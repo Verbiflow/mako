@@ -11,7 +11,7 @@ import { z } from "zod"
 import type { JsonObject, JsonValue } from "../json.js"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { controlClient } from "../control/client.js"
-import { presentation } from "../control/present.js"
+import { PresentationSchema } from "../control/present.js"
 import { artifactFileName } from "./artifacts.js"
 import { computerHelpers, type ComputerHelpers } from "../computer/steps.js"
 import { withMethodHint } from "./hints.js"
@@ -131,19 +131,18 @@ const runs = new AsyncLocalStorage<RunContext>()
 /** Runs are serialized, so at most one is in progress. */
 let current: RunContext | undefined
 /** Errors thrown in the REPL's own context are not this realm's Error. */
-function errorMessage(error: unknown): string {
-  return typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
-    ? error.message
-    : String(error)
+const ThrownMessageSchema = z.object({ message: z.string() })
+function errorMessage(cause: unknown): string {
+  return ThrownMessageSchema.safeParse(cause).data?.message ?? String(cause)
 }
-function fail(context: RunContext, error: unknown) {
+function fail(context: RunContext, cause: unknown) {
   if (!context.active) return
   context.active = false
   port.postMessage({
     kind: "error",
     runId: context.runId,
-    message: withMethodHint(errorMessage(error)),
-    fault: controlFaultData(error),
+    message: withMethodHint(errorMessage(cause)),
+    fault: controlFaultData(cause),
   })
 }
 /**
@@ -152,8 +151,8 @@ function fail(context: RunContext, error: unknown) {
  * either way the worker, its bindings and `state` stay.
  */
 const late: string[] = []
-function lateFailure(error: unknown) {
-  const message = errorMessage(error)
+function lateFailure(cause: unknown) {
+  const message = errorMessage(cause)
   if (current?.active) fail(current, new Error(`A callback threw outside the awaited program: ${message}`))
   else if (late.length < 10) late.push(message)
 }
@@ -281,7 +280,7 @@ port.on("message", (raw) => {
               log: (...values: unknown[]) =>
                 output(
                   "output",
-                  values.map((value) => presentation(value) ?? JSON.stringify(value) ?? String(value)).join(" ")
+                  values.map((value) => PresentationSchema.safeParse(value).data ?? JSON.stringify(value) ?? String(value)).join(" ")
                 ),
             },
             emitImage: (value: JsonValue) => output("image", value),

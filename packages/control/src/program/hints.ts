@@ -3,7 +3,7 @@ const FIND = "Use observe({query}) for refs, or handle.locator({role,name})."
 const READ = "Use inspect(ref) on a tab, or locator.inspect(): {text, value, visible, attributes, box}."
 
 /** Methods agents guess from Playwright and Puppeteer, and what this SDK calls them. */
-const HINTS: Readonly<Record<string, string>> = {
+const HINTS = new Map(Object.entries({
   fill: "Use setValue(ref, text) on a handle, or locator.setValue(text).",
   type: "Use setValue(ref, text) on a handle, or locator.setValue(text).",
   setText: "Use setValue(ref, text) on a handle, or locator.setValue(text).",
@@ -54,11 +54,11 @@ const HINTS: Readonly<Record<string, string>> = {
   selectText: "Use click(ref, {count:3}).",
   focus: "Use click(ref), or pressKey(key, {ref}) to type into it directly.",
   scrollTo: "Use scroll({deltaY}) or scrollIntoView(ref).",
-}
+}))
 
 /** A failed call to a method this SDK lacks, explained with what it has. */
 export function withMethodHint(message: string): string {
   const missing = /\.([\w$]+) is not a function/.exec(message)?.[1]
-  const hint = missing !== undefined && Object.hasOwn(HINTS, missing) ? HINTS[missing] : undefined
+  const hint = missing === undefined ? undefined : HINTS.get(missing)
   return hint ? `${message}. ${hint}` : message
 }

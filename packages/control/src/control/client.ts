@@ -9,6 +9,7 @@ import {
 import {
   ControlSelectorSchema,
   ControlReadScopeSchema,
+  isExactName,
   nameMatches,
   scopeControlNodes,
   scopeLabel,
@@ -91,30 +92,34 @@ const selectionHint =
   'Use {role:"button",name:"Save",max:20}; optional keys: text (substring of role, name, value or visibleText), roles, states, refsOnly, includeAncestors. Selections take strings; for name patterns use locator({role,name:{prefix}|{contains}|/re/}).'
 export type ElementSelector = z.infer<typeof selectorSchema>
 
-// Program values may come from another realm, so RegExp is detected by tag.
-const isRegExp = (value: unknown): value is RegExp =>
-  Object.prototype.toString.call(value) === "[object RegExp]"
+// Program values may come from another realm: Zod's checks hold across
+// realms, and a RegExp is detected by its tag.
+const ProgramObjectSchema = z.looseObject({})
+const ProgramListSchema = z.array(z.unknown())
+const RegExpNameSchema = z
+  .custom<RegExp>((value) => Object.prototype.toString.call(value) === "[object RegExp]")
+  .transform((pattern) => {
+    const flags = pattern.flags.replace(/[gyd]/g, "")
+    return flags ? { regex: pattern.source, flags } : { regex: pattern.source }
+  })
 /** RegExp names become `{regex,flags}` before they cross to the host, where
  * structured cloning would turn them into empty objects. */
 export function regexNames<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return value
-  const record = value as Record<string, unknown>
-  const name = record.name
-  const within = record.within
-  const match = record.match
-  if (!isRegExp(name) && !Array.isArray(within) && (typeof match !== "object" || match === null)) return value
-  return {
-    ...record,
-    ...(isRegExp(name)
-      ? { name: { regex: name.source, ...(name.flags.replace(/[gyd]/g, "") ? { flags: name.flags.replace(/[gyd]/g, "") } : {}) } }
-      : {}),
-    ...(Array.isArray(within) ? { within: within.map(regexNames) } : {}),
-    ...(typeof match === "object" && match !== null ? { match: regexNames(match) } : {}),
-  } as T
+  const record = ProgramObjectSchema.safeParse(value)
+  if (!record.success) return value
+  const converted = { ...record.data }
+  const name = RegExpNameSchema.safeParse(converted.name)
+  if (name.success) converted.name = name.data
+  const within = ProgramListSchema.safeParse(converted.within)
+  if (within.success) converted.within = within.data.map(regexNames)
+  if (ProgramObjectSchema.safeParse(converted.match).success) converted.match = regexNames(converted.match)
+  // SAFETY: only name, within and match changed, from RegExp patterns to the
+  // {regex,flags} form NameMatchSchema parses; every other field is the caller's.
+  return converted as T
 }
 /** Text a name pattern can search by, or undefined for a regular expression. */
 function nameText(name: NameMatch): string | undefined {
-  if (typeof name === "string") return name
+  if (isExactName(name)) return name
   if ("prefix" in name) return name.prefix
   if ("contains" in name) return name.contains
   return undefined
@@ -202,7 +207,7 @@ const spaced = (text: string) => text.replace(/\s+/g, " ").trim().toLocaleLowerC
  * part of its name; string names stay exact, so the fix is to use the listed
  * accessible name. */
 function visibleTextHint(nodes: readonly PageObservationNode[], role: string, name: NameMatch) {
-  if (typeof name !== "string" || !spaced(name)) return ""
+  if (!isExactName(name) || !spaced(name)) return ""
   const wanted = spaced(name)
   const shown = nodes
     .filter(
@@ -444,10 +449,10 @@ export class ControlObservation {
   }
   toJSON() {
     return {
-      ...(this.data.page ? { page: this.data.page } : {}),
+      page: this.data.page,
       lines: this.lines,
       coverage: this.coverage,
-      ...(this.data.nextOffset != null ? { nextOffset: this.data.nextOffset } : {}),
+      nextOffset: this.data.nextOffset ?? undefined,
     }
   }
 }
@@ -520,7 +525,7 @@ const ShotSchema = z.looseObject({
 /** A screenshot prints as its geometry and view token, never its pixels. */
 function screenshotValue(value: JsonValue) {
   const shot = ShotSchema.safeParse(value)
-  if (!shot.success || typeof value !== "object" || value === null) return value
+  if (!shot.success || !(value instanceof Object)) return value
   return presented(value, () => {
     const { coordinates: c, mimeType, view, data } = shot.data
     const size = c?.imageWidth && c.imageHeight ? `${c.imageWidth}×${c.imageHeight} ` : ""
@@ -548,9 +553,12 @@ const pointSchema = z
   .strict()
 const clickOptionsSchema = pointerOperationSchema.omit({ kind: true, at: true })
 export type Point = z.infer<typeof pointSchema>
+const StringSchema = z.string()
+const RefAtSchema = z.object({ ref: z.string() })
 function pointerAt(at: string | Point) {
-  return typeof at === "string"
-    ? { ref: at }
+  const ref = StringSchema.safeParse(at)
+  return ref.success
+    ? { ref: ref.data }
     : controlInput(
         pointSchema.safeParse(at),
         "point",
@@ -804,7 +812,9 @@ export class ControlLocator {
     const { role, name, within } = this.selector
     if (!view.nodes.some((node) => node.role === role && nameMatches(node.name, name))) {
       const query = nameText(name)
-      const nearby = await this.handle.observe({ within, ...(query && this.handle.target.kind === "page" ? { query } : {}), interactive: true, max: 40 })
+      const nearbyOptions: ObserveOptions = { within, interactive: true, max: 40 }
+      if (query && this.handle.target.kind === "page") nearbyOptions.query = query
+      const nearby = await this.handle.observe(nearbyOptions)
       const shown = visibleTextHint(nearby.nodes, role, name)
       throw new ControlFault(
         "target-not-found",
@@ -949,10 +959,11 @@ export class TabHandle extends ControlHandle {
   }
   /** Runs an expression, or a function called with JSON arguments, in the
    * page and returns its JSON value. Functions cannot see program variables. */
-  async evaluate(script: string | ((...args: never[]) => unknown), ...args: JsonValue[]): Promise<JsonValue | undefined> {
-    if (typeof script === "string" && args.length)
+  async evaluate(script: string | ((...args: never[]) => void), ...args: JsonValue[]): Promise<JsonValue | undefined> {
+    const source = StringSchema.safeParse(script)
+    if (source.success && args.length)
       throw new ControlFault("invalid-request", "Arguments need a function: tab.evaluate((a, b) => a + b, 1, 2). Nothing was dispatched.", "not-dispatched")
-    const expression = typeof script === "function" ? `(${script.toString()})(...${JSON.stringify(args)})` : script
+    const expression = source.success ? source.data : `(${script.toString()})(...${JSON.stringify(args)})`
     const result = await this.raw("evaluate", { expression })
     const remote = z
       .object({ result: z.object({ type: z.string(), value: z.json().optional(), description: z.string().optional() }) })
@@ -966,12 +977,12 @@ export class TabHandle extends ControlHandle {
   async inspect(ref: string, options: { attributes?: string[]; styles?: string[] } = {}) {
     const value = await this.raw("inspect", { ref, ...options })
     const inspection = inspectionSchema.safeParse(value)
-    if (!inspection.success || typeof value !== "object" || value === null || Array.isArray(value)) return value
+    if (!inspection.success || !(value instanceof Object) || Array.isArray(value)) return value
     return presented(value, () => inspectionText(inspection.data, options))
   }
   private async dispatched(action: string, args: JsonObject) {
     const result = await this.raw(action, args)
-    const subject = [args.ref, ...[args.at, args.from, args.to].map((at) => (typeof at === "object" && at !== null && "ref" in at ? at.ref : at && JSON.stringify(at)))]
+    const subject = [args.ref, ...[args.at, args.from, args.to].map((at) => RefAtSchema.safeParse(at).data?.ref ?? (at && JSON.stringify(at)))]
     return presented(
       { status: "dispatched" as const, action, verification: "not-requested" as const, result },
       () => `dispatched ${[action, ...subject.filter(Boolean)].join(" ")}${result !== null && result !== undefined ? ` · result ${JSON.stringify(result)}` : ""}`

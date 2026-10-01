@@ -101,20 +101,20 @@ export class ControlProgramError extends Error {
   }
 }
 
-const OUTCOME_TEXT: Record<ControlFaultData["outcome"], string> = {
+const OUTCOME_TEXT = {
   "not-dispatched": "nothing dispatched",
   rejected: "rejected",
   unknown: "outcome unknown",
-}
+} as const satisfies Record<ControlFaultData["outcome"], string>
 
 /** How an agent reads a failed cell: one line naming the fault, then what the
  * cell had already changed, when anything. A plain script error reads as JS. */
-export function programErrorText(error: unknown): string {
-  const cause = error instanceof ControlProgramError ? error.cause : error
-  const fault = controlFaultData(cause)
-  const message = cause instanceof Error ? cause.message : String(cause)
+export function programErrorText(cause: unknown): string {
+  const thrown = cause instanceof ControlProgramError ? cause.cause : cause
+  const fault = controlFaultData(thrown)
+  const message = thrown instanceof Error ? thrown.message : String(thrown)
   const lines = [fault ? `Error ${fault.code} (${OUTCOME_TEXT[fault.outcome]}): ${message}` : `Error: ${message}`]
-  const effects = error instanceof ControlProgramError ? error.effects : []
+  const effects = cause instanceof ControlProgramError ? cause.effects : []
   if (effects.length)
     lines.push(`Before failing, this cell ran: ${effects.join(", ")}. Observe before acting again; do not rerun the cell.`)
   return lines.join("\n")
@@ -383,10 +383,8 @@ export class ControlProgramRuntime {
       const appendText = (label: string, value: JsonValue) => {
         // An agent reads logged REPL strings as text, as console.log prints
         // them. CLI programs and results keep one JSON value per block.
-        const text =
-          execution.mode === "repl" && label === "log" && typeof value === "string"
-            ? value
-            : JSON.stringify(value)
+        const logged = execution.mode === "repl" && label === "log" ? z.string().safeParse(value).data : undefined
+        const text = logged ?? JSON.stringify(value)
         const bytes = Buffer.byteLength(text)
         if (
           bytes >= INLINE_TEXT_BUDGET ||

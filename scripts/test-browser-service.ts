@@ -927,15 +927,21 @@ try {
       value,
       sources: [{ type: "relatedElement", value: { value }, nativeSourceValue: { relatedNodes: [{ backendDOMNodeId: label }] } }],
     })
-    const ax = (nodeId: number, parentId: number | undefined, role: string, name?: string | { value: string; sources: unknown[] }, properties?: Array<{ name: string; value: { value: string } }>) => ({
-      nodeId: String(nodeId),
-      ...(parentId === undefined ? {} : { parentId: String(parentId) }),
-      ignored: false,
-      backendDOMNodeId: nodeId,
-      role: { value: role },
-      ...(name === undefined ? {} : { name: typeof name === "string" ? { value: name } : name }),
-      ...(properties ? { properties } : {}),
-    })
+    type AxName = { value: string; sources?: unknown[] }
+    type AxProperties = Array<{ name: string; value: { value: string } }>
+    type AxNode = { nodeId: string; parentId?: string; ignored: boolean; backendDOMNodeId: number; role: { value: string }; name?: AxName; properties?: AxProperties }
+    const ax = (nodeId: number, parentId: number | undefined, role: string, name?: string | AxName, properties?: AxProperties) => {
+      const node: AxNode = {
+        nodeId: String(nodeId),
+        ignored: false,
+        backendDOMNodeId: nodeId,
+        role: { value: role },
+      }
+      if (parentId !== undefined) node.parentId = String(parentId)
+      if (name !== undefined) node.name = name instanceof Object ? name : { value: name }
+      if (properties) node.properties = properties
+      return node
+    }
     const url = [{ name: "url", value: { value: "https://example.test/x" } }]
     const saved = fixture.axNodes.splice(
       0,

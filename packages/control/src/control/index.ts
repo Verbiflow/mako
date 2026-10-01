@@ -58,7 +58,7 @@ export {
   type Point,
 } from "./client.js"
 
-export { PRESENT, presentation, presented } from "./present.js"
+export { PRESENT, PresentationSchema, presented } from "./present.js"
 
 export {
   ControlFault,

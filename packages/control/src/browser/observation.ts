@@ -177,6 +177,8 @@ function printedRef(node: PageObservationNode): string | undefined {
 /** One outline row: ref, role, name, then only the facts that distinguish it.
  * Text rows print as `text: …`. Every field also stays on the node for
  * programs. */
+const TextSchema = z.string()
+const LevelSchema = z.number()
 export function pageOutlineLine(node: PageObservationNode, indent = 0): string {
   if (isText(node)) return `${"  ".repeat(indent)}text: ${spaced(node.name)}`
   const parts = [printedRef(node), node.role ?? "node"]
@@ -184,9 +186,10 @@ export function pageOutlineLine(node: PageObservationNode, indent = 0): string {
   if (node.visibleText) parts.push(`visibleText=${JSON.stringify(node.visibleText)}`)
   if (node.value !== undefined && node.value !== "" && node.value !== node.name)
     parts.push(`value=${quoted(node.value, 80)}`)
-  if (node.role === "link" && !node.name && typeof node.url === "string")
-    parts.push(`url=${quoted(node.url, 120)}`)
-  if (node.role === "heading" && typeof node.level === "number") parts.push(`level=${node.level}`)
+  const url = TextSchema.safeParse(node.url).data
+  if (node.role === "link" && !node.name && url !== undefined) parts.push(`url=${quoted(url, 120)}`)
+  const level = LevelSchema.safeParse(node.level).data
+  if (node.role === "heading" && level !== undefined) parts.push(`level=${level}`)
   for (const state of TWO_WAY_STATES) {
     const value = node[state]
     if (value === true || value === "true") parts.push(state)
@@ -194,8 +197,8 @@ export function pageOutlineLine(node: PageObservationNode, indent = 0): string {
   }
   for (const state of SET_STATES)
     if (node[state] === true || node[state] === "true") parts.push(state)
-  const popup = node.hasPopup
-  if (typeof popup === "string" && popup !== "false") parts.push(`hasPopup=${popup}`)
+  const popup = TextSchema.safeParse(node.hasPopup).data
+  if (popup !== undefined && popup !== "false") parts.push(`hasPopup=${popup}`)
   return "  ".repeat(indent) + parts.filter((part) => part !== undefined).join(" ")
 }
 

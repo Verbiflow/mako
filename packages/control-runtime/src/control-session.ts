@@ -889,10 +889,10 @@ export function createControlSession(
     const issued = issuedPageRefs.get(key) ?? new Set<string>()
     if (target.kind === "page") issuedPageRefs.set(key, issued.size > 20_000 ? new Set() : issued)
     for (const entry of refs) {
-      const ref = typeof entry === "string" ? entry : entry.ref
+      const ref = entry instanceof Object ? entry.ref : entry
       if (target.kind === "page") issuedPageRefs.get(key)!.add(ref)
       controlRefs.delete(ref)
-      controlRefs.set(ref, { target: key, observation, ...(typeof entry === "string" ? {} : { token: entry.token }) })
+      controlRefs.set(ref, entry instanceof Object ? { target: key, observation, token: entry.token } : { target: key, observation })
     }
     while (controlViews.size > 64) {
       const oldest = controlViews.keys().next().value
@@ -1658,31 +1658,31 @@ export function createControlSession(
       if (request.all || !parsed.success) return { kind: request.kind, browser: request.browser, pages: listed }
       const pages = parsed.data
       const tabs = pages.filter((page) => page.selectable)
-      return {
+      const shown: JsonObject = {
         kind: request.kind,
         browser: request.browser,
         pages: tabs.map((page) => ({ tab: page.targetId, title: page.title.slice(0, 200), url: page.url.slice(0, 500), claimed: page.claimed })),
-        ...(pages.length > tabs.length
-          ? { hidden: `${pages.length - tabs.length} workers, frames and other non-page targets; control.tabs(browser,{all:true}) lists them` }
-          : {}),
       }
+      if (pages.length > tabs.length)
+        shown.hidden = `${pages.length - tabs.length} workers, frames and other non-page targets; control.tabs(browser,{all:true}) lists them`
+      return shown
     }
     if (request.kind === "apps") {
       const listed = controlData(await invokeTool("list_apps", {}, signal))
       const apps = z.array(z.object({ pid: z.number().nullish(), name: z.string().nullish(), running: z.boolean().optional(), active: z.boolean().optional(), bundle_id: z.string().nullish() }).loose()).safeParse(listed.apps)
       if (request.all || !apps.success) return listed
       const running = apps.data.filter((app) => app.running !== false && app.pid)
-      return {
-        apps: running.map((app) => ({
-          name: app.name ?? "",
-          pid: app.pid!,
-          ...(app.bundle_id ? { bundle_id: app.bundle_id } : {}),
-          ...(app.active ? { active: true } : {}),
-        })),
-        ...(apps.data.length > running.length
-          ? { hidden: `${apps.data.length - running.length} installed apps that are not running; control.apps({all:true}) lists them` }
-          : {}),
+      const shown: JsonObject = {
+        apps: running.map((app) => {
+          const entry: JsonObject = { name: app.name ?? "", pid: app.pid! }
+          if (app.bundle_id) entry.bundle_id = app.bundle_id
+          if (app.active) entry.active = true
+          return entry
+        }),
       }
+      if (apps.data.length > running.length)
+        shown.hidden = `${apps.data.length - running.length} installed apps that are not running; control.apps({all:true}) lists them`
+      return shown
     }
     const windows = await nativeWindows(request.pid, signal)
     if (windows.length) return { kind: request.kind, pid: request.pid, windows }
@@ -1725,7 +1725,7 @@ export function createControlSession(
             match: request.match,
             query: request.query,
             interactiveOnly: request.interactive,
-            ...(request.offset !== undefined ? { offset: request.offset } : {}),
+            offset: request.offset,
           }),
           signal
         )
@@ -1775,9 +1775,9 @@ export function createControlSession(
         coverage,
         scope,
         viewport: value.viewport ?? null,
-        ...(info ? { page: { title: info.title, url: info.url } } : {}),
-        ...(value.offset ? { offset: value.offset } : {}),
       }
+      if (info) result.page = { title: info.title, url: info.url }
+      if (value.offset) result.offset = value.offset
       if (value.lineage === undefined) delete result.lineage
       if (value.matched !== undefined) result.matched = value.matched
       if (value.nextOffset !== undefined) result.nextOffset = value.nextOffset
@@ -2456,8 +2456,8 @@ export function createControlSession(
     )
     if (backend === "native") {
       const readOnly = NATIVE_READ_TOOLS.has(request.name)
-      if (typeof request.args.element_token === "string")
-        request.args.element_token = nativeToken(request.args.element_token)
+      const elementToken = z.string().safeParse(request.args.element_token)
+      if (elementToken.success) request.args.element_token = nativeToken(elementToken.data)
       const token = tokenSchema.safeParse(request.args.element_token).data
       const snapshotId =
         token?.split(":")[0] ??

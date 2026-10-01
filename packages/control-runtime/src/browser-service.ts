@@ -132,7 +132,13 @@ const cookieList = z.object({
 })
 const isolatedWorld = z.object({ executionContextId: z.number() })
 const pdfResult = z.object({ data: z.string() })
-const waitResult = z.object({ result: z.object({ value: z.union([z.boolean(), z.string()]) }) })
+/** A page check answers met or not, or the selector's syntax error. */
+const waitResult = z.object({
+  result: z.object({
+    value: z.union([z.boolean().transform((met) => ({ met })), z.string().transform((invalid) => ({ met: false, invalid }))]),
+  }),
+})
+const dragIntercepted = z.object({ data: z.json() })
 /** Waits poll from here: a hidden tab runs its own timers about once a
  * second, which would make every page-side poll a second late. */
 const WAIT_POLL_MS = 50
@@ -2510,16 +2516,16 @@ export class BrowserService {
             const checked = Date.now()
             const dom = await send("Runtime.evaluate", { expression: check, returnByValue: true }).then(
               (result) => waitResult.parse(result).result.value,
-              (error: unknown) => {
+              (cause: unknown) => {
                 // A navigation replaces the document mid-check; the next poll reads the new one.
-                if (error instanceof Error && /context was destroyed|Cannot find context/i.test(error.message)) return false
-                throw error
+                if (cause instanceof Error && /context was destroyed|Cannot find context/i.test(cause.message)) return { met: false }
+                throw cause
               }
             )
-            if (typeof dom === "string") fault("invalid-request", `selector ${JSON.stringify(conditions.selector)} is not valid CSS: ${dom}`)
+            if ("invalid" in dom) fault("invalid-request", `selector ${JSON.stringify(conditions.selector)} is not valid CSS: ${dom.invalid}`)
             // Large pages make innerText slow; poll no more than a third of the time.
             pause = Math.max(WAIT_POLL_MS, 2 * (Date.now() - checked))
-            if (!dom) return false
+            if (!dom.met) return false
           }
           let url = true
           if (conditions.url !== undefined || conditions.title !== undefined) {
@@ -2711,23 +2717,25 @@ export class BrowserService {
       this.input(binding, method, params, signal)
     const session = (method: string, params: JsonObject = {}) =>
       binding.connection.send(method, params, signal, binding.sessionId)
-    const mouse = (type: string, point: { x: number; y: number }, pressed: boolean) =>
-      send("Input.dispatchMouseEvent", {
+    const mouse = (type: string, point: { x: number; y: number }, pressed: boolean) => {
+      const params: JsonObject = {
         type,
         ...point,
         button: pressed || type !== "mouseMoved" ? "left" : "none",
         buttons: pressed ? 1 : 0,
-        ...(type === "mouseMoved" ? {} : { clickCount: 1 }),
         modifiers,
         pointerType: "mouse",
-      })
+      }
+      if (type !== "mouseMoved") params.clickCount = 1
+      return send("Input.dispatchMouseEvent", params)
+    }
     const start = await this.resolvePoint(binding, from, signal)
     await mouse("mouseMoved", start, false)
     let intercepted: JsonValue | undefined
     let noticed: (() => void) | undefined
     const unsubscribe = binding.connection.onEvent((event) => {
       if (event.sessionId !== binding.sessionId || event.method !== "Input.dragIntercepted") return
-      intercepted = (event.params as JsonObject).data
+      intercepted = dragIntercepted.safeParse(event.params).data?.data
       noticed?.()
     })
     let html5: JsonValue | undefined

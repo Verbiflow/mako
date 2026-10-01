@@ -26,14 +26,15 @@ export function nameMatches(
   wanted: NameMatch
 ): boolean {
   const name = actual ?? ""
-  if (typeof wanted === "string") return name === wanted
+  if (isExactName(wanted)) return name === wanted
   if ("prefix" in wanted) return spaced(name).startsWith(spaced(wanted.prefix))
   if ("contains" in wanted)
     return spaced(name).includes(spaced(wanted.contains))
   return new RegExp(wanted.regex, wanted.flags).test(name)
 }
+const ExactNameSchema = z.string()
 export const isExactName = (name: NameMatch): name is string =>
-  typeof name === "string"
+  ExactNameSchema.safeParse(name).success
 
 export const ControlSelectorSchema = z
   .object({ role: z.string().min(1), name: NameMatchSchema })

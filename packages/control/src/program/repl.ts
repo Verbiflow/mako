@@ -1,11 +1,11 @@
-import { parse } from "acorn"
+import { parse, type Program } from "acorn"
 import type { Runtime } from "node:inspector"
 import { Session } from "node:inspector/promises"
 import { constants, createContext, type Context } from "node:vm"
 import { z } from "zod"
 import { ControlFault, controlFaultData } from "../control/fault.js"
 import type { controlClient } from "../control/client.js"
-import { presentation } from "../control/present.js"
+import { PresentationSchema } from "../control/present.js"
 import type { checkpointTask, recallTask } from "./task-state.js"
 import type { JsonValue } from "../json.js"
 
@@ -37,23 +37,20 @@ export function syntaxError(where: string): ControlFault {
   )
 }
 
-type SyntaxNode = { type: string; start: number; kind?: string }
 const functionNodes = new Set([
   "FunctionDeclaration",
   "FunctionExpression",
   "ArrowFunctionExpression",
 ])
-function returnsAtTopLevel(node: SyntaxNode): boolean {
+const SyntaxNodeSchema = z.looseObject({ type: z.string() })
+function returnsAtTopLevel(node: z.infer<typeof SyntaxNodeSchema>): boolean {
   if (node.type === "ReturnStatement") return true
   if (functionNodes.has(node.type)) return false
-  return Object.values(node).some((child: unknown) =>
-    (Array.isArray(child) ? child : [child]).some(
-      (item: unknown) =>
-        typeof item === "object" &&
-        item !== null &&
-        "type" in item &&
-        returnsAtTopLevel(item as SyntaxNode)
-    )
+  return Object.values(node).some((child) =>
+    (Array.isArray(child) ? child : [child]).some((item) => {
+      const parsed = SyntaxNodeSchema.safeParse(item)
+      return parsed.success && returnsAtTopLevel(parsed.data)
+    })
   )
 }
 
@@ -65,18 +62,18 @@ function returnsAtTopLevel(node: SyntaxNode): boolean {
  * Source the parser rejects is left for V8 to report.
  */
 export function replSource(source: string): string {
-  let program: { body: SyntaxNode[] }
+  let program: Program
   try {
     program = parse(source, {
       ecmaVersion: "latest",
       sourceType: "script",
       allowAwaitOutsideFunction: true,
       allowReturnOutsideFunction: true,
-    }) as unknown as { body: SyntaxNode[] }
+    })
   } catch {
     return source
   }
-  if (program.body.some(returnsAtTopLevel))
+  if (program.body.some((node) => returnsAtTopLevel(SyntaxNodeSchema.parse(node))))
     return `await (async () => {\n${source}\n})()`
   let rewritten = source
   for (const node of [...program.body].reverse())
@@ -90,15 +87,16 @@ const shownSchema = z.union([
   z.object({ text: z.string() }).strict(),
   z.object({ json: z.string().optional() }).strict(),
 ])
-function showValue(value: unknown): z.infer<typeof shownSchema> {
+/** Receives a cell's value, whatever the program built. */
+const showValue = z.function({ input: [z.unknown()], output: shownSchema }).implement((value) => {
   let text: string | undefined
   try {
-    text = presentation(value)
+    text = PresentationSchema.safeParse(value).data
   } catch {
     text = undefined
   }
   return text ? { text } : { json: JSON.stringify(value) }
-}
+})
 
 /** V8 owns REPL syntax, lexical bindings and top-level await. Source changes are
  * limited to replSource. No inspector listener or network port. This is trusted

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { z } from "zod"
 import { createControlRuntime } from "@mako/control-runtime"
 import { createControlMcpServer } from "@mako/control-runtime/mcp"
 import {
@@ -106,14 +107,17 @@ const client = new Client({ name: "page-verbs", version: "1" })
 const [agentTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 await server.connect(serverTransport)
 await client.connect(agentTransport)
+const toolResult = z.object({
+  isError: z.boolean().optional(),
+  content: z.array(z.looseObject({ type: z.string(), text: z.string().optional() })),
+})
 const js = async (code: string) => {
-  const result = (await client.callTool({
-    name: "js",
-    arguments: { code, timeout_ms: 30_000 },
-  })) as {
-    isError?: boolean
-    content: Array<{ type: string; text?: string }>
-  }
+  const result = toolResult.parse(
+    await client.callTool({
+      name: "js",
+      arguments: { code, timeout_ms: 30_000 },
+    })
+  )
   const texts = result.content
     .filter((block) => block.type === "text")
     .map((block) => block.text ?? "")
@@ -150,7 +154,7 @@ try {
   const lag = await js(
     `await tab.evaluate("setTimeout(()=>{document.body.append('Appeared late');window.appearedAt=Date.now()},300)"); await tab.waitFor({text:"Appeared late"},{timeoutMs:5000}); [Date.now() - await tab.evaluate("window.appearedAt"), await tab.evaluate("document.visibilityState")]`
   )
-  const [lagMs, visibility] = lag.value() as [number, string]
+  const [lagMs, visibility] = z.tuple([z.number(), z.string()]).parse(lag.value())
   assert.ok(lagMs < 400, `a ${visibility} tab's wait sees new text within one poll, not at its throttled timers: ${lagMs} ms`)
   const badSelector = await js(`await tab.waitFor({selector:"[[bad"},{timeoutMs:500})`)
   assert.match(badSelector.text, /^Error invalid-request \(nothing dispatched\): selector "\[\[bad" is not valid CSS: /, badSelector.text)

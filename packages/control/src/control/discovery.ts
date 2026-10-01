@@ -48,7 +48,7 @@ const windowsSchema = z.looseObject({
 
 function printed<T extends object>(value: JsonValue, schema: z.ZodType<T>, text: (data: T) => string[]): JsonValue {
   const parsed = schema.safeParse(value)
-  if (!parsed.success || typeof value !== "object" || value === null) return value
+  if (!parsed.success || !(value instanceof Object)) return value
   return presented(value, () => text(parsed.data).join("\n"))
 }
 

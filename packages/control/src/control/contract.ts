@@ -125,7 +125,7 @@ export const ControlOperationSchema = z.discriminatedUnion("kind", [
 export type ControlOperation = z.infer<typeof ControlOperationSchema>
 
 /** The SDK call that dispatches each operation kind; `click(ref)` activates. */
-const OPERATION_METHODS: Record<ControlOperation["kind"], string> = {
+const OPERATION_METHODS = {
   "set-text": "setValue",
   activate: "click",
   "press-key": "pressKey",
@@ -133,7 +133,7 @@ const OPERATION_METHODS: Record<ControlOperation["kind"], string> = {
   scroll: "scroll",
   "select-option": "selectOption",
   command: "command",
-}
+} as const satisfies Record<ControlOperation["kind"], string>
 
 /** What an operation did and to what, as receipts and failed cells name it,
  * by the call that made it: `setValue e4`, `click e9`, `click 120,80 right`,
