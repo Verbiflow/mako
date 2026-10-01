@@ -137,6 +137,11 @@ export async function defaultCatalogIdentity(archivePath: string): Promise<strin
   return catalogSharingIdentity({ code, archivePath, providers })
 }
 
+/** The harnesses whose saved conversations the catalog reads. */
+export function readableHarnesses(): string[] {
+  return [...new Set(defaultProviders().map(provider => provider.harness))]
+}
+
 /** The catalog with every built-in provider, ready to scan. */
 export function defaultCatalog(
   options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy } = {}

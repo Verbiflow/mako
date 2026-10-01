@@ -27,16 +27,28 @@ export interface Compaction {
   tokensAfter?: number
   /** What the provider kept of the earlier conversation, when it says. */
   summary?: string
+  /** How long compacting took, from the provider or from when it said it started. */
+  durationMs?: number
 }
 
 export function compactionEvent(compaction: Compaction = {}): TranscriptEvent {
-  const { trigger, tokensBefore, tokensAfter } = compaction
+  const { trigger, tokensBefore, tokensAfter, durationMs } = compaction
   const tokens = tokensBefore
     ? tokensAfter !== undefined
       ? `${tokenCount(tokensBefore)} → ${tokenCount(tokensAfter)} tokens`
       : `from ${tokenCount(tokensBefore)} tokens`
     : undefined
-  return event(CONTEXT_COMPACTED, [trigger && TRIGGER[trigger], tokens].filter(Boolean).join(" · "), compaction.summary)
+  const took = durationMs !== undefined && durationMs >= 1000 ? `took ${durationText(durationMs)}` : undefined
+  return event(CONTEXT_COMPACTED, [trigger && TRIGGER[trigger], tokens, took].filter(Boolean).join(" · "), compaction.summary)
+}
+
+/** Elapsed time at the precision a person reads it: "8s", "1m 04s", "1h 02m". */
+export function durationText(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`
 }
 
 export function compactionFailedEvent(reason?: string): TranscriptEvent {
