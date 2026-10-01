@@ -37,7 +37,7 @@ import {
   useLatestPlan,
   usePlanAwaitingApproval,
 } from "@/state/plan-mode"
-import { usePlanBuild } from "@/state/plan-builds"
+import { PlanBuiltElsewhereError, usePlanBuild } from "@/state/plan-builds"
 import { acp, useAcp } from "@/state/acp"
 
 export function ProposedPlanCard({
@@ -83,9 +83,11 @@ export function ProposedPlanCard({
     setBuilding(where)
     void (where === "here" ? buildPlan(source, plan) : buildPlanInNewSession(source, plan))
       .catch((failure) =>
-        toast.error("The plan was not built", {
-          description: failure instanceof Error ? failure.message : String(failure),
-        })
+        failure instanceof PlanBuiltElsewhereError
+          ? toast("Already built", { description: failure.message })
+          : toast.error("The plan was not built", {
+              description: failure instanceof Error ? failure.message : String(failure),
+            })
       )
       .finally(() => setBuilding(null))
   }
@@ -149,7 +151,7 @@ export function ProposedPlanCard({
               )}
             </button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-48 p-1">
+          <PopoverContent align="end" className="w-60 p-1">
             <button
               type="button"
               className="pressable block w-full rounded px-2 py-2 text-left text-ui hover:bg-fill-hover"
@@ -183,6 +185,20 @@ export function ProposedPlanCard({
             >
               Save to workspace…
             </button>
+            {superseded && (source.liveId || source.threadPath) ? (
+              <button
+                type="button"
+                disabled={!canDraft || building !== null}
+                title="Earlier revisions build only in a new session; this one keeps the newer plan"
+                className="pressable block w-full rounded px-2 py-2 text-left text-ui hover:bg-fill-hover disabled:opacity-40"
+                onClick={() => {
+                  setActionsOpen(false)
+                  start("new")
+                }}
+              >
+                Build this revision in new session
+              </button>
+            ) : null}
           </PopoverContent>
         </Popover>
       </div>

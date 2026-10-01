@@ -41,7 +41,9 @@ import {
   responseSections,
   responseText,
   type Exchange as ExchangeData,
+  type ResponseSection,
 } from "@/lib/exchanges"
+import { EventNotes } from "./event-notes"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
@@ -129,18 +131,16 @@ export const Exchange = memo(function Exchange({
       ) : exchange.opener ? (
         <ProviderTurn message={exchange.opener} provider={provider} />
       ) : null}
-      {notes.map((note) =>
-        note.after === 0 ? (
-          <SystemNote key={note.message.id} message={note.message} />
-        ) : null
-      )}
+      <SystemNotes messages={notes.flatMap((note) => (note.after === 0 ? [note.message] : []))} />
 
       {sections.length > 0 ? (
         <div className={cn("flex flex-col gap-4", (exchange.prompt || exchange.opener) && "mt-4")}>
           {provider ? <AgentByline provider={provider} /> : null}
           {sections.map((section, index) =>
             section.kind === "note" ? (
-              <SystemNote key={section.id} message={section.message} inline />
+              sections[index - 1]?.kind === "note" ? null : (
+                <SystemNotes key={section.id} messages={noteRun(sections, index)} inline />
+              )
             ) : section.kind === "steer" ? (
               <div key={section.id} className="mt-1">
                 <p className="mb-1 text-right text-label text-faint">
@@ -728,10 +728,36 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
   )
 }
 
+/** The note sections that run on from `start`, drawn together. */
+function noteRun(sections: readonly ResponseSection[], start: number): ChatMessage[] {
+  const run: ChatMessage[] = []
+  for (let index = start; sections[index]?.kind === "note"; index++) {
+    const section = sections[index]
+    if (section?.kind === "note") run.push(section.message)
+  }
+  return run
+}
+
+/** Consecutive notes: provider markers as `EventNotes`, Mako's own separators between them. */
+function SystemNotes({ messages, inline }: { messages: readonly ChatMessage[]; inline?: boolean }) {
+  const groups: ChatMessage[][] = []
+  for (const message of messages) {
+    const last = groups.at(-1)
+    if (message.note && last?.[0]?.note) last.push(message)
+    else groups.push([message])
+  }
+  return groups.map((group) =>
+    group[0]!.note ? (
+      <EventNotes key={group[0]!.id} messages={group} inline={inline} />
+    ) : (
+      <SystemNote key={group[0]!.id} message={group[0]!} inline={inline} />
+    )
+  )
+}
+
 /** `inline` sits inside the answer, whose gap already spaces it. */
 function SystemNote({ message, inline }: { message: ChatMessage; inline?: boolean }) {
   const text = textOf(message.blocks)
-  if (message.note) return <EventNote note={message.note} inline={inline} />
   if (!text) return null
   return (
     <div className={cn("flex items-center gap-2.5", inline ? "my-1" : "my-3")}>
@@ -740,49 +766,6 @@ function SystemNote({ message, inline }: { message: ChatMessage; inline?: boolea
         {text.slice(0, 140)}
       </span>
       <span className="h-px flex-1 bg-hairline" />
-    </div>
-  )
-}
-
-const NOTE_TONE = { warning: "text-caution", error: "text-negative" } as const
-
-/** A provider's marker: a hairline with its label, opening onto its body when it has one. */
-function EventNote({ note, inline }: { note: NonNullable<ChatMessage["note"]>; inline?: boolean }) {
-  const [open, setOpen] = useState(false)
-  const line = (
-    <>
-      <span className={note.tone ? NOTE_TONE[note.tone] : undefined}>{note.label}</span>
-      {note.detail ? <span> · {note.detail.slice(0, 140)}</span> : null}
-    </>
-  )
-  return (
-    <div className={inline ? "my-1" : "my-3"}>
-      <div className="flex items-center gap-2.5 text-label text-faint">
-        <span className="h-px flex-1 bg-hairline" />
-        {note.body ? (
-          <button
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-            aria-expanded={open}
-            className="pressable flex min-w-0 max-w-[85%] items-center gap-1 rounded px-1 transition-colors duration-100 hover:text-foreground"
-          >
-            <span className="truncate">{line}</span>
-            <ChevronRightIcon
-              className={cn("size-3 shrink-0 [transition:transform_150ms_var(--ease-out)]", open && "rotate-90")}
-            />
-          </button>
-        ) : (
-          <span className="min-w-0 max-w-[85%] truncate">{line}</span>
-        )}
-        <span className="h-px flex-1 bg-hairline" />
-      </div>
-      {note.body ? (
-        <Collapse open={open}>
-          <div className="mt-2 max-h-96 overflow-y-auto rounded-lg border border-hairline px-3 py-2 text-muted-foreground">
-            <Prose text={note.body} />
-          </div>
-        </Collapse>
-      ) : null}
     </div>
   )
 }
