@@ -163,11 +163,14 @@ export function parseClaudeUsage(
 }
 
 /** The windows a streamed `rate_limit_event` can name, as `parseClaudeUsage` names them. */
-const STREAMED_WINDOWS: Partial<Record<NonNullable<SDKRateLimitInfo["rateLimitType"]>, [number, string?]>> = {
-  five_hour: [300],
-  seven_day: [10_080],
-  seven_day_opus: [10_080, "Opus"],
-  seven_day_sonnet: [10_080, "Sonnet"],
+function streamedWindow(type: SDKRateLimitInfo["rateLimitType"]): [number, string?] | undefined {
+  switch (type) {
+    case "five_hour": return [300]
+    case "seven_day": return [10_080]
+    case "seven_day_opus": return [10_080, "Opus"]
+    case "seven_day_sonnet": return [10_080, "Sonnet"]
+    default: return undefined
+  }
 }
 
 /**
@@ -175,11 +178,12 @@ const STREAMED_WINDOWS: Partial<Record<NonNullable<SDKRateLimitInfo["rateLimitTy
  * its reset in Unix seconds. Buckets the usage reading doesn't show are left out.
  */
 export function claudeRateLimitWindow(info: SDKRateLimitInfo): UsageWindow | null {
-  const known = info.rateLimitType ? STREAMED_WINDOWS[info.rateLimitType] : undefined
-  if (!known || typeof info.utilization !== "number" || !Number.isFinite(info.utilization)) return null
+  const known = streamedWindow(info.rateLimitType)
+  const utilization = info.utilization
+  if (!known || utilization === undefined || !Number.isFinite(utilization)) return null
   const [windowMinutes, scope] = known
   const window: UsageWindow = {
-    usedPercent: info.utilization * 100,
+    usedPercent: utilization * 100,
     windowMinutes,
     resetsAt: info.resetsAt ? info.resetsAt * 1000 : null,
   }
