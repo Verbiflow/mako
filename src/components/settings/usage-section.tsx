@@ -4,8 +4,45 @@ import { loadUsage } from "@/state/usage"
 import { formatTokens } from "@/lib/format"
 import type { UsageSummary, UsageTotals } from "@/lib/types"
 import { Shimmer } from "@/components/ui/shimmer"
+import { AccountLimits } from "@/components/identity/account-usage"
+import { accounts } from "@/state/accounts"
 
 export function UsageSection() {
+  return (
+    <div className="flex flex-col gap-8">
+      <PlanLimits />
+      <section aria-labelledby="usage-local" className="flex flex-col gap-2">
+        <Eyebrow id="usage-local" className="px-0">
+          Spend on this machine
+        </Eyebrow>
+        <LocalUsage />
+      </section>
+    </div>
+  )
+}
+
+/** What each signed-in account has left, as its provider reports it. */
+function PlanLimits() {
+  useEffect(() => {
+    accounts.load()
+  }, [])
+  return (
+    <section aria-labelledby="usage-limits" className="@container flex flex-col gap-2">
+      <Eyebrow id="usage-limits" className="px-0">
+        Plan limits
+      </Eyebrow>
+      <p className="text-ui leading-relaxed text-faint">
+        Read from each provider for every account Mako can see, refreshed each
+        minute you look.
+      </p>
+      <div className="pt-2">
+        <AccountLimits density="page" />
+      </div>
+    </section>
+  )
+}
+
+function LocalUsage() {
   const [data, setData] = useState<UsageSummary>()
   const [loading, setLoading] = useState(true)
 

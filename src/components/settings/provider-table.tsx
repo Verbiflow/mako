@@ -231,9 +231,7 @@ function ProviderRow({
               <div className="flex items-center justify-between">
                 <span className="text-label font-medium">
                   {agent.name}
-                  {accountProvider?.mode === "observed"
-                    ? " credentials"
-                    : " account"}
+                  {providerAccounts.length > 1 ? " accounts" : " account"}
                 </span>
                 <Action
                   size="xs"
@@ -276,7 +274,7 @@ function ProviderRow({
                 </>
               ) : null}
               {accountProvider ? (
-                <ProviderAccounts providerId={agent.id} />
+                <ProviderAccounts providerId={agent.id} hint={!connection} />
               ) : null}
             </div>
           ) : (
