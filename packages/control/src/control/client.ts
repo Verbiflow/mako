@@ -197,16 +197,25 @@ export interface ControlSelection extends PageNodeSelection {
 
 const spaced = (text: string) => text.replace(/\s+/g, " ").trim().toLocaleLowerCase()
 
-/** Explains a miss where the requested name is only what the control shows;
- * string names stay exact, so the fix is to use the listed accessible name. */
+/** Explains a miss where the requested name is only what the control shows or
+ * part of its name; string names stay exact, so the fix is to use the listed
+ * accessible name. */
 function visibleTextHint(nodes: readonly PageObservationNode[], role: string, name: NameMatch) {
-  if (typeof name !== "string") return ""
+  if (typeof name !== "string" || !spaced(name)) return ""
+  const wanted = spaced(name)
   const shown = nodes
-    .filter((node) => node.role === role && node.visibleText !== undefined && spaced(node.visibleText) === spaced(name))
+    .filter(
+      (node) =>
+        node.role === role &&
+        ((node.visibleText !== undefined && spaced(node.visibleText) === wanted) || spaced(node.name ?? "").includes(wanted))
+    )
     .slice(0, 3)
   if (!shown.length) return ""
   const named = shown.map((node) => `${role} ${JSON.stringify(node.name ?? "")}${node.ref ? ` (${node.ref})` : ""}`).join(", ")
-  return `${JSON.stringify(name)} is the visible text of ${named}. A string name matches the accessible name exactly, so use locator({role:${JSON.stringify(role)},name:${JSON.stringify(shown[0]!.name ?? "")}}) or name:{contains:${JSON.stringify(name)}}; nothing was dispatched.`
+  const relation = shown.some((node) => node.visibleText !== undefined && spaced(node.visibleText) === wanted)
+    ? "the visible text"
+    : "part of the name"
+  return `${JSON.stringify(name)} is ${relation} of ${named}. A string name matches the accessible name exactly, so use locator({role:${JSON.stringify(role)},name:${JSON.stringify(shown[0]!.name ?? "")}}) or name:{contains:${JSON.stringify(name)}}; nothing was dispatched.`
 }
 
 /** The header an agent reads above an observation's rows: where the page is,
@@ -217,13 +226,21 @@ function observationHeader(data: ControlObservationData, returned: number): stri
   const place = viewport
     ? ` · ${viewport.width}×${viewport.height} at y=${Math.round(viewport.scrollY)} of ${Math.round(viewport.contentHeight)}${viewport.pagesBelow ? `, ${viewport.pagesBelow} pages below` : ""}`
     : ""
-  if (data.page) head.push(`page ${JSON.stringify(data.page.title)} ${data.page.url}${place}`)
+  if (data.page) {
+    // A data: or signed URL can run to thousands of characters on every read;
+    // the value keeps it whole.
+    const { url } = data.page
+    const shown = url.length > 200 ? `${url.slice(0, 160)}… (${url.length} chars in .page.url)` : url
+    head.push(`page ${JSON.stringify(data.page.title)} ${shown}${place}`)
+  }
   const within = data.scope?.within ?? []
   if (within.length || data.scope?.match)
     head.push(`scope ${[...within.map((scope) => `${scope.role} ${JSON.stringify(scope.name)}`), ...(data.scope?.match ? [`match ${data.scope.match.role} ${JSON.stringify(data.scope.match.name)}`] : [])].join(" › ")}`)
+  const first = (data.offset ?? 0) + 1
+  const rows = `rows ${first}–${first + returned - 1} of ${data.matched ?? "more"}`
   if (data.nextOffset != null)
-    head.push(`rows ${data.offset ?? 0}–${(data.offset ?? 0) + returned - 1} of ${data.matched ?? "more"}; observe({offset:${data.nextOffset}}) reads on, or narrow with within, match or query`)
-  else if (data.offset) head.push(`rows from offset ${data.offset}`)
+    head.push(`${rows}; observe({offset:${data.nextOffset}}) reads on, or narrow with within, match or query`)
+  else if (data.offset) head.push(`${rows}, the last`)
   else if (!data.coverage.complete && data.coverage.omitted)
     head.push(`${data.coverage.omitted} more elements not shown; narrow with within, match or maxDepth`)
   else if (!data.coverage.complete) head.push("filtered read: absence here proves nothing")

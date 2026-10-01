@@ -155,7 +155,8 @@ try {
 
   const paged = await js(`await tab.observe({max:2})`)
   assert.equal(paged.error, false, paged.text)
-  assert.match(paged.text, /^page "Live" data:text\/html/, paged.text)
+  assert.match(paged.text, /^page "Live" data:text\/html,\S{100,160}… \(\d{4,} chars in \.page\.url\) · /, paged.text)
+  assert.ok(paged.text.split("\n")[0]!.length < 300, "a long page URL is not repeated whole on every read")
   assert.match(paged.text, /rows 1–2 of \d+; observe\(\{offset:2\}\) reads on/, paged.text)
   const next = await js(`await tab.observe({max:2, offset:2})`)
   assert.equal(next.error, false, next.text)

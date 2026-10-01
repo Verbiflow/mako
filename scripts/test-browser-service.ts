@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { z } from "zod"
+import { PageObservationNodeSchema, pageOutlineLines } from "@mako/control/browser"
 import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import {
   BrowserCommandSchema,
@@ -581,16 +582,20 @@ try {
     /found 2/
   )
   fixture.axNodes.splice(0, fixture.axNodes.length, ...originalNodes)
-  await run("task-a", { action: "observe", target: a })
-  await assert.rejects(
-    run("task-a", {
-      action: "type",
-      target: a,
-      ref: observation.nodes[0].ref,
-      text: "stale",
-    }),
-    /reference|ref|observation/i
-  )
+  const reread = z
+    .object({ nodes: z.array(z.object({ ref: z.string() })) })
+    .parse(await run("task-a", { action: "observe", target: a }))
+  // A ref names one DOM node of this document, so a later read shows the same
+  // node under the same ref and the earlier ref still works. Expiring refs
+  // after an action is the session's rule (test-control-repl).
+  assert.equal(reread.nodes[0]!.ref, observation.nodes[0].ref)
+  assert.match(observation.nodes[0].ref, /^e\d+$/)
+  await run("task-a", {
+    action: "type",
+    target: a,
+    ref: observation.nodes[0].ref,
+    text: "earlier read",
+  })
   assert.equal(
     fixture.calls.filter((call) => call.params.text === "delay").length,
     2,
@@ -845,11 +850,12 @@ try {
     "https://example.test/help"
   )
   assert.equal(observed.nodes.find((node) => node.role === "heading")?.level, 2)
-  assert.equal(
-    observed.nodes.find((node) => node.role === "StaticText")?.depth,
-    2
+  assert.deepEqual(
+    observed.nodes.map((node) => node.depth),
+    [0, 0, 0, 0, 0],
+    "depth counts shown ancestors: the document root and the unnamed wrapper are not rows"
   )
-  assert.match(String(checkbox?.ref), /^[0-9a-f]{6}:\d+$/)
+  assert.match(String(checkbox?.ref), /^e\d+$/)
   const interactive = z
     .object({
       nodes: z.array(z.object({ role: z.string() })),
@@ -885,7 +891,7 @@ try {
   assert.equal(paged.offset, 1)
   assert.equal(paged.nodes.length, 2)
   assert.equal(paged.nextOffset, 3)
-  assert.equal(paged.omitted, 3)
+  assert.equal(paged.omitted, 2)
   const queried = z
     .object({
       nodes: z.array(z.object({ role: z.string(), name: z.string() })),
@@ -914,6 +920,74 @@ try {
     .parse(await run("task-c", { action: "observe", target: c }))
   assert.equal(unlabelled.nodes.find((node) => node.role === "link")?.visibleText, undefined, "text equal to the name is not repeated")
   fixture.axNodes.pop()
+
+  {
+    const fromContents = (value: string) => ({ value, sources: [{ type: "contents", value: { value } }] })
+    const ax = (nodeId: number, parentId: number | undefined, role: string, name?: string | ReturnType<typeof fromContents>, properties?: Array<{ name: string; value: { value: string } }>) => ({
+      nodeId: String(nodeId),
+      ...(parentId === undefined ? {} : { parentId: String(parentId) }),
+      ignored: false,
+      backendDOMNodeId: nodeId,
+      role: { value: role },
+      ...(name === undefined ? {} : { name: typeof name === "string" ? { value: name } : name }),
+      ...(properties ? { properties } : {}),
+    })
+    const url = [{ name: "url", value: { value: "https://example.test/x" } }]
+    const saved = fixture.axNodes.splice(
+      0,
+      fixture.axNodes.length,
+      ax(1, undefined, "RootWebArea", "Doc"),
+      ax(10, 1, "paragraph"),
+      ax(11, 10, "StaticText", "Read the "),
+      ax(12, 10, "link", "guide", url),
+      ax(13, 12, "StaticText", "guide"),
+      ax(14, 10, "StaticText", " first"),
+      ax(15, 10, "link", "[1]", url),
+      ax(16, 15, "StaticText", "["),
+      ax(17, 15, "StaticText", "1"),
+      ax(18, 15, "StaticText", "]"),
+      ax(20, 1, "paragraph"),
+      ax(21, 20, "StaticText", "Second paragraph."),
+      ax(30, 1, "table", "Files"),
+      ax(31, 30, "row", fromContents("docs, Directory")),
+      ax(32, 31, "cell", fromContents("docs, Directory")),
+      ax(33, 32, "link", "docs, Directory", url),
+      ax(34, 33, "StaticText", "docs"),
+      ax(35, 30, "row", fromContents("Alice 42")),
+      ax(36, 35, "cell", fromContents("Alice")),
+      ax(37, 36, "StaticText", "Alice"),
+      ax(38, 35, "cell", fromContents("42")),
+      ax(39, 38, "StaticText", "42"),
+      ax(40, 1, "link", "Photo of the pier Story title Summary 5 hrs ago", url),
+      ax(41, 40, "image", "Photo of the pier"),
+      ax(42, 40, "heading", "Story title", [{ name: "level", value: { value: "2" } }]),
+      ax(43, 42, "StaticText", "Story title"),
+      ax(44, 40, "StaticText", "Summary 5 hrs ago"),
+      ax(50, 1, "dialog", "Story title"),
+      ax(51, 50, "button", "Close")
+    )
+    const page = z
+      .object({ nodes: z.array(PageObservationNodeSchema) })
+      .parse(await run("task-c", { action: "observe", target: c }))
+    assert.deepEqual(
+      pageOutlineLines(page.nodes).map((line) => line.replace(/\be\d+\b/g, "eN")),
+      [
+        "text: Read the [guide](eN) first [[1]](eN)",
+        "text: Second paragraph.",
+        'eN table "Files"',
+        '  eN link "docs, Directory"',
+        "  row",
+        "    text: Alice",
+        "    text: 42",
+        'eN link "Photo of the pier Story title Summary 5 hrs ago"',
+        'eN dialog "Story title"',
+        '  eN button "Close"',
+      ],
+      "prose prints as text with inline links; cells named from their contents, single-row groups, and text or content a control's name already holds print once"
+    )
+    assert.equal(page.nodes.find((node) => node.role === "StaticText")?.ref !== undefined, true, "text rows keep refs for programs")
+    fixture.axNodes.splice(0, fixture.axNodes.length, ...saved)
+  }
 
   // Click: pointer move, press with a buttons mask, then release.
   const fresh = z
@@ -1124,7 +1198,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 30))
   await assert.rejects(
     run("task-c", { action: "hover", target: c, at: { ref: checkboxRef } }),
-    /latest observation/
+    /not from a read of this tab's current document/
   )
 
   // Navigation waits: redirects count, domcontentloaded returns early, a hang reports timeout.

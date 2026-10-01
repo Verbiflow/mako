@@ -149,10 +149,37 @@ const quoted = (text: string, limit: number) =>
 const TWO_WAY_STATES = ["checked", "expanded", "pressed"] as const
 const SET_STATES = ["selected", "focused", "disabled", "required", "readonly", "invalid", "modal"] as const
 
+/** Roles that only group other rows. Unnamed, they print without a ref; one
+ * holding a single row gives its place to that row, and one holding only text
+ * and links prints as that text. */
+export const PAGE_GROUPING_ROLES: ReadonlySet<string> = new Set([
+  "paragraph",
+  "list",
+  "listitem",
+  "row",
+  "rowgroup",
+  "cell",
+  "gridcell",
+  "Figcaption",
+  "ListMarker",
+  "DescriptionList",
+])
+
+const isText = (node: PageObservationNode) => node.role === "StaticText"
+/** Text and unnamed grouping rows are context, not targets; their refs stay on
+ * the node for programs. */
+function printedRef(node: PageObservationNode): string | undefined {
+  if (isText(node)) return undefined
+  if (node.name || node.value || node.visibleText || node.focusable === true) return node.ref
+  return node.role !== null && PAGE_GROUPING_ROLES.has(node.role) ? undefined : node.ref
+}
+
 /** One outline row: ref, role, name, then only the facts that distinguish it.
- * Every field also stays on the node for programs. */
+ * Text rows print as `text: …`. Every field also stays on the node for
+ * programs. */
 export function pageOutlineLine(node: PageObservationNode, indent = 0): string {
-  const parts = [node.ref, node.role ?? "node"]
+  if (isText(node)) return `${"  ".repeat(indent)}text: ${spaced(node.name)}`
+  const parts = [printedRef(node), node.role ?? "node"]
   if (node.name) parts.push(JSON.stringify(node.name))
   if (node.visibleText) parts.push(`visibleText=${JSON.stringify(node.visibleText)}`)
   if (node.value !== undefined && node.value !== "" && node.value !== node.name)
@@ -172,11 +199,69 @@ export function pageOutlineLine(node: PageObservationNode, indent = 0): string {
   return "  ".repeat(indent) + parts.filter((part) => part !== undefined).join(" ")
 }
 
+const spaced = (text: string | undefined) => (text ?? "").replace(/\s+/g, " ").trim()
+
+/** A link with nothing to say but its name can sit inside prose. */
+const inlineLink = (node: PageObservationNode) =>
+  node.role === "link" &&
+  node.ref !== undefined &&
+  !!node.name &&
+  pageOutlineLine(node) === `${node.ref} link ${JSON.stringify(node.name)}`
+
+/** Sibling text and links as one sentence: links read `[name](ref)`. Chromium
+ * drops whitespace-only text, so a link is spaced from its neighbours unless
+ * punctuation hugs it. */
+function prose(run: readonly PageObservationNode[]): string {
+  let text = ""
+  let previous = { raw: "", link: false }
+  for (const node of run) {
+    const link = !isText(node)
+    const raw = node.name ?? ""
+    const hugged = /[\s([{"'‘“/]$/.test(previous.raw) || /^[\s,.;:!?)\]}"'’”/%]/.test(raw)
+    if ((link || previous.link) && previous.raw && raw && !hugged) text += " "
+    text += link ? `[${spaced(raw)}](${node.ref})` : raw
+    previous = { raw, link }
+  }
+  return spaced(text)
+}
+
 /** The page as an indented outline, or a flat list for filtered reads, whose
- * rows are not one tree. Indentation starts at the shallowest row. */
+ * rows are not one tree. Indentation starts at the shallowest row. In the
+ * outline, a run of sibling text and plain links prints as one `text:` line. */
 export function pageOutlineLines(nodes: readonly PageObservationNode[], options: { flat?: boolean } = {}): string[] {
   const base = Math.min(...nodes.map((node) => node.depth))
-  return nodes.map((node) => pageOutlineLine(node, options.flat ? 0 : Math.min(node.depth - base, 24)))
+  if (options.flat) return nodes.map((node) => pageOutlineLine(node))
+  const leaf = (index: number) => index + 1 >= nodes.length || nodes[index + 1]!.depth <= nodes[index]!.depth
+  const inline = (index: number) => leaf(index) && (isText(nodes[index]!) || inlineLink(nodes[index]!))
+  const runEnd = (start: number) => {
+    let end = start
+    while (end < nodes.length && nodes[end]!.depth === nodes[start]!.depth && inline(end)) end++
+    return end
+  }
+  const lines: string[] = []
+  for (let index = 0; index < nodes.length; ) {
+    const node = nodes[index]!
+    const indent = Math.min(node.depth - base, 24)
+    if (!leaf(index) && node.role !== null && PAGE_GROUPING_ROLES.has(node.role) && printedRef(node) === undefined) {
+      const end = runEnd(index + 1)
+      const run = nodes.slice(index + 1, end)
+      if (run.some(isText) && (end >= nodes.length || nodes[end]!.depth <= node.depth)) {
+        lines.push(`${"  ".repeat(indent)}text: ${prose(run)}`)
+        index = end
+        continue
+      }
+    }
+    const end = runEnd(index)
+    const run = nodes.slice(index, end)
+    if (run.length > 1 && run.some(isText)) {
+      lines.push(`${"  ".repeat(indent)}text: ${prose(run)}`)
+      index = end
+      continue
+    }
+    lines.push(pageOutlineLine(node, indent))
+    index++
+  }
+  return lines
 }
 
 /** A selected working set with every field of each row, indented as an outline. */

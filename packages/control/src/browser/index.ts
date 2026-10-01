@@ -1,4 +1,5 @@
 export {
+  PAGE_GROUPING_ROLES,
   PageNodeSelectorSchema,
   PageObservationNodeSchema,
   PageObservationSchema,

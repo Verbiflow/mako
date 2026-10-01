@@ -37,7 +37,7 @@ to the [meta-harness map](meta-harness-map.md); remote channels belong to the
 
 | Area | What is established | What is not established |
 | --- | --- | --- |
-| Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. | Uniform discovery/result typing, all error paths, broad fresh-agent usability and matched comparative task performance. |
+| Shared agent API | Bound handles, explicit reads, strict scoped targeting, lossless values, deliberate images and structured action outcomes; old public API replaced. In source (September 30): each result prints in its own compact form, observations as a reading outline, one-line failures. | Installed acceptance of the September 30 forms, all error paths, broad fresh-agent usability and matched comparative task performance. |
 | Browser capture | Installed ordinary Aside preview/recording reaches 56.84/57.73 distinct fps at 1920×1080 with two viewers, exact inputs and unchanged screenshot pixels. Corrected loaded input-to-visible p95 is 121/73/82 ms for click/type/scroll through a production offscreen viewer. | Earlier installed loaded recordings and the combined-build 120-second isolated-host run interrupt at the two-second backlog guard; the uninstalled timestamped source completes them. A matched A/B shows preview rate follows machine load (47.97–58.25 fps), not encoding method; the 55-fps preview gate under contention stays open. Sustained efficiency, physical-screen latency, remote delivery and broader native rates remain open. Focus-off hidden tabs may produce no frames. |
 | Native capture/input | Mac +mako.24 selected for new launches (September 26): a daemon killed or stopped mid-key no longer leaves the key held, and typing text already in a field is no longer falsely confirmed; running daemons keep +23 until their host starts a new one. Connected implicit-session idle lifetime and right/double-click cursor acceptance pass; fresh isolated right/double-click recording passes; the current default-host daemon loads +23 and installed right-click timeline propagation passes; tested exact AppKit file selection/cancellation; exact-value routes, bounded settling, recording and scoped gestures. A 60-second 1080p trial reached 57.35 distinct fps with unchanged foreground samples. English keyboard trial retained exact text during eight background saves with no observed focus interruption; human attestation is pending. Focus recovery remains reactive (23–99 ms in deliberate activation tests). | General proactive prevention, physical IME, universal gestures and exact 60 fps remain unproven. Sandboxed AppKit Open/Save semantic workflows pass with the separate panel service confirmed. Incomplete panel trees, raw cross-process input and broader dialog families remain gaps. Linux accepts 60 fps requests (+19, repeated on +24), but its native CLI clip is under a second; GNOME capture polls at ~5 fps. |
 | Standalone Linux | +mako.24 with the current engine (September 26) passes ARM64 X11 jobs/recording, three Sway scale/rotation configurations, labwc/Weston/KWin, GNOME 46, both CLI workflows and eleven lifecycle cases. Native AMD x64 (EC2, AMD EPYC 9R14) passes the five acceptance suites, both CLI workflows and eleven lifecycle cases on +mako.24 (September 26). Acceptance containers now run as any calling UID. [+24 evidence](audits/2026-09-26/linux24/README.md). September 28: the same native x64 suites pass again with the current engine (A23 CLI, R23 and encoder fixes), byte-identical to candidate `13a82042e7e655bd` ([evidence](audits/2026-09-28/linux24/x64-native-ec2/README.md)). | Public distribution, remaining compositor versions, real GPU/display coverage or sustained capture-rate parity. |
@@ -96,6 +96,29 @@ They come from reading every SDK call agents made through Mako. The changes:
 - smaller `apps()` and `tabs()` output.
 
 `scripts/test-control-page-verbs.ts` checks them against a real Chromium it launches itself. Two fresh agents finished a seven-step page task with at most one help lookup, no raw CDP and no sleeps. The next installed candidate must include them; then repeat that fresh-agent task on it.
+
+**September 30, second pass ([U13–U22](local-control-agent-issues.md#september-30-usage-audit)): what agents read, in source, not installed.**
+Every result now prints in a form made for what it is, and keeps its full value
+for code. The changes:
+- page observations print as a reading outline, with prose as `text:` lines and
+  inline links `[name](e12)`, each fact once;
+- page refs are `e<n>` and last across reads until the tab's next action;
+- `observe({offset})` pages through long pages;
+- receipts, discovery, screenshots and waits each have their own line format;
+- failures take one line, plus what the cell had already done;
+- Playwright-name misses say what to call instead;
+- a late callback error no longer resets the REPL;
+- `tab.expect` takes page conditions;
+- native refs are `n<k>`.
+
+Measured with the o200k tokenizer, the Hacker News and BBC News front pages,
+read whole, print in 3,322 and 3,173 tokens instead of 10,932 and 9,088. The
+first read of GitHub, MDN and Wikipedia pages takes 49–58% fewer tokens. All
+`packages/control` tests and the browser, REPL, CLI, page-verb, computer-tool,
+owner, modal, input-error and package suites pass. `test-control-api-e2e` was
+not rerun: it drives the stale `dist-electron`, and rebuilding it would compile
+other agents' uncommitted work. Next: a fresh agent repeats the seven-step task
+on these forms, then the installed candidate carries them.
 
 **Next (September 29): candidate from `dac8a05` installs when the default host is idle (`release/rollout-20260929`).**
 Both earlier jobs stopped the same way. The host quit for the install, Mako was
@@ -629,6 +652,18 @@ streaming implementation until its Linux environment is defined.
 
 The SDK changes from the September 30 usage audit are in source but not installed. The documentation lives in `control-agent-docs.ts` (the tool description and the once-per-session docs) and in `controlHelp` in `control-session.ts` (the topics). Page verbs are browser commands in `contracts/browser-control.ts` and `browser-service.ts`: `inspect` is read-only, while `drag` and `scrollIntoView` mutate. The client methods are in `packages/control/src/control/client.ts`. Name matching is `nameMatches` in `scope.ts`, shared by the client, the browser service and native scoping. REPL source changes are confined to `replSource` in `program/repl.ts`.
 
+Where printing lives:
+- **Values to text.** The `PRESENT` symbol in `packages/control/src/control/present.ts` carries each SDK result's printed form. The REPL's `showValue` (`program/repl.ts`) and the worker's `console.log` print it; other values print as JSON and strings print raw.
+- **Discovery lines.** `control/discovery.ts`.
+- **Receipts.** `operationLabel` in `control/contract.ts`.
+- **The page outline** has two halves:
+  - what a row is: `browserObservation` in `control-runtime/src/browser-observation.ts` handles pruning, names taken from contents, single-row collapse and `depth`;
+  - how rows print: `pageOutlineLines` in `packages/control/src/browser/observation.ts` handles `text:` lines, inline links and printed refs.
+  - The two share `PAGE_GROUPING_ROLES`.
+- **Stable `e<n>` refs.** `refIds` and `binding.refs` in `browser-service.ts`.
+- **Native `n<k>` aliases.** `withNativeTokens` in `control-session.ts`, applied before `beginControlMutation`.
+- **Failures.** `programErrorText` and the effect list in `program/runtime.ts`; the method hints in `program/hints.ts`.
+
 Native screenshots now validate supported options, honor resizing/format requests
 and retain exact returned-image coordinate mapping. Native recording capabilities
 derive their source-rate ceiling from the driver (new Mac/X11 candidates allow
@@ -679,9 +714,10 @@ September 26 (local, in candidate `26b4f06bc693a102`), the remaining discovery i
   client of the real app, not a sandbox. A fixture desk now says it only reads
   (see [LC-23](#lc-23--preview-isolation-and-installed-browser-rollout); local).
 - **Visible text vs accessible name (A07).** Page controls report
-  `visibleText` when their shown label differs from their name; `query`/`text`
-  search it; exact matching is unchanged. A miss for a name that is only visible
-  text names the control's real accessible name.
+  `visibleText` when their name does not contain their shown label (September 30;
+  before, whenever the two differed); `query`/`text` search it; exact matching is
+  unchanged. A miss for a name that is only visible text, or only part of the
+  name, names the control's real accessible name.
 - **Validation and help (A06/A08).** Wrong query shapes say where text search
   lives and that CSS is unsupported; every public help example compiles and calls
   only defined SDK methods.

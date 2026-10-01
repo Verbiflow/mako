@@ -5,17 +5,24 @@ The initialized `control` SDK supports top-level await and persistent JavaScript
 bindings. Start with `await control.browsers()` or `await control.apps()`; read the
 documentation the first call prints, once per session, before acting. `const` and
 `let` bindings can be redeclared in later cells. A cell may end with `return`; it then
-runs as a function, and its declarations stay local. The last expression prints
-compact JSON. Use `console.log(value)` for additional evidence (a string prints as
-text) and `emitImage(...)` for images.
+runs as a function, and its declarations stay local. The last expression prints,
+and `console.log(value)` prints more: a string as itself, an SDK result in its
+compact printed form (see [Keep context small](#keep-context-small)), and any other
+value as compact JSON exactly as the program built it. `emitImage(...)` shows images.
 
 `control.help({topic:"actions"})` returns focused signatures and examples in the
 current execution syntax. Call `control.rewriteDocumentation()` only if the
 documentation has left context. `js_reset` clears program bindings and shared
 `state`, preserving owned targets and recordings, and the next call prints the
-documentation again. Ordinary errors preserve bindings; a timeout, cancellation or
-worker failure resets them and prints a one-line notice instead of the documentation. Earlier actions may have completed:
-observe the exact target before deciding what to do next, never replay a program.
+documentation again. Ordinary errors, and callbacks that throw after their cell
+returned, preserve bindings; a late throw is reported at the start of the next cell.
+A timeout, cancellation or worker failure resets bindings and prints a one-line
+notice instead of the documentation. A failed cell prints one line,
+`Error code (outcome): message`, then `Before failing, this cell ran: set-text e4, navigate`
+when earlier calls in it may have changed something. Those effects stand: observe
+the exact target before deciding what to do next, never replay a program.
+Calling a method this SDK lacks under its Playwright name (`fill`, `goto`,
+`waitForSelector`, `textContent`, …) names the method to use instead.
 
 The composable `mako-control` CLI and Node SDK use the same TypeScript engine,
 leases, observations, input guards and recording lifecycle. The MCP adapter calls
@@ -177,10 +184,59 @@ empty remains a deliberate deletion. Always verify the intended result.
 
 ## Keep context small
 
-An observation keeps `nodes`, `lines`, identity and coverage locally. Returning
-the observation emits compact lines once. Return `.nodes` when structured JSON
-is needed, `.select(...)` for a subset, or `.diff(previous)` for changed lines.
-Diffs ignore ref churn; removed lines contain no actionable old refs.
+Every SDK result prints in a form made for what it is, and keeps its full value
+for code:
+
+| Result | Prints as |
+| --- | --- |
+| Page observation | `page "title" url · viewport`, then an indented outline: `e12 button "Save" disabled` |
+| Action receipt | `dispatched set-text e4 · route · delivery`, plus guard/settling/focus only when unusual |
+| Screenshot | size, bytes, view token and coordinate mapping, never pixels |
+| `browsers()`, `tabs()`, `apps()`, `windows()` | one target per line, the ID to copy first |
+| `waitFor`, page-condition `expect` | `satisfied {...} after N ms` |
+| Failure | `Error code (outcome): message`, then effects the cell already had |
+
+A page outline counts only shown containers for indentation. Prose reads as
+prose: a paragraph, cell or run of sibling text prints as one `text:` line, with
+plain links inside it as `[name](e12)`:
+
+```text
+e17 table
+  row
+    text: 1.
+    e21 link url="https://news.ycombinator.com/vote?id=…"
+    text: [Gemini 4 Argon](e23) ([blog.google](e25))
+  text: 1153 points by [bradleyg223](e30) [8 hours ago](e31) | [hide](e33)
+```
+
+Each fact prints once. The outline leaves out the document root, layout tables,
+unnamed wrappers and formatting roles; text, images, headings and named groups
+that the enclosing control's name or visible label already contains; and the
+names cells and rows take from their contents. An unnamed list, item, row or
+cell holding a single row gives its place to that row. Leaves with no name,
+value or interactivity are pruned. Text lines and unnamed grouping lines print
+no ref; every node keeps its ref in `view.nodes`. States print as words
+(`checked`, `expanded=false`, `focused`). `visibleText=` prints only when the
+name does not already contain the shown label, `value=` only when it differs
+from the name, `url=` only for an unnamed link. `interactive`, `query` and
+`match` reads print a flat list, never joined. A long page prints
+`rows 1–200 of 1450; observe({offset:200}) reads on`.
+
+Measured with the o200k tokenizer against the earlier ref-and-field rows, the
+Hacker News and BBC News front pages, each read whole, print in 3,322 and 3,173
+tokens instead of 10,932 and 9,088. A first read of GitHub, MDN and Wikipedia
+pages, which stops at the per-read size limit, takes 49–58% fewer tokens.
+
+Page refs are `e<n>`, unique across the task and never reused. A ref names one
+DOM node of the current document: later reads show the same node under the same
+ref, and the session accepts any page ref read since that tab's last action.
+After an action, or a navigation, observe again or use a locator. Native refs
+are `n<n>` aliases for the driver's element tokens and belong to that window's
+latest observation only.
+
+Return `.nodes` when structured JSON is needed, `.select(...)` for a subset, or
+`.diff(previous)` for changed lines. A program's own values print as compact
+JSON, unchanged.
 
 ```js
 const before = await state.window.observe();
@@ -205,8 +261,10 @@ are rejected. `screenshot_out_file` remains available for an explicit native fil
 Native click coordinates use the returned image pixels and its view token; the
 engine maps them to the original driver capture. Do not rescale coordinates yourself.
 Resizing does not enable an unsupported background input route. Browser captures
-supply their own coordinate metadata. New observations, captures, mutations, raw calls and known topology
-changes invalidate the relevant prior refs/views. Obtain fresh refs after input.
+supply their own coordinate metadata. Mutations, raw calls and known topology
+changes invalidate the target's refs and views; a new native observation or
+capture supersedes that window's earlier ones. Page reads and screenshots keep
+page refs. Obtain fresh refs after input.
 Oversized output spills to recoverable artifacts under the existing output
 budgets. `checkpoint`/`recall` retain bounded JSON facts; use artifacts for trees
 and images. `state` is task-local memory, not durable storage.
@@ -289,6 +347,7 @@ Page verbs replace raw CDP for common work:
 
 ```js
 await state.tab.waitFor({text: 'Report ready'}, {timeoutMs: 10000});   // throws assertion-failed
+await state.tab.expect({url: '/reports/', title: 'Report'});              // a page condition, no role
 await state.tab.evaluate((selector) => document.querySelectorAll(selector).length, 'li');
 await state.tab.locator({role: 'link', name: 'Docs'}).inspect({attributes: ['href'], styles: ['color']});
 await state.tab.locator({role: 'button', name: 'More'}).hover();
@@ -473,7 +532,7 @@ continue through `control.window({pid, window_id})`. Reading one window cannot
 clear uncertainty for other windows or authorize another unspecified destination.
 
 Read-only helpers such as `tab.children()`, download status and dialog inspection
-preserve existing refs. Mutations invalidate the affected target's refs. An
+preserve existing refs, as do page observations. Mutations invalidate the affected target's refs. An
 observation overlapping an explicit concurrent CDP mutation is rejected; wait for
 the mutation, then observe again. Dialog replies and event reads can run while
 navigation is waiting. Answering a currently open dialog does not verify or retry

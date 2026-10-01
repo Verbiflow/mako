@@ -186,6 +186,11 @@ try {
   assert.deepEqual(reads.map((read) => [Boolean(read.match), read.query]), [[true, undefined], [false, "Generate"]], "one read-only follow-up search; exact matching is unchanged")
   const seen = await labelled.observe()
   assert.throws(() => seen.get({ role: "button", name: "Generate" }), namesIt)
+  assert.throws(
+    () => seen.get({ role: "button", name: "create" }),
+    (error) => error.message.includes('"create" is part of the name of button "Create image"') && error.message.includes('name:{contains:"create"}'),
+    "a name the accessible name only contains points at {contains}"
+  )
   assert.throws(() => seen.get({ role: "button", name: "Save" }), (error) => error.code === "target-not-found" && error.message.includes('Observed button names: [{"ref":"abc123:2","name":"Create image"}]'))
   for (const bad of [
     "payload",

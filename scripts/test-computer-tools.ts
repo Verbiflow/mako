@@ -1111,11 +1111,13 @@ const before = await state.window.observe();
 state.oldRef = before.get({role:'TextField',name:'Name'}).ref;
 await control.connectBrowser('fixture-browser');
 const receipt = await state.window.setValue(state.oldRef, 'unified');
-return {receipt, proof: await state.window.expect({role:'TextField',name:'Name',value:'unified'})};`,
+return {ref: state.oldRef, line: before.lines.find(line => line.includes('Name')), receipt, proof: await state.window.expect({role:'TextField',name:'Name',value:'unified'})};`,
     },
   })
   assert.ok(!routed.isError, JSON.stringify(routed))
   const result = JSON.parse(firstText(routed.content))
+  assert.match(result.ref, /^n\d+$/, "a native element prints a short alias, not the driver token")
+  assert.doesNotMatch(result.line, /s[0-9a-f]{8}:/)
   assert.equal(result.receipt.status, "dispatched")
   assert.equal(result.receipt.verification, "not-requested")
   assert.equal(result.receipt.route, "accessibility")

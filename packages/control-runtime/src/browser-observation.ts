@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto"
+import { PAGE_GROUPING_ROLES as GROUPING_ROLES } from "@mako/control/browser"
 import { nameMatches, type NameMatch } from "@mako/control/control/scope"
 import { z } from "zod"
 import type { BrowserTarget } from "./contracts/browser-control.js"
@@ -21,7 +22,14 @@ export const AccessibilityNodeSchema = z.object({
   ignored: z.boolean(),
   backendDOMNodeId: z.number().optional(),
   role: z.object({ value: accessibilityText }).optional(),
-  name: z.object({ value: accessibilityText }).optional(),
+  name: z
+    .object({
+      value: accessibilityText,
+      sources: z
+        .array(z.object({ type: z.string(), value: z.unknown().optional(), superseded: z.boolean().optional() }))
+        .optional(),
+    })
+    .optional(),
   value: z.object({ value: accessibilityText }).optional(),
   properties: z
     .array(
@@ -134,9 +142,6 @@ const WRAPPER_ROLES = new Set([
   "GenericContainer",
   "group",
   "Section",
-  "paragraph",
-  "cell",
-  "gridcell",
   "strong",
   "emphasis",
   "code",
@@ -153,6 +158,20 @@ const WRAPPER_ROLES = new Set([
   "blockquote",
   "Pre",
   "figure",
+])
+/** Content roles whose name a named ancestor, such as a card's link, often
+ * already contains. Landmarks, dialogs and controls always keep their row. */
+const REPEATING_ROLES = new Set([
+  "heading",
+  "image",
+  "img",
+  "graphics-symbol",
+  "generic",
+  "group",
+  "Figcaption",
+  "LabelText",
+  "time",
+  "Abbr",
 ])
 /** Chromium's roles for presentational tables. Their names concatenate their
  * cells' text, which the cells' own lines already show. */
@@ -203,14 +222,27 @@ function isInteractive(role: string | null, properties: Map<string, string>) {
 }
 
 const spaced = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim()
+const unspaced = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, "")
+
+/** Cells and rows Chromium names by concatenating their contents; their own
+ * rows already show that text. */
+const CONTENT_NAMED_ROLES = new Set(["cell", "gridcell", "row"])
+function ownName(node: AccessibilityNode, role: string | null): string | null | undefined {
+  const name = node.name?.value
+  if (role === null || !CONTENT_NAMED_ROLES.has(role)) return name
+  const source = node.name?.sources?.find((candidate) => candidate.value !== undefined && !candidate.superseded)
+  return source?.type === "contents" ? undefined : name
+}
 
 /** Bound the serialized result, not just node count: page-controlled names can
  * contain entire documents. Keep usable refs and explicitly report omissions.
  *
  * The outline drops what repeats or says nothing: text already in its nearest
- * shown ancestor's name, unnamed wrappers and formatting, presentational tables
- * and unnamed leaves. `depth` counts shown ancestors only, so it is the
- * outline's indentation and scopes match the tree an agent reads. */
+ * shown ancestor's name or label, names cells take from their contents,
+ * unnamed wrappers and formatting, presentational tables, unnamed leaves, and
+ * grouping rows that hold a single non-text row. `depth` counts shown
+ * ancestors only, so it is the outline's indentation and scopes match the tree
+ * an agent reads. */
 export function browserObservation(input: {
   target: BrowserTarget
   info: JsonValue
@@ -300,7 +332,8 @@ export function browserObservation(input: {
     return parts.join(" ").replace(/\s+/g, " ").trim()
   }
   // Each node's place in the outline: the depth its children appear at and the
-  // name of its nearest shown named ancestor, whose text it may repeat.
+  // name and shown label of its nearest shown named ancestor, whose text it may
+  // repeat.
   const outline = new Map<string, { childDepth: number; named: string }>()
   const structural: Array<{
     node: AccessibilityNode
@@ -309,6 +342,7 @@ export function browserObservation(input: {
     properties: Map<string, string>
     interactive: boolean
     informative: boolean
+    label: string
   }> = []
   const pending = roots.reverse()
   const visited = new Set<string>()
@@ -324,7 +358,7 @@ export function browserObservation(input: {
     if (node.ignored) continue
     const role = node.role?.value ?? null
     if (role !== null && SKIPPED_ROLES.has(role)) continue
-    const name = spaced(node.name?.value)
+    const name = spaced(ownName(node, role))
     const value = node.value?.value
     const properties = propertyMap(node)
     const interactive = isInteractive(role, properties)
@@ -333,11 +367,13 @@ export function browserObservation(input: {
       ((role !== null && DOCUMENT_ROLES.has(role) && !node.parentId) ||
         (role !== null && LAYOUT_ROLE.test(role)) ||
         (role !== null && WRAPPER_ROLES.has(role) && !name && !value) ||
-        (role === "StaticText" && (!name || parent.named.includes(name))))
+        (role === "StaticText" && (!name || parent.named.includes(name))) ||
+        (role !== null && REPEATING_ROLES.has(role) && !!name && !value && parent.named.includes(name)))
     if (passThrough) continue
+    const label = role !== null && LABELLED_ROLES.has(role) ? visibleText(node) : ""
     outline.set(node.nodeId, {
       childDepth: parent.childDepth + 1,
-      named: name || parent.named,
+      named: name || label ? `${name}\n${label}` : parent.named,
     })
     structural.push({
       node,
@@ -346,6 +382,7 @@ export function browserObservation(input: {
       properties,
       interactive,
       informative: interactive || name !== "" || (value !== undefined && value !== null && value !== ""),
+      label,
     })
   }
   // An unnamed, valueless, inert node says only its role; keep it only while it
@@ -364,12 +401,35 @@ export function browserObservation(input: {
     }
   }
   kept.reverse()
-  for (const { node, depth, role, properties, interactive } of kept) {
-    const name = node.name?.value
+  // A grouping row that holds a single row adds a line and a level and says
+  // nothing; its child takes its place. Text keeps its block, so the text of
+  // neighbouring cells or paragraphs never reads as one run.
+  const childCount = kept.map(() => 0)
+  const open: number[] = []
+  kept.forEach((entry, index) => {
+    while (open.length && kept[open[open.length - 1]!]!.depth >= entry.depth) open.pop()
+    if (open.length) childCount[open[open.length - 1]!]!++
+    open.push(index)
+  })
+  const lifted: Array<{ depth: number; by: number }> = []
+  const rows: typeof kept = []
+  kept.forEach((entry, index) => {
+    while (lifted.length && lifted[lifted.length - 1]!.depth >= entry.depth) lifted.pop()
+    const by = lifted[lifted.length - 1]?.by ?? 0
+    const collapse =
+      !entry.informative &&
+      childCount[index] === 1 &&
+      kept[index + 1]!.role !== "StaticText" &&
+      entry.role !== null &&
+      GROUPING_ROLES.has(entry.role)
+    lifted.push({ depth: entry.depth, by: by + (collapse ? 1 : 0) })
+    if (!collapse) rows.push({ ...entry, depth: entry.depth - by })
+  })
+  for (const { node, depth, role, properties, interactive, label } of rows) {
+    const name = ownName(node, role)
     const value = node.value?.value
     if (input.interactiveOnly && !interactive) continue
-    const label = role !== null && LABELLED_ROLES.has(role) ? visibleText(node) : ""
-    const shown = label && label !== spaced(name) ? label : undefined
+    const shown = label && !unspaced(name).includes(unspaced(label)) ? label : undefined
     if (
       query &&
       ![role ?? "", name ?? "", value ?? "", shown ?? ""].some((field) =>
@@ -396,6 +456,7 @@ export function browserObservation(input: {
       }
       row[state] = state === "url" ? (text(raw, 2048) ?? raw) : raw
     }
+    if (interactive && (role === null || !INTERACTIVE_ROLES.has(role))) row.focusable = true
     candidates.push({ node, row })
   }
   const offset = Math.min(input.offset ?? 0, candidates.length)

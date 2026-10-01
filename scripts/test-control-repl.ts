@@ -122,7 +122,7 @@ try {
   assert.deepEqual(JSON.parse(text(named)), [true, 1, 1])
   const missed = await js('await tab.locator({role:"textbox",name:"Proo"}).setValue("x")')
   assert.equal(missed.isError, true)
-  assert.match(text(missed), /^Error target-not-found \(nothing dispatched\): No textbox is named "Proo"\. Observed textbox names: \[\{"ref":"e\d+","name":"Proof"\}\]/)
+  assert.match(text(missed), /^Error target-not-found \(nothing dispatched\): No textbox is named "Proo"\. "Proo" is part of the name of textbox "Proof" \(e\d+\)\. .*name:\{contains:"Proo"\}/)
   assert.doesNotMatch(text(missed), /Before failing/, "a cell that changed nothing names no effects")
   const guessed = await js('await tab.fill("e1", "x")')
   assert.equal(guessed.isError, true)

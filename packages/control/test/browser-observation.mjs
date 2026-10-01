@@ -66,6 +66,37 @@ assert.equal(
   'e7 textbox "Email" value="ada@example.com" expanded=false focused required'
 )
 
+const prose = [
+  { ref: "e1", depth: 0, role: "navigation", name: "Site" },
+  { ref: "e2", depth: 1, role: "link", name: "microsoft" },
+  { ref: "e3", depth: 1, role: "StaticText", name: "/" },
+  { ref: "e4", depth: 1, role: "link", name: "playwright" },
+  { ref: "e5", depth: 1, role: "StaticText", name: "Public" },
+  { ref: "e6", depth: 1, role: "link", name: "8 hours ago" },
+  { ref: "e7", depth: 1, role: "StaticText", name: "| " },
+  { ref: "e8", depth: 1, role: "link", name: "hide" },
+  { ref: "e9", depth: 1, role: "StaticText", name: " (" },
+  { ref: "e10", depth: 1, role: "link", name: "Docs", focused: true },
+  { ref: "e11", depth: 1, role: "StaticText", name: ")." },
+  { ref: "e12", depth: 0, role: "list" },
+  { ref: "e13", depth: 1, role: "link", name: "Home" },
+  { ref: "e14", depth: 1, role: "link", name: "About" },
+]
+assert.deepEqual(pageOutlineLines(prose), [
+  'e1 navigation "Site"',
+  "  text: [microsoft](e2)/[playwright](e4) Public [8 hours ago](e6) | [hide](e8) (",
+  '  e10 link "Docs" focused',
+  "  text: ).",
+  "list",
+  '  e13 link "Home"',
+  '  e14 link "About"',
+], "text and plain links read as one line; a link with states keeps its own row; links without text stay rows")
+assert.deepEqual(pageOutlineLines(prose.slice(1, 4), { flat: true }), [
+  'e2 link "microsoft"',
+  "text: /",
+  'e4 link "playwright"',
+], "filtered rows are not siblings, so they never join")
+
 const bounded = selectPageNodes(observation, {
   roles: ["heading", "button", "checkbox"],
   includeAncestors: false,

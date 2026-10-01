@@ -67,6 +67,7 @@ import {
   ControlObservationSchema,
   pageElementLines,
   planControlOperation,
+  type ControlOperation,
   type ControlTarget,
   type PageTarget,
   type WindowControlTarget,
@@ -833,10 +834,22 @@ export function createControlSession(
     { view: string; native?: NativeCaptureGeometry }
   >()
   const issuedViews = new Set<string>()
+  /** `token` is the driver's element token behind a native alias. */
   const controlRefs = new Map<
     string,
-    { target: string; observation: string; webText?: boolean }
+    { target: string; observation: string; webText?: boolean; token?: string }
   >()
+  /** Native element tokens read as `s0000001a:12` on every line; agents see
+   * `n12` instead. Aliases are never reused, so one from an earlier snapshot
+   * is refused as stale rather than naming another element. */
+  let nativeAliasCount = 0
+  const nativeToken = (ref: string) => controlRefs.get(ref)?.token ?? ref
+  const withNativeTokens = (operation: ControlOperation): ControlOperation => {
+    if ("ref" in operation && operation.ref !== undefined) return { ...operation, ref: nativeToken(operation.ref) }
+    if ("at" in operation && operation.at && "ref" in operation.at)
+      return { ...operation, at: { ref: nativeToken(operation.at.ref) } }
+    return operation
+  }
   const controlEvents: Array<{
     cursor: number
     at: number
@@ -862,15 +875,16 @@ export function createControlSession(
   const rememberControlRefs = (
     target: ControlTarget,
     observation: string,
-    refs: readonly string[]
+    refs: ReadonlyArray<string | { ref: string; token: string }>
   ) => {
     const key = controlTargetKey(target)
     if (target.kind !== "page")
       for (const [ref, binding] of controlRefs)
         if (binding.target === key) controlRefs.delete(ref)
-    for (const ref of refs) {
+    for (const entry of refs) {
+      const ref = typeof entry === "string" ? entry : entry.ref
       controlRefs.delete(ref)
-      controlRefs.set(ref, { target: key, observation })
+      controlRefs.set(ref, { target: key, observation, ...(typeof entry === "string" ? {} : { token: entry.token }) })
     }
     while (controlViews.size > 64) {
       const oldest = controlViews.keys().next().value
@@ -1876,6 +1890,12 @@ export function createControlSession(
       orphanedInput.delete(key)
     }
     const nodes = scoped.slice(0, request.max)
+    const aliases: Array<{ ref: string; token: string }> = []
+    for (const node of nodes)
+      if (node.ref) {
+        aliases.push({ ref: `n${++nativeAliasCount}`, token: node.ref })
+        node.ref = aliases.at(-1)!.ref
+      }
     const webRefs = new Set(
       nodes.filter((node) => node.inputRoute === "page").map((node) => node.ref)
     )
@@ -1887,7 +1907,7 @@ export function createControlSession(
       })
     )
     controlViews.set(key, { observation: state.snapshot_id, lines })
-    rememberControlRefs(request.target, state.snapshot_id, nodes.flatMap((node) => (node.ref ? [node.ref] : [])))
+    rememberControlRefs(request.target, state.snapshot_id, aliases)
     for (const ref of webRefs) {
       if (!ref) continue
       const remembered = controlRefs.get(ref)
@@ -2272,6 +2292,8 @@ export function createControlSession(
         at: { ...operation.at, ...nativeCapturePoint(geometry, operation.at) },
       }
     }
+    // Starting the mutation expires this window's aliases; resolve them first.
+    if (request.target?.kind === "window") operation = withNativeTokens(operation)
     const endMutation = key ? beginControlMutation(key) : undefined
     let result: JsonValue
     let settling: NativeSettling | undefined
@@ -2423,6 +2445,8 @@ export function createControlSession(
     )
     if (backend === "native") {
       const readOnly = NATIVE_READ_TOOLS.has(request.name)
+      if (typeof request.args.element_token === "string")
+        request.args.element_token = nativeToken(request.args.element_token)
       const token = tokenSchema.safeParse(request.args.element_token).data
       const snapshotId =
         token?.split(":")[0] ??
@@ -2767,17 +2791,17 @@ export function createControlSession(
         note: "Examples assume state.tab is your opened/claimed tab; substitute exact observed form/control names. Stop may return finalizing: collect status, never restart the recording. invalid-request and target-ambiguous are not-dispatched for that operation; earlier program steps may have completed. Correct just the failed step. Unknown outcomes require fresh target evidence before more input.",
       },
       discovery:
-        "control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,preferred,transport,guidance?,lastInterruption?,connection,next,...}]}, where next is the exact call that browser's state allows or the user action it waits for; control.tabs(browser) -> {kind:'pages',browser,pages:[{tab,title,url,claimed}],hidden?}; pass tab to claimTab. control.apps() lists running apps as {apps:[{name,pid,bundle_id?,active?}],hidden?}; apps({all:true}) and tabs(browser,{all:true}) add installed apps and worker or frame targets. These methods return objects, not arrays. When a pid is already known, list only that process’s windows.",
+        "control.apps() -> {apps:[...]}; control.windows(pid) -> {kind:'windows',pid,windows:[...]}; control.browsers() -> {kind:'browsers',available,browsers:[{id,name,preferred,transport,guidance?,lastInterruption?,connection,next,...}]}, where next is the exact call that browser's state allows or the user action it waits for; control.tabs(browser) -> {kind:'pages',browser,pages:[{tab,title,url,claimed}],hidden?}; pass tab to claimTab. control.apps() lists running apps as {apps:[{name,pid,bundle_id?,active?}],hidden?}; apps({all:true}) and tabs(browser,{all:true}) add installed apps and worker or frame targets. These methods return objects, not arrays; printed, each shows one target per line with the ID to copy first. When a pid is already known, list only that process’s windows.",
       connection:
         `await control.connectBrowser(id) explicitly connects an exact discovered browser and returns its connection state. A disconnected desk is ready to connect without an extension or remote-debugging setup. Choose the dev desk by origin/sourceRoot; open a hidden task tab there to inspect or capture Mako. This is a separate view, not a screenshot of the user’s visible window. Chromium profiles still require their installed extension. Example: const {browsers} = await control.browsers(); await control.connectBrowser(browsers.find(b => b.id === chosenId).id); state.tab = await control.openTab({browser:chosenId}); ${result}await state.tab.observe(); No implicit reconnect or action replay.`,
       handles:
         "control.app({pid}).windows(), control.app({pid}).window(window_id), control.window({pid,window_id}), control.tab({kind:'page',browser,tab,generation,lease}) or control.tab(receipt) with a whole CLI open/claim receipt, await control.openTab({browser?,url?,name?,background?,disposition?,lifetime?,context?}), await control.claimTab({browser,tab,takeover?}). Store handles in state across exec commands. App windows are selected explicitly; no implicit first window.",
       actions:
-        "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; name is an exact string or {prefix}, {contains} or a RegExp for live text. .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) and, on pages, .hover(), .dragTo(locator|ref|point), .scrollIntoView() and .inspect() each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); Native window.observe also accepts maxDepth:1..25 (e.g. 5 for outer dialog controls); depth-limited reads remain incomplete when descendants are omitted and cannot prove absence or uniqueness. handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?,focus_change?}; focus_change reports an observed native focus interruption (even if restored); reobserve before another action, never replay it. Missing focus_change is not proof of continuous focus isolation. native settling reports notification quiet/deadline/unavailable, never action success. Refs expire after a mutation or a new observation of that target; a page screenshot keeps them.",
+        "await handle.capabilities() returns this window’s routes or this page transport’s supported workflows, without a screenshot. handle.locator({role,name,within?}) keeps semantic intent; name is an exact string or {prefix}, {contains} or a RegExp for live text. .locator({role,name}) nests scopes, .read({max?}) reads just that element’s subtree, .click(), .setValue(value), .pressKey(key), .selectOption({value}|{label}) and, on pages, .hover(), .dragTo(locator|ref|point), .scrollIntoView() and .inspect() each read once, require one complete match, then dispatch once. No retries. await handle.observe({within?:[{role,name}],match?:{role,name},query?,interactive?,max?}); Native window.observe also accepts maxDepth:1..25 (e.g. 5 for outer dialog controls); depth-limited reads remain incomplete when descendants are omitted and cannot prove absence or uniqueness. handle.setValue(ref,value), click(ref|{x,y,view},{button?,count?}), activate(ref), pressKey(key,{modifiers?,ref?}), scroll({deltaX?,deltaY?,at?}), selectOption(ref,{value}|{label}), events({after?,limit?}). Mutations return {status:'dispatched',actionId,route,delivery,verification:'not-requested',guard,settling?,focus_change?}, printed as one line (dispatched set-text e4 · route · delivery, plus guard, settling or focus_change when they say something); focus_change reports an observed native focus interruption (even if restored); reobserve before another action, never replay it. Missing focus_change is not proof of continuous focus isolation. native settling reports notification quiet/deadline/unavailable, never action success. A page ref (e12) names one element of the current document and stays valid across reads and screenshots until the next action on that tab or a navigation. A native ref (n12) is valid only in that window's latest observation. A ref from another target is refused.",
       observations:
-        "Observation has nodes, lines, coverage, get({role,name,within?}) returns one node object; pass node.ref (a string) to setValue/click/activate, not the node object. select({role?,name?,text?,roles?,states?,includeAncestors?,max?}), diff(previous). Returning it emits compact lines once. Return .nodes only when full structured output is needed. role/name match like get/locator: a string name is exact, and {prefix}, {contains} (both ignore case and repeated spaces) or {regex,flags} match live text; text searches role, accessibility name, value and visibleText, not arbitrary DOM text. Page controls report visibleText when their shown label differs from the accessible name (a button showing 'Generate' may be named 'Create image'); matching still uses the name, and a miss names the control whose visible text you asked for. Each within scope requires both observed role and name, e.g. [{role:'form',name:'Shipping'}]; do not invent a form or omit its name. Use observe() when no named scope was observed. A miss lists the observed names of that role. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. Use role names exactly as observed: native roles such as TextField/Button may differ from browser textbox/button. No app-specific instructions are assumed.",
+        "A printed page observation starts with page \"title\" url · viewport at y=N of H, then one element per line, indented under its shown container: ref role \"name\" then value=, url= (unnamed links), level= (headings) and states such as checked, expanded=false, disabled, focused. Prose prints as text: lines with plain links inside as [name](e12). Each fact prints once: unnamed wrappers, names cells take from their contents, and text, images or headings a control's name already holds are left out; an unnamed list, row or cell with one row gives way to it. Text and unnamed grouping lines carry no printed ref, but every node keeps its ref in nodes. interactive, query and match print a flat list, never joined. A page past max prints rows a–b of N and the observe({offset}) that reads on; offset applies to pages only. Observation has page, viewport, nodes, lines, coverage, nextOffset; get({role,name,within?}) returns one node object; pass node.ref (a string) to setValue/click/activate, not the node object. select({role?,name?,text?,roles?,states?,includeAncestors?,max?}), diff(previous). Return .nodes only when full structured output is needed. role/name match like get/locator: a string name is exact, and {prefix}, {contains} (both ignore case and repeated spaces) or {regex,flags} match live text; text searches role, accessibility name, value and visibleText, not arbitrary DOM text. Page controls report visibleText when the accessible name does not contain their shown label (a button showing 'Generate' may be named 'Create image'); matching still uses the name, and a miss names the control whose visible text you asked for. Each within scope requires both observed role and name, e.g. [{role:'form',name:'Shipping'}]; do not invent a form or omit its name. Use observe() when no named scope was observed. A miss lists the observed names of that role. No automatic emission or screenshots. Native web text fields report inputRoute:page and pageBrowser when connected; claim and observe that exact page before typing. Use role names exactly as observed: native roles such as TextField/Button may differ from browser textbox/button. No app-specific instructions are assumed.",
       assertions:
-        "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial. On pages, await tab.waitFor({text?,selector?,url?,hidden?,networkIdle?},{timeoutMs?}) waits for page text (a case-sensitive substring of document.body.innerText), a CSS selector, a URL substring or network quiet, and throws assertion-failed at the deadline. Use these instead of fixed sleeps.",
+        "await handle.expect({role,name,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. Exact value equality; duplicates fail. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial. On pages, await tab.waitFor({text?,selector?,url?,title?,hidden?,networkIdle?},{timeoutMs?}) waits for page text (a case-sensitive substring of document.body.innerText), a CSS selector, a URL or title substring or network quiet, and throws assertion-failed at the deadline; tab.expect accepts the same page condition when it names no role. Use these instead of fixed sleeps.",
       recording:
         "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}) starts explicit video capture of this tab or window. Keep the returned handle and receipt. After a program reset, await handle.recording(id) binds the existing recording from its exact receipt; it never starts another capture. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video, timeline paths and encoded dimensions when ready. While capture runs, timeline names timeline.jsonl, an append-only journal; once finished it names timeline.json, the complete timeline to read. The journal stays beside it as the raw log. The receipt’s frames field counts source frames (or retained samples when a source count is unavailable); browser video holds unchanged images using timestamps, so encoded frame count differs. Browser frameRate reports requestedFps, encodedFps (not distinct visual FPS), skippedFrameSlots under scheduling/encoder pressure, and unchangedFrameSlots saved by holding identical pixels. droppedFrames counts source queue evictions. Under contention, recording continues at reduced temporal sampling with original sharpness and duration; a stalled or failed encoder still reports interruption. encodedFrames/encodedDurationMs report retained playable output; a crash prefix can be shorter than capture duration. fps caps browser sampling and output (browser default/max 60; native defaults to the driver-advertised maximum, up to 60). maxSide caps output size; it does not fabricate source detail or alter devicePixelRatio. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
       page: "tab.evaluate(fn,...jsonArgs) or evaluate('expression') returns the JSON value of page JavaScript; the function is serialized into the page and cannot see program variables, and a throw reports its message and line. tab.inspect(ref,{attributes?,styles?}) reads {tag,text,attributes,box,visible,inViewport,value?,checked?,disabled?,styles?} without changing the page. tab.hover(ref|{x,y,view}), drag(from,to,{steps?,modifiers?}) (refs or points; handles pointer-event and native HTML5 drag and drop and always releases the button), scrollIntoView(ref), waitFor(condition,{timeoutMs?}). tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot({ref?,region?:{x,y,width,height},fullPage?,format?:png|jpeg,quality?,maxSide?}), upload(ref,files), dialog({auto?:'ask'|'accept'|'dismiss',respond?:'accept'|'dismiss',promptText?:string}), children(), retain(name), download({directory,ref?|url?,timeoutMs?}), downloadStatus(id,{timeoutMs?}), close(), release(), cdp(method,params?). Prefer the verbs above to cdp: raw Input events skip ref and view checks. tab.raw(name,args?) is the explicit page escape hatch; run mako-control api --domain DOMAIN --method METHOD for pinned CDP schemas. tab.locator({role,name}).screenshot({maxSide:2048}) reads and captures one exact element; emitImage(await ...) writes an image artifact; CLI output includes its receipt. dialog({}) reads pending without answering; respond answers only the current dialog, while auto changes future handling. A dialog-triggering click may already have run: inspect and answer it without repeating the click. Screenshot coordinates report actual image pixels and viewport CSS geometry; do not infer coordinates from a resized chat thumbnail. A Mako desk is a live client of the real app, not a side-effect-free sandbox, and refuses URLs outside its own origin. Profile/task/background defaults. name labels the task group; retain(name) keeps a result after task cleanup. children() returns {children:[{browser,tab,title,url}],note}; pass a child to control.claimTab(child). Extension downloads accept an explicit http(s) URL, await the browser-issued ID, and copy the completed file into a unique subdirectory of directory; browserPath retains the original. In-progress results have an id for downloadStatus, never repeat the start. Ref-triggered download routing and isolated contexts require direct CDP.",
@@ -2786,7 +2810,7 @@ export function createControlSession(
       command:
         "control.command({language:'shell'|'applescript'|'jxa',source,cwd?}) returns dispatch evidence plus result (stdout,stderr,exit_code,timed_out,truncated). Inspect exit_code; dispatch is not command success.",
       output:
-        "return value or console.log(value); emitImage(await handle.screenshot()) writes image artifacts within output budgets. artifacts.save(name,value) writes JSON, or an image from screenshot(), to a file and returns {path,bytes}. state retains handles across exec commands, checkpoint/recall retain bounded JSON facts; cancellation resets the worker. Await every action. Callbacks from a finished command cannot act in a later command.",
+        "return value or console.log(value). In js cells a string prints as itself, an SDK result (observation, receipt, screenshot, discovery list, wait) in its compact printed form, and any other value as compact JSON; CLI exec keeps one JSON value per block. A failure prints Error code (outcome): message, then the state-changing calls the cell had already made. emitImage(await handle.screenshot()) writes image artifacts within output budgets. artifacts.save(name,value) writes JSON, or an image from screenshot(), to a file and returns {path,bytes}. state retains handles across exec commands, checkpoint/recall retain bounded JSON facts; cancellation resets the worker. Await every action. Callbacks from a finished command cannot act in a later command; one that throws is reported at the start of the next cell and bindings are kept.",
     }
     return args.topic
       ? { version: reference.version, [args.topic]: reference[args.topic] }
