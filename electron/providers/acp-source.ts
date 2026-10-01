@@ -11,6 +11,7 @@ import type { JsonObject } from "../codex-app-json.js"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "../contracts/live-content.js"
+import type { TranscriptEvent } from "@mako/sessions/events"
 
 export type AcpTuning = SessionSettings
 
@@ -29,12 +30,18 @@ export interface AcpLaunchOptions {
   tuning?: AcpTuning
   /** The access tier selected before launch, for providers that read it from flags or environment. */
   access?: AccessTier
+  /** The folder the process runs in, for providers whose settings depend on it. */
+  cwd: string
 }
 
 export interface AcpLaunch {
   command: string
   args: string[]
   configureEnvironment(env: NodeJS.ProcessEnv): void
+  /** The tier the process really runs at, when the provider's own settings override the selected one. */
+  access?: AccessTier
+  /** Shown in the conversation once the session is ready, such as a setting that overrides the selected access. */
+  notices?: TranscriptEvent[]
   prepareMcp?(servers: readonly McpServer[], env: NodeJS.ProcessEnv): Promise<() => Promise<void>>
   /** Observe native decisions without taking over the provider's permission policy. */
   prepareApprovals?(input: {
@@ -53,7 +60,7 @@ export interface AcpApprovalObserver {
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict" | "approvalEvidence" | "approvalAnswerDigest" | "backgroundStop"> {
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "resumeVerdict" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop"> {
   /** Native tool identity supplied by provider extensions to ACP metadata. */
   toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
   /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */

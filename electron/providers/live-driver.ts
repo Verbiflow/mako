@@ -104,6 +104,15 @@ export interface ProviderStartOptions extends LiveStartOptions {
   threadEnvironment?: ThreadEnvironment
 }
 
+/**
+ * How the harness plans natively: a mode on its ladder, or a setting chosen
+ * per send beside the model. `proposal` names the native record that carries
+ * the plan to Mako's plan card, live and in saved history.
+ */
+export type PlanningCapability =
+  | { via: "mode"; mode: string; proposal: string }
+  | { via: "setting"; option: string; proposal: string }
+
 export interface ProviderLiveDriver extends ProviderCapability {
   /** Nonblocking session questions. Ordinary user input retires their Mako forms;
    * exact answers preserve other questions. Native history supplies the same
@@ -114,6 +123,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
     history?(binding: ProviderBinding): Promise<import("../contracts/live-questions.js").NativeQuestionHistory>
   }
   approvalEvidence: ApprovalEvidenceCapability
+  planning: PlanningCapability
   /** Hash the exact provider encoding before sending, without retaining answer text. */
   approvalAnswerDigest?(request: import("../shared.js").LivePermissionRequest, response: LivePermissionResponse): string | undefined
   observesNativeAgents?: true
@@ -184,6 +194,15 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
       throw new Error(`${driver.provider}: mode ${mode.id} names a tier with no enforcer`)
   if (driver.defaultMode && !driver.modes?.some((mode) => mode.id === driver.defaultMode))
     throw new Error(`${driver.provider}: defaultMode ${driver.defaultMode} is not one of its declared modes`)
+  const planning = driver.planning
+  if (!planning) throw new Error(`${driver.provider}: doesn't say how it plans`)
+  if (planning.via === "mode" && driver.modes?.find((mode) => mode.id === planning.mode)?.access !== "plan")
+    throw new Error(`${driver.provider}: plans through mode ${planning.mode}, which its ladder doesn't offer as Plan`)
+  if (planning.via === "mode" && planning.mode === driver.defaultMode)
+    throw new Error(`${driver.provider}: a fresh session can't start in Plan unasked`)
+  if (planning.via === "setting" && driver.modes?.some((mode) => mode.access === "plan"))
+    throw new Error(`${driver.provider}: plans through a setting and a mode at once`)
+  if (!planning.proposal.trim()) throw new Error(`${driver.provider}: says nothing of how its plan reaches Mako`)
   const background = driver.backgroundStop
   const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : ""
   if (!reason.trim())

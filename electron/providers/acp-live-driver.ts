@@ -11,6 +11,7 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
   return {
     provider: source.provider,
     approvalEvidence: source.approvalEvidence,
+    planning: source.planning,
     backgroundStop: source.backgroundStop,
     approvalAnswerDigest: source.approvalAnswerDigest,
     observesNativeAgents: source.observeAgents ? true : undefined,
