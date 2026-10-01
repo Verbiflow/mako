@@ -35,6 +35,7 @@ import { archiveSessionTab, hasThreadUndo, threadUndoLabel, undoLastThreadChange
 import { chatPanes, engageWorkbenchPane, splitOnScreenSession } from "@/state/session-panes"
 import { search } from "@/state/search"
 import { cycleComposerRole } from "@/state/composer-settings"
+import { togglePlanMode } from "@/state/plan-mode"
 import { applyLoadoutEntry } from "@/state/model-loadout"
 import { AGENT_TAB_ID, viewer, viewerStore } from "@/state/viewer"
 import { markAllSeen, nextUnseen, openItem } from "@/state/notifications"
@@ -371,6 +372,21 @@ const DESK_COMMANDS: DeskCommand[] = [
       const landed = cycleComposerRole("speed")
       toast(
         landed ? `Fast lane: ${landed}` : "This model reports no fast lane"
+      )
+    },
+  },
+  {
+    id: "composer.toggle-plan",
+    title: "Toggle plan mode",
+    section: "Model",
+    hint: "Shift+Tab in the composer · the agent plans before changing anything",
+    run: () => {
+      void togglePlanMode().then(
+        (on) => toast(on === null ? "This agent has no plan mode" : on ? "Plan mode on" : "Plan mode off"),
+        (error) =>
+          toast.error("Plan mode did not change", {
+            description: error instanceof Error ? error.message : String(error),
+          })
       )
     },
   },
