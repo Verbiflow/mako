@@ -2,6 +2,9 @@ import type { OpenCodeClient } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import type { LiveSessionCommand } from "../../shared.js"
+import { readFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { z } from "zod"
 
 export interface OpenCodeModelRef { id: string; providerID: string; variant?: string }
@@ -20,15 +23,22 @@ export interface OpenCodeCatalog {
 /** OpenCode's own default variant is its unnamed configuration, not a value to choose. */
 const NATIVE_DEFAULT_VARIANT = "default"
 
-export async function loadOpenCodeCatalog(client: OpenCodeClient, directory: string, signal: AbortSignal): Promise<OpenCodeCatalog> {
+export async function loadOpenCodeCatalog(
+  client: OpenCodeClient,
+  directory: string,
+  signal: AbortSignal,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<OpenCodeCatalog> {
   const location = { directory }
   const options = { signal }
-  const [models, fallback, agents, commands, skills] = await Promise.all([
+  const [models, fallback, agents, commands, skills, config, recent] = await Promise.all([
     client.model.list({ location }, options),
     client.model.default({ location }, options),
     client.agent.list({ location }, options),
     client.command.list({ location }, options),
     client.skill.list({ location }, options),
+    client.config.get({ location }, options).catch(() => []),
+    recentOpenCodeModels(env),
   ])
   const enabled = models.data.filter(model => model.enabled && model.status !== "deprecated")
   const catalog = normalizeOpenCodeModels(enabled.map(model => ({
@@ -45,10 +55,16 @@ export async function loadOpenCodeCatalog(client: OpenCodeClient, directory: str
   const limits = new Map(enabled.map(model => [`${model.providerID}/${model.id}`, model.limit.context]))
   const names = new Set(commands.data.map(command => command.name))
   const slashSkills = skills.data.filter(skill => skill.slash !== false && !names.has(skill.id))
+  // OpenCode's own order for a new session: a configured `model`, then the
+  // newest recent model it still offers, then its provider default. The
+  // server's default skips the recent list, which can land on a provider the
+  // account has credentials for but can't use.
+  const configured = config.some(entry => entry.type === "document" && entry.info.model !== undefined)
+  const used = configured ? undefined : recent.find(ref => limits.has(openCodeLaunchId(ref)))
   return {
     models: catalog.models,
     limits,
-    defaultModel: fallback.data ? { id: fallback.data.id, providerID: fallback.data.providerID } : undefined,
+    defaultModel: used ?? (fallback.data ? { id: fallback.data.id, providerID: fallback.data.providerID } : undefined),
     agents: agents.data.filter(agent => agent.mode !== "subagent" && !agent.hidden)
       .map(agent => ({ id: agent.id, name: agent.name, description: agent.description })),
     commands: [
@@ -57,6 +73,21 @@ export async function loadOpenCodeCatalog(client: OpenCodeClient, directory: str
       ...slashSkills.map(skill => ({ name: skill.id, description: skill.description ?? skill.name })),
     ],
     skills: new Map(slashSkills.map(skill => [skill.id, { id: skill.id, name: skill.name }])),
+  }
+}
+
+const RecentModelsSchema = z.object({
+  recent: z.array(z.object({ providerID: z.string().min(1), modelID: z.string().min(1) })).catch([]),
+})
+
+/** The models OpenCode's own interface last used, newest first, from its state file. */
+async function recentOpenCodeModels(env: NodeJS.ProcessEnv): Promise<OpenCodeModelRef[]> {
+  const state = env.XDG_STATE_HOME || join(homedir(), ".local", "state")
+  try {
+    const parsed = RecentModelsSchema.safeParse(JSON.parse(await readFile(join(state, "opencode", "model.json"), "utf8")))
+    return parsed.success ? parsed.data.recent.map(entry => ({ id: entry.modelID, providerID: entry.providerID })) : []
+  } catch {
+    return []
   }
 }
 

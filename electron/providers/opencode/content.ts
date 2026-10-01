@@ -1,10 +1,9 @@
 import type { OpenCodeEvent } from "@opencode/client"
-import { clip, normalizeToolOutput } from "@mako/sessions"
+import { clip, normalizeToolOutput, openCodePlan } from "@mako/sessions"
 import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "@mako/sessions/content"
 import { isAbsolute, join } from "node:path"
 import { z } from "zod"
 import type { LiveUpdate } from "../../shared.js"
-import { OPENCODE_PLAN_AGENT } from "./access.js"
 
 const Edit = z.object({ path: z.string().optional(), filePath: z.string().optional(), oldString: z.string().optional(), newString: z.string().optional(), content: z.string().optional() })
 const Todo = z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() })) })
@@ -127,23 +126,18 @@ export class OpenCodeContent {
     }
   }
 
-  /**
-   * OpenCode's Plan agent has no plan tool: it is told to discuss the plan in
-   * the conversation and to ask its questions with the question tool (opencode
-   * 2.0.1). So the reply of a Plan step that ends the turn is its plan, and
-   * the streamed text folds into the plan card.
-   */
+  /** A Plan step that ends the turn folds its streamed reply into the plan card (`openCodePlan`). */
   private stepEnded(event: StepEnded): LiveUpdate[] {
     const { sessionID, assistantMessageID, finish } = event.data
     const step = sessionID === this.root ? this.steps.get(assistantMessageID) : undefined
     this.steps.delete(assistantMessageID)
-    if (step?.agent !== OPENCODE_PLAN_AGENT || finish !== "stop" || step.texts.size === 0) return []
+    if (!step) return []
     const ordinals = [...step.texts.keys()].sort((a, b) => a - b)
-    const text = ordinals.map((ordinal) => step.texts.get(ordinal)!.trim()).filter(Boolean).join("\n\n")
-    if (!text) return []
+    const plan = openCodePlan(assistantMessageID, step.agent, finish, ordinals.map((ordinal) => step.texts.get(ordinal)!))
+    if (!plan) return []
     return [
       { kind: "retract", ids: ordinals.map((ordinal) => `${assistantMessageID}:${ordinal}`) },
-      { kind: "proposed-plan", id: `opencode:${assistantMessageID}`, text, status: "proposed", replace: true },
+      { kind: "proposed-plan", id: plan.id, text: plan.text, status: "proposed", replace: true },
     ]
   }
 
@@ -173,7 +167,7 @@ export class OpenCodeContent {
   private start(sessionID: string, id: string, name: string): LiveUpdate[] {
     if (this.tools.size >= MAX_OPEN_TOOLS) this.tools.delete(this.tools.keys().next().value!)
     this.tools.set(id, { sessionID, name, title: name, input: {} })
-    return [{ kind: "tool", id, title: `${this.prefix(sessionID)}${name}`, toolKind: openCodeToolKind(name), status: "pending" }]
+    return [{ kind: "tool", id, title: `${this.prefix(sessionID)}${name}`, name, toolKind: openCodeToolKind(name), status: "pending" }]
   }
 
   private tool(event: Extract<ToolEvent, { type: "session.tool.input.started" | "session.tool.called" | "session.tool.progress" | "session.tool.success" | "session.tool.failed" }>): LiveUpdate[] {

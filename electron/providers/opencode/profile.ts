@@ -95,7 +95,7 @@ async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, 
     await api.watch.step("plugin activation", api.client.plugin.awaitActivation({ location: { directory } }))
     for (;;) {
       const seen = changes
-      const catalog = await api.watch.step("catalog", loadOpenCodeCatalog(api.client, directory, api.signal))
+      const catalog = await api.watch.step("catalog", loadOpenCodeCatalog(api.client, directory, api.signal, env))
       if (seen === changes) return catalog
     }
   } finally {

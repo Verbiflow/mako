@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { openCodeNoticeLabel, PROVIDER_TURN_FALLBACK } from "@mako/sessions"
+import { isOpenCodeInstruction, openCodeNoticeLabel, PROVIDER_TURN_FALLBACK } from "@mako/sessions"
 import { compactionFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { z } from "zod"
 import { applyControlEnvironment } from "../../control-launch.js"
@@ -13,6 +13,7 @@ import { applyThreadEnvironment } from "../../thread-environment.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { traceProviderLaunch } from "../../provider-launch.js"
 import type { AccessTier } from "../../contracts/access.js"
+import { OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import type { LiveActionResult } from "../../contracts/live-actions.js"
 import type { LiveSessionState, McpRegistrySnapshot, PromptAttachment } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
@@ -70,6 +71,8 @@ interface Turn {
   delivered: boolean
   dispatch?: PromptDispatch
   actionId?: string
+  /** Mako asked OpenCode to stop it; any other interrupt came from outside. */
+  stopRequested?: true
 }
 
 interface Live {
@@ -77,6 +80,8 @@ interface Live {
   emit: NonNullable<ProviderStartOptions["emit"]>
   api: Api
   cwd: string
+  /** The launch environment, which says where OpenCode keeps its state. */
+  env: NodeJS.ProcessEnv
   root?: string
   children: Set<string>
   catalog?: OpenCodeCatalog
@@ -218,7 +223,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   async function loadCatalog(live: Live): Promise<OpenCodeCatalog> {
     for (;;) {
       const generation = live.catalogGeneration
-      const catalog = await loadOpenCodeCatalog(live.api.client, live.cwd, live.api.signal)
+      const catalog = await loadOpenCodeCatalog(live.api.client, live.cwd, live.api.signal, live.env)
       if (generation === live.catalogGeneration || live.closed) return live.catalog = catalog
     }
   }
@@ -336,7 +341,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     const metadata = parsed.success ? parsed.data : {}
     const ended = metadata.shellID ?? metadata.childID
     if (ended && live.stopped.delete(ended)) live.stopNotices.add(inboxID)
-    if (!live.turn) live.providerTurnCause = openCodeNoticeLabel({ text: notice.text, description: notice.description, source: metadata.source, state: metadata.state })
+    const read = { text: notice.text, description: notice.description, source: metadata.source, state: metadata.state }
+    if (!live.turn && !isOpenCodeInstruction(read)) live.providerTurnCause = openCodeNoticeLabel(read)
   }
 
   function mark(live: Live, markers: readonly TranscriptEvent[]): void {
@@ -400,9 +406,11 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       case "session.inbox.delivered":
         if (event.data.sessionID !== root) return
         if (live.turn?.inboxId === event.data.inboxID) live.turn.delivered = true
-        if (live.stopNotices.delete(event.data.inboxID) && live.turn?.kind === "provider")
+        if (live.stopNotices.delete(event.data.inboxID) && live.turn?.kind === "provider") {
+          live.turn.stopRequested = true
           live.api.client.session.interrupt({ sessionID: root }).catch(error =>
             hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText({ error }) }))
+        }
         return
       case "session.execution.started":
         if (event.data.sessionID === root && !live.turn && (live.state.status === "ready" || live.state.status === "failed"))
@@ -422,8 +430,13 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           for (const settle of live.childSettling.get(sessionID) ?? []) settle()
           return
         }
-        const stopped = event.type === "session.execution.interrupted" ? openCodeStopped(event.data.reason) : undefined
-        if (stopped) engine.event(live, stopped, event.id)
+        const stopped = event.type === "session.execution.interrupted"
+          ? openCodeStopped(event.data.reason, live.turn?.stopRequested === true)
+          : undefined
+        if (stopped) {
+          engine.event(live, stopped, event.id)
+          hostWarn("opencode", "turn interrupted", { conversation: live.state.id, reason: event.type === "session.execution.interrupted" ? event.data.reason : "", detail: stopped.detail ?? "" })
+        }
         if (!live.turn?.delivered) return
         if (event.type === "session.execution.succeeded") finish(live, { kind: "succeeded" })
         else if (event.type === "session.execution.failed") finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
@@ -649,6 +662,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   return {
     provider: "opencode",
+    planning: { via: "mode", mode: OPENCODE_PLAN_AGENT, proposal: "The Plan agent's reply to a step that ends its turn, built by a message to Build" },
     approvalEvidence: {
       kind: "native-decisions",
       recovery: "retained-observer",
@@ -694,7 +708,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const approvalRoot = await dependencies.approvalRoot()
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
       const live: Live = {
-        api, cwd, emit: options.emit, launchAccess, children: new Set(), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
+        api, cwd, env, emit: options.emit, launchAccess, children: new Set(), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
         mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
         shells: new OpenCodeShells(sessionID => owns(live, sessionID)), settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
         state: {
@@ -865,6 +879,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return
       }
       live.settling.push(end)
+      turn.stopRequested = true
       let interrupted: boolean
       try {
         interrupted = (await live.api.client.session.interrupt({ sessionID: live.root })).interrupted

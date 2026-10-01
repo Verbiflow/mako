@@ -67,9 +67,14 @@ const STOPPED = {
   inactivity: "the workspace was idle too long",
 } satisfies Record<Exclude<Interruption, "user">, string>
 
-/** A turn OpenCode ended on its own; one the user stopped needs no marker. */
-export function openCodeStopped(reason: Interruption): TranscriptEvent | undefined {
-  return reason === "user" ? undefined : event("Stopped by OpenCode", STOPPED[reason])
+/**
+ * A turn OpenCode ended on its own, or a client other than Mako stopped
+ * (OpenCode's service is shared, and every client's interrupt reads "user").
+ * One stopped from Mako needs no marker.
+ */
+export function openCodeStopped(reason: Interruption, requested: boolean): TranscriptEvent | undefined {
+  if (reason !== "user") return event("Stopped by OpenCode", STOPPED[reason])
+  return requested ? undefined : event("Stopped outside Mako", "another OpenCode client interrupted this turn")
 }
 
 type McpStatus = McpServer["status"]["status"]

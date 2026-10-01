@@ -1,10 +1,9 @@
 import { accessModeId, accessTierInfo, accessTierOfModeId, type AccessTier } from "../../contracts/access.js"
+import { OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import type { LiveSessionMode } from "../../shared.js"
 
 /** The native agent the launch presets configure. It is shown as the preset, never by name. */
 export const OPENCODE_BASE_AGENT = "build"
-/** OpenCode's read-only planning agent, Mako's plan mode. */
-export const OPENCODE_PLAN_AGENT = "plan"
 const LAUNCH_TIERS = ["ask", "edits", "full"] as const satisfies readonly AccessTier[]
 
 function launchMode(tier: AccessTier): LiveSessionMode {
