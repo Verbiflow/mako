@@ -1,41 +1,44 @@
-import { z } from "zod"
 import type { ProposedPlan } from "@mako/sessions/content"
+import { PlanBuildsSchema, type PlanBuild, type PlanBuilds } from "../../electron/contracts/plan-builds.ts"
+import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 
-/**
- * Plans the user built, by plan id, so a plan card says it was built and
- * where. A plan counts as built when its implementation request was sent or
- * its native plan approval was answered with the approval's own choice; a
- * new session opened with the plan in its draft is not built until that
- * draft is sent. Kept on this machine, newest `MAX_BUILDS`.
- */
-const STORAGE_KEY = "mako.plan-builds.v1"
-const MAX_BUILDS = 200
+export type { PlanBuild }
 
-const PlanBuildSchema = z.object({
-  at: z.number(),
-  /** The live conversation the implementation went to. */
-  conversation: z.string().optional(),
-  /** The thread it went to, when it was not a live conversation. */
-  thread: z.string().optional(),
-})
-export type PlanBuild = z.infer<typeof PlanBuildSchema>
-const BuildsSchema = z.record(z.string(), PlanBuildSchema)
+/** Where builds were kept before the host kept them: one window origin on one computer. */
+const LEGACY_STORAGE_KEY = "mako.plan-builds.v1"
 
 interface PlanBuildsState {
-  builds: z.infer<typeof BuildsSchema>
+  builds: PlanBuilds
 }
 
-function load(): PlanBuildsState["builds"] {
-  try {
-    return BuildsSchema.catch({}).parse(JSON.parse(globalThis.localStorage?.getItem(STORAGE_KEY) ?? "{}"))
-  } catch {
-    return {}
-  }
-}
-
-export const planBuildsStore = createStore<PlanBuildsState>({ builds: load() })
+/** The host's record of built plans (`electron/contracts/plan-builds.ts`). */
+export const planBuildsStore = createStore<PlanBuildsState>({ builds: {} })
 export const usePlanBuilds = createHook(planBuildsStore)
+
+export function applyPlanBuilds(builds: PlanBuilds): void {
+  planBuildsStore.set({ builds })
+}
+
+/** Reads the host's record, after handing it what this window kept on its own. */
+export async function loadPlanBuilds(): Promise<void> {
+  if (!hasBridge()) return
+  await handOverLegacyBuilds()
+  applyPlanBuilds(await getMako().planBuilds())
+}
+
+async function handOverLegacyBuilds(): Promise<void> {
+  const raw = globalThis.localStorage?.getItem(LEGACY_STORAGE_KEY)
+  if (raw == null) return
+  let legacy: PlanBuilds = {}
+  try {
+    legacy = PlanBuildsSchema.catch({}).parse(JSON.parse(raw))
+  } catch {
+    // Unreadable: nothing to hand over.
+  }
+  for (const [planId, build] of Object.entries(legacy)) await getMako().recordPlanBuild(planId, build)
+  globalThis.localStorage?.removeItem(LEGACY_STORAGE_KEY)
+}
 
 /** Where a plan's implementation went. */
 export interface PlanBuildTarget {
@@ -43,21 +46,15 @@ export interface PlanBuildTarget {
   thread?: string
 }
 
+/** Shows the build at once; the host keeps it and tells every window. */
 export function recordPlanBuild(plan: Pick<ProposedPlan, "id">, target: PlanBuildTarget, at = Date.now()): void {
   const build: PlanBuild = { at }
   if (target.conversation) build.conversation = target.conversation
   if (target.thread) build.thread = target.thread
-  const kept = Object.entries(planBuildsStore.get().builds)
-    .filter(([id]) => id !== plan.id)
-    .sort(([, a], [, b]) => b.at - a.at)
-    .slice(0, MAX_BUILDS - 1)
-  const builds = Object.fromEntries([[plan.id, build], ...kept])
-  planBuildsStore.set({ builds })
-  try {
-    globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(builds))
-  } catch {
-    // The card still shows it for this run; only the record across restarts is lost.
-  }
+  planBuildsStore.set({ builds: { ...planBuildsStore.get().builds, [plan.id]: build } })
+  if (hasBridge()) void getMako().recordPlanBuild(plan.id, build).catch(() => {
+    // The card still shows it in this window; only the shared record misses it.
+  })
 }
 
 /** The build recorded for a plan, if any. */

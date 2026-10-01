@@ -72,7 +72,7 @@ export function retainLiveDetails(snapshot: LiveSnapshot): LiveSnapshot {
   const base = snapshot.base ? { ...snapshot.base, entries: snapshot.base.entries.map(entry => entry.kind === "assistant"
     ? { ...entry, blocks: entry.blocks.map(block => {
       const retained = block.type === "tool" && block.historyVersion ? details.get(block.historyVersion) : undefined
-      return retained?.type === "tool" && "name" in retained ? retained : block
+      return retained?.type === "tool" && !("title" in retained) ? retained : block
     }) } : entry) } : null
   return { ...snapshot, blocks, base }
 }
@@ -134,7 +134,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       if (!base) return
       const local = at.entry - base.start
       const entry = base.entries[local]
-      if (entry?.kind !== "assistant" || value.type !== "tool" || !("name" in value)) return
+      if (entry?.kind !== "assistant" || value.type !== "tool" || "title" in value) return
       const blocks = entry.blocks.slice()
       blocks[at.block] = value
       const entries = base.entries.slice()

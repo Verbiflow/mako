@@ -65,13 +65,19 @@ export function restorePendingPlan(target: ComposerTarget, conversation: string)
 /** The part of a start that carries plan mode. */
 export interface PlanStart {
   modeId?: string
+  launchModeId?: string
   tuning: SessionSettings
 }
 
-/** What a start sends for its plan choice: the setting rides the tuning, the mode is the mode. */
+/**
+ * What a start sends for its plan choice: the setting rides the tuning, the
+ * mode is the mode, and the level it replaces is the one a launch-only
+ * harness starts at, to return to once the plan is approved.
+ */
 export function withNativePlan(plan: NativePlan | undefined, start: PlanStart): PlanStart {
   if (!plan) return start
-  if (plan.kind === "mode") return { ...start, modeId: plan.mode }
+  if (plan.kind === "mode")
+    return { ...start, modeId: plan.mode, ...(start.modeId && start.modeId !== plan.mode ? { launchModeId: start.modeId } : {}) }
   return { ...start, tuning: { ...start.tuning, options: { ...start.tuning.options, [plan.option]: true } } }
 }
 

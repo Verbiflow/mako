@@ -56,7 +56,7 @@ import {
   type LiveAcpConversation,
   type StartingAcpConversation,
 } from "@/state/acp-state"
-import { prefsStore } from "@/state/prefs"
+import { prefsStore, setPref } from "@/state/prefs"
 import { refreshWorktrees } from "@/state/worktrees"
 import {
   markThreadReviewed,
@@ -83,6 +83,26 @@ export type {
   AcpState,
   LiveAcpConversation,
   StartingAcpConversation,
+}
+
+/**
+ * A title Mako chose rather than read from the prompt stays the Thread's
+ * name: agents that title their own sessions (Grok, Devin) would replace it.
+ */
+function keepTitle(key: string, title: string): void {
+  const kept = (): boolean => {
+    const conversation = acpStore.get().conversations[key]
+    if (!conversation) return true
+    if (!conversation.threadPath) return false
+    const { titleOverrides } = prefsStore.get()
+    if (!titleOverrides[conversation.threadPath])
+      setPref("titleOverrides", { ...titleOverrides, [conversation.threadPath]: title })
+    return true
+  }
+  if (kept()) return
+  const stop = acpStore.subscribe(() => {
+    if (kept()) stop()
+  })
 }
 
 export const acp = {
@@ -386,7 +406,7 @@ export const acp = {
     }
     // Named from the first prompt, the way every other thread is; the
     // provider's own title replaces it once the session file reports one.
-    const title = displayPrompt ? titleFromPrompt(displayPrompt) : undefined
+    const title = titleFromPrompt(displayPrompt, attachments.map((item) => item.name))
     const starting = beginStart({
       harness,
       cwd,
@@ -409,7 +429,10 @@ export const acp = {
     if (!hasBridge()) return false
     const starting = beginStart({ harness, cwd, title, blocks: [{ type: "user", text: prompt }], hiddenUserPrompt: null, worktree: true })
     const sent = await launch(starting, { title, worktree: true }, prompt)
-    if (sent) void refreshWorktrees().catch(() => {})
+    if (sent) {
+      void refreshWorktrees().catch(() => {})
+      keepTitle(starting.key, title)
+    }
     return sent
   },
 

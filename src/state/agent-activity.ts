@@ -1,5 +1,6 @@
 import type { AcpBlock } from "@/lib/acp-blocks"
-import { liveToolName } from "@/lib/tools"
+import { liveToolIdentity } from "@/lib/tools"
+import { toolKindActivity } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
 
 export type AgentActivityKind = "working" | "connecting" | "reasoning" | "searching" | "executing" | "editing" | "responding" | "waiting" | "failed" | "complete" | "idle"
@@ -26,21 +27,18 @@ export interface AgentActivity {
  */
 export const QUIET_AFTER_MS = 60_000
 
-export function toolActivity(name: string): AgentActivityKind {
-  const tool = name.toLowerCase().split(".").at(-1)
-  if (["edit", "write", "apply_patch", "multiedit", "delete", "move", "write_file"].includes(tool ?? "")) return "editing"
-  if (["grep", "glob", "rg", "find", "read", "readfile", "read_file", "websearch", "web_search", "webfetch", "ls"].includes(tool ?? "")) return "searching"
-  return "executing"
-}
-
-export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, preparing, quietForMs = 0, native }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; preparing: boolean; quietForMs?: number; native?: NativeActivity }): AgentActivity {
+export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, preparing, quietForMs = 0, native, harness }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; preparing: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
   if (connecting) return { kind: "connecting", label: makingWorktree ? "Making a worktree" : "Connecting" }
   if (preparing) return { kind: "connecting", label: "Sending" }
   if (native) return nativeAgentActivity(native)
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
   const tool = blocks.findLast((block) => block.type === "tool" && block.status === "pending")
-  if (tool?.type === "tool") return { kind: toolActivity(liveToolName(tool.toolKind, tool.title)), label: quiet ? `${quiet} · ${tool.title}` : tool.title }
+  if (tool?.type === "tool") {
+    const identity = liveToolIdentity(tool, harness)
+    const label = !identity.target ? identity.label : identity.kind === "shell" ? identity.target : `${identity.label} · ${identity.target}`
+    return { kind: toolKindActivity(identity.kind), label: quiet ? `${quiet} · ${label}` : label }
+  }
   const last = blocks.at(-1)
   if (last?.type === "thinking" && last.text.length > 0) return { kind: "reasoning", label: quiet ?? "Reasoning" }
   if (last?.type === "text" && last.text.length > 0) return quiet ? { kind: "working", label: quiet } : { kind: "responding", label: "Responding" }

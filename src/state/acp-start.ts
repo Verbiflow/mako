@@ -19,6 +19,8 @@ import {
   updateAcpConversation,
   type StartingAcpConversation,
 } from "@/state/acp-state"
+import { threadsStore } from "@/state/thread-store"
+import { parseThreadReferenceAppendix } from "@/lib/thread-references"
 import { toast } from "sonner"
 import { restorePendingPlan, takePendingPlan, withNativePlan } from "@/state/plan-choice"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage, type OutboxCommand } from "@/state/message-outbox"
@@ -30,12 +32,27 @@ export type AcpStartOptions = Omit<
 
 const MAX_PROMPT_TITLE = 60
 
-/** The first line of a prompt, as the rail names every other thread. */
-export function titleFromPrompt(prompt: string): string | undefined {
-  const text = prompt
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line && !/^\[[^\]]+\]$/.test(line))
+/**
+ * The first line of a prompt, as the rail names every other thread. A
+ * referenced conversation reads as its title; attachment markers aren't
+ * words, and a prompt that is only attachments takes the first one's name.
+ */
+export function titleFromPrompt(
+  prompt: string,
+  attachmentNames: readonly string[] = []
+): string | undefined {
+  const { body, references } = parseThreadReferenceAppendix(prompt)
+  const text =
+    body
+      .split("\n")
+      .map((line) =>
+        line
+          .replace(/\[Referenced conversation (\d+)\]/g, (_match, number: string) => references[Number(number) - 1]?.title ?? "")
+          .replace(/\[Attachment \d+\]/g, "")
+          .replace(/\s+/g, " ")
+          .trim()
+      )
+      .find((line) => line && !/^\[[^\]]+\]$/.test(line)) ?? attachmentNames[0]
   if (!text) return undefined
   return text.length > MAX_PROMPT_TITLE
     ? `${text.slice(0, MAX_PROMPT_TITLE - 1)}…`
@@ -81,6 +98,9 @@ export function beginStart(input: BeginStartInput): StartingAcpConversation {
   conversation.projection = projectAcp(conversation)
   replaceAcpConversation(key, conversation)
   acpStore.set({ activeKey: key })
+  // The composer now addresses this conversation, so its pickers read this
+  // agent's settings, not the one the composer had picked before.
+  if (threadsStore.get().composerHarness !== input.harness) threadsStore.set({ composerHarness: input.harness })
   return conversation
 }
 

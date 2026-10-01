@@ -8,6 +8,7 @@ import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { refreshWorktrees } from "@/state/worktrees"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
+import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
@@ -228,6 +229,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "workspace-moves") {
     applyWorkspaceMoves(event.moves)
+    return
+  }
+  if (event.type === "plan-builds") {
+    applyPlanBuilds(event.builds)
     return
   }
   if (event.type === "workspace-moved") {
@@ -601,6 +606,7 @@ function adoptBoot(boot: BootPayload) {
   void loadGroups()
   void loadWorktrees()
   void loadWorkspaceMoves().catch(() => {})
+  void loadPlanBuilds().catch(() => {})
   followChatFolders()
   refollowCheckouts()
   if (!boot.archives) void threadLifecycle.load()
@@ -655,6 +661,7 @@ export const actions = {
       void providers.loadRuntimeUpdates()
       void threads.load()
       void loadGroups()
+      void loadPlanBuilds().catch(() => {})
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
       if (epoch === connectionEpoch) hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })
