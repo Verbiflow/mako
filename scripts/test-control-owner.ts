@@ -12,7 +12,7 @@ import { BrowserService } from "../packages/control-runtime/src/browser-service.
 import { browserFixture } from "./browser-control-fixture.js"
 import {
   applyControlEnvironment,
-  controlLaunchInstructions,
+  launchInstructions,
 } from "../electron/control-launch.js"
 const run = promisify(execFile)
 const fixture = await browserFixture()
@@ -44,7 +44,7 @@ try {
   assert.equal(env.MAKO_CONTROL_URL, undefined)
   assert.equal(env.MAKO_CONTROL_SESSION_FILE, launch.sessionFile)
   assert.ok(env.PATH?.startsWith(launch.bin))
-  assert.ok(controlLaunchInstructions(launch).includes(launch.command))
+  assert.ok(launchInstructions(launch)?.includes(launch.command))
   const grant = grants.mint("binding", "conversation")
   assert.ok(grant.computerUrl)
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.computerUrl), {
@@ -66,7 +66,8 @@ try {
   const recovered = await agent.callTool({ name: "js", arguments: { code: 'typeof retained' } })
   assert.equal(recovered.isError, undefined, JSON.stringify(recovered))
   assert.match(JSON.stringify(recovered), /undefined/)
-  assert.match(JSON.stringify(recovered), /Mako browser and computer use/)
+  assert.match(JSON.stringify(recovered), /Program state was reset/)
+  assert.doesNotMatch(JSON.stringify(recovered), /Mako browser and computer use/, "documentation is printed once per session")
   await run(launch.command, ["connect", "--browser", "fixture"])
   await run(launch.command, ["open", "--browser", "fixture"])
   assert.equal(fixture.targets.size, 1)
@@ -75,7 +76,7 @@ try {
   await delay(300)
   const afterLateFailure = await agent.callTool({ name: "js", arguments: { code: 'await control.browsers()' } })
   assert.equal(afterLateFailure.isError, undefined, JSON.stringify(afterLateFailure))
-  assert.match(JSON.stringify(afterLateFailure), /Mako browser and computer use/)
+  assert.match(JSON.stringify(afterLateFailure), /Program state was reset/)
   assert.equal(fixture.targets.size, 1, "An idle program fault must not close the task's targets")
   assert.ok(sessions.get("binding"), "An idle Worker error must not kill the desktop owner")
   const descriptor = JSON.parse(await readFile(launch.sessionFile, "utf8"))

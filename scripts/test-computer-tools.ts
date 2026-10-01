@@ -1078,7 +1078,7 @@ try {
 
   assert.match(
     unifiedClient.instructions ?? "",
-    /provider-neutral code API/
+    /persistent JavaScript over the control SDK/
   )
   const help = JSON.parse(
     firstText(
@@ -1510,7 +1510,7 @@ return {hidden,chord};`,
   })
   assert.ok(!backgroundRefusals.isError, JSON.stringify(backgroundRefusals))
   const refusals = JSON.parse(firstText(backgroundRefusals.content))
-  assert.match(refusals.hidden, /Nothing was dispatched/)
+  assert.match(refusals.hidden, /nothing was dispatched/i)
   assert.match(refusals.chord, /foreground-required/)
 } finally {
 

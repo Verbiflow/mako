@@ -27,6 +27,7 @@
     "typecheck": "tsgo -b --force"
   },
   "dependencies": {
+    "acorn": "8.18.0",
     "devtools-protocol": "0.0.1692173",
     "zod": "4.4.3"
   },

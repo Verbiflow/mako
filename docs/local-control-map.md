@@ -1,6 +1,6 @@
 # Local Control wayfinder
 
-Updated 2026-09-28. This is the current plan for browser and computer control across
+Updated 2026-09-30. This is the current plan for browser and computer control across
 all harnesses, desktop Mac and isolated Linux cloud jobs. The goal is accurate,
 responsive complete workflows through a typed engine, agent MCP and composable CLI. Full ChatGPT/Codex
 parity has not been established.
@@ -85,6 +85,17 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
   label is not a boundary.
 
 ## Delivery order
+
+**September 30: the usage-audit fixes ([U01–U11](local-control-agent-issues.md#september-30-usage-audit)) are in source, not installed.**
+They come from reading every SDK call agents made through Mako. The changes:
+- page verbs, so pages need no raw CDP: `waitFor`, `evaluate`, `inspect`, `hover`, `drag` (including HTML5 drag and drop) and `scrollIntoView`;
+- name patterns;
+- REPL cells that can redeclare bindings and `return`;
+- refs that survive a page screenshot;
+- documentation printed once, as plain text;
+- smaller `apps()` and `tabs()` output.
+
+`scripts/test-control-page-verbs.ts` checks them against a real Chromium it launches itself. Two fresh agents finished a seven-step page task with at most one help lookup, no raw CDP and no sleeps. The next installed candidate must include them; then repeat that fresh-agent task on it.
 
 **Next (September 29): candidate from `dac8a05` installs when the default host is idle (`release/rollout-20260929`).**
 Both earlier jobs stopped the same way. The host quit for the install, Mako was
@@ -613,7 +624,10 @@ streaming implementation until its Linux environment is defined.
 
 **Status: partial; each original complaint has its own ledger entry.**
 [Discovery/API issues](local-control-agent-issues.md#discovery-targeting-and-api),
+[September 30 usage audit](local-control-agent-issues.md#september-30-usage-audit),
 [recorded request-shape failure](audits/2026-09-22/background-control-fixes/agent-request-shape.md).
+
+The SDK changes from the September 30 usage audit are in source but not installed. The documentation lives in `control-agent-docs.ts` (the tool description and the once-per-session docs) and in `controlHelp` in `control-session.ts` (the topics). Page verbs are browser commands in `contracts/browser-control.ts` and `browser-service.ts`: `inspect` is read-only, while `drag` and `scrollIntoView` mutate. The client methods are in `packages/control/src/control/client.ts`. Name matching is `nameMatches` in `scope.ts`, shared by the client, the browser service and native scoping. REPL source changes are confined to `replSource` in `program/repl.ts`.
 
 Native screenshots now validate supported options, honor resizing/format requests
 and retain exact returned-image coordinate mapping. Native recording capabilities

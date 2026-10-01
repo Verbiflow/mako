@@ -39,10 +39,10 @@ export const controlCommands = new Map<string, CommandHelp>(
     },
     tabs: {
       summary: "List pages in a discovered browser.",
-      usage: "tabs --browser ID",
-      flags: ["browser"],
+      usage: "tabs --browser ID [--all]",
+      flags: ["browser", "all"],
       output:
-        "JSON {kind:'pages',browser,pages}. Claim an exact tab before controlling it.",
+        "JSON {kind:'pages',browser,pages:[{tab,title,url,claimed}],hidden?}. Pass tab to claim. --all adds workers, frames and other non-page targets with their raw CDP fields.",
       examples: ["mako-control tabs --browser chromium:example | jq '.pages'"],
     },
     open: {
@@ -69,10 +69,10 @@ export const controlCommands = new Map<string, CommandHelp>(
     },
     apps: {
       summary: "Discover native applications.",
-      usage: "apps",
-      flags: [],
+      usage: "apps [--all]",
+      flags: ["all"],
       output:
-        "JSON application list with process IDs. Does not activate an app.",
+        "JSON {apps:[{name,pid,bundle_id?,active?}],hidden?} for running apps. --all adds installed apps that are not running, with launch paths. Does not activate an app.",
       examples: ["mako-control apps | jq ."],
     },
     windows: {
@@ -157,6 +157,7 @@ export const controlCommands = new Map<string, CommandHelp>(
       examples: [
         "mako-control shot --target-file target.json --format png --output 'screen shot.png'",
         "mako-control shot --target-file target.json --role button --name Save --output save.png --format png",
+        `printf '%s' '{"options":{"region":{"x":0,"y":0,"width":600,"height":400}}}' | mako-control shot --target-file target.json --input - --output top.png --format png`,
       ],
     },
     "record start": {

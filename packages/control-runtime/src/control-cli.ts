@@ -193,6 +193,7 @@ export async function runControlCli(
       fps: { type: "string" },
       "max-side": { type: "string" },
       wait: { type: "boolean" },
+      all: { type: "boolean" },
     },
   })
   if (values.help || positionals.length === 0 || positionals[0] === "help") {
@@ -388,7 +389,7 @@ export async function runControlCli(
       case "apps":
         operation = {
           method: "call",
-          command: { action: "targets", kind: "apps" },
+          command: { action: "targets", kind: "apps", all: values.all === true },
         }
         break
       case "windows":
@@ -408,6 +409,7 @@ export async function runControlCli(
             action: "targets",
             kind: "pages",
             browser: z.string().min(1).parse(values.browser),
+            all: values.all === true,
           },
         }
         break

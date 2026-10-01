@@ -67,11 +67,12 @@ try {
     tools.tools.map((t) => t.name),
     ["js", "js_reset"]
   )
-  assert.match(tools.tools[0].description ?? "", /first use/i)
+  assert.match(tools.tools[0].description ?? "", /first call prints the SDK documentation once/i)
   assert.ok(!JSON.stringify(tools).includes('"cell"'))
   const first = await js("await control.browsers()")
   assert.equal(first.isError, undefined, text(first))
-  assert.match(text(first), /Mako browser and computer use/)
+  assert.match(text(first), /^Mako browser and computer use/, "documentation is plain text, not a JSON string")
+  assert.doesNotMatch(text(first).split("\n\n")[0]!, /\\n/)
   assert.match(text(first), /fixture/)
   assert.equal(fixture.calls.length, 0, "discovery does not connect")
   summary.firstCallBytes = Buffer.byteLength(JSON.stringify(first))
@@ -109,8 +110,20 @@ try {
   )
   assert.equal(open.isError, undefined, text(open))
   assert.match(text(open), /Proof/)
-  assert.match(text(open), /observations/)
+  assert.doesNotMatch(text(open), /Mako browser and computer use|Observation has nodes/, "action results carry no guides")
   assert.equal(fixture.targets.size, 1)
+  const named = await js(
+    'let [prefix, contains, pattern] = [tab.locator({role:"textbox",name:{prefix:"pro"}}), tab.locator({role:"textbox",name:{contains:"ROO"}}), tab.locator({role:"textbox",name:/^Pr/})]; [(await prefix.read()).coverage.complete, (await tab.observe({match:{role:"textbox",name:/^Pr/}})).nodes.length, (await tab.observe({match:{role:"textbox",name:{contains:"ROO"}}})).nodes.length]'
+  )
+  assert.equal(named.isError, undefined, text(named))
+  assert.deepEqual(JSON.parse(text(named)), [true, 1, 1])
+  const missed = await js('await tab.locator({role:"textbox",name:"Proo"}).setValue("x")')
+  assert.equal(missed.isError, true)
+  assert.match(JSON.parse(text(missed)).message, /Observed textbox names: \[\{"ref":"[^"]+","name":"Proof"\}\]/)
+  const redeclared = await js("const marker = 1; marker")
+  assert.equal(redeclared.isError, undefined, text(redeclared))
+  assert.equal(JSON.parse(text(await js("const marker = 2; marker"))), 2, "const redeclares across cells")
+  assert.equal(JSON.parse(text(await js("const local = 5\nreturn local * 2"))), 10, "a cell may return")
   const docless = await js(
     'let view=await tab.observe(); let field=view.get({role:"textbox",name:"Proof"}); console.log(field.ref); view'
   )
@@ -162,7 +175,8 @@ try {
   assert.equal(timeout.isError, true)
   assert.match(text(timeout), /timed-out/)
   const fresh = await js("typeof tab")
-  assert.match(text(fresh), /Mako browser and computer use/)
+  assert.match(text(fresh), /Program state was reset/)
+  assert.doesNotMatch(text(fresh), /Mako browser and computer use/, "a timeout does not reprint the documentation")
   assert.equal(
     JSON.parse(fresh.content.filter((c) => c.type === "text").at(-1)!.text),
     "undefined"
@@ -174,7 +188,9 @@ try {
   )
   await js("let resetMarker=1; state.resetMarker=1")
   await client.callTool({ name: "js_reset", arguments: {} })
-  assert.match(text(await js("typeof resetMarker")), /undefined/)
+  const afterReset = text(await js("typeof resetMarker"))
+  assert.match(afterReset, /undefined/)
+  assert.match(afterReset, /Mako browser and computer use/, "an explicit reset reintroduces the documentation")
   assert.equal(fixture.targets.size, 1)
   const retained = await request({
     method: "exec",
@@ -279,7 +295,7 @@ try {
   const compiled = calls.length
   for (const [run, where] of [
     [evaluate("let broken = (1"), /Unexpected end of input \(line 1\)/],
-    [evaluate("return 1"), /Illegal return statement/],
+    [evaluate("var switched = 1").then(() => evaluate("let switched = 2")), /An earlier cell declared it with var, function or class/],
     [script("return (1"), /ends before every bracket, string or statement is closed/],
     [script("const a = 1\nlet c = ;"), /Unexpected token ';' \(line 2\)/],
   ] as const) {

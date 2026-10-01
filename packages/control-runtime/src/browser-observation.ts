@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto"
+import { nameMatches, type NameMatch } from "@mako/control/control/scope"
 import { z } from "zod"
 import type { BrowserTarget } from "./contracts/browser-control.js"
 import type { JsonObject, JsonValue } from "./json.js"
@@ -37,8 +38,8 @@ type AccessibilityNode = z.infer<typeof AccessibilityNodeSchema>
 export function scopeAccessibilityNodes(
   nodes: AccessibilityNode[],
   scope: {
-    within: Array<{ role: string; name: string }>
-    match?: { role: string; name: string }
+    within: Array<{ role: string; name: NameMatch }>
+    match?: { role: string; name: NameMatch }
   }
 ): AccessibilityNode[] {
   let selected = nodes
@@ -54,7 +55,7 @@ export function scopeAccessibilityNodes(
       (node) =>
         !node.ignored &&
         node.role?.value === container.role &&
-        (node.name?.value ?? "") === container.name
+        nameMatches(node.name?.value ?? "", container.name)
     )
     if (matches.length !== 1)
       throw new Error(
@@ -75,7 +76,7 @@ export function scopeAccessibilityNodes(
       (node) =>
         !node.ignored &&
         node.role?.value === scope.match!.role &&
-        (node.name?.value ?? "") === scope.match!.name
+        nameMatches(node.name?.value ?? "", scope.match!.name)
     )
   return selected
 }
@@ -190,22 +191,25 @@ export function browserObservation(input: {
   viewport?: ObservationViewport
 }) {
   let truncatedTextFields = 0
+  function shorten(value: string, limit: number): string {
+    return value.length <= limit ? value : value.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "") + "…"
+  }
   function text(
     value: string | null | undefined,
     limit: number
   ): string | null {
     if (value === undefined || value === null) return null
-    const source = value
-    if (source.length <= limit) return source
-    truncatedTextFields++
-    return source.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "") + "…"
+    if (value.length > limit) truncatedTextFields++
+    return shorten(value, limit)
   }
+  // The tab's title and URL describe the page, not its elements: shortening
+  // them leaves element text complete.
   const sourceInfo = ObservationInfoSchema.parse(input.info).targetInfo
   const info = {
     targetInfo: {
       ...sourceInfo,
-      title: text(sourceInfo.title, 500),
-      url: text(sourceInfo.url, 2048),
+      title: shorten(sourceInfo.title, 500),
+      url: shorten(sourceInfo.url, 2048),
     },
   }
   const viewport = input.viewport

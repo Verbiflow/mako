@@ -46,7 +46,7 @@ const exec = (source) =>
 try {
   for (const source of [
     `return await control.tab(${JSON.stringify(target)}).observe({max:'ten'})`,
-    `return control.tab(${JSON.stringify(target)}).locator({role:'button',name:/Save/})`,
+    `return control.tab(${JSON.stringify(target)}).locator({role:'button',name:{startsWith:'Save'}})`,
     `return await control.tab(${JSON.stringify(target)}).click('abc123:1',{buton:'right'})`,
     `return await control.tab(${JSON.stringify(target)}).record({fps:'sixty'})`,
     `return await control.tab(${JSON.stringify(target)}).screenshot({scale:2})`,
@@ -126,6 +126,8 @@ try {
       ...members(ControlObservation.prototype),
       ...members(RecordingHandle.prototype),
       "find", "stringify",
+      // Page functions run DOM and array methods; artifacts is a program global.
+      "querySelectorAll", "map", "save",
     ])
     const AsyncFunction = (async () => {}).constructor
     for (const syntax of ["script", "repl"]) {
@@ -184,7 +186,7 @@ try {
   assert.deepEqual(reads.map((read) => [Boolean(read.match), read.query]), [[true, undefined], [false, "Generate"]], "one read-only follow-up search; exact matching is unchanged")
   const seen = await labelled.observe()
   assert.throws(() => seen.get({ role: "button", name: "Generate" }), namesIt)
-  assert.throws(() => seen.get({ role: "button", name: "Save" }), (error) => error.code === "target-not-found" && error.message.includes("Candidates: []"))
+  assert.throws(() => seen.get({ role: "button", name: "Save" }), (error) => error.code === "target-not-found" && error.message.includes('Observed button names: [{"ref":"abc123:2","name":"Create image"}]'))
   for (const bad of [
     "payload",
     { max: "SECRET_PAYLOAD_DO_NOT_ECHO" },

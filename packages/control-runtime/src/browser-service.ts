@@ -29,6 +29,7 @@ import {
   OBSERVATION_BUDGET_BYTES,
 } from "./browser-observation.js"
 import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
+import { isExactName, nameMatches } from "@mako/control/control/scope"
 import {
   BrowserFault,
   browserCommandEffect,
@@ -236,12 +237,12 @@ function modifierMask(modifiers: readonly Modifier[] | undefined): number {
   return (modifiers ?? []).reduce((mask, name) => mask | MODIFIER_BITS[name], 0)
 }
 
-function visualView(
+function visualViews(
   command: Extract<BrowserCommand, { target: BrowserTarget }>
-): string | undefined {
-  if (!("at" in command) || !command.at || !("view" in command.at))
-    return undefined
-  return command.at.view
+): string[] {
+  const points =
+    command.action === "drag" ? [command.from, command.to] : "at" in command ? [command.at] : []
+  return points.flatMap((point) => (point && "view" in point && point.view !== undefined ? [point.view] : []))
 }
 
 interface Binding {
@@ -293,6 +294,7 @@ export interface BrowserServiceOptions {
 const FOCUS_INPUT_ACTIONS: ReadonlySet<BrowserCommand["action"]> = new Set([
   "click",
   "hover",
+  "drag",
   "scroll",
   "type",
   "press",
@@ -1357,8 +1359,7 @@ export class BrowserService {
       const effect = browserCommandEffect(command)
       const observation =
         effect === "read" || effect === "observe" || effect === "release"
-      const view = visualView(command)
-      if (view !== undefined && binding.view !== view)
+      if (visualViews(command).some((view) => binding.view !== view))
         throw new BrowserFault({
           code: "stale-target",
           message:
@@ -1533,9 +1534,12 @@ export class BrowserService {
     signal: AbortSignal,
     operation: () => Promise<T>
   ): Promise<T> {
+    // Raw Input.* stalls in a background tab without focus emulation, the
+    // same as managed input.
     if (
       this.focusPolicy !== "action" ||
-      !FOCUS_INPUT_ACTIONS.has(command.action)
+      !(FOCUS_INPUT_ACTIONS.has(command.action) ||
+        (command.action === "cdp" && command.method.startsWith("Input.")))
     )
       return operation()
     const release = await binding.focus.acquire(signal)
@@ -1680,10 +1684,12 @@ export class BrowserService {
                 returnByValue: true,
               })
             ).result.value
-          if (visibility === "hidden") {
+          const exactNames = [...command.within, ...(command.match ? [command.match] : [])].every((scope) => isExactName(scope.name))
+          if (visibility === "hidden" || !exactNames) {
             // queryAXTree waits for a visual lifecycle update, which Chromium
             // can throttle for occluded pages. A synchronous snapshot remains
             // read-only and does not activate or change focus on the page.
+            // queryAXTree also matches only exact names.
             const snapshot = z
               .object({ nodes: z.array(AccessibilityNodeSchema) })
               .parse(await send("Accessibility.getFullAXTree"))
@@ -1700,7 +1706,7 @@ export class BrowserService {
                 await send("Accessibility.queryAXTree", {
                   backendNodeId,
                   role: scope.role,
-                  accessibleName: scope.name,
+                  accessibleName: String(scope.name),
                 })
               )
             const matches = result.nodes.filter(
@@ -1708,7 +1714,7 @@ export class BrowserService {
                 node.backendDOMNodeId !== backendNodeId &&
                 !node.ignored &&
                 node.role?.value === scope.role &&
-                (node.name?.value ?? "") === scope.name
+                nameMatches(node.name?.value ?? "", scope.name)
             )
             if (matches.length !== 1 || !matches[0]?.backendDOMNodeId)
               fault(
@@ -1720,7 +1726,7 @@ export class BrowserService {
           const params: JsonObject = { backendNodeId }
           if (command.match) {
             params.role = command.match.role
-            params.accessibleName = command.match.name
+            params.accessibleName = String(command.match.name)
           }
           const subtree = z
             .object({ nodes: z.array(AccessibilityNodeSchema) })
@@ -1982,12 +1988,29 @@ export class BrowserService {
         }
         if (contextId !== undefined) evaluation.contextId = contextId
         const result = await send("Runtime.evaluate", evaluation)
-        if (result.exceptionDetails)
+        const thrown = z
+          .object({
+            exceptionDetails: z.object({
+              text: z.string().optional(),
+              lineNumber: z.number().optional(),
+              columnNumber: z.number().optional(),
+              exception: z
+                .object({ description: z.string().optional(), value: z.json().optional() })
+                .optional(),
+            }),
+          })
+          .safeParse(result)
+        if (thrown.success) {
+          const details = thrown.data.exceptionDetails
+          const description =
+            details.exception?.description?.split("\n")[0] ??
+            (details.exception?.value !== undefined ? JSON.stringify(details.exception.value) : details.text ?? "exception")
           throw new BrowserFault({
             code: "protocol-error",
-            message: JSON.stringify(result.exceptionDetails),
+            message: `Page script threw ${description.slice(0, 500)} at line ${(details.lineNumber ?? 0) + 1}, column ${(details.columnNumber ?? 0) + 1}. Effects before the throw remain.`,
             outcome: "rejected",
           })
+        }
         return result
       }
       case "navigate":
@@ -2137,6 +2160,33 @@ export class BrowserService {
           pointerType: "mouse",
         })
         return { ...point }
+      }
+      case "drag":
+        return this.dragBetween(
+          binding,
+          command.from,
+          command.to,
+          command.steps,
+          modifierMask(command.modifiers),
+          signal
+        )
+      case "inspect": {
+        const result = await this.callOnNode(
+          binding,
+          command.ref,
+          `function(){if(!this.isConnected)throw Error('Element detached: observe again');const names=${JSON.stringify(command.attributes ?? null)},styles=${JSON.stringify(command.styles ?? [])};const r=this.getBoundingClientRect(),cs=getComputedStyle(this);const attributes={};for(const n of names??this.getAttributeNames().slice(0,24)){const v=this.getAttribute(n);if(v!==null)attributes[n]=v.slice(0,500)}const style={};for(const n of styles)style[n]=cs.getPropertyValue(n);const text=String(this.innerText??this.textContent??'').replace(/\\s+/g,' ').trim();const out={tag:this.tagName.toLowerCase(),text:text.slice(0,2000),attributes,box:{x:r.x,y:r.y,width:r.width,height:r.height},visible:cs.display!=='none'&&cs.visibility!=='hidden'&&r.width>0&&r.height>0,inViewport:r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth};if(text.length>2000)out.textLength=text.length;if(styles.length)out.styles=style;if(typeof this.value==='string')out.value=this.value.slice(0,2000);if(typeof this.checked==='boolean')out.checked=this.checked;if(typeof this.disabled==='boolean')out.disabled=this.disabled;return out}`,
+          signal
+        )
+        return z.object({ result: z.object({ value: z.json() }) }).parse(result).result.value
+      }
+      case "scrollIntoView": {
+        const result = await this.callOnNode(
+          binding,
+          command.ref,
+          "function(){if(!this.isConnected)throw Error('Element detached: observe again');this.scrollIntoView({block:'center',inline:'center',behavior:'instant'});const r=this.getBoundingClientRect();return {box:{x:r.x,y:r.y,width:r.width,height:r.height},scrollX:window.scrollX,scrollY:window.scrollY}}",
+          signal
+        )
+        return z.object({ result: z.object({ value: z.json() }) }).parse(result).result.value
       }
       case "scroll": {
         const point = command.at
@@ -2617,6 +2667,115 @@ export class BrowserService {
         outcome: "unknown",
       })
     return released
+  }
+
+  /** Press, move in steps and release. A native HTML5 drag is intercepted
+   * after the first move and finished with drag events, since synthetic
+   * mouse events alone cannot complete one. */
+  private async dragBetween(
+    binding: Binding,
+    from: { ref: string } | { x: number; y: number },
+    to: { ref: string } | { x: number; y: number },
+    steps: number,
+    modifiers: number,
+    signal: AbortSignal
+  ): Promise<JsonValue> {
+    const send = (method: string, params: JsonObject = {}) =>
+      this.input(binding, method, params, signal)
+    const session = (method: string, params: JsonObject = {}) =>
+      binding.connection.send(method, params, signal, binding.sessionId)
+    const mouse = (type: string, point: { x: number; y: number }, pressed: boolean) =>
+      send("Input.dispatchMouseEvent", {
+        type,
+        ...point,
+        button: pressed || type !== "mouseMoved" ? "left" : "none",
+        buttons: pressed ? 1 : 0,
+        ...(type === "mouseMoved" ? {} : { clickCount: 1 }),
+        modifiers,
+        pointerType: "mouse",
+      })
+    const start = await this.resolvePoint(binding, from, signal)
+    await mouse("mouseMoved", start, false)
+    let intercepted: JsonValue | undefined
+    let noticed: (() => void) | undefined
+    const unsubscribe = binding.connection.onEvent((event) => {
+      if (event.sessionId !== binding.sessionId || event.method !== "Input.dragIntercepted") return
+      intercepted = (event.params as JsonObject).data
+      noticed?.()
+    })
+    let html5: JsonValue | undefined
+    let last = start
+    let pressed = false
+    try {
+      await mouse("mousePressed", start, true)
+      pressed = true
+      const end = await this.resolvePoint(binding, to, signal)
+      await session("Runtime.evaluate", {
+        expression:
+          "(()=>{let started=Promise.resolve(false),drag=null;const onDrag=e=>drag=e;const onMove=()=>{started=new Promise(done=>{addEventListener('dragstart',onDrag,{once:true,capture:true});setTimeout(()=>done(drag?!drag.defaultPrevented:false),0)})};addEventListener('mousemove',onMove,{once:true,capture:true});window.__makoDragEnd=async()=>{const value=await started;removeEventListener('mousemove',onMove,{capture:true});removeEventListener('dragstart',onDrag,{capture:true});delete window.__makoDragEnd;return value}})()",
+      })
+      const intercepting = await session("Input.setInterceptDrags", { enabled: true }).then(() => true, () => false)
+      for (let step = 1; step <= steps; step++) {
+        const point = {
+          x: start.x + ((end.x - start.x) * step) / steps,
+          y: start.y + ((end.y - start.y) * step) / steps,
+        }
+        if (html5 !== undefined)
+          await send("Input.dispatchDragEvent", { type: "dragOver", ...point, data: html5, modifiers })
+        else await mouse("mouseMoved", point, true)
+        if (step === 1 && intercepting) {
+          const started = z
+            .object({ result: z.object({ value: z.boolean().optional() }) })
+            .safeParse(
+              await session("Runtime.evaluate", {
+                expression: "window.__makoDragEnd?.()",
+                awaitPromise: true,
+                returnByValue: true,
+              })
+            )
+          if (started.success && started.data.result.value) {
+            if (intercepted === undefined)
+              await new Promise<void>((resolve) => {
+                noticed = resolve
+                setTimeout(resolve, 2000)
+              })
+            html5 = intercepted
+          }
+          await session("Input.setInterceptDrags", { enabled: false }).catch(() => {})
+          if (html5 !== undefined)
+            await send("Input.dispatchDragEvent", { type: "dragEnter", ...point, data: html5, modifiers })
+        }
+        last = point
+        await new Promise((resolve) => setTimeout(resolve, 16))
+      }
+      // A missing acknowledgement of the release is never permission to replay it.
+      pressed = false
+      if (html5 !== undefined)
+        await send("Input.dispatchDragEvent", { type: "drop", ...end, data: html5, modifiers })
+      else await mouse("mouseReleased", end, false)
+      if (signal.aborted)
+        throw new BrowserFault({
+          code: "cancelled",
+          message: "The drag was dispatched and released before cancellation. Observe before deciding whether to drag again.",
+          outcome: "unknown",
+        })
+      return { from: start, to: end, steps, mode: html5 !== undefined ? "html5" : "pointer" }
+    } finally {
+      unsubscribe()
+      if (pressed) {
+        // Release once with its own budget; never leave the button held.
+        const cleanup = (method: string, params: JsonObject) =>
+          this.input(binding, method, params, AbortSignal.timeout(2000)).catch(() => {})
+        if (html5 !== undefined)
+          await cleanup("Input.dispatchDragEvent", { type: "dragCancel", ...last, data: html5, modifiers })
+        await cleanup("Input.dispatchMouseEvent", {
+          type: "mouseReleased", ...last, button: "left", buttons: 0, clickCount: 1, modifiers, pointerType: "mouse",
+        })
+        await binding.connection
+          .send("Input.setInterceptDrags", { enabled: false }, AbortSignal.timeout(2000), binding.sessionId)
+          .catch(() => {})
+      }
+    }
   }
 
   /** An execution context inside one same-process frame. */

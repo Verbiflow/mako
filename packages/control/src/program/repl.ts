@@ -1,3 +1,4 @@
+import { parse } from "acorn"
 import type { Runtime } from "node:inspector"
 import { Session } from "node:inspector/promises"
 import { constants, createContext, type Context } from "node:vm"
@@ -35,8 +36,57 @@ export function syntaxError(where: string): ControlFault {
   )
 }
 
-/** V8 owns REPL syntax, lexical bindings and top-level await. No source rewriting,
- * inspector listener or network port. This is trusted code, not an OS sandbox. */
+type SyntaxNode = { type: string; start: number; kind?: string }
+const functionNodes = new Set([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+])
+function returnsAtTopLevel(node: SyntaxNode): boolean {
+  if (node.type === "ReturnStatement") return true
+  if (functionNodes.has(node.type)) return false
+  return Object.values(node).some((child: unknown) =>
+    (Array.isArray(child) ? child : [child]).some(
+      (item: unknown) =>
+        typeof item === "object" &&
+        item !== null &&
+        "type" in item &&
+        returnsAtTopLevel(item as SyntaxNode)
+    )
+  )
+}
+
+/**
+ * V8's REPL mode redeclares a name only with the same keyword, so `let x` after
+ * an earlier cell's `const x` would not compile: top-level const becomes let.
+ * A top-level return (the CLI's program style) makes the cell an async function
+ * body whose value is the returned one; its bindings stay local to that cell.
+ * Source the parser rejects is left for V8 to report.
+ */
+export function replSource(source: string): string {
+  let program: { body: SyntaxNode[] }
+  try {
+    program = parse(source, {
+      ecmaVersion: "latest",
+      sourceType: "script",
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+    }) as unknown as { body: SyntaxNode[] }
+  } catch {
+    return source
+  }
+  if (program.body.some(returnsAtTopLevel))
+    return `await (async () => {\n${source}\n})()`
+  let rewritten = source
+  for (const node of [...program.body].reverse())
+    if (node.type === "VariableDeclaration" && node.kind === "const")
+      rewritten = `${rewritten.slice(0, node.start)}let${rewritten.slice(node.start + "const".length)}`
+  return rewritten
+}
+
+/** V8 owns REPL syntax, lexical bindings and top-level await. Source changes are
+ * limited to replSource. No inspector listener or network port. This is trusted
+ * code, not an OS sandbox. */
 export class ControlRepl {
   private readonly inspector = new Session()
   private readonly ready: Promise<number>
@@ -100,7 +150,7 @@ export class ControlRepl {
     try {
       const evaluation: Runtime.EvaluateParameterType & { replMode: boolean } =
         {
-          expression: source,
+          expression: replSource(source),
           contextId,
           replMode: true,
           awaitPromise: true,
@@ -134,13 +184,19 @@ export class ControlRepl {
         // A cell that failed to compile has no stack frame of its own; one
         // that threw a SyntaxError while running (JSON.parse, eval) has.
         const details = evaluated.exceptionDetails
+        // A declaration conflict fails while the cell's bindings are created,
+        // before its first statement, though V8 reports a frame for it.
+        const conflict = /has already been declared/.test(message)
         if (
           exception?.className === "SyntaxError" &&
-          !details.stackTrace?.callFrames.some(
-            (frame) => frame.scriptId === details.scriptId
-          )
+          (conflict ||
+            !details.stackTrace?.callFrames.some(
+              (frame) => frame.scriptId === details.scriptId
+            ))
         )
-          throw syntaxError(`${message} (line ${details.lineNumber + 1})`)
+          throw syntaxError(
+            `${message} (line ${details.lineNumber + 1})${conflict ? ". An earlier cell declared it with var, function or class; assign to it instead, or use another name" : ""}`
+          )
         const fault = controlFaultData(detail)
         throw fault
           ? new ControlFault(fault.code, message, fault.outcome)

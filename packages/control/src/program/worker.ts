@@ -23,6 +23,7 @@ const incoming = z.discriminatedUnion("kind", [
     source: z.string(),
     mode: z.enum(["script", "repl"]).default("script"),
     documentation: z.string().optional(),
+    introduce: z.boolean().default(false),
     runId: z.number(),
     namespace: identifier,
     actions: z.array(identifier).max(128),
@@ -158,46 +159,20 @@ const call = (
       command,
     })
   })
-  if (context.mode === "repl" && documentation && action !== "help") {
-    return (async () => {
-      const target = z.object({ kind: z.enum(["page", "window"]) }).safeParse(args.target)
-      if (target.success || action === "page" || action === "native") {
-        await documentTopic("actions")
-        await documentTopic("observations")
-        await documentTopic(target.success ? target.data.kind === "page" ? "page" : "native" : action === "page" ? "page" : "native")
-      }
-      if (!context.active) throw new Error("This script has already finished")
-      return dispatch()
-    })()
-  }
   return dispatch()
 }
 let repl: ControlRepl | undefined
 let documentation: string | undefined
-const documented = new Set<string>()
-let documenting: Promise<void> = Promise.resolve()
 function emit(kind: "output" | "image", value: JsonValue) {
   const active = runs.getStore()
   if (active?.active) port.postMessage({ kind, runId: active.runId, value: jsonSafe(value) })
 }
-function documentTopic(topic: string): Promise<void> {
-  const written = documenting.then(async () => {
-    if (documented.has(topic)) return
-    const detail = await call("control", "help", { topic })
-    if (!runs.getStore()?.active) throw new Error("This script has already finished")
-    emit("output", detail)
-    documented.add(topic)
-  })
-  documenting = written.catch(() => {})
-  return written
-}
+// Help topics are printed only when asked for, never beside an action's result.
 async function rewriteDocumentation() {
-  if (!documentation) return
-  const topics = [...documented]
-  documented.clear()
-  emit("output", documentation)
-  for (const topic of topics.length ? topics : ["discovery", "handles"]) await documentTopic(topic)
+  if (documentation) emit("output", documentation)
 }
+const resetNotice =
+  "Program state was reset after a timeout, cancellation or worker fault: REPL bindings and state are cleared; tabs, windows, leases and recordings remain. Rebind targets from their receipts and observe before input. The documentation is unchanged; call control.rewriteDocumentation() only if it is no longer in your context."
 
 const client = controlClient((action, args) => call("control", action, args))
 
@@ -255,12 +230,23 @@ port.on("message", (raw) => {
           if (message.namespace !== "control") throw new ControlFault("unsupported-operation", "Persistent agent JavaScript requires the unified control SDK.", "not-dispatched")
           if (!repl) {
             documentation = message.documentation
-            await rewriteDocumentation()
+            if (message.introduce) await rewriteDocumentation()
+            else if (documentation) emit("output", resetNotice)
           }
           repl ??= new ControlRepl({
             control: Object.freeze({ ...client, rewriteDocumentation }),
             state,
-            console: { log: (...values: JsonValue[]) => output("output", values.length === 1 ? values[0] : values) },
+            // Several arguments print as one line, strings as text, the way
+            // console.log does; a single value keeps its JSON form.
+            console: {
+              log: (...values: JsonValue[]) =>
+                output(
+                  "output",
+                  values.length === 1
+                    ? values[0]
+                    : values.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join(" ")
+                ),
+            },
             emitImage: (value: JsonValue) => output("image", value),
             artifacts,
             setTimeout,

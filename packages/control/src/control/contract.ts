@@ -125,12 +125,14 @@ export const ControlOperationSchema = z.discriminatedUnion("kind", [
 export type ControlOperation = z.infer<typeof ControlOperationSchema>
 
 export const ControlTargetsRequestSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("apps") }).strict(),
+  z.object({ kind: z.literal("apps"), all: z.boolean().default(false) }).strict(),
   z
     .object({ kind: z.literal("windows"), pid: z.number().int().positive() })
     .strict(),
   z.object({ kind: z.literal("browsers") }).strict(),
-  z.object({ kind: z.literal("pages"), browser: z.string().min(1) }).strict(),
+  z
+    .object({ kind: z.literal("pages"), browser: z.string().min(1), all: z.boolean().default(false) })
+    .strict(),
 ])
 export type ControlTargetsRequest = z.infer<typeof ControlTargetsRequestSchema>
 

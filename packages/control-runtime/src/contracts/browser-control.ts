@@ -445,6 +445,50 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
     .strict(),
   z
     .object({
+      action: z.literal("drag"),
+      target: BrowserTargetSchema,
+      from: PointerTargetSchema.describe("Where the left button is pressed."),
+      to: PointerTargetSchema.describe("Where it is released."),
+      steps: z
+        .number()
+        .int()
+        .min(1)
+        .max(60)
+        .default(12)
+        .describe("Pointer moves between press and release. Default 12."),
+      modifiers: z
+        .array(KeyModifierSchema)
+        .max(4)
+        .optional()
+        .describe("Modifier keys held during the drag."),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("inspect"),
+      target: BrowserTargetSchema,
+      ref,
+      attributes: z
+        .array(z.string().min(1).max(100))
+        .max(32)
+        .optional()
+        .describe("Attribute names to read. Default: the first 24 present."),
+      styles: z
+        .array(z.string().min(1).max(100))
+        .max(32)
+        .optional()
+        .describe("Computed style properties to read, e.g. color or display."),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("scrollIntoView"),
+      target: BrowserTargetSchema,
+      ref,
+    })
+    .strict(),
+  z
+    .object({
       action: z.literal("scroll"),
       target: BrowserTargetSchema,
       at: PointerTargetSchema.optional().describe(
@@ -750,6 +794,7 @@ export function browserCommandEffect(
     case "pdf":
     case "recording":
     case "retain":
+    case "inspect":
       return "read"
     case "cookies":
       return command.operation === "list" ? "read" : "mutate"
@@ -768,7 +813,9 @@ export function browserCommandEffect(
     case "navigate":
     case "click":
     case "hover":
+    case "drag":
     case "scroll":
+    case "scrollIntoView":
     case "type":
     case "press":
     case "download":

@@ -69,9 +69,13 @@ export {
 export {
   ControlSelectorSchema,
   ControlReadScopeSchema,
+  NameMatchSchema,
+  isExactName,
+  nameMatches,
   scopeControlNodes,
   type ControlSelector,
   type ControlReadScope,
+  type NameMatch,
 } from "./scope.js"
 
 export {

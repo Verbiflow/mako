@@ -9,8 +9,10 @@ import {
 import {
   ControlSelectorSchema,
   ControlReadScopeSchema,
+  nameMatches,
   scopeControlNodes,
   type ControlReadScope,
+  type NameMatch,
 } from "./scope.js"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
@@ -63,10 +65,46 @@ const selectorSchema = ControlSelectorSchema.extend({
   within: ControlReadScopeSchema.shape.within.optional(),
 })
 const selectorHint =
-  'Use {role:"button",name:"Save"}; to scope it, add within:[{role:"form",name:"Profile"}]. Copy exact role/name from observe(). Both are required and exact; to search by text use observe({query}) or select({text}); CSS selectors are not supported.'
+  'Use {role:"button",name:"Save"}; to scope it, add within:[{role:"form",name:"Profile"}]. A string name is exact; for names with live text use name:{prefix:"Draft"}, {contains:"draft"} or a RegExp (/^Draft/). Copy the role from observe(); to search by text use observe({query}) or select({text}); CSS selectors are not supported.'
 const selectionHint =
-  'Use {role:"button",name:"Save",max:20}; optional keys: text (substring of role, name, value or visibleText), roles, states, refsOnly, includeAncestors. Strings only, no regular expressions.'
+  'Use {role:"button",name:"Save",max:20}; optional keys: text (substring of role, name, value or visibleText), roles, states, refsOnly, includeAncestors. Selections take strings; for name patterns use locator({role,name:{prefix}|{contains}|/re/}).'
 export type ElementSelector = z.infer<typeof selectorSchema>
+
+// Program values may come from another realm, so RegExp is detected by tag.
+const isRegExp = (value: unknown): value is RegExp =>
+  Object.prototype.toString.call(value) === "[object RegExp]"
+/** RegExp names become `{regex,flags}` before they cross to the host, where
+ * structured cloning would turn them into empty objects. */
+export function regexNames<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  const name = record.name
+  const within = record.within
+  const match = record.match
+  if (!isRegExp(name) && !Array.isArray(within) && (typeof match !== "object" || match === null)) return value
+  return {
+    ...record,
+    ...(isRegExp(name)
+      ? { name: { regex: name.source, ...(name.flags.replace(/[gyd]/g, "") ? { flags: name.flags.replace(/[gyd]/g, "") } : {}) } }
+      : {}),
+    ...(Array.isArray(within) ? { within: within.map(regexNames) } : {}),
+    ...(typeof match === "object" && match !== null ? { match: regexNames(match) } : {}),
+  } as T
+}
+/** Text a name pattern can search by, or undefined for a regular expression. */
+function nameText(name: NameMatch): string | undefined {
+  if (typeof name === "string") return name
+  if ("prefix" in name) return name.prefix
+  if ("contains" in name) return name.contains
+  return undefined
+}
+/** Same-role nodes that share a word with the wanted name, then any of that role. */
+function nearNames(nodes: readonly PageObservationNode[], role: string, name: NameMatch) {
+  const words = (nameText(name) ?? "").toLocaleLowerCase().split(/\W+/).filter((word) => word.length > 1)
+  const sameRole = nodes.filter((node) => node.role === role)
+  const sharing = sameRole.filter((node) => words.some((word) => (node.name ?? "").toLocaleLowerCase().includes(word)))
+  return [...new Set([...sharing, ...sameRole])].slice(0, 6).map((node) => ({ ref: node.ref, name: node.name?.slice(0, 120) }))
+}
 
 /** The CSS and text selector spellings callers reach for instead of `{role,name}`. */
 const textSelectorSchema = z.union([
@@ -80,7 +118,7 @@ const textSelectorSchema = z.union([
 export function controlSelector(value: JsonValue | ElementSelector): ElementSelector {
   const text = textSelectorSchema.safeParse(value).data
   if (text === undefined)
-    return controlInput(selectorSchema.safeParse(value), "selector", selectorHint)
+    return controlInput(selectorSchema.safeParse(regexNames(value)), "selector", selectorHint)
   const quoted = /["'](.{1,60}?)["']/.exec(text)?.[1] ?? /^text=(.{1,60})$/.exec(text)?.[1]
   throw new ControlFault(
     "invalid-request",
@@ -126,14 +164,15 @@ export interface ControlSelection extends PageNodeSelection {
 const spaced = (text: string) => text.replace(/\s+/g, " ").trim().toLocaleLowerCase()
 
 /** Explains a miss where the requested name is only what the control shows;
- * names stay exact, so the fix is to use the listed accessible name. */
-function visibleTextHint(nodes: readonly PageObservationNode[], role: string, name: string) {
+ * string names stay exact, so the fix is to use the listed accessible name. */
+function visibleTextHint(nodes: readonly PageObservationNode[], role: string, name: NameMatch) {
+  if (typeof name !== "string") return ""
   const shown = nodes
     .filter((node) => node.role === role && node.visibleText !== undefined && spaced(node.visibleText) === spaced(name))
     .slice(0, 3)
   if (!shown.length) return ""
   const named = shown.map((node) => `${role} ${JSON.stringify(node.name ?? "")}${node.ref ? ` (${node.ref})` : ""}`).join(", ")
-  return `${JSON.stringify(name)} is the visible text of ${named}. Names match the accessible name exactly, so use locator({role:${JSON.stringify(role)},name:${JSON.stringify(shown[0]!.name ?? "")}}); nothing was dispatched.`
+  return `${JSON.stringify(name)} is the visible text of ${named}. A string name matches the accessible name exactly, so use locator({role:${JSON.stringify(role)},name:${JSON.stringify(shown[0]!.name ?? "")}}) or name:{contains:${JSON.stringify(name)}}; nothing was dispatched.`
 }
 
 /** Structured evidence stays local; returning an observation emits its compact view once. */
@@ -167,7 +206,12 @@ export class ControlObservation {
     if (matches.length !== 1)
       throw new ControlFault(
         matches.length ? "target-ambiguous" : "target-not-found",
-        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. ${shown || `Candidates: ${JSON.stringify(matches.slice(0, 5).map((node) => ({ ref: node.ref, role: node.role, name: node.name?.slice(0, 120), depth: node.depth })))}. Observe a narrower scope or use locator({role,name,within:[{role,name}]}); nothing was dispatched.`}`,
+        `Expected one observed ${role} ${JSON.stringify(name)}, found ${matches.length}. ${
+          shown ||
+          (matches.length
+            ? `Matches: ${JSON.stringify(matches.slice(0, 5).map((node) => ({ ref: node.ref, name: node.name?.slice(0, 120), depth: node.depth })))}. Scope it with within:[{role,name}] or use a ref; nothing was dispatched.`
+            : `Observed ${role} names: ${JSON.stringify(nearNames(this.nodes, role, name))}. Copy one, or match live text with name:{prefix}, {contains} or a RegExp; nothing was dispatched.`)
+        }`,
         "not-dispatched"
       )
     return matches[0]!
@@ -327,6 +371,15 @@ const pointSchema = z
   .strict()
 const clickOptionsSchema = pointerOperationSchema.omit({ kind: true, at: true })
 export type Point = z.infer<typeof pointSchema>
+function pointerAt(at: string | Point) {
+  return typeof at === "string"
+    ? { ref: at }
+    : controlInput(
+        pointSchema.safeParse(at),
+        "point",
+        "Use an observed ref string or {x:100,y:80,view:shot.view} from this tab’s latest screenshot."
+      )
+}
 
 export class ControlHandle {
   readonly target: ControlTarget
@@ -350,7 +403,7 @@ export class ControlHandle {
   }
   async observe(options: ObserveOptions = {}) {
     return new ControlObservation(
-      await this.call("observe", { ...options, target: this.target })
+      await this.call("observe", { ...regexNames(options), target: this.target })
     )
   }
   async record(options: RecordingOptions = {}) {
@@ -447,7 +500,7 @@ export class ControlHandle {
     options: { timeoutMs?: number; everyMs?: number } = {}
   ): Promise<ControlExpectationResult> {
     const wanted = controlInput(
-      expectationSchema.safeParse(expectation),
+      expectationSchema.safeParse(regexNames(expectation)),
       "expectation",
       'Use {role:"textbox",name:"Name",value:"Ada"}; optional within, states, absent.'
     )
@@ -470,7 +523,7 @@ export class ControlHandle {
         match: { role: wanted.role, name: wanted.name },
       })
       const matches = view.nodes.filter(
-        (node) => node.role === wanted.role && (node.name ?? "") === wanted.name
+        (node) => node.role === wanted.role && nameMatches(node.name, wanted.name)
       )
       if (matches.length > 1)
         throw new ControlFault(
@@ -525,7 +578,7 @@ export class ControlHandle {
 export class ControlLocator {
   constructor(
     private readonly handle: ControlHandle,
-    private readonly selector: ElementSelector
+    readonly selector: ElementSelector
   ) {}
   locator(selector: ElementSelector) {
     const next = controlSelector(selector)
@@ -560,10 +613,15 @@ export class ControlLocator {
         "not-dispatched"
       )
     const { role, name, within } = this.selector
-    if (!view.nodes.some((node) => node.role === role && (node.name ?? "") === name) && this.handle.target.kind === "page") {
-      const nearby = await this.handle.observe({ within, query: name, interactive: true, max: 20 })
+    if (!view.nodes.some((node) => node.role === role && nameMatches(node.name, name))) {
+      const query = nameText(name)
+      const nearby = await this.handle.observe({ within, ...(query && this.handle.target.kind === "page" ? { query } : {}), interactive: true, max: 40 })
       const shown = visibleTextHint(nearby.nodes, role, name)
-      if (shown) throw new ControlFault("target-not-found", `No ${role} is named ${JSON.stringify(name)}. ${shown}`, "not-dispatched")
+      throw new ControlFault(
+        "target-not-found",
+        `No ${role} is named ${JSON.stringify(name)}. ${shown || `Observed ${role} names: ${JSON.stringify(nearNames(nearby.nodes, role, name))}. Copy one, or match live text with name:{prefix}, {contains} or a RegExp; nothing was dispatched.`}`,
+        "not-dispatched"
+      )
     }
     const node = view.get({ role, name })
     if (!node.ref)
@@ -602,6 +660,42 @@ export class ControlLocator {
         "not-dispatched"
       )
     return this.handle.screenshot({ ...options, ref: await this.resolve() })
+  }
+  private tab(verb: string) {
+    if (!(this.handle instanceof TabHandle))
+      throw new ControlFault(
+        "unsupported",
+        `${verb} currently requires a browser tab; native windows support click, setValue, pressKey and scroll. Nothing was dispatched.`,
+        "not-dispatched"
+      )
+    return this.handle
+  }
+  async hover() {
+    const tab = this.tab("hover")
+    return tab.hover(await this.resolve())
+  }
+  /** Drags this element onto another locator, an observed ref or a point.
+   * Two locators resolve from one observation, since each observation
+   * replaces the tab's refs. */
+  async dragTo(target: ControlLocator | string | Point, options: { steps?: number; modifiers?: string[] } = {}) {
+    const tab = this.tab("dragTo")
+    if (!(target instanceof ControlLocator)) return tab.drag(await this.resolve(), target, options)
+    const view = await tab.observe({ max: 1000 })
+    const ref = (locator: ControlLocator) => {
+      const node = view.get(locator.selector)
+      if (!node.ref)
+        throw new ControlFault("target-not-actionable", "The matched element has no actionable reference; nothing was dispatched.", "not-dispatched")
+      return node.ref
+    }
+    return tab.drag(ref(this), ref(target), options)
+  }
+  async inspect(options: { attributes?: string[]; styles?: string[] } = {}) {
+    const tab = this.tab("inspect")
+    return tab.inspect(await this.resolve(), options)
+  }
+  async scrollIntoView() {
+    const tab = this.tab("scrollIntoView")
+    return tab.scrollIntoView(await this.resolve())
   }
   expect(
     expectation: Omit<ElementExpectation, "role" | "name" | "within">,
@@ -661,6 +755,62 @@ export class TabHandle extends ControlHandle {
   }
   upload(ref: string, files: string[]) {
     return this.raw("upload", { ref, files })
+  }
+  /** Runs an expression, or a function called with JSON arguments, in the
+   * page and returns its JSON value. Functions cannot see program variables. */
+  async evaluate(script: string | ((...args: never[]) => unknown), ...args: JsonValue[]): Promise<JsonValue | undefined> {
+    if (typeof script === "string" && args.length)
+      throw new ControlFault("invalid-request", "Arguments need a function: tab.evaluate((a, b) => a + b, 1, 2). Nothing was dispatched.", "not-dispatched")
+    const expression = typeof script === "function" ? `(${script.toString()})(...${JSON.stringify(args)})` : script
+    const result = await this.raw("evaluate", { expression })
+    const remote = z
+      .object({ result: z.object({ type: z.string(), value: z.json().optional(), description: z.string().optional() }) })
+      .safeParse(result)
+    if (!remote.success) return result
+    if (remote.data.result.value !== undefined) return remote.data.result.value
+    return remote.data.result.type === "undefined" ? undefined : remote.data.result.description ?? null
+  }
+  /** Reads an observed element's tag, text, attributes, box and chosen
+   * computed styles without changing the page. */
+  inspect(ref: string, options: { attributes?: string[]; styles?: string[] } = {}) {
+    return this.raw("inspect", { ref, ...options })
+  }
+  private async dispatched(action: string, args: JsonObject) {
+    const result = await this.raw(action, args)
+    return { status: "dispatched" as const, action, verification: "not-requested" as const, result }
+  }
+  hover(at: string | Point) {
+    return this.dispatched("hover", { at: pointerAt(at) })
+  }
+  /** Presses at `from`, moves in steps and releases at `to`; handles native
+   * HTML5 drag and drop as well as pointer-event drags. */
+  drag(from: string | Point, to: string | Point, options: { steps?: number; modifiers?: string[] } = {}) {
+    return this.dispatched("drag", { from: pointerAt(from), to: pointerAt(to), ...options })
+  }
+  scrollIntoView(ref: string) {
+    return this.dispatched("scrollIntoView", { ref })
+  }
+  /** Waits until every given condition holds; throws assertion-failed at the
+   * deadline. Text is a substring of the page's visible text. */
+  async waitFor(
+    condition: { text?: string; selector?: string; url?: string; hidden?: boolean; networkIdle?: boolean },
+    options: { timeoutMs?: number } = {}
+  ) {
+    const timeoutMs = controlInput(
+      z.number().int().min(100).max(55_000).default(10_000).safeParse(options.timeoutMs),
+      "wait timeout",
+      "Use {timeoutMs:10000}; 100–55000."
+    )
+    const result = z
+      .object({ satisfied: z.boolean(), elapsedMs: z.number() })
+      .parse(await this.raw("wait", { for: { ...condition }, timeoutMs }))
+    if (!result.satisfied)
+      throw new ControlFault(
+        "assertion-failed",
+        `Not established within ${timeoutMs} ms: ${JSON.stringify(condition)}. Observe or screenshot to see the page's state; nothing was dispatched.`,
+        "not-dispatched"
+      )
+    return result
   }
   dialog(
     options: {
@@ -844,7 +994,7 @@ export function controlClient(call: ControlCall) {
       if (options.takeover !== undefined) args.takeover = options.takeover
       return bindPage(await call("page", { name: "select", args }))
     },
-    apps: () => call("targets", { kind: "apps" }),
+    apps: (options: { all?: boolean } = {}) => call("targets", { kind: "apps", ...options }),
     windows: (pid: number) => call("targets", { kind: "windows", pid }),
     browsers: () => call("targets", { kind: "browsers" }),
     connectBrowser: async (browser: string) =>
@@ -854,7 +1004,7 @@ export function controlClient(call: ControlCall) {
           generation: z.string().min(1),
         })
         .parse(await call("connect", { browser })),
-    tabs: (browser: string) => call("targets", { kind: "pages", browser }),
+    tabs: (browser: string, options: { all?: boolean } = {}) => call("targets", { kind: "pages", browser, ...options }),
     native: (name: string, args: JsonObject = {}) =>
       call("native", { name, args }),
     command: async (options: {

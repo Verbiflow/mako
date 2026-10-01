@@ -3,14 +3,18 @@
 Mako agents use the `mako-control` MCP `js` tool for browser and computer use.
 The initialized `control` SDK supports top-level await and persistent JavaScript
 bindings. Start with `await control.browsers()` or `await control.apps()`; read the
-returned documentation before acting. The last expression prints compact JSON.
-Use `console.log(value)` for additional evidence and `emitImage(...)` for images.
+documentation the first call prints, once per session, before acting. `const` and
+`let` bindings can be redeclared in later cells. A cell may end with `return`; it then
+runs as a function, and its declarations stay local. The last expression prints
+compact JSON. Use `console.log(value)` for additional evidence (a string prints as
+text) and `emitImage(...)` for images.
 
 `control.help({topic:"actions"})` returns focused signatures and examples in the
-current execution syntax. `control.rewriteDocumentation()` restores instructions
-after compaction. `js_reset` clears program bindings and shared `state`, preserving
-owned targets and recordings. Ordinary errors preserve bindings; timeout,
-cancellation and worker failure reset them. Earlier actions may have completed:
+current execution syntax. Call `control.rewriteDocumentation()` only if the
+documentation has left context. `js_reset` clears program bindings and shared
+`state`, preserving owned targets and recordings, and the next call prints the
+documentation again. Ordinary errors preserve bindings; a timeout, cancellation or
+worker failure resets them and prints a one-line notice instead of the documentation. Earlier actions may have completed:
 observe the exact target before deciding what to do next, never replay a program.
 
 The composable `mako-control` CLI and Node SDK use the same TypeScript engine,
@@ -275,6 +279,30 @@ Locators store selectors, resolve a fresh exact match before each action and
 refuse ambiguity or incomplete coverage before dispatch. They never retry input.
 `read()` observes the selected subtree. Continue checking intended outcomes with
 `expect()`; successful dispatch alone does not establish that a form saved.
+
+A selector name is an exact string, `{prefix}` or `{contains}` (both ignore case and
+repeated spaces), or a RegExp, for names that carry live text:
+`state.tab.locator({role:'button', name:{prefix:'Inbox'}})`. A miss lists the
+observed names of that role.
+
+Page verbs replace raw CDP for common work:
+
+```js
+await state.tab.waitFor({text: 'Report ready'}, {timeoutMs: 10000});   // throws assertion-failed
+await state.tab.evaluate((selector) => document.querySelectorAll(selector).length, 'li');
+await state.tab.locator({role: 'link', name: 'Docs'}).inspect({attributes: ['href'], styles: ['color']});
+await state.tab.locator({role: 'button', name: 'More'}).hover();
+await state.tab.locator({role: 'listitem', name: 'Card'}).dragTo(state.tab.locator({role: 'region', name: 'Done'}));
+await state.tab.locator({role: 'button', name: 'Far away'}).scrollIntoView();
+```
+
+`inspect` is read-only. `hover`, `drag` and `scrollIntoView` return
+`{status:'dispatched', verification:'not-requested', result}`. `drag` handles both
+pointer-event drags and native HTML5 drag and drop, and always releases the button.
+A page screenshot keeps the tab's refs. `artifacts.save(name, value)` writes JSON or
+an image to a file and returns `{path, bytes}`. `control.apps()` and
+`control.tabs(browser)` list running apps and pages only; pass `{all: true}` for
+everything.
 
 `handle.capabilities()` describes the bound window or browser transport. Request
 one section with `mako-control api --topic actions` (see help's topic enum).

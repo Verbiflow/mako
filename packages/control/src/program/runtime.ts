@@ -146,6 +146,8 @@ export class ControlProgramRuntime {
   private readonly stopping = new AbortController()
   private readonly options: ControlProgramOptions
   private readonly cells = new Map<number, ProgramCell>()
+  /** A worker replaced after a timeout keeps this, so it does not reprint the docs. */
+  private documentationDelivered = false
 
   constructor(options: ControlProgramOptions) {
     this.options = options
@@ -338,14 +340,19 @@ export class ControlProgramRuntime {
           text: JSON.stringify(value),
         }))
       const appendText = (label: string, value: JsonValue) => {
-        const text = JSON.stringify(value)
+        // An agent reads logged REPL strings as text, as console.log prints
+        // them. CLI programs and results keep one JSON value per block.
+        const text =
+          execution.mode === "repl" && label === "log" && typeof value === "string"
+            ? value
+            : JSON.stringify(value)
         const bytes = Buffer.byteLength(text)
         if (
           bytes >= INLINE_TEXT_BUDGET ||
           inlineText + bytes > INLINE_TOTAL_BUDGET
         ) {
           output.push(
-            receipt(spillJson(artifacts, `${namespace}-${label}`, value, text))
+            receipt(spillJson(artifacts, `${namespace}-${label}`, value))
           )
           return
         }
@@ -466,12 +473,16 @@ export class ControlProgramRuntime {
       worker.on("message", message)
       worker.once("error", failed)
       worker.once("exit", exited)
+      const repl = execution.mode === "repl"
+      const introduce = repl && !this.documentationDelivered
+      if (repl) this.documentationDelivered = true
       worker.postMessage({
         kind: "run",
         runId,
         source,
         mode: execution.mode ?? "script",
         documentation: this.options.replDocumentation,
+        introduce,
         namespace,
         actions: this.options.actions,
         extra: this.options.extra ?? {},
@@ -489,6 +500,7 @@ export class ControlProgramRuntime {
       this.stopping.signal.throwIfAborted()
       await this.worker?.terminate()
       this.worker = undefined
+      this.documentationDelivered = false
     })
     this.tail = result.catch(() => {})
     return result
