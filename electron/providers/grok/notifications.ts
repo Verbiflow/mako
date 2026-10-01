@@ -10,12 +10,13 @@ type Retrying = Extract<NativeActivityObservation, { kind: "retrying" }>
 /**
  * Grok's session updates beyond ACP's own, read against grok 1.0.44. They
  * arrive on `_x.ai/session_notification` and are saved as
- * `_x.ai/session/update`, both as `{ sessionId, update: { sessionUpdate, … } }`.
+ * `_x.ai/session/update`, both as `{ sessionId, update: { sessionUpdate, … } }`;
+ * one sent on ACP's own `session/update` reaches here after the SDK refuses its kind.
  * Field names come from the recorded auto-compaction payloads and, for the
  * rest, from the binary's serde variants: `retry_state` is flattened with a
  * `state` tag of `retrying` (4 fields), `failed` or `exhausted`.
  */
-const SESSION_METHODS = new Set(["_x.ai/session_notification", "_x.ai/session/update"])
+const SESSION_METHODS = new Set(["_x.ai/session_notification", "_x.ai/session/update", "session/update"])
 
 /** Workspace indexing and search progress, which Grok documents as its other notifications. */
 const WORKSPACE_METHODS = new Set([
@@ -67,7 +68,8 @@ const IGNORED = new Set([
 const IGNORED_PREFIXES = ["memory_", "hook_", "response_"]
 
 const GrokUpdate = z.looseObject({ sessionUpdate: z.string() })
-const Envelope = z.object({ sessionId: z.string(), update: GrokUpdate })
+/** `_meta.eventId` is Grok's own id for the update, the same live and saved. */
+const Envelope = z.object({ sessionId: z.string(), update: GrokUpdate, _meta: z.looseObject({ eventId: z.string().optional() }).optional() })
 const Session = z.object({ sessionId: z.string() })
 const count = z.number().int().nonnegative().nullish()
 const text = z.string().nullish()
@@ -92,7 +94,8 @@ export function grokNotification(method: string, params: JsonObject): AcpNotific
   const { sessionUpdate } = envelope.data.update
   const kind = `${method}/${sessionUpdate}`
   const decoded = grokSessionUpdate(sessionUpdate, update)
-  return { sessionId, kind: decoded.kind ? `${kind}/${decoded.kind}` : kind, notices: decoded.notices, state: decoded.state }
+  const id = envelope.data._meta?.eventId
+  return { sessionId, kind: decoded.kind ? `${kind}/${decoded.kind}` : kind, notices: decoded.notices, state: decoded.state, ...id && { id } }
 }
 
 interface DecodedUpdate {

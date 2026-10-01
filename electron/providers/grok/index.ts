@@ -1,5 +1,6 @@
 import { acpLiveDriver } from "../acp-live-driver.js"
 import { emitGrokSession } from "@mako/sessions"
+import { installHarness, lacks } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { grokAcpSource } from "./acp.js"
 import { grokMcpSource } from "./mcp.js"
@@ -8,28 +9,31 @@ import { grokProcessProbe } from "./process-probe.js"
 import { grokProfileLoader } from "./profile.js"
 import { grokSkillSource } from "./skills.js"
 import { grokConnection } from "./connection.js"
+import { grokAccountCapability } from "./accounts.js"
 import { npmInstall, scriptInstall } from "../update-source.js"
 import {
   environmentForExecutable,
   resolveExecutable,
 } from "../../executable.js"
 
-export const installGrok: ProviderModule = (host) => {
-  host.connections.register(grokConnection())
-  host.nativeRunners.register(grokNativeRunner)
-  host.acpSources.register(grokAcpSource)
-  host.liveDrivers.register(acpLiveDriver(grokAcpSource))
-  host.profiles.register(grokProfileLoader)
-  host.processProbes.register(grokProcessProbe)
-  host.mcpSources.register(grokMcpSource)
-  host.skillSources.register(grokSkillSource)
-  host.sessionEmitters.register({
+export const installGrok: ProviderModule = (host) => installHarness(host, {
+  provider: "grok",
+  live: acpLiveDriver(grokAcpSource),
+  profile: grokProfileLoader,
+  accounts: grokAccountCapability,
+  acp: grokAcpSource,
+  nativeRunner: grokNativeRunner,
+  processProbe: grokProcessProbe,
+  mcp: grokMcpSource,
+  skills: grokSkillSource,
+  sessionEmitter: {
     provider: "grok",
     emit: (thread) => emitGrokSession(thread, {}),
-  })
+  },
+  connection: grokConnection(),
   // The install script keeps versioned binaries under ~/.grok/bin and links
   // `grok` at the current one; the npm package is the other install.
-  host.updateSources.register({
+  updates: {
     provider: "grok",
     binary: (env) => resolveExecutable("grok", env),
     npmPackage: "@xai-official/grok",
@@ -43,8 +47,9 @@ export const installGrok: ProviderModule = (host) => {
       scriptInstall("https://x.ai/cli/install.sh"),
       npmInstall("@xai-official/grok"),
     ],
-  })
-}
+  },
+  artifactPreview: lacks("Writes no artifact Mako previews"),
+})
 
 /** Grok's own updater can spawn npm even when its binary lives in ~/.grok/bin.
  * Upstream: xai-grok-update/src/auto_update.rs, get_installer and install_npm.
