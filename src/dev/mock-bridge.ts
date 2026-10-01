@@ -1537,7 +1537,7 @@ export function installMockBridge() {
       const session: LiveSessionState = {
         ...snapshot.session,
         status: "ready",
-        currentMode: approved ? "acceptEdits" : snapshot.session.currentMode,
+        currentMode: approved ? (MOCK_PLAN_APPROVALS.get(snapshot.session.harness)?.after ?? null) : snapshot.session.currentMode,
       }
       const updates: LiveUpdate[] = asked.implementsPlan
         ? [{ kind: "text", text: approved ? "Plan approved. Implementing it now — Finished." : "Still planning. Tell me what to change." }]
@@ -1961,6 +1961,73 @@ const MOCK_MODES = new Map<string, MockModes>([
       { id: "plan", name: "Plan", access: "plan" },
     ],
   }],
+  ["grok", {
+    defaultMode: "default",
+    modes: [
+      { id: "plan", name: "Plan", access: "plan", enforcement: "launch" },
+      { id: "default", name: "Ask", access: "deny", enforcement: "launch" },
+      { id: "bypassPermissions", name: "Full access", access: "full", enforcement: "launch" },
+    ],
+  }],
+  ["devin", {
+    defaultMode: "accept-edits",
+    modes: [
+      { id: "accept-edits", name: "Code", access: "edits" },
+      { id: "ask", name: "Ask", access: "chat" },
+      { id: "plan", name: "Plan", access: "plan" },
+      { id: "bypass", name: "Bypass Permissions", access: "full" },
+    ],
+  }],
+])
+
+interface MockPlanApproval {
+  request: Omit<LivePermissionRequest, "id" | "sessionId" | "implementsPlan">
+  approve: string
+  /** The mode the harness moves to once the plan is approved. */
+  after: string
+}
+
+/** Each harness's own plan approval, as its adapter presents it; OpenCode's plan is its reply and asks nothing. */
+const MOCK_PLAN_APPROVALS = new Map<string, MockPlanApproval>([
+  ["claude", {
+    approve: "allow_once",
+    after: "acceptEdits",
+    request: {
+      title: "Start implementing the proposed plan?",
+      kind: "ExitPlanMode",
+      options: [
+        { optionId: "allow_once", name: "Approve plan", kind: "allow_once" },
+        { optionId: "reject_once", name: "Keep planning", kind: "reject_once" },
+      ],
+    },
+  }],
+  ["grok", {
+    approve: "approved",
+    after: "default",
+    request: {
+      title: "Build the proposed plan?",
+      kind: "switch_mode",
+      options: [
+        { optionId: "approved", name: "Yes, build it", kind: "allow_once" },
+        { optionId: "keep-planning", name: "No, keep planning", kind: "reject_once" },
+        { optionId: "abandoned", name: "Abandon the plan", kind: "reject_always" },
+      ],
+    },
+  }],
+  ["devin", {
+    approve: "plan_accept_edits",
+    after: "accept-edits",
+    request: {
+      title: "Exit plan mode",
+      kind: "switch_mode",
+      options: [
+        { optionId: "plan_normal", name: "Yes, implement plan", kind: "allow_once" },
+        { optionId: "plan_accept_edits", name: "Yes, implement plan and accept edits", kind: "allow_once" },
+        { optionId: "plan_bypass", name: "Yes, implement plan and bypass permissions", kind: "allow_once" },
+        { optionId: "reject_once", name: "No, plan needs changes", kind: "reject_once" },
+      ],
+    },
+  }],
 ])
 
 let mockPlans = 0
@@ -1970,7 +2037,7 @@ interface MockReply {
   permission?: LivePermissionRequest
 }
 
-/** A planning turn answers with a Markdown plan; Claude's also waits on its plan approval. */
+/** A planning turn answers with a Markdown plan, and waits on the harness's own plan approval where it has one. */
 function mockReply(
   session: LiveSessionState,
   request: LiveRequest,
@@ -2001,19 +2068,15 @@ function mockReply(
     user,
     { kind: "proposed-plan", id, text, status: "proposed", replace: true },
   ]
-  if (session.harness !== "claude") return { updates }
+  const approval = MOCK_PLAN_APPROVALS.get(session.harness)
+  if (!approval) return { updates }
   return {
     updates,
     permission: {
+      ...approval.request,
       id: `approval-${id}`,
       sessionId: session.id,
-      title: "Start implementing the proposed plan?",
-      kind: "ExitPlanMode",
-      implementsPlan: { plan: id, approve: "allow_once" },
-      options: [
-        { optionId: "allow_once", name: "Approve plan", kind: "allow_once" },
-        { optionId: "reject_once", name: "Keep planning", kind: "reject_once" },
-      ],
+      implementsPlan: { plan: id, approve: approval.approve },
     },
   }
 }
