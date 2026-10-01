@@ -12,6 +12,7 @@ import { playSetupTurn } from "./mock-setup-turn"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
 import type {
+  AccountUsage, ResetCreditOutcome,
   ThreadContextOptions,
   ThreadFileContext,
   ThreadInlineContext,
@@ -831,57 +832,43 @@ export function installMockBridge() {
     },
     accounts: async () => ({
       providers: [
-        {
-          provider: "claude",
-          label: "Claude Code",
-          mode: "selectable",
-          loginCommand: "claude /login",
-        },
-        {
-          provider: "codex",
-          label: "Codex",
-          mode: "selectable",
-          loginCommand: "codex login",
-        },
-        {
-          provider: "opencode",
-          label: "OpenCode",
-          mode: "observed",
-          loginCommand: "opencode auth login",
-        },
+        { provider: "claude", label: "Claude Code", mode: "selectable", loginCommand: "claude /login" },
+        { provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login" },
+        { provider: "cursor", label: "Cursor", mode: "observed", loginCommand: "cursor-agent login" },
+        { provider: "grok", label: "Grok", mode: "observed", loginCommand: "grok login" },
+        { provider: "devin", label: "Devin", mode: "observed", loginCommand: "devin auth login" },
+        { provider: "opencode", label: "OpenCode", mode: "observed", loginCommand: "opencode auth login" },
       ],
       accounts: [
+        { harness: "claude", name: "default", email: "personal@example.com", dir: "~/.claude", active: true },
         {
-          harness: "claude" as const,
-          name: "default",
-          email: "personal@example.com",
-          dir: "~/.claude",
-          active: true,
-        },
-        {
-          harness: "claude" as const,
+          harness: "claude",
           name: "work@example.com",
           email: "work@example.com",
           dir: "~/.subrouter/codex/claude/_p1",
           active: false,
           source: "subrouter" as const,
         },
+        { harness: "codex", name: "default", email: "codex@example.com", dir: "~/.codex", active: false },
         {
-          harness: "codex" as const,
-          name: "default",
-          email: "codex@example.com",
-          dir: "~/.codex",
-          active: false,
-        },
-        {
-          harness: "codex" as const,
+          harness: "codex",
           name: "personal",
           email: "personal@work.dev",
           dir: "~/.mako/accounts/codex/personal",
           active: true,
         },
+        { harness: "cursor", name: "default", email: "developer@example.com", dir: "~/.cursor", active: true, source: "cli" as const },
+        { harness: "grok", name: "default", email: "developer@example.com", dir: "~/.grok/auth.json", active: true, source: "cli" as const },
         {
-          harness: "opencode" as const,
+          harness: "devin",
+          name: "default",
+          email: "developer@example.com",
+          dir: "~/.local/share/devin/credentials.toml",
+          active: true,
+          source: "cli" as const,
+        },
+        {
+          harness: "opencode",
           name: "openai",
           providerId: "openai",
           authType: "oauth" as const,
@@ -892,7 +879,7 @@ export function installMockBridge() {
           source: "opencode" as const,
         },
         {
-          harness: "opencode" as const,
+          harness: "opencode",
           name: "anthropic",
           providerId: "anthropic",
           authType: "api" as const,
@@ -905,60 +892,101 @@ export function installMockBridge() {
     captureAccount: async () => {},
     selectAccount: async () => {},
     removeAccount: async () => {},
-    accountUsage: async (harness: string, name: string) =>
-      harness === "opencode"
-        ? name === "openai"
+    ...(() => {
+    // Devin's daily window resets shortly after load, and a spent reset
+    // empties the personal Codex account, so both are visible here.
+    const loadedAt = Date.now()
+    let personalReset = false
+    return {
+    useResetCredit: async (harness: string, name: string): Promise<ResetCreditOutcome> => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      if (harness !== "codex" || name !== "personal") return "no-credit"
+      personalReset = true
+      return "reset"
+    },
+    accountUsage: async (harness: string, name: string): Promise<AccountUsage> => {
+      // Each provider answers at its own pace; Grok starts a process to ask.
+      await new Promise((resolve) => setTimeout(resolve, harness === "grok" ? 1_400 : 350))
+      const hour = 3_600_000
+      const day = 24 * hour
+      const now = Date.now()
+      const devinReset = loadedAt + 25_000
+      const fixtures: Record<string, AccountUsage> = {
+        "claude:default": {
+          status: "ok",
+          plan: "max",
+          windows: [
+            { usedPercent: 42, windowMinutes: 300, resetsAt: now + 2 * hour + 13 * 60_000 },
+            { usedPercent: 18, windowMinutes: 10_080, resetsAt: now + 3 * day },
+            { usedPercent: 81, windowMinutes: 10_080, resetsAt: now + 3 * day, scope: "Opus" },
+          ],
+          balances: [{ label: "Extra usage", remaining: 37.6, total: 50, unit: "usd" }],
+        },
+        "claude:work@example.com": { status: "stale-token", detail: "Usage returns after this account’s next Claude Code run" },
+        "codex:default": {
+          status: "ok",
+          plan: "pro",
+          windows: [{ usedPercent: 23, windowMinutes: 10_080, resetsAt: now + 4 * day }],
+          balances: [{ label: "Credits", remaining: 62_494, unit: "credits" }],
+        },
+        "codex:personal": personalReset
           ? {
-              status: "ok" as const,
+              status: "ok",
               plan: "plus",
-              session: {
-                usedPercent: 28,
-                windowMinutes: 300,
-                resetsAt: Date.now() + 2_400_000,
-              },
-              weekly: {
-                usedPercent: 61,
-                windowMinutes: 10_080,
-                resetsAt: Date.now() + 3 * 86_400_000,
-              },
+              windows: [
+                { usedPercent: 0, windowMinutes: 300, resetsAt: now + 5 * hour },
+                { usedPercent: 0, windowMinutes: 10_080, resetsAt: now + 7 * day },
+              ],
+              resetCredits: { available: 1, expiresAt: loadedAt + 22 * day },
             }
           : {
-              status: "unavailable" as const,
-              detail: "Usage is unavailable for API-key credentials",
-            }
-        : harness === "codex"
-          ? {
-              status: "ok" as const,
-              plan: "pro",
-              session: {
-                usedPercent: 34,
-                windowMinutes: 300,
-                resetsAt: Date.now() + 3_600_000,
-              },
-              weekly: {
-                usedPercent: 92,
-                windowMinutes: 10_080,
-                resetsAt: Date.now() + 4 * 86_400_000,
-              },
-            }
-          : name === "default"
-            ? {
-                status: "stale-token" as const,
-                detail: "Refreshes the next time Claude Code runs",
-              }
-            : {
-                status: "ok" as const,
-                session: {
-                  usedPercent: 12,
-                  windowMinutes: 300,
-                  resetsAt: Date.now() + 9_000_000,
-                },
-                weekly: {
-                  usedPercent: 55,
-                  windowMinutes: 10_080,
-                  resetsAt: Date.now() + 2 * 86_400_000,
-                },
-              },
+              status: "ok",
+              plan: "plus",
+              windows: [
+                { usedPercent: 34, windowMinutes: 300, resetsAt: loadedAt + 48 * 60_000 },
+                { usedPercent: 92, windowMinutes: 10_080, resetsAt: loadedAt + 1.5 * day },
+              ],
+              resetCredits: { available: 2, expiresAt: loadedAt + 22 * day },
+            },
+        "cursor:default": {
+          status: "ok",
+          plan: "Team",
+          windows: [{ usedPercent: 37, windowMinutes: 43_200, resetsAt: now + 25 * day }],
+          balances: [
+            { label: "On-demand", remaining: 20, total: 20, unit: "usd" },
+            { label: "Promotional credit", remaining: 3_730.31, total: 5_000, unit: "usd" },
+          ],
+        },
+        "grok:default": {
+          status: "ok",
+          plan: "X Premium+",
+          windows: [{ usedPercent: 2, windowMinutes: 10_080, resetsAt: now + 2 * day }],
+        },
+        "devin:default": {
+          status: "ok",
+          plan: "Teams",
+          windows: [
+            now < devinReset
+              ? { usedPercent: 97, windowMinutes: 1_440, resetsAt: devinReset }
+              : { usedPercent: 0, windowMinutes: 1_440, resetsAt: devinReset + day },
+            { usedPercent: 18, windowMinutes: 10_080, resetsAt: loadedAt + 3 * day },
+          ],
+          balances: [{ label: "Extra usage", remaining: 39.5, unit: "usd" }],
+        },
+        "opencode:openai": {
+          status: "ok",
+          plan: "plus",
+          windows: [
+            { usedPercent: 28, windowMinutes: 300, resetsAt: now + 40 * 60_000 },
+            { usedPercent: 61, windowMinutes: 10_080, resetsAt: now + 3 * day },
+          ],
+        },
+        "opencode:anthropic": { status: "unavailable", detail: "API keys have no plan limits" },
+      }
+      return fixtures[`${harness}:${name}`] ?? { status: "unavailable" }
+    },
+    }
+    })(),
     harnessProfiles: async () => profiles(),
     harnessAvailability: async () => ({
       codex: true,
