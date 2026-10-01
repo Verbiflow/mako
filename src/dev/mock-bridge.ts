@@ -5,7 +5,9 @@ import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
-import type { LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
+import type { LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
+import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
+import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
@@ -153,7 +155,8 @@ export function installMockBridge() {
     capabilities,
   })
 
-  const scene = new URLSearchParams(location.search).get("app")
+  // Node tests install the bridge on a bare `window` with no address.
+  const scene = "location" in window ? new URLSearchParams(window.location.search).get("app") : null
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
   /** The setup Thread's worktree, once its Session has started in one. */
   let setupWorktree: ThreadWorktree | undefined
@@ -1068,6 +1071,7 @@ export function installMockBridge() {
         resumable: resumable.includes(provider),
         live: live.includes(provider),
         canResume: live.includes(provider),
+        ...MOCK_MODES.get(provider),
       }))
     },
     resolveContinuation: async (path: string) => {
@@ -1108,8 +1112,8 @@ export function installMockBridge() {
         cwd,
         status: "ready",
         connection: "connected",
-        modes: [],
-        currentMode: null,
+        modes: MOCK_MODES.get(harness)?.modes ?? [],
+        currentMode: options.modeId ?? MOCK_MODES.get(harness)?.defaultMode ?? null,
         configOptions: [],
         // The host reports the tuning it started with until the provider says otherwise.
         settings: options.tuning,
@@ -1149,21 +1153,20 @@ export function installMockBridge() {
       const request: LiveRequest | undefined = options.initialRequest
         ? { ...options.initialRequest, status: "completed" }
         : undefined
+      const reply = request ? mockReply(session, request, options.tuning) : null
       const snapshot: LiveSnapshot = {
-        session,
+        session: reply?.permission ? { ...session, status: "running" } : session,
         revision: 0,
         createdAt: Date.now(),
+        // The host files every session under a Thread; the mock stamps one so a new tab can open beside it.
+        threadId: crypto.randomUUID(),
         threadPath: options.threadPath,
         base,
-        permissions: [],
+        permissions: reply?.permission ? [reply.permission] : [],
         requests: request ? [request] : [],
-        blocks: request
-          ? [
-              { type: "user", requestId: request.id, text: request.text },
-              { type: "text", text: `Finished: ${request.text}` },
-            ]
-          : [],
+        blocks: request && reply ? reduceLiveUpdates([], reply.updates) : [],
       }
+      acpSessions.set(session.id, snapshot.session)
       liveSnapshots.set(session.id, snapshot)
       return snapshot
     },
@@ -1478,7 +1481,8 @@ export function installMockBridge() {
       id: string,
       requestId: string,
       text: string,
-      attachments = []
+      attachments = [],
+      tuning?: SessionSettings
     ) => {
       const snapshot = liveSnapshots.get(id)
       if (!snapshot) throw new Error("Mock session is closed")
@@ -1496,30 +1500,53 @@ export function installMockBridge() {
         attachments,
         status: "completed",
       }
-      const updates = [
-        { kind: "user" as const, requestId, text },
-        { kind: "text" as const, text: `Finished: ${text}` },
-      ]
+      const settings = tuning
+        ? { ...snapshot.session.settings, ...tuning, options: { ...snapshot.session.settings?.options, ...tuning.options } }
+        : snapshot.session.settings
+      const { updates, permission } = mockReply({ ...snapshot.session, settings }, request, settings)
+      const session: LiveSessionState = { ...snapshot.session, settings, status: permission ? "running" : "ready" }
+      const permissions = permission ? [permission] : []
       const next = {
         ...snapshot,
+        session,
+        permissions,
         revision: snapshot.revision + 1,
         requests: [...snapshot.requests, request],
         blocks: reduceLiveUpdates(snapshot.blocks, updates),
       }
       liveSnapshots.set(id, next)
+      acpSessions.set(id, session)
       emit({
         type: "live-batch",
         batch: {
           id,
           revision: next.revision,
           updates,
-          session: next.session,
+          session,
+          permissions,
           requests: next.requests,
         },
       })
       return request
     },
-    livePermission: async () => {},
+    livePermission: async (id: string, requestId: string, response: LivePermissionResponse) => {
+      const snapshot = liveSnapshots.get(id)
+      const asked = snapshot?.permissions.find((permission) => permission.id === requestId)
+      if (!snapshot || !asked) return
+      const approved = response.kind === "choice" && response.optionId === asked.implementsPlan?.approve
+      const session: LiveSessionState = {
+        ...snapshot.session,
+        status: "ready",
+        currentMode: approved ? "acceptEdits" : snapshot.session.currentMode,
+      }
+      const updates: LiveUpdate[] = asked.implementsPlan
+        ? [{ kind: "text", text: approved ? "Plan approved. Implementing it now — Finished." : "Still planning. Tell me what to change." }]
+        : []
+      const next = { ...snapshot, session, permissions: [], revision: snapshot.revision + 1, blocks: reduceLiveUpdates(snapshot.blocks, updates) }
+      liveSnapshots.set(id, next)
+      acpSessions.set(id, session)
+      emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, permissions: [] } })
+    },
     liveSetMode: async (id: string, modeId: string) => {
       const session = acpSessions.get(id)
       if (!session) return
@@ -1553,12 +1580,13 @@ export function installMockBridge() {
         const updated = {
           ...snapshot,
           session: next,
+          permissions: [],
           revision: snapshot.revision + 1,
         }
         liveSnapshots.set(id, updated)
         emit({
           type: "live-batch",
-          batch: { id, revision: updated.revision, session: next, updates: [] },
+          batch: { id, revision: updated.revision, session: next, permissions: [], updates: [] },
         })
       }
     },
@@ -1797,6 +1825,13 @@ const mockFast = {
   role: "speed" as const,
   current: false,
 }
+const mockPlan = {
+  kind: "boolean" as const,
+  id: "plan",
+  label: "Plan mode",
+  role: "plan" as const,
+  current: false,
+}
 const mockContext = (current: string, values: string[]) => ({
   kind: "select" as const,
   id: "context",
@@ -1808,7 +1843,7 @@ const mockContext = (current: string, values: string[]) => ({
 const mockModel = (
   id: string,
   label: string,
-  options: (ReturnType<typeof mockEffort> | ReturnType<typeof mockContext> | typeof mockFast)[] = [],
+  options: (ReturnType<typeof mockEffort> | ReturnType<typeof mockContext> | typeof mockFast | typeof mockPlan)[] = [],
   contextWindow?: number
 ) => ({ id, label, options, contextWindow })
 
@@ -1843,7 +1878,7 @@ const MOCK_PROFILES = [
       mockModel("gpt-5.6-terra", "GPT-5.6 Terra", [mockEffort("medium", ["low", "medium", "high"])]),
       mockModel("gpt-5.6-luna", "GPT-5.6 Luna", [mockEffort("low", ["low", "medium"])]),
       mockModel("gpt-5.5", "GPT-5.5", [mockEffort("medium", ["low", "medium", "high"])]),
-    ],
+    ].map((model) => ({ ...model, options: [...model.options, mockPlan] })),
   },
   {
     id: "cursor",
@@ -1860,7 +1895,7 @@ const MOCK_PROFILES = [
       mockModel("claude-opus-5-5", "Claude Opus 5.5", [mockContext("1m", ["300k", "1m"]), mockEffort("medium", ["low", "medium", "high", "xhigh", "max"]), mockFast]),
       mockModel("gpt-5.6-sol", "GPT-5.6 Sol", [mockContext("1m", ["272k", "1m"]), mockEffort("medium", ["low", "medium", "high"]), mockFast]),
       mockModel("grok-4.7", "Grok 4.7"),
-    ],
+    ].map((model) => ({ ...model, options: [...model.options, mockPlan] })),
   },
   {
     id: "grok",
@@ -1902,3 +1937,83 @@ const MOCK_PROFILES = [
     ],
   },
 ]
+
+interface MockModes {
+  modes: LiveSessionMode[]
+  defaultMode: string
+}
+
+/** Access ladders shaped like the real harnesses declare them, plan included where they plan by mode. */
+const MOCK_MODES = new Map<string, MockModes>([
+  ["claude", {
+    defaultMode: "default",
+    modes: [
+      { id: "default", name: "Default", access: "ask" },
+      { id: "acceptEdits", name: "Accept edits", access: "edits" },
+      { id: "plan", name: "Plan", access: "plan" },
+      { id: "bypassPermissions", name: "Bypass permissions", access: "full" },
+    ],
+  }],
+  ["opencode", {
+    defaultMode: "build",
+    modes: [
+      { id: "build", name: "Build", access: "full" },
+      { id: "plan", name: "Plan", access: "plan" },
+    ],
+  }],
+])
+
+let mockPlans = 0
+
+interface MockReply {
+  updates: LiveUpdate[]
+  permission?: LivePermissionRequest
+}
+
+/** A planning turn answers with a Markdown plan; Claude's also waits on its plan approval. */
+function mockReply(
+  session: LiveSessionState,
+  request: LiveRequest,
+  tuning: SessionSettings | undefined
+): MockReply {
+  const user: LiveUpdate = { kind: "user", requestId: request.id, text: request.text }
+  const planning = tuning?.options?.plan === true ||
+    session.modes.some((mode) => mode.id === session.currentMode && mode.access === "plan")
+  if (!planning) return { updates: [user, { kind: "text", text: `Finished: ${request.text}` }] }
+  const id = `mock-plan-${++mockPlans}`
+  const subject = request.text.replace(/\s+/g, " ").trim().slice(0, 60) || "the change"
+  const text = [
+    `# Plan: ${subject}`,
+    "",
+    "## Context",
+    "The composer resolves settings per target; the change touches the state layer and one control, nothing in the host.",
+    "",
+    "## Steps",
+    "1. Add the state in `src/state/` with a pure mapping and tests for each harness shape.",
+    "2. Wire the control into the composer's routing row, beside access.",
+    "3. Cover the edge cases: a session that is starting, a launch-only mode, a failed start.",
+    "",
+    "## Verification",
+    "- `npm run lint` and `npm run typecheck`",
+    "- The plan and approval suites, then a look in the dev desk",
+  ].join("\n")
+  const updates: LiveUpdate[] = [
+    user,
+    { kind: "proposed-plan", id, text, status: "proposed", replace: true },
+  ]
+  if (session.harness !== "claude") return { updates }
+  return {
+    updates,
+    permission: {
+      id: `approval-${id}`,
+      sessionId: session.id,
+      title: "Start implementing the proposed plan?",
+      kind: "ExitPlanMode",
+      implementsPlan: { plan: id, approve: "allow_once" },
+      options: [
+        { optionId: "allow_once", name: "Approve plan", kind: "allow_once" },
+        { optionId: "reject_once", name: "Keep planning", kind: "reject_once" },
+      ],
+    },
+  }
+}
