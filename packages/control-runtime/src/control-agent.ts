@@ -1,5 +1,4 @@
-import { ControlProgramError } from "@mako/control/program"
-import { controlFaultData } from "@mako/control/control"
+import { ControlProgramError, programErrorText } from "@mako/control/program"
 import type { JsonValue } from "./json.js"
 import type { ControlSession } from "./control-session.js"
 import type { SessionOperation } from "./control-session-protocol.js"
@@ -45,27 +44,11 @@ export function controlAgent(
           : [{ type: "text", text: "Completed; no value emitted." }],
       }
     } catch (error) {
-      const cause = error instanceof ControlProgramError ? error.cause : error
-      const fault = controlFaultData(cause)
       return {
         isError: true,
         content: [
           ...(error instanceof ControlProgramError ? error.output : []),
-          {
-            type: "text",
-            text: JSON.stringify({
-              code: fault?.code ?? "script-error",
-              outcome: fault?.outcome ?? "unknown",
-              message:
-                cause instanceof Error
-                  ? cause.message
-                  : "Control program failed",
-              recovery:
-                fault?.code === "syntax-error"
-                  ? "No statement ran. Fix the source and run it again."
-                  : "Earlier statements may have completed. Inspect the exact target; never replay the whole program after uncertainty.",
-            }),
-          },
+          { type: "text", text: programErrorText(error) },
         ],
       }
     }

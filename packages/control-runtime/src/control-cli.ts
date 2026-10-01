@@ -600,9 +600,12 @@ export async function runControlCli(
           // An unreadable result must not replace the program's own fault.
         }
       }
+      const ran = reply.ran?.length
+        ? ` Before failing, the program ran: ${reply.ran.join(", ")}. Observe before acting again; do not rerun the program.`
+        : ""
       throw new ControlFault(
         reply.fault.code,
-        shown ? `${reply.fault.message} Output emitted before the failure is on stdout.` : reply.fault.message,
+        `${reply.fault.message}${shown ? " Output emitted before the failure is on stdout." : ""}${ran}`,
         reply.fault.outcome
       )
     }

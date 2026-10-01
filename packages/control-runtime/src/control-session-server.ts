@@ -99,6 +99,7 @@ export async function serveControlSession(
       case "exec": {
         let blocks: Awaited<ReturnType<typeof session.execute>>
         let failure: Error | undefined
+        let effects: readonly string[] = []
         try {
           blocks = await session.execute(
             { source: operation.source },
@@ -109,6 +110,7 @@ export async function serveControlSession(
           if (!(error instanceof ControlProgramError) || !error.output.length) throw error
           blocks = error.output
           failure = error.cause
+          effects = error.effects
         }
         const output: ControlProgramOutput[] = []
         for (const block of blocks) {
@@ -142,7 +144,7 @@ export async function serveControlSession(
             })
           }
         }
-        if (failure) throw new ControlProgramError(output, failure)
+        if (failure) throw new ControlProgramError(output, failure, effects)
         return output
       }
       case "call":
@@ -315,6 +317,7 @@ export async function serveControlSession(
               outcome,
             },
             output: partial?.length ? partial : undefined,
+            ran: error instanceof ControlProgramError && error.effects.length ? error.effects : undefined,
           })
         )
       })

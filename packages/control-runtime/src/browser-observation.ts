@@ -125,13 +125,38 @@ const INTERACTIVE_ROLES = new Set([
 ])
 /** Text runs and breaks duplicate their parent StaticText. */
 const SKIPPED_ROLES = new Set(["InlineTextBox", "LineBreak"])
-/** Unnamed wrappers carry no information an agent can use. */
+/** Unnamed wrappers and inline formatting carry no information an agent can
+ * use; their children take their place in the outline. */
 const WRAPPER_ROLES = new Set([
   "generic",
   "none",
   "presentation",
   "GenericContainer",
+  "group",
+  "Section",
+  "paragraph",
+  "cell",
+  "gridcell",
+  "strong",
+  "emphasis",
+  "code",
+  "time",
+  "mark",
+  "Abbr",
+  "subscript",
+  "superscript",
+  "insertion",
+  "deletion",
+  "LabelText",
+  "DescriptionListDetail",
+  "DescriptionListTerm",
+  "blockquote",
+  "Pre",
+  "figure",
 ])
+/** Chromium's roles for presentational tables. Their names concatenate their
+ * cells' text, which the cells' own lines already show. */
+const LAYOUT_ROLE = /^LayoutTable/
 /** Accessibility states retain false and empty values as assertion evidence. */
 const STATE_PROPERTIES = [
   "checked",
@@ -177,8 +202,15 @@ function isInteractive(role: string | null, properties: Map<string, string>) {
   )
 }
 
+const spaced = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim()
+
 /** Bound the serialized result, not just node count: page-controlled names can
- * contain entire documents. Keep usable refs and explicitly report omissions. */
+ * contain entire documents. Keep usable refs and explicitly report omissions.
+ *
+ * The outline drops what repeats or says nothing: text already in its nearest
+ * shown ancestor's name, unnamed wrappers and formatting, presentational tables
+ * and unnamed leaves. `depth` counts shown ancestors only, so it is the
+ * outline's indentation and scopes match the tree an agent reads. */
 export function browserObservation(input: {
   target: BrowserTarget
   info: JsonValue
@@ -189,6 +221,8 @@ export function browserObservation(input: {
   exactValues?: boolean
   interactiveOnly?: boolean
   viewport?: ObservationViewport
+  /** Stable ref for a DOM node; the same node keeps its ref across reads. */
+  refFor?: (backendDOMNodeId: number) => string
 }) {
   let truncatedTextFields = 0
   function shorten(value: string, limit: number): string {
@@ -237,7 +271,6 @@ export function browserObservation(input: {
           ) / 10,
       }
     : undefined
-  const depths = new Map<string, number>()
   const query = input.query?.trim().toLowerCase() || undefined
   const candidates: Array<{ node: AccessibilityNode; row: JsonObject }> = []
   // CDP may return breadth-first rows. Emit depth-first rows so a container's
@@ -266,6 +299,17 @@ export function browserObservation(input: {
     }
     return parts.join(" ").replace(/\s+/g, " ").trim()
   }
+  // Each node's place in the outline: the depth its children appear at and the
+  // name of its nearest shown named ancestor, whose text it may repeat.
+  const outline = new Map<string, { childDepth: number; named: string }>()
+  const structural: Array<{
+    node: AccessibilityNode
+    depth: number
+    role: string | null
+    properties: Map<string, string>
+    interactive: boolean
+    informative: boolean
+  }> = []
   const pending = roots.reverse()
   const visited = new Set<string>()
   while (pending.length) {
@@ -275,25 +319,57 @@ export function browserObservation(input: {
     const descendants = children.get(node.nodeId) ?? []
     for (let index = descendants.length - 1; index >= 0; index--)
       pending.push(descendants[index]!)
-    const depth = node.parentId ? (depths.get(node.parentId) ?? 0) + 1 : 0
-    depths.set(node.nodeId, depth)
+    const parent = (node.parentId && outline.get(node.parentId)) || { childDepth: 0, named: "" }
+    outline.set(node.nodeId, parent)
     if (node.ignored) continue
     const role = node.role?.value ?? null
     if (role !== null && SKIPPED_ROLES.has(role)) continue
-    const name = node.name?.value
+    const name = spaced(node.name?.value)
     const value = node.value?.value
     const properties = propertyMap(node)
-    if (
-      role !== null &&
-      WRAPPER_ROLES.has(role) &&
-      !name &&
-      !value &&
-      !isInteractive(role, properties)
-    )
-      continue
-    if (input.interactiveOnly && !isInteractive(role, properties)) continue
+    const interactive = isInteractive(role, properties)
+    const passThrough =
+      !interactive &&
+      ((role !== null && DOCUMENT_ROLES.has(role) && !node.parentId) ||
+        (role !== null && LAYOUT_ROLE.test(role)) ||
+        (role !== null && WRAPPER_ROLES.has(role) && !name && !value) ||
+        (role === "StaticText" && (!name || parent.named.includes(name))))
+    if (passThrough) continue
+    outline.set(node.nodeId, {
+      childDepth: parent.childDepth + 1,
+      named: name || parent.named,
+    })
+    structural.push({
+      node,
+      depth: parent.childDepth,
+      role,
+      properties,
+      interactive,
+      informative: interactive || name !== "" || (value !== undefined && value !== null && value !== ""),
+    })
+  }
+  // An unnamed, valueless, inert node says only its role; keep it only while it
+  // holds something that says more.
+  // Walking the preorder rows backwards, a row's descendants come first:
+  // keptAt[d] records a kept row at depth d inside the subtree being closed.
+  const kept: typeof structural = []
+  const keptAt: boolean[] = []
+  for (let index = structural.length - 1; index >= 0; index--) {
+    const entry = structural[index]!
+    const holds = keptAt.slice(entry.depth + 1).some(Boolean)
+    keptAt.length = entry.depth + 1
+    if (entry.informative || holds) {
+      kept.push(entry)
+      keptAt[entry.depth] = true
+    }
+  }
+  kept.reverse()
+  for (const { node, depth, role, properties, interactive } of kept) {
+    const name = node.name?.value
+    const value = node.value?.value
+    if (input.interactiveOnly && !interactive) continue
     const label = role !== null && LABELLED_ROLES.has(role) ? visibleText(node) : ""
-    const shown = label && label !== (name ?? "").replace(/\s+/g, " ").trim() ? label : undefined
+    const shown = label && label !== spaced(name) ? label : undefined
     if (
       query &&
       ![role ?? "", name ?? "", value ?? "", shown ?? ""].some((field) =>
@@ -324,6 +400,7 @@ export function browserObservation(input: {
   }
   const offset = Math.min(input.offset ?? 0, candidates.length)
   const prefix = randomBytes(3).toString("hex")
+  const refFor = input.refFor ?? ((id: number) => `${prefix}:${id}`)
   const refs = new Map<string, number>()
   const nodes: JsonObject[] = []
   // Leave room for counters, separators and protocol metadata in the final JSON.
@@ -334,7 +411,7 @@ export function browserObservation(input: {
   let index = offset
   for (; index < candidates.length && nodes.length < input.maxNodes; index++) {
     const { node, row } = candidates[index]
-    const ref = node.backendDOMNodeId ? `${prefix}:${index}` : undefined
+    const ref = node.backendDOMNodeId ? refFor(node.backendDOMNodeId) : undefined
     const entry: JsonObject = ref ? { ref, ...row } : row
     const size = Buffer.byteLength(JSON.stringify(entry)) + 1
     if (bytes + size > OBSERVATION_BUDGET_BYTES) break

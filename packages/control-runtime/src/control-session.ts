@@ -1,11 +1,11 @@
 import { controlReplDocumentation } from "./control-agent-docs.js"
-import type { JsonValue } from "./json.js"
+import type { JsonObject, JsonValue } from "./json.js"
 import {
   nativeCapture,
   nativeCapturePoint,
   type NativeCaptureGeometry,
 } from "./native-capture.js"
-import { NativeScreenshotOptionsSchema } from "@mako/control/control"
+import { ControlOperationSchema, NativeScreenshotOptionsSchema, operationLabel } from "@mako/control/control"
 import { AppshotTargetSchema } from "./contracts/appshots.js"
 import { verifyForegroundInput } from "./computer-input-target.js"
 import { ComputerObservationClient } from "./computer-observation-client.js"
@@ -71,6 +71,7 @@ import {
   type PageTarget,
   type WindowControlTarget,
 } from "@mako/control/control"
+import { pageOutlineLines } from "@mako/control/browser"
 import { BROWSER_ACTIONS, type BrowserCall } from "./browser-tools-runtime.js"
 import { browserProtocolHelp } from "./browser-protocol-help.js"
 import { CONTROL_HELP_TOPICS } from "./control-session-protocol.js"
@@ -214,6 +215,34 @@ const NATIVE_READ_TOOLS: ReadonlySet<string> = new Set([
   "screenshot",
   "zoom",
 ])
+const namedCallSchema = z.object({ name: z.string(), args: z.record(z.string(), z.json()).optional() })
+/** How a failed cell's error names a control call that may have changed
+ * something: "activate e12", "navigate", "press_key". Reads are unnamed. */
+function controlEffect(command: JsonObject): string | undefined {
+  switch (command.action) {
+    case "dispatch": {
+      const operation = ControlOperationSchema.safeParse(command.operation)
+      return operation.success ? operationLabel(operation.data) : "dispatch"
+    }
+    case "page": {
+      const { name, args } = namedCallSchema.parse(command)
+      const parsed = BrowserCommandSchema.safeParse({ ...args, action: name })
+      if (!parsed.success) return name
+      const effect = browserCommandEffect(parsed.data)
+      return effect === "mutate" || effect === "release" ? name : undefined
+    }
+    case "native": {
+      const { name } = namedCallSchema.parse(command)
+      return NATIVE_READ_TOOLS.has(name) ? undefined : name
+    }
+    case "connect":
+      return "connectBrowser"
+    case "recording":
+      return command.operation === "status" ? undefined : `record ${String(command.operation)}`
+    default:
+      return undefined
+  }
+}
 /** Keys the driver repeats in every window-state result that agents rarely need. */
 const VERBOSE_WINDOW_STATE_KEYS = ["tree_markdown", "_note"]
 /**
@@ -512,8 +541,12 @@ const pageViewSchema = z.looseObject({
   nodes: ControlObservationSchema.shape.nodes.default([]),
   viewport: z.json().nullable().optional(),
   matched: z.number().int().optional(),
+  offset: z.number().int().optional(),
   nextOffset: z.number().int().nullable().optional(),
   omitted: z.number().int().optional(),
+})
+const pageInfoSchema = z.object({
+  targetInfo: z.object({ title: z.string(), url: z.string() }),
 })
 /** The driver's contract: a refused action carries no delivery. */
 const nativeRefusalSchema = z.object({
@@ -823,27 +856,28 @@ export function createControlSession(
     forgetObservation(key)
     controlVisuals.delete(key)
   }
+  /** A page ref names one DOM node for as long as its document lives, so
+   * page refs from every read since the target's last action stay usable.
+   * A native ref belongs to its snapshot only. */
   const rememberControlRefs = (
     target: ControlTarget,
     observation: string,
-    lines: readonly string[]
+    refs: readonly string[]
   ) => {
     const key = controlTargetKey(target)
-    for (const [ref, binding] of controlRefs)
-      if (binding.target === key) controlRefs.delete(ref)
-    for (const line of lines) {
-      try {
-        controlRefs.set(controlLineRef(line), { target: key, observation })
-      } catch {
-        continue
-      }
+    if (target.kind !== "page")
+      for (const [ref, binding] of controlRefs)
+        if (binding.target === key) controlRefs.delete(ref)
+    for (const ref of refs) {
+      controlRefs.delete(ref)
+      controlRefs.set(ref, { target: key, observation })
     }
     while (controlViews.size > 64) {
       const oldest = controlViews.keys().next().value
       if (oldest === undefined) break
       invalidateControlTarget(oldest)
     }
-    while (controlRefs.size > 2_048) {
+    while (controlRefs.size > 20_000) {
       const oldest = controlRefs.keys().next().value
       if (oldest === undefined) break
       controlRefs.delete(oldest)
@@ -1653,10 +1687,9 @@ export function createControlSession(
     if (request.match) scope.match = request.match
     if (request.maxDepth !== undefined) scope.maxDepth = request.maxDepth
     const key = controlTargetKey(request.target)
-    // Reading a page changes nothing in it, so a page screenshot's view token
-    // stays valid; a native snapshot supersedes the driver's capture tokens.
-    if (request.target.kind === "page") forgetObservation(key)
-    else invalidateControlTarget(key)
+    // Reading a page changes nothing in it, so its refs and screenshot view
+    // stay valid; a native snapshot supersedes the driver's tokens.
+    if (request.target.kind !== "page") invalidateControlTarget(key)
     if (request.target.kind === "page") {
       if (!browserCall)
         throw new Error("Page control is unavailable outside a Mako task")
@@ -1670,11 +1703,15 @@ export function createControlSession(
             match: request.match,
             query: request.query,
             interactiveOnly: request.interactive,
+            ...(request.offset !== undefined ? { offset: request.offset } : {}),
           }),
           signal
         )
       )
-      const lines = pageElementLines(value.nodes)
+      const info = pageInfoSchema.safeParse(value.info).data?.targetInfo
+      const lines = pageOutlineLines(value.nodes, {
+        flat: request.interactive || request.query !== undefined || request.match !== undefined,
+      })
       const nodes = value.nodes.map((raw) => {
         const node = { ...raw }
         for (const state of [
@@ -1698,13 +1735,14 @@ export function createControlSession(
         complete:
           value.omitted === 0 &&
           value.nextOffset == null &&
+          !value.offset &&
           !request.query &&
           !request.interactive,
         omitted: value.omitted ?? null,
         textComplete: value.truncatedTextFields === 0,
       }
       controlViews.set(key, { observation: value.observation, lines })
-      rememberControlRefs(request.target, value.observation, lines)
+      rememberControlRefs(request.target, value.observation, nodes.flatMap((node) => (node.ref ? [node.ref] : [])))
       const result: ComputerArguments = {
         target: request.target,
         route: "page",
@@ -1715,6 +1753,8 @@ export function createControlSession(
         coverage,
         scope,
         viewport: value.viewport ?? null,
+        ...(info ? { page: { title: info.title, url: info.url } } : {}),
+        ...(value.offset ? { offset: value.offset } : {}),
       }
       if (value.lineage === undefined) delete result.lineage
       if (value.matched !== undefined) result.matched = value.matched
@@ -1847,7 +1887,7 @@ export function createControlSession(
       })
     )
     controlViews.set(key, { observation: state.snapshot_id, lines })
-    rememberControlRefs(request.target, state.snapshot_id, lines)
+    rememberControlRefs(request.target, state.snapshot_id, nodes.flatMap((node) => (node.ref ? [node.ref] : [])))
     for (const ref of webRefs) {
       if (!ref) continue
       const remembered = controlRefs.get(ref)
@@ -2133,11 +2173,15 @@ export function createControlSession(
       if (
         !binding ||
         binding.target !== key ||
-        binding.observation !== current?.observation
+        (target.kind !== "page" && binding.observation !== current?.observation)
       )
         throw new ControlFault(
           "stale-reference",
-          `Ref "${ref}" is not from this target's latest observation. Observe the exact target again; nothing was dispatched.`,
+          binding && binding.target !== key
+            ? `Ref "${ref}" belongs to another target; use this target's own refs. Nothing was dispatched.`
+            : target.kind === "page"
+              ? `Ref "${ref}" is not from a read of this tab since its last action. Observe again, or use a locator, which reads fresh; nothing was dispatched.`
+              : `Ref "${ref}" is not from this window's latest observation. Observe the exact target again; nothing was dispatched.`,
           "not-dispatched"
         )
     }
@@ -3033,6 +3077,7 @@ export function createControlSession(
         return toolResultData(result)
       },
       image: computerProgramImage,
+      effect: unified ? controlEffect : undefined,
       fault: (detail) =>
         new ControlFault(detail.code, detail.message, detail.outcome),
     })

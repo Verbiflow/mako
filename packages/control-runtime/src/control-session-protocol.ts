@@ -151,6 +151,8 @@ export const SessionReplySchema = z.discriminatedUnion("ok", [
     }),
     /** Blocks a failed program emitted before its fault, images already saved. */
     output: z.array(z.json()).optional(),
+    /** State-changing calls the failed program made, as programErrorText names them. */
+    ran: z.array(z.string()).optional(),
   }),
 ])
 

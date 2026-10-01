@@ -154,6 +154,7 @@ interface DownloadState {
 const PAGE_TARGET_TYPES = new Set(["page", "iframe", "webview"])
 const EVENT_ENTRY_LIMIT = 128
 const EVENT_ENTRY_BYTES = 16_384
+const MAX_PAGE_REFS = 20_000
 type Modifier = z.infer<typeof KeyModifierSchema>
 const MODIFIER_BITS = {
   Alt: 1,
@@ -259,7 +260,11 @@ interface Binding {
   mutations: number
   running: number
   tail: Promise<void>
+  /** Refs usable now: every node read since the last clear. */
   refs: Map<string, number>
+  /** This document's ref for each DOM node it has shown; cleared only when the
+   * document is replaced, so a ref always names one node. */
+  refIds: Map<number, string>
   view?: string
   observation?: { token: string; digest: string; refs: string[] }
   events: BrowserProtocolEvent[]
@@ -369,6 +374,9 @@ export class BrowserService {
   private readonly preference: BrowserPreferences
   private readonly defaultApplication?: () => Promise<string | undefined>
   private closing = false
+  /** Page refs are e1, e2, … across every tab of this service and never
+   * reused, so a ref from one tab or document can never name another node. */
+  private refCount = 0
   private readonly discover: () => Promise<LocalBrowser[]>
   private refreshing: Promise<BrowserControlStatus[]> | undefined
   private readonly focusPolicy: BrowserFocusPolicy
@@ -817,6 +825,7 @@ export class BrowserService {
         if (!frame.success || frame.data.frame.parentId === undefined) {
           binding.lineage = randomUUID()
           binding.refs.clear()
+          binding.refIds = new Map()
           binding.view = undefined
           binding.observation = undefined
         }
@@ -1040,6 +1049,7 @@ export class BrowserService {
         running: 0,
         tail: Promise.resolve(),
         refs: new Map(),
+        refIds: new Map(),
         events: [],
         dialog: null,
         dialogPolicy: "ask",
@@ -1774,7 +1784,15 @@ export class BrowserService {
             if (value !== null) node.value = { value }
           }
         }
+        // A navigation during this read replaces the map; refs minted for the
+        // old document stay in the old one and the read fails below.
+        const refIds = binding.refIds
         const observation = browserObservation({
+          refFor: (backendNodeId) => {
+            let ref = refIds.get(backendNodeId)
+            if (ref === undefined) refIds.set(backendNodeId, (ref = `e${++this.refCount}`))
+            return ref
+          },
           target: binding.target,
           info,
           nodes: result.nodes,
@@ -1809,29 +1827,32 @@ export class BrowserService {
             })
           )
           .digest("base64url")
+        // Refs from earlier reads of this document stay usable: each names
+        // the same node. Past the bound, older refs are refused, never reused.
+        if (binding.refs.size + observation.refs.size > MAX_PAGE_REFS) binding.refs.clear()
+        if (refIds.size > MAX_PAGE_REFS) refIds.clear()
         if (
           command.since !== undefined &&
           binding.observation?.token === command.since &&
-          binding.observation.digest === digest
+          binding.observation.digest === digest &&
+          binding.observation.refs.length === observation.refs.size
         ) {
-          const nextNodeIds = [...observation.refs.values()]
-          if (binding.observation.refs.length === nextNodeIds.length) {
-            binding.refs = new Map(
-              binding.observation.refs.map((ref, index) => [
-                ref,
-                z.number().parse(nextNodeIds[index]),
-              ])
-            )
-            return {
-              target: { ...binding.target },
-              observation: binding.observation.token,
-              lineage,
-              unchanged: true,
-            }
+          // The same rows, perhaps re-rendered as new DOM nodes: the refs the
+          // agent holds follow them. Refs minted for this read were never shown.
+          const shown = binding.observation.refs
+          ;[...observation.refs.values()].forEach((id, index) => {
+            binding.refs.set(shown[index]!, id)
+            refIds.set(id, shown[index]!)
+          })
+          return {
+            target: { ...binding.target },
+            observation: binding.observation.token,
+            lineage,
+            unchanged: true,
           }
         }
+        for (const [ref, id] of observation.refs) binding.refs.set(ref, id)
         const token = randomUUID()
-        binding.refs = observation.refs
         binding.observation = {
           token,
           digest,
@@ -2499,14 +2520,13 @@ export class BrowserService {
             if (!dom) continue
           }
           let url = true
-          if (conditions.url !== undefined) {
-            const info = await root("Target.getTargetInfo", {
-              targetId: binding.target.tab,
-            })
-            url = z
-              .object({ targetInfo: z.object({ url: z.string() }) })
-              .parse(info)
-              .targetInfo.url.includes(conditions.url)
+          if (conditions.url !== undefined || conditions.title !== undefined) {
+            const { targetInfo } = z
+              .object({ targetInfo: z.object({ url: z.string(), title: z.string() }) })
+              .parse(await root("Target.getTargetInfo", { targetId: binding.target.tab }))
+            url =
+              targetInfo.url.includes(conditions.url ?? "") &&
+              targetInfo.title.includes(conditions.title ?? "")
           }
           let idle = true
           if (conditions.networkIdle) {
@@ -2868,7 +2888,7 @@ export class BrowserService {
     if (id === undefined)
       fault(
         "stale-target",
-        `Ref "${ref}" is not from this tab's latest observation. Observe the exact tab again and use a ref from that result.`
+        `Ref "${ref}" is not from a read of this tab's current document. Observe the exact tab again and use a ref from that result.`
       )
     return id
   }

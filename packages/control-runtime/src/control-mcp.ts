@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
-import { controlFaultData } from "@mako/control/control"
+import { programErrorText } from "@mako/control/program"
 import { ControlJsInputSchema } from "./control-session-protocol.js"
 import { controlJsDescription } from "./control-agent-docs.js"
 
@@ -40,26 +40,9 @@ export function createControlMcpServer(
     try {
       return resultSchema.parse(await request(operation, signal))
     } catch (error) {
-      const fault = controlFaultData(error)
       return {
         isError: true,
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              code: fault?.code ?? "control-error",
-              outcome: fault?.outcome ?? "unknown",
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Control request failed",
-              recovery:
-                fault?.code === "syntax-error"
-                  ? "No statement ran. Fix the source and run it again."
-                  : "Inspect the exact target before deciding whether another action is needed. No action was replayed.",
-            }),
-          },
-        ],
+        content: [{ type: "text" as const, text: programErrorText(error) }],
       }
     }
   }
