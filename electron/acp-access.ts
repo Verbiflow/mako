@@ -18,6 +18,13 @@ import type { LiveSessionMode } from "./shared.js"
 export interface AcpAccessPolicy {
   native?: Partial<Record<AccessTier, string>>
   launch?: readonly AccessTier[]
+  /** Native modes the agent takes through `session/set_mode` and reports without listing them. */
+  unlisted?: readonly SessionMode[]
+  /**
+   * The native mode id that means "the launch tier": the agent reports it on
+   * leaving one of its native modes, and Mako sends it to leave one.
+   */
+  launchNativeMode?: string
   /**
    * The tier a session runs under when the user has not chosen one. A
    * launch-listed default is passed to the process so the level the desk
@@ -74,7 +81,7 @@ export function acpSessionModes(
     if (id) tierOf.set(id, info.tier)
   }
   const modes: LiveSessionMode[] = []
-  for (const mode of native?.availableModes ?? []) {
+  for (const mode of native?.availableModes ?? policy?.unlisted ?? []) {
     const access = tierOf.get(mode.id)
     const entry: LiveSessionMode = { id: mode.id, name: mode.name }
     if (mode.description) entry.description = mode.description
@@ -108,6 +115,8 @@ export function acpInitialSelection(
   requestedModeId: string | undefined
 ): AcpAccessSelection {
   const requested = requestedModeId ? modes.find((mode) => mode.id === requestedModeId) : undefined
+  if (requested && !native && policy?.unlisted?.some((mode) => mode.id === requested.id))
+    return { currentMode: requested.id }
   const tier = requested?.access ?? null
   if (!requested || !tier || requested.enforcement === "provider")
     return { currentMode: native?.currentModeId ?? null }
@@ -120,24 +129,38 @@ export type AcpModeChange =
   | { kind: "unchanged"; modeId: string }
 
 /**
- * What selecting `modeId` means for this session. A launch-only tier that is
- * not the running session's own launch tier cannot be made true now, so it is
- * refused with the reason rather than shown as applied.
+ * What selecting `modeId` means for this session, now in `current`. A
+ * launch-only tier that is not the running session's own launch tier cannot
+ * be made true now, so it is refused with the reason rather than shown as
+ * applied. Returning to the launch tier from a native mode sends the
+ * policy's `launchNativeMode`.
  */
 export function acpModeChange(
   policy: AcpAccessPolicy | undefined,
   modes: readonly LiveSessionMode[],
   modeId: string,
   launchedTier: AccessTier | null,
-  harness: string
+  harness: string,
+  current: string | null = null
 ): AcpModeChange {
   const tier = accessTierOfModeId(modeId)
   if (!tier) return { kind: "native", modeId, nativeModeId: modeId }
   const mode = modes.find((item) => item.id === modeId)
   if (!mode) throw new Error(`${harness} does not offer that access level`)
   if (policy?.launch?.includes(tier) && tier === launchedTier)
-    return { kind: "unchanged", modeId }
+    return policy.launchNativeMode && current !== null && current !== modeId
+      ? { kind: "native", modeId, nativeModeId: policy.launchNativeMode }
+      : { kind: "unchanged", modeId }
   throw new Error(
     `${harness} reads ${accessTierInfo(tier).label} when its session starts. It will apply to the next conversation you start with ${harness}; this session keeps ${launchedTier ? accessTierInfo(launchedTier).label : "its current level"}.`
   )
+}
+
+/** The mode id Mako shows for a mode the agent reports. */
+export function acpReportedMode(
+  policy: AcpAccessPolicy | undefined,
+  nativeModeId: string,
+  launchedTier: AccessTier | null
+): string {
+  return launchedTier && nativeModeId === policy?.launchNativeMode ? accessModeId(launchedTier) : nativeModeId
 }

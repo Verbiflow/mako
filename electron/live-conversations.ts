@@ -1289,6 +1289,7 @@ export class LiveConversations {
         title: resident.snapshot.session.title,
         tuning,
         modeId,
+        launchModeId: resident.snapshot.session.launchMode,
         emit: this.driverEvents(resident, binding.id),
         mcpSnapshot: this.dependencies.mcpSnapshot
           ? () =>

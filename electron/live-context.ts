@@ -65,7 +65,7 @@ export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
         assistant.blocks.push({
           type: "tool",
           id: block.id,
-          name: block.toolKind ?? block.title,
+          name: block.name ?? block.toolKind ?? block.title,
           input: block.input,
           output: [`Tool status: ${block.status}`, block.output]
             .filter(Boolean)

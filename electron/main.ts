@@ -71,6 +71,8 @@ import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { installChatFoldersIpc } from "./ipc/chat-folders.js"
 import { installWorkspaceMovesIpc } from "./ipc/workspace-moves.js"
+import { installPlanBuildsIpc } from "./ipc/plan-builds.js"
+import { PlanBuilds } from "./plan-builds.js"
 import { installTranscriptDocumentIpc } from "./ipc/transcript-document.js"
 import { WorkspaceMoves, type MoveSource } from "./workspace-moves.js"
 import { moveablePlace, workspaceTools } from "./workspace-tools.js"
@@ -2295,6 +2297,10 @@ app.whenReady().then(async () => {
   installThreadWorktreesIpc(threadWorktrees)
   installChatFoldersIpc()
   installWorkspaceMovesIpc(moves)
+  installPlanBuildsIpc(new PlanBuilds({
+    file: join(app.getPath("userData"), "plan-builds.json"),
+    announce: (builds) => emit({ type: "plan-builds", builds }),
+  }))
   installTranscriptDocumentIpc({ snapshot: (id) => liveConversations.snapshot(id), openThread })
   const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>
     hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))

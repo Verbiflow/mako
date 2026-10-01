@@ -11,6 +11,9 @@ export type AcpDecoderHooks = Pick<ProviderAcpSource, "toolName" | "plans" | "re
 
 const RawSchema = z.json().catch(null)
 
+/** What a plan approval asks when the agent gives it no title of its own. */
+export const PLAN_APPROVAL_TITLE = "Build the proposed plan?"
+
 /** A notification as captured for the decoder (`MAKO_NATIVE_CAPTURE`). */
 export interface AcpNotificationRecord {
   method: string
@@ -51,16 +54,20 @@ export class AcpDecoder {
     return out
   }
 
-  /** ACP's own permission request, as the desk asks it. */
+  /**
+   * ACP's own permission request, as the desk asks it. Devin 3000.10.23 asks
+   * to build a plan with a tool call carrying only its id, so a plan approval
+   * is titled and kinded here when the agent leaves them out.
+   */
   permission(request: RequestPermissionRequest): AcpAsk {
+    const plan = this.plans?.approval?.(request)
     const ask: AcpAsk = {
       request: {
-        title: request.toolCall.title ?? this.hooks?.permissionTitle?.(request) ?? "The agent wants to use a tool",
-        kind: request.toolCall.kind ?? undefined,
+        title: request.toolCall.title ?? (plan ? PLAN_APPROVAL_TITLE : this.hooks?.permissionTitle?.(request)) ?? "The agent wants to use a tool",
+        kind: request.toolCall.kind ?? (plan ? "switch_mode" : undefined),
         options: request.options.map(({ optionId, name, kind }) => ({ optionId, name, kind })),
       },
     }
-    const plan = this.plans?.approval?.(request)
     if (plan) ask.request.implementsPlan = plan
     return ask
   }

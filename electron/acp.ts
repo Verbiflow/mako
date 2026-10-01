@@ -11,9 +11,9 @@ import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction } from "./acp-compaction.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
-import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "./acp-access.js"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
 import type { AcpLaunchOptions, AcpAgentObserver } from "./providers/acp-source.js"
-import { accessTierOfModeId, type AccessTier } from "./contracts/access.js"
+import { accessModeId, accessTierOfModeId, type AccessTier } from "./contracts/access.js"
 /**
  * Interactive foreign agents, over ACP.
  *
@@ -230,18 +230,20 @@ async function startAcp(
 ): Promise<LiveSessionState> {
   const source = providerHost.acpSources.get(harness)
   const policy = source?.access
-  const requestedAccess = options.modeId ? accessTierOfModeId(options.modeId) : null
-  // A chosen launch tier wins; a stale one falls back to the provider's
-  // declared default so the process always launches at the level the desk
-  // will report, never at a leftover configuration the user cannot see.
-  const launchTier =
-    requestedAccess && policy?.launch?.includes(requestedAccess)
-      ? requestedAccess
-      : policy?.default
+  // A chosen launch tier wins, from the mode or, when the mode is a native one
+  // such as Plan, from the level beside it; a stale one falls back to the
+  // provider's declared default so the process always launches at the level
+  // the desk will report, never at a leftover configuration the user cannot see.
+  const requestedAccess = [options.modeId, options.launchModeId]
+    .map((modeId) => (modeId ? accessTierOfModeId(modeId) : null))
+    .find((tier) => tier && policy?.launch?.includes(tier))
+  const launchTier = requestedAccess ?? policy?.default
   const launchAccess =
     launchTier && policy?.launch?.includes(launchTier) ? launchTier : null
   const env = await trace.step("account", () => accountEnv(harness, process.env))
+  const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const launchOptions: AcpLaunchOptions = {
+    cwd: workingDir,
     appPath: app.getAppPath(),
     execPath: process.execPath,
     resume: options.resume,
@@ -252,12 +254,12 @@ async function startAcp(
   if (launchAccess) launchOptions.access = launchAccess
   const spec = await trace.step("runtime-discovery", () => source?.launch(launchOptions))
   if (!spec) throw new Error(`${harness} does not speak ACP here yet`)
+  const runAccess = spec.access ?? launchAccess
 
   const id = options.conversationId
   // The owner supplies a generation-fenced sink. Old connection events must
   // not mutate a replacement owner or undo deliberate hibernation.
   const send = options.emit ?? ((event: LiveDriverEvent) => emit(event))
-  const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
 
   // The nested-session guard: Claude Code refuses to start inside another
@@ -319,7 +321,7 @@ async function startAcp(
     configOptions: [],
     mcpServers: [],
     turn: null,
-    launchAccess,
+    launchAccess: runAccess,
     emit: send,
   }
   sessions.set(id, live)
@@ -606,12 +608,17 @@ async function startAcp(
     // session.modes; the option is the same fact in another field.
     const sessionModes = session.modes ?? acpNativeModes(live.configOptions)
     const modes = acpSessionModes(policy, sessionModes)
-    const effectiveModeId =
+    const requestedModeId =
       options.modeId && modes.some((mode) => mode.id === options.modeId)
         ? options.modeId
         : acpDefaultMode(policy)
+    // A tier the provider's own settings overrode is reported as the tier it runs at.
+    const effectiveModeId =
+      spec.access && requestedModeId && accessTierOfModeId(requestedModeId)
+        ? accessModeId(spec.access)
+        : requestedModeId
     if (effectiveModeId) {
-      const change = acpModeChange(policy, modes, effectiveModeId, launchAccess, harness)
+      const change = acpModeChange(policy, modes, effectiveModeId, runAccess, harness)
       if (change.kind === "native" && change.nativeModeId !== sessionModes?.currentModeId) {
         await trace.step("settings", () => watch.step("session/set_mode", connection.setSessionMode({ sessionId: session.sessionId, modeId: change.nativeModeId })))
         if (sessionModes) sessionModes.currentModeId = change.nativeModeId
@@ -628,9 +635,11 @@ async function startAcp(
       connection: "connected",
       modes,
       currentMode: selection.currentMode,
+      launchMode: runAccess ? accessModeId(runAccess) : undefined,
       configOptions: normalizeAcpOptions(live.configOptions),
       settings: { ...applied.settings, options: { ...applied.settings.options, ...acpObservedSettings(live.configOptions).options } },
     })
+    for (const notice of spec.notices ?? []) engine.event(live, notice, `launch:${notice.label}`)
     watch.dispose()
     hostLog("acp", "ready", {
       harness,
@@ -902,7 +911,7 @@ export async function liveSetMode(id: string, modeId: string): Promise<void> {
   const live = sessions.get(id)
   if (!live?.sessionId || !live.connection) return
   const policy = providerHost.acpSources.get(live.harness)?.access
-  const change = acpModeChange(policy, live.state.modes, modeId, live.launchAccess, live.harness)
+  const change = acpModeChange(policy, live.state.modes, modeId, live.launchAccess, live.harness, live.state.currentMode)
   if (change.kind === "unchanged") {
     update(live, { currentMode: change.modeId })
     return
@@ -922,7 +931,8 @@ export async function liveSetMode(id: string, modeId: string): Promise<void> {
 export function acpObserveNativeMode(id: string, nativeMode: string): void {
   const live = sessions.get(id)
   if (!live) return
-  update(live, { currentMode: nativeMode })
+  const policy = providerHost.acpSources.get(live.harness)?.access
+  update(live, { currentMode: acpReportedMode(policy, nativeMode, live.launchAccess) })
 }
 
 export async function liveCancel(id: string): Promise<void> {

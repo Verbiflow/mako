@@ -122,6 +122,7 @@ const MetadataSchema = z.object({
       z.array(LiveSessionModeSchema)
     ),
     currentMode: z.string().nullable(),
+    launchMode: z.string().optional(),
     configOptions: z.array(ModelOptionSchema),
     settings: SessionSettingsSchema.optional(),
     lastStop: z.string().optional(),

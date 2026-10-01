@@ -1,6 +1,6 @@
 import { acpObservedSettings } from "./acp-config.js"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { AttachmentContent, ToolDetail } from "@mako/sessions"
+import { agentTitleFrom, type AttachmentContent, type ToolDetail } from "@mako/sessions"
 import type {
   ContentBlock,
   SessionNotification,
@@ -83,7 +83,8 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
         kind: "tool",
         id: raw.toolCallId,
         title: raw.title ?? "tool",
-        toolKind: context.toolName ?? raw.kind,
+        name: context.toolName,
+        toolKind: raw.kind,
         status: raw.status ?? "pending",
         ...toolContent(raw.content),
         details: withLocations(
@@ -135,7 +136,7 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
       })]
     case "session_info_update": {
       // A cleared title keeps the one the thread has; `updatedAt` is the agent's own bookkeeping.
-      const title = raw.title?.trim()
+      const title = agentTitleFrom(raw.title ?? undefined)
       return title ? [decoded.state({ title })] : []
     }
     // The host reads these before forwarding: the context reading and the command list.
