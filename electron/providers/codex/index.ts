@@ -3,6 +3,7 @@ import { emitCodexSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { codexAccountCapability } from "./accounts.js"
+import { codexDecoderSource } from "./decoder-source.js"
 import { codexMcpSource } from "./mcp.js"
 import { codexNativeRunner } from "./native-runner.js"
 import { codexProcessProbe } from "./process-probe.js"
@@ -14,6 +15,7 @@ import { npmInstall } from "../update-source.js"
 export const installCodex: ProviderModule = (host) => installHarness(host, {
   provider: "codex",
   live: codexLiveDriver,
+  decoder: codexDecoderSource,
   profile: codexProfileLoader,
   accounts: codexAccountCapability,
   acp: lacks("Runs on Codex’s app-server"),
