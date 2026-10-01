@@ -11,7 +11,7 @@ import {
   GitCompareIcon,
   TerminalSquareIcon,
 } from "lucide-react"
-import { registerSlot, registerToolKindView, registerToolView, type ToolCall } from "@/extend/slots"
+import { registerSlot, registerToolKindView, type ToolCall } from "@/extend/slots"
 import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
@@ -26,12 +26,9 @@ import {
   WriteBody,
 } from "@/components/transcript/tool-views"
 import {
-  argAt,
   countLines,
   editsOf,
-  firstQuestion,
-  primaryArgument,
-  SUBAGENT_TOOLS,
+  writtenText,
 } from "@/lib/tools"
 import { fileName } from "@/lib/format"
 
@@ -90,155 +87,38 @@ export function installBuiltins(): () => void {
     registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
     registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
 
-    ...["bash", "Bash", "shell", "Shell", "exec_command"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) => argAt(call.arguments, "command") ?? argAt(call.arguments, "cmd") ?? argAt(call.arguments, "description") ?? "",
-        body: BashBody,
-      })
-    ),
-    ...["edit", "Edit", "multiedit", "MultiEdit", "apply_patch"].map((name) =>
-      registerToolView(name, {
+    // Views by the shared kind (packages/sessions/src/tool-identity.ts), so
+    // every harness's shell, edit and agent draws the same row. The row's
+    // summary is the identity's target unless a view says otherwise.
+    registerToolKindView("shell", { body: BashBody }),
+    ...(["edit", "delete", "move"] as const).map((kind) =>
+      registerToolKindView(kind, {
         summary: (call: ToolCall) => {
           const edits = editsOf(call)
-          const path = primaryArgument(call.arguments)
+          const path = call.tool.target ?? ""
           return edits.length > 1 ? `${path} · ${edits.length} edits` : path
         },
         body: EditBody,
-        openPath: (call: ToolCall) =>
-          primaryArgument(call.arguments) || undefined,
+        openPath: (call: ToolCall) => call.tool.path,
       })
     ),
-    ...["write", "Write"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) =>
-          `${primaryArgument(call.arguments)} · ${countLines(argAt(call.arguments, "content"))} lines`,
-        body: WriteBody,
-        openPath: (call: ToolCall) =>
-          primaryArgument(call.arguments) || undefined,
-      })
-    ),
-    ...["read", "Read", "ReadFile", "read_file"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) => {
-          const path = primaryArgument(call.arguments)
-          return path ? fileName(path) : ""
-        },
-        openPath: (call: ToolCall) =>
-          primaryArgument(call.arguments) || undefined,
-      })
-    ),
-    ...["grep", "Grep", "rg", "find", "Glob", "glob"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) => {
-          const query =
-            argAt(call.arguments, "pattern") ??
-            argAt(call.arguments, "query") ??
-            argAt(call.arguments, "glob_pattern")
-          const path = primaryArgument(call.arguments)
-          return [query, path].filter(Boolean).join(" · ")
-        },
-      })
-    ),
-    ...["ls", "list_files"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) => primaryArgument(call.arguments) || ".",
-      })
-    ),
-    ...["webfetch", "WebFetch", "web_search", "WebSearch"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) => primaryArgument(call.arguments),
-      })
-    ),
-    ...["Skill", "skill"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) =>
-          argAt(call.arguments, "skill") ??
-          argAt(call.arguments, "name") ??
-          primaryArgument(call.arguments),
-        body: SkillBody,
-      })
-    ),
-    ...["TaskCreate", "TaskUpdate", "TodoWrite", "updateTodos", "CreatePlan"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) =>
-          argAt(call.arguments, "subject") ??
-          argAt(call.arguments, "title") ??
-          argAt(call.arguments, "description") ??
-          "Plan",
-      })
-    ),
-    ...["AskQuestion", "AskUserQuestion", "question"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) =>
-          firstQuestion(call.arguments) ??
-          argAt(call.arguments, "question") ??
-          argAt(call.arguments, "prompt") ??
-          "Question",
-      })
-    ),
-    registerToolView("wait", {
+    registerToolKindView("write", {
       summary: (call: ToolCall) => {
-        const cell = argAt(call.arguments, "cell_id")
-        return cell ? `Command ${cell}` : "Command output"
+        const lines = countLines(writtenText(call))
+        return lines ? `${call.tool.target ?? ""} · ${lines} ${lines === 1 ? "line" : "lines"}` : call.tool.target ?? ""
       },
-      body: WaitBody,
+      body: WriteBody,
+      openPath: (call: ToolCall) => call.tool.path,
     }),
-    ...["ScheduleWakeup", "AwaitShell", "write_stdin", "ToolSearch"].map(
-      (name) =>
-        registerToolView(name, {
-          summary: (call: ToolCall) => primaryArgument(call.arguments),
-        })
-    ),
-    // Mako's control programs: the row reads the program's first line.
-    ...["mako_browser_exec", "mako_computer_exec"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) => {
-          const source = argAt(call.arguments, "source")
-          const line = source?.split("\n").find((entry) => entry.trim())
-          return line?.trim() ?? primaryArgument(call.arguments)
-        },
-      })
-    ),
-    ...["mako_browser_help", "mako_computer_help"].map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) =>
-          argAt(call.arguments, "action") ??
-          argAt(call.arguments, "tool") ??
-          argAt(call.arguments, "method") ??
-          argAt(call.arguments, "domain") ??
-          "Reference",
-      })
-    ),
-    ...SUBAGENT_TOOLS.map((name) =>
-      registerToolView(name, {
-        summary: (call: ToolCall) =>
-          argAt(call.arguments, "description") ??
-          argAt(call.arguments, "title") ??
-          argAt(call.arguments, "role") ??
-          argAt(call.arguments, "subagent_type") ??
-          argAt(call.arguments, "agent_id") ??
-          argAt(call.arguments, "target") ??
-          argAt(call.arguments, "cell_id") ??
-          "Background agent",
-        body: SubagentBody,
-        icon: GitBranchIcon,
-      })
-    ),
-
-    // The provider's own kind keeps a real body when the name is unknown to
-    // the registry: an `execute` still renders a terminal, an `edit` a diff.
-    registerToolKindView("execute", { body: BashBody }),
-    ...["edit", "delete", "move"].map((kind) =>
-      registerToolKindView(kind, {
-        body: EditBody,
-        openPath: (call: ToolCall) =>
-          primaryArgument(call.arguments) || undefined,
-      })
-    ),
     registerToolKindView("read", {
-      openPath: (call: ToolCall) =>
-        primaryArgument(call.arguments) || undefined,
+      summary: (call: ToolCall) => call.tool.path ? fileName(call.tool.path) : call.tool.target ?? "",
+      openPath: (call: ToolCall) => call.tool.path,
     }),
+    registerToolKindView("skill", { body: SkillBody }),
+    ...(["shell-output", "wait"] as const).map((kind) => registerToolKindView(kind, { body: WaitBody })),
+    ...(["agent", "agent-message", "agent-wait", "agents"] as const).map((kind) =>
+      registerToolKindView(kind, { body: SubagentBody })
+    ),
   ]
   return () => disposers.forEach((dispose) => dispose())
 }
