@@ -694,6 +694,8 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
     const accepted = await sendTo(conversationId, request.text, request.attachments)
     setResent(accepted ? "sent" : null)
   }
+  // A new thread opens in the same folder over the same transport, so it can't escape these.
+  const freshThread = request.status === "failed" && request.failure !== "transport-limit" && request.failure !== "missing-folder"
   return (
     <RecoveryBody expanded={expanded} summary={`${continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message`} request={request}>
       {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
@@ -708,7 +710,7 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
             {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : recovery.resendLabel}
           </button>
         ) : null}
-        {request.status === "failed" && request.failure !== "transport-limit" && conversationId ? (
+        {freshThread && conversationId ? (
           <button type="button" disabled={resent !== null} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground disabled:opacity-45"
             onClick={() => {
               setResent("sending")
@@ -717,7 +719,7 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
         ) : null}
         <button type="button" onClick={() => void copy()} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
       </div>
-      {request.status === "failed" && request.failure !== "transport-limit" ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
+      {freshThread ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
     </RecoveryBody>
   )
 }
