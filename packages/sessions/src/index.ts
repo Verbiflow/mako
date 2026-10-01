@@ -8,6 +8,7 @@
  */
 
 export {
+  agentTitleFrom,
   titleFrom,
   threadIdentity,
   userTextFrom,
@@ -33,7 +34,9 @@ export {
   type BackgroundCommandOutcome,
   type SubagentOutcome,
 } from "./provider-turn.js"
-export { openCodeNoticeLabel, type OpenCodeNotice } from "./providers/opencode-notice.js"
+export { isOpenCodeInstruction, openCodeNoticeLabel, type OpenCodeNotice } from "./providers/opencode-notice.js"
+export { OPENCODE_PLAN_AGENT, openCodePlan } from "./providers/opencode-plan.js"
+export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, DevinPlanTracker, type DevinPlanCall, type DevinProposedPlan } from "./providers/devin-plans.js"
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
 export { SessionArchive, keepEverything } from "./archive.js"
@@ -95,6 +98,7 @@ export {
   type CursorSdkImport,
 } from "./providers/cursor-sdk-index.js"
 export {
+  CURSOR_PLAN_OPTION,
   cursorSdkReportedSettings,
   cursorSdkSelection,
   normalizeCursorSdkModels,

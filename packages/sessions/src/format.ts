@@ -401,6 +401,18 @@ export function titleFrom(text: string | undefined): string | undefined {
   return undefined
 }
 
+const LEAKED_TOOL_CALL = /^functions\.[\w.-]+:\d+/
+
+/**
+ * A title the agent generated. Devin's titler sometimes returns the model's
+ * raw first tool-call token, `functions.shell:0{"command": …}`; that is not a
+ * title, so the caller keeps the one it has or falls back to the prompt.
+ */
+export function agentTitleFrom(text: string | undefined): string | undefined {
+  const title = titleFrom(text)
+  return title && !LEAKED_TOOL_CALL.test(title) ? title : undefined
+}
+
 /**
  * Mako prepends its Local Control instructions to every prompt it sends, so
  * every native history stores them in the user's turn. Only that exact

@@ -113,3 +113,34 @@ export const ProposedPlanSchema = z.object({
   truncated: z.boolean().optional(),
 })
 export type ProposedPlan = z.infer<typeof ProposedPlanSchema>
+
+/**
+ * A plan an agent proposed, as saved history shows it. `id` is the id its
+ * live session gives the plan, so a build recorded there finds this card.
+ * A blank plan is none.
+ */
+export function proposedPlanBlock(id: string, text: string): ProposedPlan | undefined {
+  if (!text.trim()) return undefined
+  return text.length > MAX_PROPOSED_PLAN_LENGTH
+    ? { type: "proposed-plan", id, text: text.slice(0, MAX_PROPOSED_PLAN_LENGTH), status: "proposed", truncated: true }
+    : { type: "proposed-plan", id, text, status: "proposed" }
+}
+
+/** A session's plan cards, one per id: a revised plan rewrites the card already placed. */
+export class ProposedPlans {
+  private readonly placed = new Map<string, ProposedPlan>()
+
+  /** The card to place for a new plan; a revision or a blank plan places none. */
+  propose(id: string, text: string): ProposedPlan | undefined {
+    const block = proposedPlanBlock(id, text)
+    if (!block) return undefined
+    const placed = this.placed.get(id)
+    if (!placed) {
+      this.placed.set(id, block)
+      return block
+    }
+    delete placed.truncated
+    Object.assign(placed, block)
+    return undefined
+  }
+}

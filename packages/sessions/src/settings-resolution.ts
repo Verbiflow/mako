@@ -86,9 +86,15 @@ export function resolveSessionSettings(
     (modelState.source !== "provider" || input.context === "new")
   for (const id of ids) {
     const option = model?.options.find((entry) => entry.id === id)
-    const selected = applicable.find(
-      (layer) => layer.settings.options?.[id] !== undefined
-    )
+    // A remembered choice the model can't take was made for another catalog
+    // (the provider's default moved, or the option went away); it yields to
+    // the model's own default instead of leaving a new draft unable to send.
+    const selected = applicable.find((layer) => {
+      const value = layer.settings.options?.[id]
+      if (value === undefined) return false
+      if (!model || (layer.source !== "saved" && layer.source !== "legacy")) return true
+      return option !== undefined && !option.disabledReason && optionAccepts(option, value)
+    })
     const explicit = selected?.settings.options?.[id]
     // Speed is a choice about the account's throughput, not about one
     // model, so it survives a model switch whenever the new model offers
