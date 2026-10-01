@@ -10,6 +10,7 @@ import { DevinAgents } from "./agents.js"
 import { devinBackground } from "./background.js"
 import { devinProviderTurns } from "./provider-turns.js"
 import { devinNotification } from "./notifications.js"
+import { DevinPlans } from "./plans.js"
 import { DevinApprovalObserver, readDevinApprovalDecisions } from "./approval-observer.js"
 import { hostWarn } from "../../host-log.js"
 
@@ -23,6 +24,8 @@ export const devinAcpSource: ProviderAcpSource = {
   observeBackground: devinBackground,
   providerTurns: devinProviderTurns,
   decodeNotification: devinNotification,
+  plans: () => new DevinPlans(),
+  permissionTitle: devinPermissionTitle,
   backgroundStop: { kind: "ends-on-stop", how: "Stop kills each running background shell with killBackgroundShell, and its session/cancel ends each background subagent, with or without a running turn; no turn follows. Closing closes stdin, which ends them; a signal would leave them running." },
   compaction: devinCompaction,
   canResume: true,
@@ -44,7 +47,6 @@ export const devinAcpSource: ProviderAcpSource = {
       command: devinExecutable() ?? "devin",
       args: ["acp"],
       configureEnvironment: configureDevinEnvironment,
-      permissionTitle: devinPermissionTitle,
       prepareMcp: prepareDevinMcp,
       async prepareApprovals({ previous, publish }) {
         if (options.nativePath && options.resume) {

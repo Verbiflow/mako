@@ -39,6 +39,7 @@ export const installCursor: ProviderModule = (host) => {
   installHarness(host, {
     provider: "cursor",
     live: createCursorSdkDriver({ auth, stateRoot, modelCache }),
+    decoder: notBuilt("Its SDK messages decode inside the live driver"),
     profile: createCursorProfileLoader({
       sdkModels: async (_env, cwd) => {
         const env = await auth.childEnv()

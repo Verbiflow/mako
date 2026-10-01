@@ -1,4 +1,5 @@
 import { acpLiveDriver } from "../acp-live-driver.js"
+import { acpDecoderSource } from "../acp-decoder-source.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { devinAccountCapability } from "./accounts.js"
@@ -13,6 +14,7 @@ import { scriptInstall } from "../update-source.js"
 export const installDevin: ProviderModule = (host) => installHarness(host, {
   provider: "devin",
   live: acpLiveDriver(devinAcpSource),
+  decoder: acpDecoderSource(devinAcpSource),
   profile: devinProfileLoader,
   accounts: devinAccountCapability,
   acp: devinAcpSource,
