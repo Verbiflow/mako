@@ -2,6 +2,7 @@ import { createElement, type ComponentType } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { type ToolViewProps } from "@/extend/slots"
 import { Output } from "@/components/transcript/tool-row"
+import type { ToolKind } from "@mako/sessions/tool-identity"
 import {
   argAt,
   booleanArgAt,
@@ -10,12 +11,15 @@ import {
   parseToolExecutionOutput,
   subagentResultId,
   subagentResultText,
+  writtenText,
 } from "@/lib/tools"
 import { cn } from "@/lib/utils"
 import {
   ArrowLeftRightIcon,
   BookOpenIcon,
+  BotIcon,
   BrainIcon,
+  CodeIcon,
   CircleHelpIcon,
   FolderInputIcon,
   Trash2Icon,
@@ -28,79 +32,64 @@ import {
   ImageIcon,
   ListChecksIcon,
   MonitorCogIcon,
+  PlugIcon,
   SearchIcon,
   SquareTerminalIcon,
   WrenchIcon,
 } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"
 
-/** Icon by tool name, so the transcript is scannable without reading labels. */
-const ICONS = new Map([
-  ["bash", SquareTerminalIcon],
-  ["shell", SquareTerminalIcon],
-  ["exec_command", SquareTerminalIcon],
-  ["edit", FilePenLineIcon],
-  ["multiedit", FilePenLineIcon],
-  ["apply_patch", FilePenLineIcon],
-  ["write", FilePlusIcon],
-  ["read", FileTextIcon],
-  ["readfile", FileTextIcon],
-  ["read_file", FileTextIcon],
-  ["grep", SearchIcon],
-  ["rg", SearchIcon],
-  ["find", SearchIcon],
-  ["glob", SearchIcon],
-  ["ls", FolderTreeIcon],
-  ["list_files", FolderTreeIcon],
-  ["webfetch", GlobeIcon],
-  ["websearch", GlobeIcon],
-  ["web_search", GlobeIcon],
-  ["skill", BookOpenIcon],
-  ["taskcreate", ListChecksIcon],
-  ["taskupdate", ListChecksIcon],
-  ["todowrite", ListChecksIcon],
-  ["updatetodos", ListChecksIcon],
-  ["createplan", ListChecksIcon],
-  ["askquestion", CircleHelpIcon],
-  ["generateimage", ImageIcon],
-  ["askuserquestion", CircleHelpIcon],
-  ["question", CircleHelpIcon],
-  ["schedulewakeup", ClockIcon],
-  ["awaitshell", SquareTerminalIcon],
-  ["write_stdin", SquareTerminalIcon],
-  ["toolsearch", SearchIcon],
-  ["delete", Trash2Icon],
-  ["move", FolderInputIcon],
-  ["think", BrainIcon],
-  ["switch_mode", ArrowLeftRightIcon],
-])
+/** Icon by kind, so the transcript is scannable without reading labels. */
+const ICONS = {
+  shell: SquareTerminalIcon,
+  "shell-output": SquareTerminalIcon,
+  "shell-input": SquareTerminalIcon,
+  "shell-stop": SquareTerminalIcon,
+  read: FileTextIcon,
+  edit: FilePenLineIcon,
+  write: FilePlusIcon,
+  delete: Trash2Icon,
+  move: FolderInputIcon,
+  list: FolderTreeIcon,
+  search: SearchIcon,
+  find: SearchIcon,
+  "web-fetch": GlobeIcon,
+  "web-search": GlobeIcon,
+  code: CodeIcon,
+  computer: MonitorCogIcon,
+  agent: BotIcon,
+  "agent-message": BotIcon,
+  "agent-wait": BotIcon,
+  agents: BotIcon,
+  todo: ListChecksIcon,
+  plan: ListChecksIcon,
+  "plan-exit": ListChecksIcon,
+  question: CircleHelpIcon,
+  "tool-search": SearchIcon,
+  skill: BookOpenIcon,
+  mcp: PlugIcon,
+  mode: ArrowLeftRightIcon,
+  think: BrainIcon,
+  image: ImageIcon,
+  wait: ClockIcon,
+  other: WrenchIcon,
+} satisfies { readonly [Kind in ToolKind]: ComponentType<{ className?: string }> }
 
 /**
- * Resolves a tool's glyph — a registered view's override first, then the
- * built-in table, then the generic wrench. Rendering it through a component
- * (rather than picking a component type at the call site) keeps the element
- * type stable across renders.
+ * Resolves a tool's glyph: a registered view's override first, then the
+ * kind's. Rendering it through a component (rather than picking a component
+ * type at the call site) keeps the element type stable across renders.
  */
 export function ToolGlyph({
-  name,
+  kind,
   override,
   className,
 }: {
-  name: string
+  kind: ToolKind
   override?: ComponentType<{ className?: string }>
   className?: string
 }) {
-  const normalized = name.toLowerCase()
-  const Glyph =
-    override ??
-    (normalized.startsWith("mako_computer_")
-      ? MonitorCogIcon
-      : normalized.startsWith("browser_") ||
-          normalized.startsWith("mako_browser_")
-        ? GlobeIcon
-        : ICONS.get(normalized)) ??
-    WrenchIcon
-  return createElement(Glyph, { className })
+  return createElement(override ?? ICONS[kind], { className })
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,7 +194,7 @@ export function EditBody({ call }: ToolViewProps) {
 }
 
 export function WriteBody({ call }: ToolViewProps) {
-  const content = argAt(call.arguments, "content") ?? ""
+  const content = writtenText(call) ?? ""
   return (
     <div className="py-1">
       <DiffBlock
@@ -341,7 +330,10 @@ export function WaitBody({ call }: ToolViewProps) {
 }
 
 export function BashBody({ call }: ToolViewProps) {
-  const command = argAt(call.arguments, "command") ?? argAt(call.arguments, "cmd") ?? ""
+  const command = call.tool.command ?? ""
+  // A shell a code-mode script ran (Codex's `exec`) reports through the
+  // script's own header; the command's output is what follows it.
+  const result = parseToolExecutionOutput(call.result)?.output ?? call.result
   return (
     <div className="space-y-1.5 px-2.5 py-2">
       <div className="flex gap-2 font-mono text-ui text-foreground/90">
@@ -350,8 +342,8 @@ export function BashBody({ call }: ToolViewProps) {
       </div>
       {call.isCanceled ? (
         <p className="text-ui text-faint">canceled</p>
-      ) : call.result ? (
-        <Output text={call.result} isError={call.isError} />
+      ) : result ? (
+        <Output text={result} isError={call.isError} />
       ) : call.pending ? (
         <p className="text-ui"><Shimmer text="Running…" /></p>
       ) : (

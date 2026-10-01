@@ -1,14 +1,12 @@
 import { useCopy } from "@/components/ui/use-copy"
 import { ActivityMark } from "@/components/ui/activity-mark"
-import { toolActivity } from "@/state/agent-activity"
+import { toolKindActivity } from "@mako/sessions/tool-identity"
 import { memo, useEffect, useState, type ComponentType } from "react"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
   formatToolArguments,
   hasToolArguments,
   normalizeToolOutput,
-  primaryArgument,
-  toolLabel,
 } from "@/lib/tools"
 import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
@@ -42,7 +40,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const source = useTranscriptSource()
   const view = useToolView(call)
 
-  const summary = view?.summary?.(call) ?? primaryArgument(call.arguments)
+  const summary = view?.summary?.(call) ?? call.tool.target ?? ""
   const openPath = view?.openPath?.(call)
   const Body = view?.body
   // A page carries the head of each tool output; the rest is read when the
@@ -83,7 +81,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
         >
           <LeadSlot call={call} open={open} icon={view?.icon} />
           <span className="shrink-0 text-ui font-medium text-foreground/90">
-            {toolLabel(call.name) === "Shell" ? "$" : toolLabel(call.name)}
+            {call.tool.kind === "shell" ? "$" : call.tool.label}
           </span>
           <span className="min-w-0 flex-1 truncate font-mono text-ui text-faint">
             {summary}
@@ -162,7 +160,7 @@ function LeadSlot({
   return (
     <span className="relative size-3.5 shrink-0">
       <ToolGlyph
-        name={call.name}
+        kind={call.tool.kind}
         override={icon}
         className={cn(
           layer,
@@ -192,7 +190,7 @@ function Status({ call }: { call: ToolCall }) {
   if (call.pending) {
     return (
       <span role="status" aria-label="Running" className="shrink-0 text-muted-foreground">
-        <ActivityMark state={toolActivity(call.name)} />
+        <ActivityMark state={toolKindActivity(call.tool.kind)} />
       </span>
     )
   }

@@ -15,6 +15,7 @@ import { memo, useMemo, useState } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { ToolRow } from "@/components/transcript/tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
+import type { ToolKind } from "@mako/sessions/tool-identity"
 import { FileChip } from "@/components/composer/reference-chip"
 import { Slot } from "@/extend/slot"
 import {
@@ -277,11 +278,6 @@ function Prompt({ message }: { message: ChatMessage }) {
     const parsed = parseAttachmentAppendix(body)
     return { body: restoreThreadReferences(parsed.body, sentThreads), files: parsed.files }
   }, [body, sentThreads])
-  // References the user typed read back as the chips they were written as.
-  const segments = useMemo(
-    () => attachmentPromptSegments(text, files),
-    [text, files]
-  )
   const reusable = useMemo(
     () =>
       reusablePromptAttachments(
@@ -291,6 +287,16 @@ function Prompt({ message }: { message: ChatMessage }) {
     [files, message.blocks]
   )
   const referenceFiles = useMemo(() => reusable.map((item) => ({ index: item.index, name: item.name, path: item.stagedPath })), [reusable])
+  // A file the user referenced in their words shows as that chip, not again below.
+  const inlinePaths = useMemo(
+    () =>
+      new Set(
+        attachmentPromptSegments(text, referenceFiles).flatMap((segment) =>
+          segment.kind === "attachment" ? [segment.file.path] : []
+        )
+      ),
+    [text, referenceFiles]
+  )
   // A copied prompt keeps its `$skill` and `@thread:` tokens and drops the
   // bodies and bundles they carried: pasted back into the composer they
   // resolve again for whichever provider answers next. Only a prompt whose
@@ -339,6 +345,12 @@ function Prompt({ message }: { message: ChatMessage }) {
         <PlanContextChips plans={plans} />
         {message.blocks
           .filter((block) => block.type === "attachment")
+          .filter(
+            (block) =>
+              block.source.kind !== "file" ||
+              /^(?:image|audio|video)\//i.test(block.mimeType) ||
+              !inlinePaths.has(block.source.path)
+          )
           .map((attachment, index) => (
             <div key={attachment.id ?? index} data-copy-file={attachment.source.kind === "file" ? attachment.source.path : undefined}>
               <TranscriptAttachment attachment={attachment} />
@@ -347,14 +359,7 @@ function Prompt({ message }: { message: ChatMessage }) {
         {files.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {files
-              .filter(
-                (file) =>
-                  !segments.some(
-                    (segment) =>
-                      segment.kind === "attachment" &&
-                      segment.file.path === file.path
-                  )
-              )
+              .filter((file) => !inlinePaths.has(file.path))
               .map((file) => (
                 <FileChip
                   key={file.path}
@@ -496,15 +501,15 @@ function WorkSection({
  */
 const WORK_PHRASES = [
   { glyph: "edit", count: (work) => work.changedFiles, phrase: (n) => `edited ${n === 1 ? "a file" : `${n} files`}` },
-  { glyph: "bash", count: (work) => work.commands, phrase: (n) => `ran ${n === 1 ? "a command" : `${n} commands`}` },
+  { glyph: "shell", count: (work) => work.commands, phrase: (n) => `ran ${n === 1 ? "a command" : `${n} commands`}` },
   { glyph: "read", count: (work) => work.reads, phrase: (n) => `read ${n === 1 ? "a file" : `${n} files`}` },
-  { glyph: "grep", count: (work) => work.searches, phrase: (n) => `searched ${n === 1 ? "once" : `${n} times`}` },
+  { glyph: "search", count: (work) => work.searches, phrase: (n) => `searched ${n === 1 ? "once" : `${n} times`}` },
   { glyph: "skill", count: (work) => work.skills, phrase: (n) => `used ${n === 1 ? "a skill" : `${n} skills`}` },
   { glyph: "agent", count: (work) => work.agents, phrase: (n) => `started ${n === 1 ? "an agent" : `${n} agents`}` },
-  { glyph: "todowrite", count: (work) => work.plans, phrase: (n) => `updated the plan${n === 1 ? "" : ` ${n} times`}` },
+  { glyph: "todo", count: (work) => work.plans, phrase: (n) => `updated the plan${n === 1 ? "" : ` ${n} times`}` },
   { glyph: "other", count: (work) => work.other, phrase: (n) => `used ${n === 1 ? "another tool" : `${n} other tools`}` },
 ] satisfies Array<{
-  glyph: string
+  glyph: ToolKind
   count: (work: WorkSummaryData) => number
   phrase: (count: number) => string
 }>
@@ -565,12 +570,7 @@ function WorkSummary({
       ) : (
         <span aria-hidden className="flex shrink-0 items-center gap-1 text-faint transition-colors duration-100 group-hover/work:text-muted-foreground">
           {glyphs.map((glyph) => (
-            <ToolGlyph
-              key={glyph}
-              name={glyph}
-              override={glyph === "agent" ? BotIcon : undefined}
-              className="size-3.5"
-            />
+            <ToolGlyph key={glyph} kind={glyph} className="size-3.5" />
           ))}
         </span>
       )}
