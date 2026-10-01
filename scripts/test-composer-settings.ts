@@ -362,3 +362,46 @@ console.log("composer settings: role cycling walks only reported options")
   providerStore.set({ contexts: {} })
 }
 console.log("composer settings: the loadout orders, bounds, and applies its picks")
+
+// A remembered option the default model can't take yields to that model's
+// defaults: Devin's default moved to Adaptive, which has no Fast mode, and a
+// new draft carrying the old `fast` could not send.
+{
+  const devin: HarnessProfile = {
+    ...profile,
+    id: "devin",
+    settings: { model: "adaptive" },
+    models: [
+      { id: "adaptive", label: "Adaptive", options: [] },
+      { id: "swe-2", label: "SWE-2", options: [{ kind: "boolean", id: "fast", label: "Fast mode", role: "speed", current: false }] },
+    ],
+  }
+  const target = { kind: "new" as const, harness: "devin", cwd }
+  const remembered = resolveComposerSettingsInput({
+    target,
+    profile: devin,
+    preference: { source: "saved", settings: { options: { fast: true } } },
+  }).resolved
+  assert.deepEqual(remembered.issues, [])
+  assert.deepEqual(remembered.settings, { model: "adaptive" })
+  const chosen = resolveComposerSettingsInput({
+    target,
+    profile: devin,
+    overrides: { model: "adaptive", options: { fast: true } },
+  }).resolved
+  assert.equal(chosen.issues.length, 1, "a choice made in this draft still says why it can't send")
+}
+console.log("composer settings: remembered options the model lacks fall back to its defaults")
+
+// A new Thread is named by the words of its first prompt, not its attachment markers.
+{
+  const { titleFromPrompt } = await import("../src/state/acp-start.ts")
+  assert.equal(titleFromPrompt("[Attachment 1] Can you take care of this?", ["app.md"]), "Can you take care of this?")
+  assert.equal(
+    titleFromPrompt("Look at [Referenced conversation 1] again\n---\n[Referenced conversation 1] Fix the flaky build (codex)\nhistory…"),
+    "Look at Fix the flaky build again"
+  )
+  assert.equal(titleFromPrompt("[Attachment 1]", ["tally-app.md"]), "tally-app.md")
+  assert.equal(titleFromPrompt("", []), undefined)
+}
+console.log("composer settings: new Thread titles skip attachment markers")

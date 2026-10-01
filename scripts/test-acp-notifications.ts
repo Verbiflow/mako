@@ -207,12 +207,14 @@ const send = (update: SessionNotification["update"]) =>
 send({ sessionUpdate: "session_info_update", title: " Fix the flaky build ", updatedAt: "2026-09-29T00:00:00Z" })
 send({ sessionUpdate: "session_info_update", title: null })
 send({ sessionUpdate: "session_info_update", updatedAt: "2026-09-29T00:00:01Z" })
+send({ sessionUpdate: "session_info_update", title: 'functions.shell:0{"command": "ls -la"}' })
+send({ sessionUpdate: "session_info_update", title: "functions.app_start:0{}" })
 send({ sessionUpdate: "usage_update", used: 1, size: 2 })
 send({ sessionUpdate: "available_commands_update", availableCommands: [] })
 send({ sessionUpdate: "plan_removed", planId: "p" })
 assert.deepEqual(patches, [{ title: "Fix the flaky build" }])
 assert.deepEqual(unhandled, ["plan_removed"])
-console.log("PASS: session_info_update names the thread; host-read updates are known; unstable plan updates are logged")
+console.log("PASS: session_info_update names the thread, never with a leaked tool call; host-read updates are known; unstable plan updates are logged")
 
 // Requests the agent waits on: what each choice sends back, and requests no provider reads.
 const exitPlan = grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { sessionId: "s", toolCallId: "call_1", planContent: null })

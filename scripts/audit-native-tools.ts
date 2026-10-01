@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util"
+import { z } from "zod"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.ts"
 import { CodexProvider } from "../packages/sessions/src/providers/codex.ts"
 import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
@@ -6,23 +7,25 @@ import { CursorProvider } from "../packages/sessions/src/providers/cursor.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
-import { primaryArgument, toolLabel } from "../src/lib/tools.ts"
+import { identifyTool } from "../packages/sessions/src/tool-identity.ts"
 
 /**
- * How every harness's tool calls reach the transcript, read from this
- * machine's own native stores through Mako's history readers.
+ * How every harness's tool calls resolve, read from this machine's own native
+ * stores through Mako's history readers and `identifyTool`.
  *
- *   npx tsx scripts/audit-native-tools.ts [--harness grok] [--sessions 40]
+ *   npm run audit:tools -- [--harness grok] [--sessions 40] [--unresolved]
  *
- * Prints tool names, labels and argument keys only, never argument values or
- * output, so the report is safe to paste. A name the transcript has no label
- * for is shown as `(raw)`: the row draws the native name as it came.
+ * Prints names, kinds, labels and argument keys only, never argument values
+ * or output, so the report is safe to paste. `other` means no vocabulary in
+ * packages/sessions/src/tool-identity.ts knows the name; `no target` counts
+ * calls whose collapsed row would show only the label.
  */
 
 const options = parseArgs({
   options: {
     harness: { type: "string" },
     sessions: { type: "string", default: "40" },
+    unresolved: { type: "boolean", default: false },
   },
 }).values
 const limit = Number(options.sessions)
@@ -34,10 +37,14 @@ const providers: SessionProvider[] = [
 
 interface ToolTally {
   count: number
+  kind: string
+  label: string
+  untargeted: number
   keys: Map<string, number>
-  primary: Map<string, number>
-  failed: number
 }
+
+const Arguments = z.record(z.string(), z.json())
+let unresolvedTotal = 0
 
 for (const provider of providers) {
   if (options.harness && provider.harness !== options.harness) continue
@@ -54,54 +61,39 @@ for (const provider of providers) {
       if (entry.kind !== "assistant") continue
       for (const block of entry.blocks) {
         if (block.type !== "tool") continue
-        const tally = tools.get(block.name) ?? { count: 0, keys: new Map(), primary: new Map(), failed: 0 }
+        const identity = identifyTool({ harness: provider.harness, name: block.name, input: block.input })
+        const row = identity.via ? `${block.name} → ${identity.server ? `${identity.server}/` : ""}${identity.tool}` : block.name
+        const tally = tools.get(row) ?? { count: 0, kind: identity.kind, label: identity.label, untargeted: 0, keys: new Map() }
         tally.count += 1
-        if (block.error) tally.failed += 1
-        const keys = argumentKeys(block.input)
-        for (const key of keys) tally.keys.set(key, (tally.keys.get(key) ?? 0) + 1)
-        const primary = primaryKey(block.input)
-        tally.primary.set(primary, (tally.primary.get(primary) ?? 0) + 1)
-        tools.set(block.name, tally)
+        if (!identity.target) tally.untargeted += 1
+        for (const key of argumentKeys(identity.input ?? block.input)) tally.keys.set(key, (tally.keys.get(key) ?? 0) + 1)
+        tools.set(row, tally)
       }
     }
   }
   provider.close?.()
-  console.log(`\n## ${provider.harness}: ${read} sessions, ${tools.size} tool names`)
-  const rows = [...tools].sort((a, b) => b[1].count - a[1].count)
-  for (const [name, tally] of rows) {
-    const label = toolLabel(name)
-    const shown = label === name ? "(raw)" : label
+  const rows = [...tools]
+    .filter(([, tally]) => !options.unresolved || tally.kind === "other")
+    .sort((a, b) => b[1].count - a[1].count)
+  const unresolved = rows.filter(([, tally]) => tally.kind === "other").length
+  unresolvedTotal += unresolved
+  console.log(`\n## ${provider.harness}: ${read} sessions, ${tools.size} tools, ${unresolved} unresolved`)
+  for (const [row, tally] of rows) {
     const keys = [...tally.keys].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([key]) => key).join(",")
-    const primary = [...tally.primary].sort((a, b) => b[1] - a[1]).map(([key, n]) => `${key}×${n}`).slice(0, 3).join(" ")
-    console.log(`${String(tally.count).padStart(5)}  ${clip(name, 46).padEnd(46)} ${shown.padEnd(16)} primary: ${primary.padEnd(28)} keys: ${keys}`)
+    const untargeted = tally.untargeted ? `no target ×${tally.untargeted}` : ""
+    console.log(`${String(tally.count).padStart(5)}  ${clip(row, 64).padEnd(64)} ${tally.kind.padEnd(13)} ${clip(tally.label, 22).padEnd(22)} ${untargeted.padEnd(16)} keys: ${keys}`)
   }
 }
+console.log(`\n${unresolvedTotal} unresolved tool names`)
 
 function argumentKeys(input: string | undefined): string[] {
   if (!input) return ["(no input)"]
   try {
-    const parsed: unknown = JSON.parse(input)
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return Object.keys(parsed)
-    return ["(not an object)"]
+    const parsed = Arguments.safeParse(JSON.parse(input))
+    return parsed.success ? Object.keys(parsed.data) : ["(not an object)"]
   } catch {
-    return ["(not JSON)"]
+    return ["(script)"]
   }
-}
-
-/** Which argument the collapsed row shows, by key, so values stay out of the report. */
-function primaryKey(input: string | undefined): string {
-  if (!input) return "(none)"
-  const value = primaryArgument(input)
-  if (!value) return "(none)"
-  try {
-    const parsed: unknown = JSON.parse(input)
-    if (parsed && typeof parsed === "object")
-      for (const [key, candidate] of Object.entries(parsed))
-        if (candidate === value || (Array.isArray(candidate) && candidate.join(" ") === value)) return key
-  } catch {
-    return "(?)"
-  }
-  return "(?)"
 }
 
 function clip(text: string, width: number): string {

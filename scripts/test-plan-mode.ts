@@ -90,7 +90,9 @@ assert.equal(leavePlanMode({ modes: [claudeModes[2]!], plan: "plan", saved: null
 // A start carries its plan natively: the setting rides the tuning, the mode is the mode.
 assert.deepEqual(withNativePlan({ kind: "setting", option: "plan" }, { modeId: "full", tuning: { model: "m", options: { effort: "high" } } }),
   { modeId: "full", tuning: { model: "m", options: { effort: "high", plan: true } } })
-assert.deepEqual(withNativePlan({ kind: "mode", mode: "plan" }, { modeId: "default", tuning: {} }), { modeId: "plan", tuning: {} })
+assert.deepEqual(withNativePlan({ kind: "mode", mode: "plan" }, { modeId: "access:full", tuning: {} }), { modeId: "plan", launchModeId: "access:full", tuning: {} },
+  "the level Plan replaces is the one a launch-only harness starts at")
+assert.deepEqual(withNativePlan({ kind: "mode", mode: "plan" }, { tuning: {} }), { modeId: "plan", tuning: {} })
 assert.deepEqual(withNativePlan(undefined, { tuning: {} }), { tuning: {} })
 
 // Plan for a new session is consumed by its first send and given back if the start fails.

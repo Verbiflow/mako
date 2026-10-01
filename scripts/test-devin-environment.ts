@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { devinAcpSource } from "../electron/providers/devin/acp.js"
 
 const desktop: NodeJS.ProcessEnv = { ACP_BACKEND: "windsurf", WINDSURF_IDE_TYPE: "windsurf", HOME: "/fixture", XDG_CONFIG_HOME: "/fixture/config", XDG_DATA_HOME: "/fixture/data", PATH: "/bin" }
-const launch = await devinAcpSource.launch({ appPath: "/fixture/app", execPath: process.execPath })
+const launch = await devinAcpSource.launch({ appPath: "/fixture/app", execPath: process.execPath, cwd: "/fixture/project" })
 assert.ok(launch)
 const env = { ...desktop }
 launch.configureEnvironment(env)

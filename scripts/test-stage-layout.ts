@@ -14,16 +14,15 @@ import {
 } from "../src/lib/file-citations.ts"
 import {
   argAt,
-  isSubagentLaunch,
-  makoToolLabel,
   normalizeToolOutput,
   pairTools,
   parseToolExecutionOutput,
   subagentResultId,
   subagentResultText,
   summarizeToolWork,
-  toolLabel,
 } from "../src/lib/tools.ts"
+import { identifyTool, toolKindWork } from "../packages/sessions/src/tool-identity.ts"
+import type { ToolCall } from "../src/extend/slots.ts"
 import {
   activeThreadRefs,
   applyThreadActivity,
@@ -390,29 +389,15 @@ assert.equal(
   argAt('{"description":"Read package name"}', "description"),
   "Read package name"
 )
-assert.equal(
-  isSubagentLaunch({ id: "1", name: "TaskUpdate", pending: false }),
-  false
-)
-assert.equal(
-  isSubagentLaunch({ id: "2", name: "Subagent", pending: true }),
-  true
-)
-assert.equal(toolLabel("exec_command"), "Shell")
-assert.equal(toolLabel("TaskUpdate"), "Update task")
-assert.equal(toolLabel("WAIT"), "Wait for command")
+assert.equal(toolKindWork(identifyTool({ name: "TaskUpdate" }).kind), "plan")
+assert.equal(toolKindWork(identifyTool({ name: "Subagent" }).kind), "agent")
+assert.equal(identifyTool({ name: "exec_command" }).label, "Shell")
+assert.equal(identifyTool({ harness: "codex", name: "WAIT" }).label, "Command output")
 for (const asked of ["mcp__mako__app_start", "mako.app_start", "mako: app_start"])
-  assert.equal(makoToolLabel(asked), "Start app", `an approval for ${asked} names the Mako tool`)
-assert.equal(makoToolLabel("mako: shell"), undefined, "a name Mako doesn't serve stays as the agent wrote it")
-assert.equal(
-  isSubagentLaunch({
-    id: "wait",
-    name: "wait",
-    arguments: { cell_id: "706" },
-    pending: false,
-  }),
-  false
-)
+  assert.equal(identifyTool({ title: asked }).label, "Start app", `an approval for ${asked} names the Mako tool`)
+assert.notEqual(identifyTool({ title: "mako: shell" }).label, "Start app", "a name Mako doesn't serve stays as the agent wrote it")
+assert.equal(toolKindWork(identifyTool({ harness: "codex", name: "wait", input: '{"cell_id":"706"}' }).kind), "other")
+assert.equal(toolKindWork(identifyTool({ harness: "devin", name: "subagent", input: '{"agent_id":"a1","status":"running"}' }).kind), "other", "Devin's subagent checks on an agent; it starts none")
 assert.equal(
   normalizeToolOutput(
     JSON.stringify([
@@ -459,27 +444,19 @@ assert.deepEqual(markdownFileTarget("/work/src/index.ts#L12-L18"), {
   line: 12,
   endLine: 18,
 })
+const workCall = (id: string, name: string, extra: Partial<ToolCall> = {}): ToolCall =>
+  ({ id, name, pending: false, ...extra, tool: identifyTool({ name, input: extra.arguments === undefined ? undefined : JSON.stringify(extra.arguments) }) })
 assert.deepEqual(
   summarizeToolWork([
-    {
-      id: "edit-a",
-      name: "edit",
-      arguments: { file_path: "src/a.ts" },
-      pending: false,
-    },
-    {
-      id: "edit-a-2",
-      name: "write",
-      arguments: { path: "src/a.ts" },
-      pending: false,
-    },
-    { id: "shell", name: "exec_command", pending: false },
-    { id: "read", name: "read", pending: false },
-    { id: "search", name: "grep", pending: false },
-    { id: "skill", name: "skill", pending: false },
-    { id: "agent", name: "run_subagent", pending: false },
-    { id: "plan", name: "TodoWrite", pending: false, isError: true },
-    { id: "research", name: "task", pending: false, isCutOff: true },
+    workCall("edit-a", "edit", { arguments: { file_path: "src/a.ts" } }),
+    workCall("edit-a-2", "write", { arguments: { path: "src/a.ts" } }),
+    workCall("shell", "exec_command"),
+    workCall("read", "read"),
+    workCall("search", "grep"),
+    workCall("skill", "skill"),
+    workCall("agent", "run_subagent"),
+    workCall("plan", "TodoWrite", { isError: true }),
+    workCall("research", "task", { isCutOff: true }),
   ]),
   {
     tools: 9,

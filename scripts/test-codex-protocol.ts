@@ -545,10 +545,10 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
     ],
   } })
   const tools = reduceLiveUpdates([], updates).filter((block) => block.type === "tool")
-  assert.deepEqual(tools.map((tool) => [tool.title, tool.toolKind, tool.status]), [
+  assert.deepEqual(tools.map((tool) => [tool.title, tool.name, tool.status]), [
     ["electron utility process", "web_search", "completed"],
     ["Sleep 1m 30s", "sleep", "completed"],
-    ["linear: get_issue", "get_issue", "completed"],
+    ["linear: get_issue", "mcp__linear__get_issue", "completed"],
     ["Edit /tmp/project/new.ts, /tmp/project/old.ts", "apply_patch", "completed"],
   ])
   assert.equal(tools[0]?.input, JSON.stringify({ type: "search", query: "electron utility process", queries: null }, null, 2))

@@ -462,6 +462,7 @@ assert.ok(openCodeFresh.args.includes("openai/gpt"))
 const grokAcp = await providerHost.acpSources.get("grok")!.launch({
   appPath: process.cwd(),
   execPath: process.execPath,
+  cwd: process.cwd(),
   tuning: { options: { effort: "high" } },
 })
 assert.equal(providerHost.profiles.get("grok")?.label, "Grok")

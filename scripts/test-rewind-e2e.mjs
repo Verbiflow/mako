@@ -191,7 +191,7 @@ try {
             (block) =>
               block.type === "tool" &&
               ["read", "write", "edit"].includes(
-                block.toolKind?.toLowerCase()
+                (block.name ?? block.toolKind)?.toLowerCase()
               ) &&
               ["pending", "running", "in_progress"].includes(block.status) &&
               paths.some((path) => block.input?.includes(path))
@@ -205,7 +205,7 @@ try {
           const fixtureCommand = snapshot.blocks.some((block) => {
             if (
               block.type !== "tool" ||
-              !["execute", "bash"].includes(block.toolKind?.toLowerCase()) ||
+              !["execute", "bash"].includes((block.name ?? block.toolKind)?.toLowerCase()) ||
               !["pending", "running", "in_progress"].includes(block.status) ||
               !block.input
             )

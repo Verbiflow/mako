@@ -264,7 +264,7 @@ async function run() {
       }
       result.questionAttempts ??= []
       const turnStart = asked.blocks.findIndex(block => block.type === 'user' && block.requestId === request)
-      const nativeTools = asked.blocks.slice(turnStart + 1).filter(block => block.type === 'tool').map(block => ({id:block.id,kind:block.toolKind,title:block.title}))
+      const nativeTools = asked.blocks.slice(turnStart + 1).filter(block => block.type === 'tool').map(block => ({id:block.id,name:block.name,kind:block.toolKind,title:block.title}))
       result.questionAttempts.push({label,approvalId:permission.id,question,phrase,nativeTools})
       const sentBefore = answerDispatches
       await capture(label+'-pending')

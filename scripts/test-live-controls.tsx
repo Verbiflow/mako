@@ -150,17 +150,17 @@ threadsStore.set({
     live: true,
     canResume: true,
     modes: [
-      { id: "access:plan", name: "Plan", access: "plan", enforcement: "launch" },
-      { id: "access:deny", name: "Deny unapproved", access: "deny", enforcement: "launch" },
+      { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },
+      { id: "access:ask", name: "Ask before acting", access: "ask", enforcement: "launch" },
       { id: "access:auto", name: "Auto review", access: "auto", enforcement: "launch" },
       { id: "access:full", name: "Full access", access: "full", enforcement: "launch" },
     ],
-    defaultMode: "access:deny",
+    defaultMode: "access:ask",
   }],
   composerHarness: "grok",
 })
 const defaultedMarkup = renderToStaticMarkup(<NextSessionModePicker />)
-assert.match(defaultedMarkup, /aria-label="Access: Deny unapproved"/)
+assert.match(defaultedMarkup, /aria-label="Access: Ask before acting"/)
 // The thread's own remembered level still outranks the provider default.
 threadsStore.set({
   viewing: {

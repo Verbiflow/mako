@@ -92,7 +92,7 @@ try {
   const otherIdentity = otherSession.identifyElicitation({ ...elicitation, sessionId: "other" })
   assert.ok(otherIdentity)
   assert.notEqual(otherIdentity.scope, native.scope, "native tool IDs are session scoped")
-  const launch = await devinAcpSource.launch({ appPath: root, execPath: process.execPath, resume: "session" })
+  const launch = await devinAcpSource.launch({ appPath: root, execPath: process.execPath, cwd: root, resume: "session" })
   const prepared = await launch!.prepareApprovals!({ root, env: {}, previous: [native], publish: d => decisions.push(d) })
   prepared.observe!(notification)
   assert.deepEqual(prepared.identifyElicitation!(elicitation), native, "production ACP preparation forwards saved identities to its live observer")

@@ -10,13 +10,13 @@ const tool = {
 assert.equal(devinToolName(tool), "run_subagent")
 assert.equal(devinToolName({ ...tool, _meta: { "cognition.ai/inferenceToolName": 17 } }), undefined)
 assert.equal(devinToolName({ ...tool, _meta: undefined }), undefined)
-const kinds: (string | null | undefined)[] = []
+const named: [string | undefined, string | undefined][] = []
 for (const name of [devinToolName(tool), undefined]) {
   forward({ id: "fixture" }, { sessionId: "fixture", update: tool }, event => {
-    if (event.type === "live-update" && event.update.kind === "tool") kinds.push(event.update.toolKind)
+    if (event.type === "live-update" && event.update.kind === "tool") named.push([event.update.name, event.update.toolKind])
   }, () => {}, undefined, name)
 }
-assert.deepEqual(kinds, ["run_subagent", "other"], "Shared ACP uses only the provider-contributed native tool name")
+assert.deepEqual(named, [["run_subagent", "other"], [undefined, "other"]], "Shared ACP names a tool only from the provider's hook and keeps ACP's kind beside it")
 
 const request = {
   sessionId: "fixture",

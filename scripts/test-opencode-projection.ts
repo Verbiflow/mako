@@ -36,7 +36,7 @@ const message = "msg_assistant"
     "a child's prose stays in its own session")
 
   const started = content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "t1", name: "bash" }))
-  assert.deepEqual(started, [{ kind: "tool", id: `${root}:t1`, title: "bash", toolKind: "execute", status: "pending" }])
+  assert.deepEqual(started, [{ kind: "tool", id: `${root}:t1`, title: "bash", name: "bash", toolKind: "execute", status: "pending" }])
   const [called] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "t1", input: { command: "ls -la" }, executed: false }))
   assert.equal(called.kind, "tool-update")
   assert.equal(called.kind === "tool-update" && called.title, "ls -la")
@@ -53,7 +53,7 @@ const message = "msg_assistant"
   content.nameSession(child, "Explore the repo")
   assert.equal(content.prefix(child), "Explore the repo: ")
   const childRow = content.observe(event("session.tool.input.started", { sessionID: child, assistantMessageID: "msg_c", id: "t1", name: "read" }))
-  assert.deepEqual(childRow, [{ kind: "tool", id: `${child}:t1`, title: "Explore the repo: read", toolKind: "read", status: "pending" }],
+  assert.deepEqual(childRow, [{ kind: "tool", id: `${child}:t1`, title: "Explore the repo: read", name: "read", toolKind: "read", status: "pending" }],
     "a child's call ID never collides with its parent's")
   const [childCalled] = content.observe(event("session.tool.called", { sessionID: child, assistantMessageID: "msg_c", id: "t1", input: { filePath: "src/a.ts" }, executed: false }))
   assert.deepEqual(childCalled.kind === "tool-update" && childCalled.details, [{ type: "location", path: "/work/src/a.ts" }])
@@ -75,7 +75,7 @@ const message = "msg_assistant"
   assert.deepEqual(todo.find(update => update.kind === "plan"), { kind: "plan", entries: [{ content: "Ship it", status: "pending" }] })
 
   assert.deepEqual(content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "q", name: "question" })),
-    [{ kind: "tool", id: `${root}:q`, title: "question", toolKind: "question", status: "pending" }], "the question leaves a row beside its form")
+    [{ kind: "tool", id: `${root}:q`, title: "question", name: "question", toolKind: "question", status: "pending" }], "the question leaves a row beside its form")
   const [asked] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "q", executed: false,
     input: { questions: [{ header: "Colour", question: "Which colour?", options: [{ label: "red", description: "" }], multiple: false }] } }))
   assert.equal(asked.kind === "tool-update" && asked.title, "Which colour?", "the row names the question it asked")
@@ -88,7 +88,7 @@ const message = "msg_assistant"
   assert.equal(stopped.kind === "tool-update" && stopped.status, "cancelled", "a call the user stopped reads as cancelled, not failed")
 
   // A resubscribed stream first sees a call at its result; the driver opens it under its native name.
-  assert.deepEqual(content.open(root, "late", "grep"), [{ kind: "tool", id: `${root}:late`, title: "grep", toolKind: "grep", status: "pending" }])
+  assert.deepEqual(content.open(root, "late", "grep"), [{ kind: "tool", id: `${root}:late`, title: "grep", name: "grep", toolKind: "grep", status: "pending" }])
   assert.deepEqual(content.open(root, "late", "grep"), [], "opening is idempotent")
   const [lateCalled] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "late", input: { pattern: "TODO" }, executed: false }))
   assert.equal(lateCalled.kind === "tool-update" && lateCalled.title, "TODO")
@@ -315,8 +315,10 @@ try {
   const [refused] = mcp.failed("big", `Invalid config\n${"x".repeat(300)}`)
   assert.deepEqual(refused, { label: "MCP server failed", detail: "big · Invalid config", body: `Invalid config\n${"x".repeat(300)}`, tone: "warning" },
     "a long error stays one line beside the label, whole in the body")
-  assert.equal(openCodeStopped("user"), undefined, "a turn the user stopped needs no marker")
-  assert.deepEqual(openCodeStopped("superseded"), { label: "Stopped by OpenCode", detail: "a newer run took its place" })
+  assert.equal(openCodeStopped("user", true), undefined, "a turn stopped from Mako needs no marker")
+  assert.deepEqual(openCodeStopped("user", false), { label: "Stopped outside Mako", detail: "another OpenCode client interrupted this turn" },
+    "an interrupt Mako didn't ask for says where it came from")
+  assert.deepEqual(openCodeStopped("superseded", false), { label: "Stopped by OpenCode", detail: "a newer run took its place" })
   assert.ok(openCodeIgnores(event("tui.toast.show", { message: "hi", variant: "warning" })))
   assert.ok(openCodeIgnores(event("rpc.internal", {})))
   assert.ok(!openCodeIgnores(event("mcp.status.changed", { server: "docs" })))
@@ -366,6 +368,7 @@ process.stdin.on("end", () => process.exit(0))
         case "/api/model/default": return reply({ id: "m", providerID: "p" })
         case "/api/agent": return reply([{ id: "build", name: "build", mode: "primary" }])
         case "/api/command": case "/api/skill": case "/api/shell": return reply([])
+        case "/api/config": return new Response("[]", { headers: { "content-type": "application/json" } })
         case "/api/session": return reply({ id: root, title: "Fixture" })
         case "/api/mcp": return reply(mcpServers)
         case `/api/session/${root}/compact`:

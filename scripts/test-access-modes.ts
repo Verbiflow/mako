@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { ApprovalEvidenceCapabilitySchema } from "../electron/providers/approval-capability.js"
-import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpSessionModes } from "../electron/acp-access.ts"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "../electron/acp-access.ts"
 import { accessModeId } from "../electron/contracts/access.ts"
 import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
 import { CURSOR_SDK_MODES } from "../electron/providers/cursor/sdk/modes.ts"
@@ -9,6 +9,10 @@ import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credenti
 import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { grokImportedPermissionMode } from "../electron/providers/grok/claude-permissions.ts"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
 import { openCodeAgentForMode, openCodeModeForAgent, openCodeModes, openCodeSessionModes } from "../electron/providers/opencode/access.ts"
 import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "../electron/providers/codex/access.ts"
@@ -71,35 +75,89 @@ assert.deepEqual(devinModes.map((mode) => [mode.id, mode.access]), [
 assert.ok(devinModes.every((mode) => mode.enforcement === "provider"))
 assert.equal(acpLiveDriver(devinAcpSource).steering, "step")
 
-// Grok: no native modes, no steering; tiers are fixed at launch through --permission-mode.
+// Grok: Plan is a native mode it takes live but does not list; permission
+// tiers are fixed at launch through --permission-mode. No steering.
 const grokModes = acpSessionModes(grokAcpSource.access, null)
-assert.deepEqual(grokModes.map((mode) => [mode.id, mode.enforcement]), [
-  [accessModeId("plan"), "launch"],
-  [accessModeId("deny"), "launch"],
-  [accessModeId("auto"), "launch"],
-  [accessModeId("full"), "launch"],
+assert.deepEqual(grokModes.map((mode) => [mode.id, mode.access, mode.enforcement]), [
+  ["plan", "plan", "provider"],
+  [accessModeId("ask"), "ask", "launch"],
+  [accessModeId("auto"), "auto", "launch"],
+  [accessModeId("full"), "full", "launch"],
 ])
 assert.equal(acpLiveDriver(grokAcpSource).steer, undefined, "Grok queues a concurrent prompt behind the turn")
 assert.equal(acpLiveDriver(grokAcpSource).steering, undefined)
-const grokLaunch = { appPath: "/app", execPath: process.execPath }
+const grokRoot = mkdtempSync(join(tmpdir(), "grok-access-"))
+const grokHome = join(grokRoot, "home")
+const grokRepo = join(grokRoot, "repo")
+const grokProject = join(grokRepo, "app")
+mkdirSync(join(grokRepo, ".git"), { recursive: true })
+mkdirSync(grokProject, { recursive: true })
+mkdirSync(grokHome)
+const grokLaunch = { appPath: "/app", execPath: process.execPath, cwd: grokProject, env: { HOME: grokHome } }
+interface ClaudeSettings {
+  permissions?: { defaultMode: string }
+  defaultMode?: string
+}
+const claudeSettings = (dir: string, name: string, settings: ClaudeSettings) => {
+  mkdirSync(join(dir, ".claude"), { recursive: true })
+  writeFileSync(join(dir, ".claude", name), JSON.stringify(settings))
+}
 const grokFull = await grokAcpSource.launch({ ...grokLaunch, access: "full" })
 assert.deepEqual(grokFull?.args.slice(0, 3), ["--permission-mode", "bypassPermissions", "agent"])
 const grokAuto = await grokAcpSource.launch({ ...grokLaunch, access: "auto" })
 assert.deepEqual(grokAuto?.args.slice(0, 2), ["--permission-mode", "auto"])
+const grokAsk = await grokAcpSource.launch({ ...grokLaunch, access: "ask" })
+assert.deepEqual(grokAsk?.args.slice(0, 2), ["--permission-mode", "default"], "Grok's default mode asks over ACP")
+assert.equal(grokAsk?.access, undefined, "with no Claude-compatible mode Grok runs at Ask")
+assert.equal(grokAsk?.notices, undefined)
+claudeSettings(grokHome, "settings.json", { permissions: { defaultMode: "dontAsk" } })
+const grokDontAsk = await grokAcpSource.launch({ ...grokLaunch, access: "ask" })
+assert.equal(grokDontAsk?.access, undefined, "dontAsk has no tier: Mako keeps Ask and says what Grok does instead")
+assert.equal(grokDontAsk?.notices?.[0]?.tone, "warning")
+assert.match(grokDontAsk?.notices?.[0]?.detail ?? "", /^~\/\.claude\/settings\.json sets permissions\.defaultMode to dontAsk, so it denies/)
+assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "auto" }))?.notices, undefined, "an explicit Auto flag beats the imported mode")
+assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "full" }))?.notices, undefined, "an explicit Full flag beats the imported mode")
+claudeSettings(grokHome, "settings.local.json", { defaultMode: "bypassPermissions" })
+assert.deepEqual(grokImportedPermissionMode(grokProject, grokHome), { mode: "bypassPermissions", file: join(grokHome, ".claude", "settings.local.json") },
+  "the user's local settings come before the shared ones, and a top-level defaultMode counts")
+assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "ask" }))?.access, "full", "an imported bypassPermissions runs Grok at Full, so Mako reports Full")
+claudeSettings(grokRepo, "settings.json", { permissions: { defaultMode: "auto" } })
+assert.deepEqual(grokImportedPermissionMode(grokProject, grokHome), { mode: "auto", file: join(grokRepo, ".claude", "settings.json") },
+  "project settings up to the repository root come before the user's")
+assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "ask" }))?.access, "auto")
+claudeSettings(grokProject, "settings.local.json", { permissions: { defaultMode: "default" } })
+const grokProjectDefault = await grokAcpSource.launch({ ...grokLaunch, access: "ask" })
+assert.equal(grokProjectDefault?.access, undefined, "the nearest project setting wins, and default is Ask")
+assert.equal(grokProjectDefault?.notices, undefined)
+rmSync(grokRoot, { recursive: true, force: true })
 const grokUnset = await grokAcpSource.launch(grokLaunch)
 assert.equal(grokUnset?.args[0], "agent", "no selection leaves the user's Grok configuration alone")
 const grokEdits = await grokAcpSource.launch({ ...grokLaunch, access: "edits" })
 assert.equal(grokEdits?.args[0], "agent", "a tier Grok cannot enforce over ACP is not forwarded")
+const grokPlanFlag = await grokAcpSource.launch({ ...grokLaunch, access: "plan" })
+assert.equal(grokPlanFlag?.args[0], "agent", "the weaker --permission-mode plan is never used; Plan is set live")
 assert.deepEqual(acpInitialSelection(grokAcpSource.access, grokModes, null, accessModeId("full")), { currentMode: accessModeId("full") })
+assert.deepEqual(acpInitialSelection(grokAcpSource.access, grokModes, null, "plan"), { currentMode: "plan" },
+  "a session started in Plan reports it, though Grok lists no modes")
 assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, accessModeId("full"), "full", "grok"), { kind: "unchanged", modeId: accessModeId("full") })
 assert.throws(() => acpModeChange(grokAcpSource.access, grokModes, accessModeId("auto"), "full", "grok"), /when its session starts/)
-// Grok reports no session modes over ACP, so the deny tier it launches with
-// is the declared default: the desk always has a level to report.
-assert.equal(acpDefaultMode(grokAcpSource.access), accessModeId("deny"))
-assert.equal(acpLiveDriver(grokAcpSource).defaultMode, accessModeId("deny"))
+assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, "plan", "full", "grok", accessModeId("full")),
+  { kind: "native", modeId: "plan", nativeModeId: "plan" }, "Plan is entered live")
+assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, accessModeId("full"), "full", "grok", "plan"),
+  { kind: "native", modeId: accessModeId("full"), nativeModeId: "default" }, "leaving Plan returns to the launch tier through Grok's default mode")
+assert.throws(() => acpModeChange(grokAcpSource.access, grokModes, accessModeId("ask"), "full", "grok", "plan"), /when its session starts/,
+  "leaving Plan cannot reach another launch tier")
+// Grok reports `default` on leaving plan, which means the tier it launched with.
+assert.equal(acpReportedMode(grokAcpSource.access, "default", "auto"), accessModeId("auto"))
+assert.equal(acpReportedMode(grokAcpSource.access, "plan", "auto"), "plan")
+assert.equal(acpReportedMode(devinAcpSource.access, "plan", null), "plan")
+// Grok reports no session modes over ACP, so the tier it launches with is
+// the declared default: the desk always has a level to report.
+assert.equal(acpDefaultMode(grokAcpSource.access), accessModeId("ask"))
+assert.equal(acpLiveDriver(grokAcpSource).defaultMode, accessModeId("ask"))
 assert.deepEqual(
   acpInitialSelection(grokAcpSource.access, grokModes, null, acpDefaultMode(grokAcpSource.access)),
-  { currentMode: accessModeId("deny") },
+  { currentMode: accessModeId("ask") },
   "an unchosen Grok session opens under its declared default, reported as such"
 )
 
@@ -172,7 +230,7 @@ assert.equal(codexObservedTier({ sandbox: { type: "externalSandbox", networkAcce
 assert.ok(ClaudeModeSchema.safeParse("bypassPermissions").success)
 
 console.log(
-  "Access modes: native policy ownership, Cursor SDK tiers, Devin native tiers, Grok launch tiers without steering, OpenCode native agents and rulesets, Codex per-turn policy, and Claude bypass verified"
+  "Access modes: native policy ownership, Cursor SDK tiers, Devin native tiers, Grok launch tiers with a live Plan and no steering, OpenCode native agents and rulesets, Codex per-turn policy, and Claude bypass verified"
 )
 
 // Before launch, every driver declares the same ladder its live session will show,
@@ -234,6 +292,17 @@ assert.throws(
   () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
   /not one of its declared modes/
 )
+
+// Every harness says how it plans and which native record carries the plan.
+assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.planning.via === "mode" ? `mode ${driver.planning.mode}` : `setting ${driver.planning.option}`])), {
+  cursor: "setting plan", devin: "mode plan", grok: "mode plan", opencode: "mode plan", codex: "setting plan", claude: "mode plan",
+})
+assert.throws(() => validateLiveDriver({ ...claudeLiveDriver, planning: { via: "mode", mode: "acceptEdits", proposal: "x" } }), /doesn't offer as Plan/,
+  "a harness can't plan through a mode its ladder doesn't offer as Plan")
+assert.throws(() => validateLiveDriver({ ...claudeLiveDriver, defaultMode: "plan" }), /can't start in Plan unasked/)
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: undefined }), /how it plans/,
+  "registration rejects a new adapter that doesn't say how it plans")
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: { via: "setting", option: "plan", proposal: " " } }), /how its plan reaches Mako/)
 
 // Stop ends the turn and the background work it started on every harness.
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.backgroundStop.kind])), {

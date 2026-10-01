@@ -414,9 +414,9 @@ history.push({ kind: 'user', text: 'Explain <mako-local-control>\nkept\n</mako-l
 assert.deepEqual(history.done().map((entry) => entry.kind === 'user' && entry.text), ['Use your question tool', 'Explain <mako-local-control>\nkept\n</mako-local-control>\n\n'],
   "every provider's history drops only Mako's own leading control envelope")
 
-const { firstQuestion, liveToolName, toolLabel } = await import("../src/lib/tools.ts")
+const { identifyTool } = await import("../packages/sessions/src/tool-identity.ts")
 const structuredAsk = JSON.stringify({ questions: [{ header: "Colour", question: "Which colour?", options: [{ label: "red" }] }] })
-assert.equal(firstQuestion(structuredAsk), "Which colour?", "Claude and OpenCode asks summarise by their first question")
-assert.equal(firstQuestion(JSON.stringify({ question: "Flat" })), undefined)
-assert.equal(toolLabel(liveToolName("question", "Which colour?")), "Question", "OpenCode's native question row reads as a question")
+assert.equal(identifyTool({ name: "AskUserQuestion", input: structuredAsk }).target, "Which colour?", "Claude and OpenCode asks summarise by their first question")
+assert.equal(identifyTool({ name: "question", input: JSON.stringify({ question: "Flat" }) }).target, "Flat")
+assert.equal(identifyTool({ acpKind: "question", title: "Which colour?" }).label, "Question", "OpenCode's native question row reads as a question")
 console.log("Structured questions keep a named row")

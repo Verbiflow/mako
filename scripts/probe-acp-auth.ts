@@ -28,6 +28,7 @@ try {
     const launch = await source.launch({
       appPath: process.cwd(),
       execPath: process.execPath,
+      cwd: process.cwd(),
     })
     if (!launch) {
       console.log(
