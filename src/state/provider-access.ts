@@ -74,10 +74,11 @@ export function chooseProviderMode(harness: string, modeId: string): void {
  * A choice made while viewing a thread that is not live is the thread's:
  * the host remembers it for that native session, for every host that serves
  * it, and the provider-wide default follows so a fresh session starts there
- * too.
+ * too — unless `forProvider` is false, as for plan mode, which is the
+ * session's alone.
  */
-export function chooseThreadMode(ref: Pick<ThreadRef, "path" | "harness">, modeId: string): void {
-  chooseProviderMode(ref.harness, modeId)
+export function chooseThreadMode(ref: Pick<ThreadRef, "path" | "harness">, modeId: string, forProvider = true): void {
+  if (forProvider) chooseProviderMode(ref.harness, modeId)
   if (!hasBridge()) return
   getMako()
     .rememberThreadMode(ref.path, modeId)

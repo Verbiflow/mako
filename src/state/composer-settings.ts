@@ -251,7 +251,7 @@ export function resolveComposerSettingsInput(input: ComposerSettingsInput) {
   return { resolved, model, options: model?.options ?? [] }
 }
 
-function composerSettingsInput(target: ComposerTarget, profile?: HarnessProfile) {
+export function composerSettingsInput(target: ComposerTarget, profile?: HarnessProfile) {
   const prefs = prefsStore.get()
   const conversation = settingsConversation(target)
   return resolveComposerSettingsInput({

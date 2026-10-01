@@ -20,6 +20,7 @@ import {
   type StartingAcpConversation,
 } from "@/state/acp-state"
 import { toast } from "sonner"
+import { restorePendingPlan, takePendingPlan, withNativePlan } from "@/state/plan-choice"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage, type OutboxCommand } from "@/state/message-outbox"
 
 export type AcpStartOptions = Omit<
@@ -154,12 +155,14 @@ export async function launch(
         : undefined,
     })
   }
+  const plan = takePendingPlan(starting.settingsTarget, starting.key)
   try {
     const input: LiveStartOptions = {
       ...options,
-      modeId: options.modeId ?? prefsStore.get().providerModes[starting.harness],
-      tuning:
-        options.tuning ?? (await settingsForSend(starting.settingsTarget)),
+      ...withNativePlan(plan, {
+        modeId: options.modeId ?? prefsStore.get().providerModes[starting.harness],
+        tuning: options.tuning ?? (await settingsForSend(starting.settingsTarget)),
+      }),
       conversationId: starting.key,
       threadPath: starting.threadPath,
       session: starting.sessionId,
@@ -178,6 +181,7 @@ export async function launch(
     return deliverStart(starting, input)
   } catch (error) {
     failStart(starting.key)
+    restorePendingPlan(starting.settingsTarget, starting.key)
     toast.error(error instanceof Error ? error.message : String(error))
     return false
   }
@@ -282,6 +286,7 @@ async function attemptStart(starting: StartingAcpConversation, input: LiveStartO
     }
     settleMessage(input.initialRequest?.id ?? input.conversationId)
     failStart(starting.key)
+    restorePendingPlan(starting.settingsTarget, starting.key)
     toast.error(error instanceof Error ? error.message : String(error))
     return false
   }
