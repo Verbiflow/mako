@@ -1,3 +1,4 @@
+import { accounts } from "@/state/accounts"
 import { noteFolderUse } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
@@ -215,6 +216,14 @@ function apply(event: HostEvent) {
   }
   if (event.type === "worktrees-changed") {
     void loadWorktrees()
+    return
+  }
+  if (event.type === "account-usage-spent") {
+    accounts.spent(event.harness)
+    return
+  }
+  if (event.type === "account-usage") {
+    accounts.observed(event.harness, event.name, event.usage)
     return
   }
   if (event.type === "workspace-moves") {
