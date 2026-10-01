@@ -45,6 +45,20 @@ ids or branch on all known providers. Provider-specific wire syntax and paths
 belong under that provider's directory. A new provider adds one module to
 `electron/providers/index.ts`; it does not add switches to shared consumers.
 
+Live native messages are decoded by a pure decoder per harness, declared as
+the `decoder` family of its `HarnessDefinition` (or `absent` with a reason).
+A decoder turns one native message into the shared `Decoded` events in
+`electron/contracts/native-decoding.ts` and touches no process, clock or host,
+so recorded messages always decode the same way. An empty list means "known,
+deliberately silent"; `unknown` carries the raw record, which the engine
+keeps (first of each kind per host life) in `native-unknown.jsonl` beside the
+host log. Codex is the first harness on this contract; the others still
+decode inside their drivers. To change a decoder, run Mako with
+`MAKO_NATIVE_CAPTURE=<harness>` to record real messages, inspect them with
+`npm run decode -- <capture>`, turn the case into a fixture with `--fixture`,
+then run `npm run test:decoders`. Captures hold conversation content: read a
+fixture before committing it.
+
 `@mako/sessions` remains the pure native-store layer. Its `SessionProvider`
 contract owns discovery, translation, and following without importing Electron
 or any provider host capability.
@@ -1195,6 +1209,38 @@ sandbox, and reviewer with every `turn/start`; a change applies to the next
 turn. Cursor is not an ACP provider: its ladder is the SDK's own and is
 enforced by the SDK (below). `test-access-modes.ts` covers the placements
 and decisions.
+
+### Plan mode
+
+Plan is one composer control (the Plan chip, Shift+Tab, the palette's
+"Toggle plan mode") over two native shapes, resolved by `planControl` in
+`src/state/plan-mode.ts`:
+
+- A **setting**: a boolean model option with `role: "plan"`, sent per turn
+  and independent of access, so Plan with full access is valid. Codex sends
+  it as `collaborationMode`; Cursor sends the SDK's per-send `mode`. Codex
+  keeps the collaboration mode across turns and restores it on resume, so
+  Mako sends `plan` or `default` on every turn once the choice is known.
+  Cursor reports only its model back, so the driver carries `plan` beside
+  each report or the chip turns itself off after one turn.
+- A **mode**: the access mode whose tier is `plan` (Claude, OpenCode, Devin,
+  Grok). Entering it replaces the access level; leaving returns to the one
+  remembered on entry. Grok's modes are launch-only, so a live Grok session's
+  chip is locked.
+
+A setting wins when a harness declares both. Generic option menus and the
+Settings defaults skip `role: "plan"`. A plan chosen for a session that has
+not started is pending in `src/state/plan-choice.ts`. It is taken at launch,
+restored if the launch fails, and never saved as the harness default.
+
+Build answers the native plan approval when one is waiting for that plan
+(`LivePermissionRequest.implementsPlan`, set by Claude's `ExitPlanMode`), and
+sends no prompt as well: a second prompt would run the work twice. Without an
+approval it leaves plan mode and sends the implement request. An earlier plan
+revision never answers the current approval. "Build in new session" cancels
+the planning session, then opens a session in the same Thread with the plan
+attached and plan off. `scripts/test-plan-mode.ts` covers the mapping, locks,
+pending choices and both build paths.
 
 How a catalogued thread is continued is the host's decision, not the
 renderer's. `electron/contracts/thread-continuation.ts` turns one ref plus
