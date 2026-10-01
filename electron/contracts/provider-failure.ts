@@ -30,6 +30,8 @@ export const PROVIDER_FAILURE_KINDS = [
   "transport-limit",
   /** The prompt itself was refused before it ran (empty, too large, an unsupported attachment). */
   "rejected-input",
+  /** The thread's folder is gone, so no provider can start in it. */
+  "missing-folder",
   "unknown",
 ] as const
 export type ProviderFailureKind = (typeof PROVIDER_FAILURE_KINDS)[number]
@@ -55,6 +57,11 @@ interface Rule {
  * tokens) precede the broad HTTP families they could also trip.
  */
 const rules: Rule[] = [
+  {
+    // MissingWorkingDirectoryError's own words, said before any provider starts.
+    kind: "missing-folder",
+    match: /no longer exists\. Open this in a folder that exists/,
+  },
   {
     kind: "transport-limit",
     match: /oversized JSON-RPC message/i,
@@ -189,6 +196,13 @@ export function describeProviderFailure(
         retriable: false,
         title: `${providerLabel} refused the message`,
         guidance: "Change the message, its attachments or the selected model and send it again.",
+      }
+    case "missing-folder":
+      return {
+        kind,
+        retriable: false,
+        title: "This thread's folder no longer exists",
+        guidance: `${providerLabel} can't start in a folder that's gone. Restore the folder, or copy the message to a thread in a folder that exists.`,
       }
     case "unknown":
       return {

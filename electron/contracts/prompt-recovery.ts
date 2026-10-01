@@ -29,7 +29,9 @@ export function describePromptRecovery(
             ? "Conversation context is full"
             : request.failure === "resume-failed"
               ? "Could not reopen this session"
-              : "Message could not be completed"
+              : request.failure === "missing-folder"
+                ? "Folder no longer exists"
+                : "Message could not be completed"
   const canResend = request.status === "failed"
     && ((failure?.retriable ?? true) || (request.failure === "context-exhausted" && compacted))
   return {

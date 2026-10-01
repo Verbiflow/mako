@@ -548,6 +548,15 @@ export const hostCallInputs = {
   ]),
   "mako:open-url": z.tuple([z.string()]),
   "mako:pick-folder": z.tuple([]),
+  "mako:plan-build-claim": z.tuple([
+    z.string(),
+    z.string(),
+    z.object({
+      thread: z.string().optional(),
+      conversation: z.string().optional(),
+    }),
+    z.union([z.null(), z.number()]),
+  ]),
   "mako:plan-build-record": z.tuple([
     z.string(),
     z.object({
@@ -556,6 +565,7 @@ export const hostCallInputs = {
       thread: z.string().optional(),
     }),
   ]),
+  "mako:plan-build-release": z.tuple([z.string()]),
   "mako:plan-builds": z.tuple([]),
   "mako:plugins-dir": z.tuple([]),
   "mako:project-app-secrets": z.tuple([z.string(), z.boolean()]),

@@ -12,7 +12,7 @@ import type { ProjectAppSetup } from "./project-app.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
 import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
-import type { PlanBuild, PlanBuilds } from "./plan-builds.js"
+import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -211,6 +211,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     forgetWorkspaceMoves: (project: string) => invokeTrustedHost<void>("mako:workspace-move-forget", project),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
+    claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
+      invokeTrustedHost<PlanBuildClaim>("mako:plan-build-claim", claimId, planId, target, seen),
+    releasePlanBuild: (claimId: string) => invokeTrustedHost<void>("mako:plan-build-release", claimId),
     threadCreateSession: (operationId: string, thread: string) =>
       invokeTrustedHost<ThreadPlacement>("mako:thread-create-session", operationId, thread),
     threadControls: (target: ThreadTarget) =>

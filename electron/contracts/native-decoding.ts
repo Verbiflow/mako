@@ -2,7 +2,7 @@ import type { Compaction, TranscriptEvent } from "@mako/sessions/events"
 import type { UsageWindow } from "../account-types.js"
 import type { JsonValue } from "../codex-app-json.js"
 import type { LiveUpdate } from "./live-content.js"
-import type { NativeActivityObservation } from "./native-activity.js"
+import type { NativeActivityObservation, NativeNotice } from "./native-activity.js"
 import type { LiveSessionState } from "./providers-acp.js"
 
 /**
@@ -94,6 +94,20 @@ export function deliverDecoded<Effect>(decoded: readonly Decoded<Effect>[], sink
     }
   }
   flush()
+}
+
+/**
+ * A harness's notices about one native record as decoded events. The record's
+ * id names its markers, the second and later as `<id>:2`, `<id>:3`, so the
+ * same record replayed draws each once.
+ */
+export function decodedNotices(notices: readonly NativeNotice[], source?: string): Decoded<never>[] {
+  let markers = 0
+  const id = () => (source ? (markers++ === 0 ? source : `${source}:${markers}`) : undefined)
+  return notices.map((notice) =>
+    notice.kind === "activity" ? decoded.activity(notice.activity)
+      : notice.kind === "compacted" ? decoded.compacted(notice.compaction, id())
+        : decoded.marker(notice.event, id()))
 }
 
 /** Builders that keep decoders terse. */

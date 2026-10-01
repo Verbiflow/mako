@@ -16,6 +16,14 @@ export const PlanBuildSchema = z.object({
 })
 export type PlanBuild = z.infer<typeof PlanBuildSchema>
 
+export const PlanBuildTargetSchema = PlanBuildSchema.omit({ at: true })
+export type PlanBuildTarget = z.infer<typeof PlanBuildTargetSchema>
+
+/** A Build click's claim on a plan; it loses to a build made since the plan was last seen. */
+export type PlanBuildClaim =
+  | { claimed: true; build: PlanBuild }
+  | { claimed: false; current: PlanBuild | undefined }
+
 export const PlanBuildsSchema = z.record(z.string(), PlanBuildSchema)
 export type PlanBuilds = z.infer<typeof PlanBuildsSchema>
 

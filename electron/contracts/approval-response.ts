@@ -1,5 +1,12 @@
 import { z } from "zod"
 
+/**
+ * How the host refuses an answer to an approval or question that already has
+ * a different one, given first in another window or on another computer.
+ * Crosses IPC as text, so windows match on it.
+ */
+export const ANSWERED_DIFFERENTLY = "already has a different saved answer"
+
 /** Provider-owned occurrence, scoped to the native observer's lifetime. */
 export const NativeApprovalIdentitySchema = z.object({
   scope: z.string().uuid(),

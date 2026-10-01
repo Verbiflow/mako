@@ -5,6 +5,7 @@ import {
   ProposedPlanSchema,
   MAX_PROPOSED_PLAN_LENGTH,
 } from "@mako/sessions/content"
+import { sameSetupEvent } from "@mako/sessions/events"
 
 const plan = z.array(z.object({ content: z.string(), status: z.string() }))
 /**
@@ -18,6 +19,7 @@ const transcriptEvent = {
   detail: z.string().optional(),
   body: z.string().optional(),
   tone: z.enum(["warning", "error"]).optional(),
+  setup: z.boolean().optional(),
 }
 export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
@@ -83,7 +85,8 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
    * A marker the provider gave the conversation (`TranscriptEvent`); a saved
    * history's `event` entry. `id` names the native event it came from: the
    * same id again in the turn replaces the marker, so a replayed or amended
-   * event is drawn once.
+   * event is drawn once. A setup marker the conversation already shows is
+   * dropped, whichever turn or session start reports it again.
    */
   z.object({ kind: z.literal("event"), id: z.string().optional(), ...transcriptEvent }),
   /** The provider withdrew content it had sent: the turn's text, thinking and tool blocks with these ids go. */
@@ -345,7 +348,10 @@ export function reduceLiveUpdates(
         replace(-1, { type: "provider-turn", reason: update.reason })
         break
       case "event": {
+        if (update.setup && next.some((candidate) => candidate.type === "event" && sameSetupEvent(candidate, update)))
+          break
         const block: LiveBlock = { type: "event", label: update.label, detail: update.detail, body: update.body, tone: update.tone }
+        if (update.setup) block.setup = true
         if (update.id) block.id = update.id
         replace(update.id ? findCurrent((candidate) => candidate.type === "event" && candidate.id === update.id) : -1, block)
         break

@@ -135,6 +135,10 @@ const replays = [
   "mako:workspace-move-forget",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
+  /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */
+  "mako:plan-build-claim",
+  /** `PlanBuilds.release`: the claim id; a released claim releases nothing. */
+  "mako:plan-build-release",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

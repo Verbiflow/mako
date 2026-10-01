@@ -65,6 +65,8 @@ export function describeTransferRecovery(
     case "uncertain": {
       const failure = state.kind === "failed" && state.failure
         ? describeProviderFailure(state.failure, provider) : undefined
+      // Nothing started, so there is no switch to retry and no work to repeat.
+      if (failure?.kind === "missing-folder") return { title: failure.title, guidance: failure.guidance, retryLabel: undefined }
       return {
         title: state.kind === "uncertain" ? `Switch to ${provider} is unconfirmed` : `Could not switch to ${provider}`,
         guidance: `${failure ? failure.guidance + " " : ""}Review the conversation before trying again. A new switch attempt can repeat work.`,
