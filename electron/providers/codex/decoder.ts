@@ -500,7 +500,7 @@ export class CodexDecoder {
         return
       }
       case "mcpToolCall":
-        startTool(out, tracker, `${item.server}: ${item.tool}`, item.tool, item.status, item.arguments ?? undefined)
+        startTool(out, tracker, `${item.server}: ${item.tool}`, `mcp__${item.server}__${item.tool}`, item.status, item.arguments ?? undefined)
         if (completed) {
           const output = item.error?.message ||
             (item.result === null ? tracker.output : boundedJson(item.result))
@@ -508,7 +508,7 @@ export class CodexDecoder {
         }
         return
       case "dynamicToolCall":
-        startTool(out, tracker, `${item.namespace ? `${item.namespace}.` : ""}${item.tool}`, item.tool, item.status,
+        startTool(out, tracker, `${item.namespace ? `${item.namespace}.` : ""}${item.tool}`, item.namespace ? `${item.namespace}.${item.tool}` : item.tool, item.status,
           item.arguments ?? undefined)
         if (completed) finishTool(out, tracker, item.status, item.contentItems ? boundedJson(item.contentItems) : undefined)
         return
@@ -621,14 +621,14 @@ function retrying(message: string, variant: string | undefined): NativeActivityO
  * shows (the command, the file) are supplied here. Without the input the
  * shell row had no command on it at all, live or expanded.
  */
-function startTool(out: CodexDecoded[], tracker: ItemTracker, title: string, toolKind: string, status: string, input?: JsonValue): void {
+function startTool(out: CodexDecoded[], tracker: ItemTracker, title: string, name: string, status: string, input?: JsonValue): void {
   if (tracker.started) return
   tracker.started = true
   out.push(decoded.update({
     kind: "tool",
     id: tracker.acpId,
     title: boundedText(title, 500),
-    toolKind,
+    name,
     status: toolStatus(status),
     input: input === undefined ? undefined : boundedJson(input),
   }))

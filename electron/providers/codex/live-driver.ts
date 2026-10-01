@@ -2,12 +2,14 @@ import { codexQuestionAnswer } from "./questions.js"
 import { readCodexQuestionHistory } from "./question-reader.js"
 import { codexExecutableCandidates } from "./executable.js"
 import { codexAccessModes, CODEX_DEFAULT_MODE } from "./access.js"
+import { CODEX_PLAN_OPTION } from "@mako/sessions/model-catalog"
 import type { ProviderLiveDriver } from "../live-driver.js"
 
 export const codexLiveDriver: ProviderLiveDriver = {
   provider: "codex",
   sessionQuestions: { encodeAnswer: codexQuestionAnswer, history: readCodexQuestionHistory },
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission"], coverage: "Native codex.tool_decision user events confirm once/session/decline/abort for a unique command or file approval. Repeated tool IDs, amendments and other request families remain unconfirmed. Normalized decisions survive reconnect; request-resolved alone is not confirmation." },
+  planning: { via: "setting", option: CODEX_PLAN_OPTION.id, proposal: "The Plan collaboration mode's plan item, built by a message that asks for the implementation" },
   observesNativeAgents: true,
   canResume: true,
   forkPoint: "run",
