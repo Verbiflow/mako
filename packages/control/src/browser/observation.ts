@@ -143,12 +143,49 @@ export function selectPageNodes(
   }
 }
 
-/** Compact text for a selected working set; refs remain the first token. */
+const quoted = (text: string, limit: number) =>
+  JSON.stringify(text.length > limit ? `${text.slice(0, limit)}…` : text)
+/** States worth reading when false as well: a collapsed menu, an unchecked box. */
+const TWO_WAY_STATES = ["checked", "expanded", "pressed"] as const
+const SET_STATES = ["selected", "focused", "disabled", "required", "readonly", "invalid", "modal"] as const
+
+/** One outline row: ref, role, name, then only the facts that distinguish it.
+ * Every field also stays on the node for programs. */
+export function pageOutlineLine(node: PageObservationNode, indent = 0): string {
+  const parts = [node.ref, node.role ?? "node"]
+  if (node.name) parts.push(JSON.stringify(node.name))
+  if (node.visibleText) parts.push(`visibleText=${JSON.stringify(node.visibleText)}`)
+  if (node.value !== undefined && node.value !== "" && node.value !== node.name)
+    parts.push(`value=${quoted(node.value, 80)}`)
+  if (node.role === "link" && !node.name && typeof node.url === "string")
+    parts.push(`url=${quoted(node.url, 120)}`)
+  if (node.role === "heading" && typeof node.level === "number") parts.push(`level=${node.level}`)
+  for (const state of TWO_WAY_STATES) {
+    const value = node[state]
+    if (value === true || value === "true") parts.push(state)
+    else if (value === false || value === "false" || value === "mixed") parts.push(`${state}=${String(value)}`)
+  }
+  for (const state of SET_STATES)
+    if (node[state] === true || node[state] === "true") parts.push(state)
+  const popup = node.hasPopup
+  if (typeof popup === "string" && popup !== "false") parts.push(`hasPopup=${popup}`)
+  return "  ".repeat(indent) + parts.filter((part) => part !== undefined).join(" ")
+}
+
+/** The page as an indented outline, or a flat list for filtered reads, whose
+ * rows are not one tree. Indentation starts at the shallowest row. */
+export function pageOutlineLines(nodes: readonly PageObservationNode[], options: { flat?: boolean } = {}): string[] {
+  const base = Math.min(...nodes.map((node) => node.depth))
+  return nodes.map((node) => pageOutlineLine(node, options.flat ? 0 : Math.min(node.depth - base, 24)))
+}
+
+/** A selected working set with every field of each row, indented as an outline. */
 export function pageNodeLines(nodes: readonly PageObservationNode[]): string[] {
+  const base = Math.min(...nodes.map((node) => node.depth))
   return nodes.map((node) => {
     const fields = [
       node.ref,
-      `${"  ".repeat(Math.min(node.depth, 20))}${node.role ?? "node"}`,
+      node.role ?? "node",
       node.name ? JSON.stringify(node.name) : undefined,
       node.value ? `value=${JSON.stringify(node.value)}` : undefined,
       node.visibleText ? `visibleText=${JSON.stringify(node.visibleText)}` : undefined,
@@ -162,6 +199,6 @@ export function pageNodeLines(nodes: readonly PageObservationNode[]): string[] {
         )
         .map(([name, value]) => `${name}=${String(value)}`),
     ]
-    return fields.filter((field) => field !== undefined).join(" ")
+    return "  ".repeat(Math.min(node.depth - base, 24)) + fields.filter((field) => field !== undefined).join(" ")
   })
 }

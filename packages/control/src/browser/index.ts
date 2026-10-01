@@ -3,6 +3,8 @@ export {
   PageObservationNodeSchema,
   PageObservationSchema,
   pageNodeLines,
+  pageOutlineLine,
+  pageOutlineLines,
   selectPageNodes,
   type PageNodeSelection,
   type PageNodeSelector,
