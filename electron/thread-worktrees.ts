@@ -663,7 +663,8 @@ export class ThreadWorktreeService {
     if (existed && !(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"])))
       await git(receipt.path, ["checkout", "-q", receipt.branch])
     const recipe = await this.setup?.recipe(receipt.path).catch(() => undefined)
-    const copied = await carryFiles(receipt.repoRoot, receipt.path, recipe?.carry ?? [])
+    const granted = await this.setup?.grantedSecrets?.(receipt.path, recipe).catch(() => []) ?? []
+    const copied = await carryFiles(receipt.repoRoot, receipt.path, [...(recipe?.carry ?? []), ...granted])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true
     await this.save(ready)

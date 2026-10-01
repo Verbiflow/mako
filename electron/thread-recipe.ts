@@ -80,8 +80,14 @@ export const RecipeSchema = z.object({
   }).strict().default({}),
   /** Install in a fresh copy, and catch up after the branch moves: each step only when its inputs changed. */
   prepare: z.array(prepareSchema).max(10).default([]),
-  /** Files Git ignores that a new checkout gets from the main checkout as they are, such as `.env` files. */
+  /** Files Git ignores that a new checkout gets from the main checkout as they are, such as a local settings file. Never credentials. */
   carry: z.array(checkoutPattern).max(20).optional(),
+  /**
+   * Files Git ignores that hold credentials, such as `.env` files. A new
+   * checkout gets them from the main checkout only once the person has
+   * allowed it in Mako; nobody reads them.
+   */
+  secrets: z.array(checkoutPattern).max(20).optional(),
   /**
    * One copy on this Mac at a time: for an app with a fixed port, one local
    * database or one Docker stack that copies can't split. A start is refused

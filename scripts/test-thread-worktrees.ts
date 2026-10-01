@@ -11,6 +11,7 @@ import { ThreadStore } from "../electron/thread-store.js"
 import { worktreeSlug } from "../electron/contracts/thread-worktrees.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 import { carryOutputs, carryReport, type CheckoutSetup, outputNames } from "../electron/worktree-carry.js"
+import { holdsCredentials } from "../electron/recipe-secrets.js"
 
 /**
  * A Thread's worktree against a real repository: where it goes, what the
@@ -55,10 +56,12 @@ const busy = new Map<string, string[]>()
 const working = new Map<string, string[]>()
 const threads = new ThreadStore(join(root, "threads.sqlite"))
 const INSTALL = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"] }
-let recipe: Recipe | undefined = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
+let recipe: Recipe | undefined = RecipeSchema.parse({ secrets: [".env", ".env.*"], prepare: [INSTALL] })
+let secretsAllowed = true
 const records = new Map<string, Prepared>()
 const setup: CheckoutSetup = {
   recipe: async () => recipe,
+  grantedSecrets: async (_checkout, wanted) => secretsAllowed ? wanted?.secrets ?? [] : [],
   prepared: async (checkout) => records.get(checkout) ?? { done: {} },
   savePrepared: async (checkout, prepared) => {
     records.set(checkout, prepared)
@@ -461,7 +464,7 @@ for (const venvFolder of [".env.venv", ".venv"]) {
   writeFileSync(join(shop, venvFolder, "pyvenv.cfg"), "home = /usr/bin\n")
   writeFileSync(join(shop, venvFolder, "bin", "python"), "#!/bin/sh\n")
 }
-recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL, { command: "uv sync", inputs: ["uv.lock"], outputs: [".venv"] }] })
+recipe = RecipeSchema.parse({ secrets: [".env", ".env.*"], prepare: [INSTALL, { command: "uv sync", inputs: ["uv.lock"], outputs: [".venv"] }] })
 const venvId = randomUUID()
 const venv = await worktrees.prepare(venvId, shop, "Virtualenv left behind")
 assert.equal(existsSync(join(venv.path, ".env")), true)
@@ -472,11 +475,25 @@ assert.ok(venvOutputs?.skipped.includes(".venv is a Python virtual environment, 
 await assert.rejects(carryReport(recipe, shop), /^Error: Not saved: \.env\.venv is a Python virtual environment, which names its own folder, so a copy would run the main checkout's packages/)
 assert.deepEqual(readdirSync(venv.path).filter((name) => name.includes("mako-")), [], "nothing half-made is left in the checkout")
 for (const venvFolder of [".env.venv", ".venv"]) rmSync(join(shop, venvFolder), { recursive: true })
-assert.deepEqual(await carryReport(recipe, shop), [
-  "A new checkout gets these from the main checkout before its agent starts: .env, .env.local.",
+assert.deepEqual(await carryReport(recipe, shop, [".env", ".env.*"]), [
+  "The user allows these credentials files, so a new checkout gets them from the main checkout before its agent starts: .env, .env.local.",
   "npm install: node_modules, web/node_modules are cloned into a new checkout when package-lock.json is the same there.",
   "uv sync: nothing Git ignores in the main checkout matches .venv yet; once the step has run there, new checkouts get them.",
 ])
+
+// Credentials: carry refuses a file named like one, and secrets reach a new checkout only once the person allows them.
+await assert.rejects(carryReport(RecipeSchema.parse({ carry: [".env.*"] }), shop), /^Error: Not saved: \.env\.\*, \.env\.local hold credentials by their names, so they go under "secrets", not "carry"/)
+await assert.rejects(carryReport(RecipeSchema.parse({ carry: ["certs/dev.pem"] }), shop), /dev\.pem holds credentials by its name/)
+assert.deepEqual(await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop), ["A new checkout gets these from the main checkout before its agent starts: dist/app.js."], "a file that isn't named like credentials carries as before")
+const [waitingLine] = await carryReport(RecipeSchema.parse({ secrets: [".env", ".env.*"] }), shop, [".env"])
+assert.match(waitingLine!, /^These hold credentials: \.env, \.env\.local\. A new checkout gets them only once the user allows it in Mako .* Never ask the user to paste a value\.$/, "allowing some patterns isn't allowing the list")
+for (const [name, held] of [[".env", true], [".env.production", true], ["web/.env.local", true], [".env.example", false], [".env.sample", false], [".npmrc", true], ["deploy/key.pem", true], ["client_secret.json", true], ["gcloud-credentials.json", true], ["config.json", false], ["README.md", false]] as const)
+  assert.equal(holdsCredentials(name), held, name)
+secretsAllowed = false
+const notAllowed = await worktrees.prepare(randomUUID(), shop, "Before allowing")
+assert.equal(existsSync(join(notAllowed.path, ".env")), false, "secrets stay behind until the person allows them")
+assert.equal(existsSync(join(notAllowed.path, ".env.local")), false)
+secretsAllowed = true
 assert.deepEqual(outputNames(RecipeSchema.parse({ prepare: [{ command: "make", inputs: ["Makefile"], outputs: ["**/node_modules", "target", "dist/*", "build/*.o"] }] })), ["node_modules", "target"], "a wildcard name would leave the whole checkout out of its size")
 
 // A path inside an ignored folder is taken as it is; the rest of the folder stays.
@@ -493,7 +510,7 @@ const bare = await worktrees.prepare(bareId, shop, "No recipe")
 assert.equal(bare.copied, 0)
 assert.deepEqual(await worktrees.outputs(bareId), { carried: [], skipped: [] })
 for (const entry of [".env", ".env.local", "node_modules", "dist"]) assert.equal(existsSync(join(bare.path, entry)), false, `${entry} stays behind`)
-recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
+recipe = RecipeSchema.parse({ secrets: [".env", ".env.*"], prepare: [INSTALL] })
 
 // Output clones are staged beside the checkout, where Git can't see them, and ones a stopped host left go.
 const staging = join(venv.path, "..", ".carrying")
@@ -532,4 +549,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials refused in carry and copied from secrets only once allowed, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, refusals")

@@ -76,6 +76,8 @@ export type ThreadAppView =
        * Nobody hears it until they ask to run this one.
        */
       elsewhere?: string
+      /** The recipe names credentials files the person hasn't allowed new Threads to have yet. */
+      credentialsWaiting?: boolean
     }
 
 /** A checkout's app as the sidebar marks it. A stopped app has no mark. */

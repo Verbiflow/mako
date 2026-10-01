@@ -15,6 +15,7 @@ import { toast } from "sonner"
 import { setPref } from "@/state/prefs"
 import { threadsStore } from "@/state/thread-store"
 import type { SetupProgress } from "../../electron/contracts/thread-app"
+import type { ProjectAppSetup } from "../../electron/contracts/project-app"
 import { RAIL_MARKS } from "./mock-rail-worktrees"
 import {
   installThreadAppDriver,
@@ -192,6 +193,71 @@ export function installMockThreadApp(): void {
     timers.clear()
   }
 
+  // Settings › Apps: mako's credentials wait for the person; api's were allowed; site isn't set up.
+  const allowed = new Map<string, number | undefined>([["/Users/you/api", Date.now() - 26 * 60 * 60_000]])
+  const projectOf = (folder: string) => (folder.startsWith(`${CWD}/`) || folder.includes("/.mako/worktrees/mako") ? CWD : folder.includes("/.mako/worktrees/") ? "/Users/you/api" : folder)
+  const mockSetup = (folder: string): ProjectAppSetup => {
+    const root = projectOf(folder)
+    const project = root.split("/").at(-1) ?? root
+    const view = threadAppStore.get().byCwd[CWD]
+    if (root === CWD && (view?.kind === "none" || view?.kind === "setting-up")) return { project, root, recipe: { kind: "none" } }
+    if (root === CWD && view?.kind === "invalid") return { project, root, recipe: { kind: "invalid", message: view.message, file: `/Users/you/.mako/recipes/mako-3f9a1c2e.json` } }
+    const secrets = (patterns: string[], files: string[]) => {
+      const at = allowed.get(root)
+      return at === undefined ? { patterns, files, allowed: false } : { patterns, files, allowed: true, allowedAt: at }
+    }
+    if (root === CWD)
+      return {
+        project,
+        root,
+        recipe: {
+          kind: "ready",
+          source: "mako",
+          file: "/Users/you/.mako/recipes/mako-3f9a1c2e.json",
+          savedAt: minutes(60 * 50),
+          earlier: 3,
+          recipe: {
+            values: { PORT: "{port}", MAKO_HOME: "{data}/home", MAKO_DEV_URL: "{url}" },
+            processes: [{ name: "web", command: "npm run web", port: "{port}" }],
+            checks: { quick: "npm run typecheck && npm run lint", full: "npm run test:dev-live" },
+            prepare: [{ command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"] }],
+            carry: ["config/dev.local.json"],
+            oneAtATime: false,
+          },
+        },
+        secrets: secrets([".env.local"], [".env.local"]),
+      }
+    if (root === "/Users/you/api")
+      return {
+        project,
+        root,
+        recipe: {
+          kind: "ready",
+          source: "committed",
+          file: "/Users/you/api/.mako/environment.json",
+          savedAt: minutes(60 * 24 * 9),
+          earlier: 0,
+          recipe: {
+            values: { PORT: "{port}", DB_NAME: "api_{thread}", DATABASE_URL: "postgres://localhost:5432/api_{thread}", TEMPORAL_NAMESPACE: "api-{thread}" },
+            processes: [
+              { name: "api", command: "uv run uvicorn app.main:app --port $PORT", port: "{port}" },
+              { name: "worker", command: "uv run python -m app.worker" },
+              { name: "temporal", command: "temporal server start-dev --ui-port 8233", port: "7233" },
+            ],
+            checks: { quick: "uv run ruff check && uv run pytest -q tests/unit" },
+            prepare: [
+              { command: "uv sync", inputs: ["uv.lock"], outputs: [] },
+              { command: "uv run python -m app.db ensure", inputs: ["migrations"], outputs: [] },
+            ],
+            carry: [],
+            oneAtATime: true,
+          },
+        },
+        secrets: secrets([".env", "server/.env"], [".env", "server/.env"]),
+      }
+    return { project, root, recipe: { kind: "none" } }
+  }
+
   const current = (): Ready => {
     const view = threadAppStore.get().byCwd[CWD]
     return view?.kind === "ready" ? view : ready("stopped")
@@ -258,6 +324,12 @@ export function installMockThreadApp(): void {
     takeTurn: () => {
       put({ elsewhere: undefined })
       start()
+    },
+    setup: async (root) => mockSetup(root),
+    allowSecrets: async (root, allow) => {
+      allowed.set(projectOf(root), allow ? Date.now() : undefined)
+      if (projectOf(root) === CWD) put({ credentialsWaiting: allow ? undefined : true })
+      return mockSetup(root)
     },
     readOutput: async (_cwd, key) => outputs.get(key) ?? "",
     subscribeOutput: (_cwd, key, listener) => {
@@ -395,6 +467,12 @@ export function installMockThreadApp(): void {
   }
 
   function ready(phase: Ready["phase"]): Ready {
+    const view = readyView(phase)
+    if (allowed.get(CWD) === undefined) view.credentialsWaiting = true
+    return view
+  }
+
+  function readyView(phase: Ready["phase"]): Ready {
     return {
       kind: "ready",
       project: "mako",

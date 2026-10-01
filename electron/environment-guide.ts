@@ -41,6 +41,7 @@ Search the code. Don't guess.
 - Fixed places for data: app data folders, profiles, SQLite files, ~/Library/Application Support/<app>, ~/.config/<app>, caches, sockets, lock and pid files, single-instance locks.
 - Docker Compose: published ports ("5432:5432") and container_name collide. Compose names everything else after its project, which defaults to the folder's name, so Threads sharing a folder share one stack.
 - Outside services: databases, queues, email, payments, OAuth, production APIs. For each, how does a developer's copy reach it today?
+- Credentials: which files Git ignores hold them (.env files, key files, a service's own env file), found by name and from the code, an .env.example or the README. Never open one to look. And whether the project has a way to run without them, such as a local or mock mode.
 
 ## 3. Fix each collision on the lowest rung
 
@@ -64,14 +65,15 @@ Pass it to recipe_save as the recipe. Mako checks it against this Thread's ports
   },
   "checks": { "quick": "npm run typecheck && npm test", "full": "npm run e2e" },
   "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"], "outputs": ["**/node_modules"] }],
-  "carry": [".env", "**/.env.local"]
+  "carry": ["config/dev.local.json"],
+  "secrets": [".env.local", "server/.env"]
 }
 \`\`\`
 
 The fields:
 
 - values: names the app reads. Mako sets them in every agent's shell and in every process.
-  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}. {thread} names this copy of the app, for a profile or database name; Threads that share one folder share one copy, so they get the same values.
+  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}. {thread} names this copy of the app, for a profile, database, branch or Compose project name: lowercase letters, digits and hyphens, at most 36 characters, so quote it where a hyphen needs quoting. Threads that share one folder share one copy, so they get the same values.
   - PATH, HOME, SHELL, USER, TMPDIR and PWD can't be set here, because the agent's own shell needs them.
   - MAKO_THREAD_* and MAKO_CONTROL_* are Mako's own. The project's own MAKO_ names are fine.
 - processes: what runs the app, as the project's own commands.
@@ -84,9 +86,10 @@ The fields:
   - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch. Never a clean reinstall (npm ci, or deleting what it installs first): it throws away what a new checkout was given.
   - inputs: the files the step reads, usually the lockfiles. A folder counts only the files Git tracks or would track there.
   - outputs: what the step writes, as paths or patterns (* stays in one folder, ** crosses folders), such as **/node_modules. A new checkout gets them cloned from the main checkout when its inputs are the same there, which costs no disk and takes a second or two, so its first install only catches up. List only what still works in another folder. Never a Python virtual environment (.venv): it names its own folder, so a copy quietly runs the main checkout's code, and Mako refuses it; uv sync makes one from its cache in well under a second anyway. A build cache that checks itself works: with Rust's target/ cloned in, Cargo keeps the dependencies and rebuilds only the project's own crates.
-- carry: files Git ignores that a new checkout gets from the main checkout as they are, before its agent starts, such as .env files. Paths or patterns. Copy them; never read their values.
+- carry: files Git ignores that a new checkout gets from the main checkout as they are, before its agent starts, such as a local settings file. Paths or patterns. Never credentials: recipe_save refuses a file that holds them by its name, such as .env, and says to list it under secrets.
+- secrets: files Git ignores that hold credentials, such as .env.local or server/.env. A new checkout gets them from the main checkout only once the user allows it in Mako, where they see the list; until then, Threads outside the main checkout start without them. Nobody reads them, you included.
 - oneAtATime: true for an app whose fixed port, local database or Docker stack copies can't split (rung 4 above).
-- Nothing else comes from the main checkout: without carry and outputs, a new checkout has only what Git checks out.
+- Nothing else comes from the main checkout: without carry, secrets and outputs, a new checkout has only what Git checks out.
 
 Keep it small, and name the project's own scripts. Add a script to the project only when none exists. Nothing Mako-specific goes inside a command, so every command still works without Mako.
 
@@ -113,11 +116,29 @@ Give each service its mode in one plain sentence: its own copy per Thread, share
 - When a service is shared, write the one rule agents follow, such as "only touch rows you created".
 - Ask the user only when your choice changes where real data goes, for example agents writing to a production database today.
 
+### A database of its own per Thread
+
+When copies would change each other's data, give each Thread its own database with one of these, whichever fits how the project already runs its database. Mako runs no database server; the project's own does the work.
+
+1. The project's own local server, a database per Thread. Name it for the Thread in values, such as DATABASE_URL set to postgres://localhost:5432/app_{thread} (and DB_NAME to app_{thread} if the project's scripts want the name), and make it with the project's own setup or migration script, run as a prepare step whose inputs are the migrations. Copying a prepared database is fastest: Postgres's createdb -T app_template makes one in milliseconds, though nothing may be connected to the template while it's copied. Elsewhere, create it and run the migrations.
+2. A database in Docker Compose: COMPOSE_PROJECT_NAME set to {thread} gives each Thread its own containers and volume, with the published port on a Thread port (rung 1 above). A container_name in the compose file defeats this, so remove it or take turns.
+3. A hosted database that branches, such as Neon, Supabase or PlanetScale: a branch named for the Thread, made by the provider's own CLI in a prepare step, with DATABASE_URL pointing at it. Neon makes a branch in about a second. Ask the user first: it needs the CLI signed in and may cost money.
+
+Several services can share one server this way. A queue or workflow server (Temporal, Redis) needs a namespace, prefix or database number per Thread too, or one copy's workers take another's work.
+
+### Credentials
+
+Every project that reads credentials gets the same treatment:
+
+1. List them under secrets, by file, never in carry and never by value.
+2. If the project can also run without them (a local, isolated or mock mode), say so and ask the user which every Thread should run: with the credentials copied in, against what they reach, or without them.
+3. Tell the user they allow the files in Mako, under Settings, then Apps. Never ask them to paste a value, and never copy a file yourself.
+
 ## 7. Stop and ask
 
 Ask before any of these:
 
-- A secret: never read .env values; name the variable you need, and the user supplies it.
+- A secret: never read .env values or any file under secrets. Name the file or variable the app needs; the user allows the file in Mako or supplies the value.
 - A paid service.
 - A change bigger than a small one.
 - sudo, or installing anything globally.
@@ -129,7 +150,8 @@ Never write to production data, delete data, or stop a process you didn't start.
 1. The recipe needs no commit: it's saved in Mako. Commit any small change to the project on this Thread's branch.
 2. Tell the user in full, plain sentences, not fragments, someone who hasn't read the code:
    - what every Thread now gets;
-   - what stays shared, and the rule for it;
+   - what stays shared, and the rule for it; each database's pattern;
+   - the credentials files, what the app needs them for, and that they allow them in Settings, then Apps;
    - each change to the project, which rung it used, and what it buys; fixes to things that were already broken, separately;
    - the proof: the processes that ran, their ports, and the check results.
 3. If you changed the project, say that other branches run the recipe without that change until it's merged, and what that means for them, such as two copies still sharing one port. Offer to merge or open a pull request; the user decides.

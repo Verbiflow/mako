@@ -6,6 +6,7 @@ import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
 import type { AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
+import type { ProjectAppSetup } from "../../electron/contracts/project-app"
 
 /**
  * A folder's app, as the strip and the terminal dock show it. Keyed by the
@@ -40,6 +41,10 @@ export interface ThreadAppDriver {
   watch?(cwd: string): () => void
   /** Keep every checkout's mark current while the sidebar shows them. */
   watchMarks?(): () => void
+  /** A project's recipe written out, with its credentials files, for Settings. */
+  setup?(root: string): Promise<ProjectAppSetup>
+  /** The person's answer on those files: new Threads get all of them, or none. */
+  allowSecrets?(root: string, allow: boolean): Promise<ProjectAppSetup>
 }
 
 interface ThreadAppState {

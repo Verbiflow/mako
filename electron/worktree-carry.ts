@@ -6,6 +6,7 @@ import { basename, dirname, join, matchesGlob } from "node:path"
 import { promisify } from "node:util"
 import { belowAgents } from "./background-priority.js"
 import type { Prepared } from "./thread-processes.js"
+import { holdsCredentials } from "./recipe-secrets.js"
 import { inputsDigest, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { git } from "./worktree-git.js"
 
@@ -36,6 +37,8 @@ const CLONE_TREES = `function run(argv) {
 export interface CheckoutSetup {
   /** The project's recipe, saved in Mako or committed, for what a new checkout takes from the main one. */
   recipe(checkout: string): Promise<Recipe | undefined>
+  /** The recipe's credentials files the person allows new checkouts to have. */
+  grantedSecrets?(checkout: string, recipe: Recipe | undefined): Promise<string[]>
   prepared(checkout: string): Promise<Prepared>
   savePrepared(checkout: string, prepared: Prepared): Promise<void>
 }
@@ -221,11 +224,14 @@ export async function carryOutputs(repoRoot: string, checkout: string, steps: re
 }
 
 /**
- * What a recipe's `carry` and `outputs` find in the main checkout, one
- * sentence each, for the agent saving it. A Python virtual environment in
- * either is refused, since a copy of one quietly runs the main checkout's.
+ * What a recipe's `carry`, `secrets` and `outputs` find in the main
+ * checkout, one sentence each, for the agent saving it. A Python virtual
+ * environment in carry or outputs is refused, since a copy of one quietly
+ * runs the main checkout's; so is a credentials file in carry, which
+ * belongs under `secrets` for the person to allow. `granted` is what the
+ * person allows of the secrets now.
  */
-export async function carryReport(recipe: Recipe, repoRoot: string): Promise<string[]> {
+export async function carryReport(recipe: Recipe, repoRoot: string, granted: readonly string[] = []): Promise<string[]> {
   const listed = (entries: string[]) => entries.length > 6 ? `${entries.slice(0, 6).join(", ")} and ${entries.length - 6} more` : entries.join(", ")
   const refuse = (entries: string[]) => {
     const unsafe = entries.filter((entry) => virtualEnvironment(join(repoRoot, entry)))
@@ -235,10 +241,24 @@ export async function carryReport(recipe: Recipe, repoRoot: string): Promise<str
   const lines: string[] = []
   if (recipe.carry?.length) {
     const entries = await matchedEntries(repoRoot, recipe.carry)
+    const credentials = [...new Set([...recipe.carry, ...entries].filter(holdsCredentials))]
+    if (credentials.length)
+      throw new Error(`Not saved: ${listed(credentials)} ${credentials.length === 1 ? "holds credentials by its name, so it goes" : "hold credentials by their names, so they go"} under "secrets", not "carry". The user allows secrets in Mako, and new checkouts get them only then; nobody reads them.`)
     refuse(entries)
     lines.push(entries.length
       ? `A new checkout gets these from the main checkout before its agent starts: ${listed(entries)}.`
       : `carry: nothing Git ignores in the main checkout (${repoRoot}) matches ${recipe.carry.join(", ")} yet; files Git tracks come with every checkout anyway.`)
+  }
+  if (recipe.secrets?.length) {
+    const entries = await matchedEntries(repoRoot, recipe.secrets)
+    refuse(entries)
+    const waiting = recipe.secrets.filter((pattern) => !granted.includes(pattern))
+    if (!entries.length)
+      lines.push(`secrets: nothing Git ignores in the main checkout (${repoRoot}) matches ${recipe.secrets.join(", ")} yet.`)
+    else if (!waiting.length)
+      lines.push(`The user allows these credentials files, so a new checkout gets them from the main checkout before its agent starts: ${listed(entries)}.`)
+    else
+      lines.push(`These hold credentials: ${listed(entries)}. A new checkout gets them only once the user allows it in Mako (Settings, then Apps, then this project); until then, Threads other than the main checkout start without them. Tell the user, in a sentence, which files they are, what the app needs them for, and that they can allow them there. Never ask the user to paste a value.`)
   }
   for (const step of recipe.prepare) {
     if (!step.outputs?.length) continue

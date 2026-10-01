@@ -8,6 +8,7 @@ import type {
 } from "./thread-lifecycle.js"
 import type { ThreadGroup } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
+import type { ProjectAppSetup } from "./project-app.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
 import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
@@ -195,6 +196,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadAppOutput: (cwd: string, key: AppOutputKey, cursor?: AppOutputCursor) =>
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
+    projectAppSetup: (cwd: string) => invokeTrustedHost<ProjectAppSetup>("mako:project-app-setup", cwd),
+    allowProjectSecrets: (cwd: string, allow: boolean) => invokeTrustedHost<ProjectAppSetup>("mako:project-app-secrets", cwd, allow),
     chatFolders: (paths: string[]) => invokeTrustedHost<ChatFolders>("mako:chat-folders", paths),
     removeWorktree: (path: string) => invokeTrustedHost<ThreadWorktrees>("mako:worktree-remove", path),
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),

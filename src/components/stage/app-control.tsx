@@ -3,11 +3,12 @@ import { toast } from "sonner"
 import { CheckIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
 import type { SetupStep } from "../../../electron/contracts/thread-app"
 import { environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
-import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import { openAppSetup } from "@/state/app-setup"
 import { desktop } from "@/state/desktop"
 import {
   setUpInThisThread,
@@ -89,43 +90,47 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
   useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
   if (!cwd || !view || hidden) return null
   const state = view.kind === "ready" ? view.phase : view.kind
+  const project = view.kind === "ready" ? cwd : view.root
   if (view.kind === "ready" && view.phase === "stopped" && view.elsewhere) {
     return (
       <Menu modal={false}>
-        <MenuTrigger asChild>
-          <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5", triggerTone(view))}>
-            <TriggerLabel view={view} />
-          </button>
-        </MenuTrigger>
+        <WithSetup project={project}>
+          <MenuTrigger asChild>
+            <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5", triggerTone(view))}>
+              <TriggerLabel view={view} />
+            </button>
+          </MenuTrigger>
+        </WithSetup>
         <MenuContent align="end" className="w-80" onCloseAutoFocus={(event) => event.preventDefault()}>
           <Head title="Run it here instead?">{`Only one copy of ${view.project}'s app runs at a time, and ${view.elsewhere} has it.`}</Head>
           <MenuSeparator />
           <Action data-app-action="take-turn" onSelect={() => threadAppDriver()?.takeTurn(cwd)}>
             Stop it there and run it here
           </Action>
+          <SetupItem project={project} view={view} />
         </MenuContent>
       </Menu>
     )
   }
   if (view.kind === "ready" && view.phase === "stopped") {
+    const run = () => threadAppDriver()?.start(cwd)
     return (
-      <button
-        type="button"
-        data-app-control="stopped"
-        className={cn(trigger, "mr-0.5", triggerTone(view))}
-        onClick={() => threadAppDriver()?.start(cwd)}
-      >
-        <TriggerLabel view={view} />
-      </button>
+      <WithSetup project={project} run={run} credentialsWaiting={view.credentialsWaiting}>
+        <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5", triggerTone(view))} onClick={run}>
+          <TriggerLabel view={view} />
+        </button>
+      </WithSetup>
     )
   }
   return (
     <Menu modal={false}>
-      <MenuTrigger asChild>
-        <button type="button" data-app-control={state} className={cn(trigger, "mr-0.5", triggerTone(view))}>
-          <TriggerLabel view={view} />
-        </button>
-      </MenuTrigger>
+      <WithSetup project={project}>
+        <MenuTrigger asChild>
+          <button type="button" data-app-control={state} className={cn(trigger, "mr-0.5", triggerTone(view))}>
+            <TriggerLabel view={view} />
+          </button>
+        </MenuTrigger>
+      </WithSetup>
       <MenuContent align="end" className="w-80" onCloseAutoFocus={(event) => event.preventDefault()}>
         {view.kind === "none" ? (
           <NoneMenu cwd={cwd} view={view} focused={focused} />
@@ -136,8 +141,53 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
         ) : (
           <ReadyMenu cwd={cwd} view={view} />
         )}
+        {view.kind === "ready" || view.kind === "invalid" ? <SetupItem project={project} view={view} /> : null}
       </MenuContent>
     </Menu>
+  )
+}
+
+/**
+ * Right-click on the control, in any state: the project's app in Settings,
+ * and Run when a click would run it.
+ */
+function WithSetup({ project, run, credentialsWaiting, children }: { project: string; run?: () => void; credentialsWaiting?: boolean; children: ReactNode }) {
+  return (
+    <ContextMenu modal={false}>
+      <ContextMenuTrigger asChild>
+        <span className="contents">{children}</span>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-52">
+        {run ? (
+          <>
+            <MenuItem data-app-action="run" onSelect={run}>Run app</MenuItem>
+            <MenuSeparator />
+          </>
+        ) : null}
+        <SetupRowItem project={project} credentialsWaiting={credentialsWaiting} />
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
+/** The last row of the control's own menu: the project's app in Settings. */
+function SetupItem({ project, view }: { project: string; view: ThreadAppView }) {
+  return (
+    <>
+      <MenuSeparator />
+      <SetupRowItem project={project} credentialsWaiting={view.kind === "ready" && view.credentialsWaiting} />
+    </>
+  )
+}
+
+function SetupRowItem({ project, credentialsWaiting }: { project: string; credentialsWaiting?: boolean }) {
+  return (
+    <MenuItem data-app-action="app-setup" className="group gap-3" onSelect={() => openAppSetup(project)}>
+      <span className="shrink-0">App setup</span>
+      {credentialsWaiting ? (
+        <span className="min-w-0 flex-1 truncate text-right text-label text-caution">Credentials not copied</span>
+      ) : null}
+    </MenuItem>
   )
 }
 

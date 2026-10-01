@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -651,8 +651,8 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.match(await worktreeTools.start(conversation), /web: running/)
   // Saved from a worktree, the recipe reaches the main checkout and every other worktree at once.
   const saving = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, recipesRoot: projectRecipes, settleMs: settle })
-  const savedNote = await saving.save(conversation, RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, carry: [".env"] }))
-  assert.ok(savedNote.includes(`carry: nothing Git ignores in the main checkout (${realpathSync(project)}) matches .env yet; files Git tracks come with every checkout anyway.`), "saving says what carry finds in the main checkout")
+  const savedNote = await saving.save(conversation, RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, carry: ["config.local.json"] }))
+  assert.ok(savedNote.includes(`carry: nothing Git ignores in the main checkout (${realpathSync(project)}) matches config.local.json yet; files Git tracks come with every checkout anyway.`), "saving says what carry finds in the main checkout")
   assert.match(savedNote, /^Saved as this project's recipe in Mako, \S+project-recipes\/\S+\.json\. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that\.\nThis checkout also has/)
   assert.match(savedNote, /also has a committed \.mako\/environment\.json; Mako's saved recipe comes first/)
   assert.match(savedNote, /This Thread's processes are still running as they were started; app_restart runs them with this recipe\./)
@@ -665,6 +665,35 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(savedStatus.recipe.contents.values.SAVED, "yes", "status shows what the recipe says, to repair from")
   assert.match(savedStatus.recipe.ignored, /\.mako\/environment\.json: committed with the project, but the recipe saved in Mako comes first/)
   assert.equal(savedStatus.values.SAVED, "yes")
+  assert.equal(savedStatus.credentials, undefined, "a recipe without secrets says nothing about them")
+
+  // Credentials: never carried; listed under secrets, they reach a checkout only once the person allows them in Settings.
+  appendFileSync(join(project, ".git", "info", "exclude"), ".env\n")
+  writeFileSync(join(project, ".env"), "TOKEN=main\n")
+  await assert.rejects(saving.save(conversation, RecipeSchema.parse({ ...recipe, carry: [".env"] })), /Not saved: \.env holds credentials by its name, so it goes under "secrets", not "carry"/)
+  const withSecrets = RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, secrets: [".env"] })
+  assert.match(await saving.save(conversation, withSecrets), /These hold credentials: \.env\. A new checkout gets them only once the user allows it in Mako/)
+  const settings = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, folder: deskFolder, processes, recipesRoot: projectRecipes, settleMs: settle }).desk
+  const notYet = await settings.setup(prepared.cwd)
+  assert.deepEqual(notYet.secrets, { patterns: [".env"], files: [".env"], allowed: false }, "Settings lists the files by name, found in the main checkout")
+  assert.deepEqual(notYet.recipe.kind === "ready" && [notYet.recipe.source, notYet.recipe.file, notYet.recipe.earlier > 0], ["mako", sharedFile, true])
+  assert.deepEqual(notYet.recipe.kind === "ready" && notYet.recipe.recipe.processes.map((entry) => [entry.name, entry.command, entry.port]), [["web", "node server.mjs", "{port}"], ["api", "node server.mjs", "{port+1}"]], "the recipe as written, placeholders and all")
+  assert.equal((await settings.view(prepared.cwd)).kind === "ready" && (await settings.view(prepared.cwd)).credentialsWaiting, true, "the strip says credentials are waiting")
+  assert.match(JSON.parse(await saving.status(conversation)).credentials, /hasn't allowed new checkouts to have them yet/)
+  await saving.stop(conversation)
+  assert.match(await saving.start(conversation), /web: running/)
+  assert.equal(existsSync(join(prepared.path, ".env")), false, "a start before the person allows them goes without")
+  const allowed = await settings.allowSecrets(prepared.cwd, true)
+  assert.deepEqual(allowed.secrets && [allowed.secrets.allowed, allowed.secrets.allowedAt !== undefined], [true, true])
+  assert.equal((await settings.view(prepared.cwd)).kind === "ready" && (await settings.view(prepared.cwd)).credentialsWaiting, undefined)
+  assert.match(JSON.parse(await saving.status(conversation)).credentials, /^The user allows \.env, so new checkouts get them/)
+  await saving.stop(conversation)
+  assert.match(await saving.start(conversation), /web: running/)
+  assert.equal(readFileSync(join(prepared.path, ".env"), "utf8"), "TOKEN=main\n", "a checkout made before they were allowed gets them at its next start")
+  assert.equal(git(prepared.path, "status", "--porcelain"), "", "and Git still ignores them there")
+  assert.equal((await settings.allowSecrets(prepared.cwd, false)).secrets?.allowed, false, "the person can take it back")
+  assert.equal(existsSync((await recipePath(projectRecipes, project)).replace(/\.json$/, ".allowed.json")), false)
+  await assert.rejects(settings.allowSecrets(bare, true), /names no credentials files/)
   const running = (await processes.status(AppKeySchema.parse(placed.thread))).map((entry) => entry.pid!)
   await worktrees.remove(prepared.path)
   assert.equal(existsSync(prepared.path), false)
@@ -674,7 +703,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; one copy at a time (a fixed port, a start refused naming whose copy runs, the desk taking a turn); process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, credentials refused in carry and copied from secrets only once allowed in Settings, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; one copy at a time (a fixed port, a start refused naming whose copy runs, the desk taking a turn); process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })

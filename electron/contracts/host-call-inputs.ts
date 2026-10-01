@@ -558,6 +558,8 @@ export const hostCallInputs = {
   ]),
   "mako:plan-builds": z.tuple([]),
   "mako:plugins-dir": z.tuple([]),
+  "mako:project-app-secrets": z.tuple([z.string(), z.boolean()]),
+  "mako:project-app-setup": z.tuple([z.string()]),
   "mako:prompt": z.tuple([
     z.string(),
     z.union([z.literal("steer"), z.literal("followUp")]).optional(),

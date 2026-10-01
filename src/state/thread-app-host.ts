@@ -151,6 +151,12 @@ export function installHostThreadApp(): void {
         threadAppStore.set({ followed: [...watched.keys()] })
       }
     },
+    setup: (root) => mako.projectAppSetup(root),
+    allowSecrets: async (root, allow) => {
+      const setup = await mako.allowProjectSecrets(root, allow)
+      for (const cwd of watched.keys()) schedule(cwd, 0)
+      return setup
+    },
     watchMarks: () => {
       if (++markWatchers === 1) void refreshMarks()
       let released = false

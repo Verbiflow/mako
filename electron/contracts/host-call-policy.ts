@@ -40,6 +40,7 @@ const reads = [
   "mako:thread-groups",
   "mako:thread-purposes",
   "mako:thread-app-marks",
+  "mako:project-app-setup",
   "mako:worktrees",
   "mako:worktree-ahead",
   "mako:worktree-inventory",
@@ -126,6 +127,8 @@ const replays = [
   "mako:thread-create-session",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
+  /** `DeskApp.allowSecrets`: records the same answer twice as once. */
+  "mako:project-app-secrets",
   /** `WorkspaceMoves.answer`: the request id; an answered request ignores a repeat. */
   "mako:workspace-move-answer",
   /** Forgetting a project that isn't remembered is a no-op. */

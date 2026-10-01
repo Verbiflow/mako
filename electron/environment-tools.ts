@@ -1,3 +1,4 @@
+import { readdir, stat } from "node:fs/promises"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { childProcessEnv } from "./accounts-common.js"
@@ -5,9 +6,11 @@ import { applyControlEnvironment } from "./control-launch.js"
 import type { AppKey, ThreadEnvironment } from "./contracts/thread-environments.js"
 import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "./contracts/thread-environments.js"
 import type { AppActionOutcome, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
+import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView } from "./contracts/project-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
-import { carryReport } from "./worktree-carry.js"
+import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
+import { carryFiles, carryReport, matchedEntries } from "./worktree-carry.js"
 import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
   checkoutOf,
@@ -17,6 +20,7 @@ import {
   processValues,
   projectRoot,
   readRecipe,
+  recipeHistory,
   recipeValues,
   RECIPE_PATH,
   recipeIssues,
@@ -89,6 +93,10 @@ export interface DeskApp {
   output(cwd: string, key: AppOutputKey, cursor?: AppOutputCursor): Promise<AppOutputChunk>
   /** Every checkout on this Mac whose app isn't stopped, for the sidebar. */
   marks(): Promise<AppMark[]>
+  /** The project's recipe written out, with its credentials files, for Settings. */
+  setup(cwd: string): Promise<ProjectAppSetup>
+  /** The person's answer on the recipe's credentials files: new checkouts get all of them, or none. */
+  allowSecrets(cwd: string, allow: boolean): Promise<ProjectAppSetup>
 }
 
 interface Context {
@@ -256,6 +264,14 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     await deps.processes.settle(app, [PREPARE_KEY], settleMs)
     return settled()
   }
+  /** The credentials files the person allowed, into a checkout made before they did; the main checkout has its own. */
+  const bringSecrets = async ({ checkout, recipe }: Context & { recipe: Recipe }) => {
+    if (!deps.recipesRoot || !recipe.secrets?.length) return
+    const root = await projectRoot(checkout)
+    if (root === checkout) return
+    const granted = grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
+    if (granted.length) await carryFiles(root, checkout, granted)
+  }
   /** Under memory pressure, stops other Threads' quiet apps first; the start waits only while the machine stays critical. */
   const makeRoom = async (app: AppKey): Promise<{ refused?: string; notes: string[] }> => {
     const notes: string[] = []
@@ -312,6 +328,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       }
     }
     if (idle.length) {
+      await bringSecrets(current)
       const preparing = await prepare(current)
       if (preparing) return { kind: "blocked", ...preparing }
       const room = anyway ? { notes: [] } : await makeRoom(app)
@@ -388,6 +405,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       }
     }
     else {
+      await bringSecrets(current)
       const preparing = await prepare(current)
       if (preparing) return preparing.message
     }
@@ -481,6 +499,9 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     })
     const view: ThreadAppView = { kind: "ready", project: found.project, phase: "stopped", processes, checks }
     if (found.environment) view.address = { host: found.environment.host, port: found.environment.port }
+    if (deps.recipesRoot && read.recipe.secrets?.length
+      && grantedSecrets(read.recipe, await readAllowedSecrets(deps.recipesRoot, found.checkout)).length < read.recipe.secrets.length)
+      view.credentialsWaiting = true
     const up = processes.filter((entry) => entry.state === "running" || entry.state === "starting")
     const started = runs.filter((entry) => entry.kind === "process" && entry.startedAt !== undefined && (entry.state.kind === "running" || entry.state.kind === "starting"))
     if (started.length) view.startedAt = Math.min(...started.map((entry) => entry.startedAt!))
@@ -522,8 +543,32 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (queued) report.waitingInLine = `since ${minutes((deps.now ?? Date.now)() - queued.since)} ago; it starts by itself once there's room`
     return report
   }
+  const setupView = async (cwd: string): Promise<{ view: ProjectAppSetup; read: Read; checkout: string }> => {
+    if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
+    const found = await deps.folder(cwd, false)
+    const read = await readRecipe(found.checkout, found.environment ?? placeholder(found.app), deps.recipesRoot)
+    const view: ProjectAppSetup = { project: found.project, root: found.root, recipe: await recipeState(read) }
+    const patterns = read.kind === "ready" ? read.recipe.secrets ?? [] : []
+    if (read.kind === "ready" && patterns.length) {
+      const allowed = deps.recipesRoot ? await readAllowedSecrets(deps.recipesRoot, found.checkout) : undefined
+      const granted = grantedSecrets(read.recipe, allowed)
+      view.secrets = { patterns, files: await matchedEntries(found.root, patterns).catch(() => []), allowed: granted.length === patterns.length }
+      if (view.secrets.allowed && allowed) view.secrets.allowedAt = allowed.at
+    }
+    return { view, read, checkout: found.checkout }
+  }
   const desk: DeskApp = {
     view: deskView,
+    async setup(cwd) {
+      return (await setupView(cwd)).view
+    },
+    async allowSecrets(cwd, allow) {
+      if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes.")
+      const { read, checkout } = await setupView(cwd)
+      if (read.kind !== "ready" || !read.recipe.secrets?.length) throw new Error("This project's recipe names no credentials files.")
+      await writeAllowedSecrets(deps.recipesRoot, checkout, allow ? read.recipe.secrets : [], (deps.now ?? Date.now)())
+      return (await setupView(cwd)).view
+    },
     async start(cwd) {
       return deskOutcome(await startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd)))
     },
@@ -596,6 +641,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const shellValues = launched?.values ?? {}
       const shellMatches = JSON.stringify(Object.entries(shellValues).sort()) === JSON.stringify(Object.entries(values).sort())
       const processNames = read.kind === "ready" ? Object.keys(read.recipe.processes) : []
+      const secrets = read.kind === "ready" ? read.recipe.secrets ?? [] : []
+      const granted = secrets.length && deps.recipesRoot && read.kind === "ready"
+        ? grantedSecrets(read.recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
+        : []
       const report = {
         thread: {
           app: `http://${environment.host}:${environment.port}`,
@@ -624,6 +673,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
           const status = runs.find((entry) => entry.kind === "check" && entry.name === tier)
           return command || status ? [checkSummary(tier, command, status)] : []
         }),
+        credentials: secrets.length
+          ? granted.length === secrets.length
+            ? `The user allows ${secrets.join(", ")}, so new checkouts get them from the main checkout. Never read them.`
+            : `${secrets.join(", ")} hold credentials, and the user hasn't allowed new checkouts to have them yet (Settings, then Apps, in Mako). A Thread outside the main checkout starts without them; say so if the app fails for want of them. Never copy or read them yourself.`
+          : undefined,
+        planning: "In plan mode your agent app may refuse app_start and app_check. Don't work around that: say what you'd run, and the user can press Run app at the top right of this Thread.",
       }
       return JSON.stringify(report, null, 2)
     },
@@ -652,7 +707,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async save(conversationId, recipe) {
       if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
       const { environment, checkout, read } = await context(conversationId)
-      const carried = await carryReport(recipe, await projectRoot(checkout))
+      const granted = grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
+      const carried = await carryReport(recipe, await projectRoot(checkout), granted)
       const saved = await saveRecipe(deps.recipesRoot, checkout, recipe, environment)
       const after = await readRecipe(checkout, environment, deps.recipesRoot)
       if (after.kind !== "ready") throw new Error(`Saved to ${saved.file}, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
@@ -742,6 +798,37 @@ function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSumm
     summary.problem = read.message
   }
   return summary
+}
+
+/** The recipe in use, written out for a person: where it's kept, when it was saved, and what it runs. */
+async function recipeState(read: Read): Promise<ProjectRecipeState> {
+  if (read.kind === "none") return { kind: "none" }
+  if (read.kind === "invalid") return read.from ? { kind: "invalid", message: read.message, file: read.from } : { kind: "invalid", message: read.message }
+  const { recipe } = read
+  const saved = read.from === read.saved
+  const state: ProjectRecipeState = {
+    kind: "ready",
+    source: saved ? "mako" : "committed",
+    file: read.from,
+    earlier: saved ? (await readdir(recipeHistory(read.from)).catch(() => [])).filter((name) => name.endsWith(".json")).length : 0,
+    recipe: {
+      values: recipe.values,
+      processes: Object.entries(recipe.processes).map(([name, spec]) => {
+        const written: RecipeProcessView = { name, command: spec.command }
+        if (spec.port) written.port = spec.port
+        if (spec.cwd) written.cwd = spec.cwd
+        return written
+      }),
+      checks: recipe.checks,
+      prepare: recipe.prepare.map((step) => ({ command: step.command, inputs: step.inputs, outputs: step.outputs ?? [] })),
+      carry: recipe.carry ?? [],
+      oneAtATime: recipe.oneAtATime ?? false,
+    },
+  }
+  const savedAt = (await stat(read.from).catch(() => undefined))?.mtimeMs
+  if (savedAt !== undefined) state.savedAt = Math.round(savedAt)
+  if (read.ignored) state.ignored = read.ignored
+  return state
 }
 
 function bytes(count: number): string {
@@ -915,7 +1002,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       description:
         "Replace this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run; the version it replaces is kept. Mako keeps it for the project, so every Thread on every branch uses it at once and nothing needs committing. Prove it afterwards with app_restart and app_check.",
       inputSchema: z.object({
-        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and carry and oneAtATime when it needs them."),
+        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and carry, secrets and oneAtATime when it needs them."),
       }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

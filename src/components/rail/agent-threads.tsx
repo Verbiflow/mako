@@ -60,6 +60,7 @@ import {
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { prefsStore, setPref, setProjectHidden, togglePinnedProject, usePrefs } from "@/state/prefs"
+import { openAppSetup } from "@/state/app-setup"
 import { desktop } from "@/state/desktop"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { toast } from "sonner"
@@ -82,6 +83,7 @@ import { archivedLive, archivedThread, useThreadArchives } from "@/state/thread-
 import { FolderActivity, RailSkeleton } from "@/components/rail/rail-activity"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
+  AppWindowIcon,
   CheckIcon,
   ChevronRightIcon,
   ChevronsDownUpIcon,
@@ -967,6 +969,9 @@ function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHid
         {closed ? <ChevronsUpDownIcon className="size-3.5" /> : <ChevronsDownUpIcon className="size-3.5" />}{closed ? "Expand" : "Collapse"}
       </MenuItem>
       <MenuSeparator />
+      <MenuItem data-folder-action="app-setup" onSelect={() => openAppSetup(folder.cwd)}>
+        <AppWindowIcon className="size-3.5" />App setup
+      </MenuItem>
       <MenuItem onSelect={() => { void desktop.openInEditor(folder.cwd, prefsStore.get().externalEditor) }}>
         <CodeIcon className="size-3.5" />Open in editor
       </MenuItem>
