@@ -115,8 +115,9 @@ const server = await createServer({
   root,
   server: {
     host: "127.0.0.1",
-    port: 5173,
-    strictPort: false,
+    // A launcher given PORT answers there or not at all; without one, Vite moves past a taken 5173.
+    port: Number(env.PORT) || 5173,
+    strictPort: Boolean(Number(env.PORT)),
   },
 })
 await server.listen()

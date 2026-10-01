@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createServer } from "vite"
-import { trustedLocalOrigins, webHostProxy } from "../electron/web-dev-proxy.mjs"
+import { isTrustedOrigin, trustedLocalOrigins, webHostProxy } from "../electron/web-dev-proxy.mjs"
 
 // A loopback URL admits every loopback spelling of itself, nothing else.
 assert.deepEqual(
@@ -18,6 +18,12 @@ assert.deepEqual([...trustedLocalOrigins(["http://[::1]:5174/"])].sort(), [
 assert.deepEqual([...trustedLocalOrigins(["http://192.168.1.20:5173/"])], [
   "http://192.168.1.20:5173",
 ])
+// A name under .localhost is the loopback page on the same port, and only that.
+const local = trustedLocalOrigins(["http://127.0.0.1:5173/"])
+assert.equal(isTrustedOrigin(local, "http://fix-login.thread.localhost:5173"), true)
+for (const other of ["http://fix-login.thread.localhost:5174", "https://fix-login.thread.localhost:5173", "http://localhost.example:5173", "http://thread-localhost:5173", "null", undefined])
+  assert.equal(isTrustedOrigin(local, other), false, `${other} is another page`)
+assert.equal(isTrustedOrigin(trustedLocalOrigins(["http://192.168.1.20:5173/"]), "http://fix-login.thread.localhost:5173"), false)
 import { startWebHost } from "../dist-electron/web-host.js"
 
 const directory = await mkdtemp(join(tmpdir(), "mako-web-test-"))
@@ -107,7 +113,14 @@ try {
     body,
   })
   assert.equal(aliased.status, 200)
+  const threadHost = await fetch(origin + "/__mako/rpc", {
+    method: "POST",
+    headers: { ...headers, origin: origin.replace("127.0.0.1", "fix-login.thread.localhost") },
+    body,
+  })
+  assert.equal(threadHost.status, 200, "a Thread's own .localhost name reaches the host")
   assert.deepEqual(calls, [
+    { channel: "mako:thread-page", args: ["/thread", undefined, 100] },
     { channel: "mako:thread-page", args: ["/thread", undefined, 100] },
     { channel: "mako:thread-page", args: ["/thread", undefined, 100] },
   ])

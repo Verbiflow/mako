@@ -22,6 +22,23 @@ export function trustedLocalOrigins(urls) {
   return origins
 }
 
+/**
+ * Whether a page at `origin` is one of the pages `trustedLocalOrigins` names.
+ * A name under `.localhost` is loopback too (RFC 6761), so a tab opened at
+ * `fix-login.thread.localhost:5173` is the page at `localhost:5173`.
+ */
+export function isTrustedOrigin(origins, origin) {
+  if (!origin) return false
+  if (origins.has(origin)) return true
+  let url
+  try {
+    url = new URL(origin)
+  } catch {
+    return false
+  }
+  return url.hostname.endsWith(".localhost") && origins.has(`${url.protocol}//localhost${url.port ? `:${url.port}` : ""}`)
+}
+
 const MAX_CALL_BYTES = 32 * 1024 * 1024
 
 const CallChannelSchema = z.object({ channel: z.string().regex(/^mako:[a-z0-9-]+$/) })
@@ -58,7 +75,7 @@ export function webHostProxy(socket, { refuse } = {}) {
           }
         }
         const trusted =
-          origins.has(origin) &&
+          isTrustedOrigin(origins, origin) &&
           request.headers["sec-fetch-site"] === "same-origin"
         if (
           !trusted ||
