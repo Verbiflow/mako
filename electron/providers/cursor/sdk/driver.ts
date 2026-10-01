@@ -13,6 +13,7 @@ import {
 } from "@mako/sessions"
 import type { SessionModel, SessionSettings, SettingValue } from "@mako/sessions/settings"
 import { messageEvent, TURN_FAILED } from "@mako/sessions/events"
+import { CURSOR_PLAN_OPTION } from "@mako/sessions"
 import { compareNativeCheckpoint, type ProviderBinding, type ResumeVerdict } from "../../../contracts/conversation-control.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
@@ -438,6 +439,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   return {
     provider: "cursor",
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
+    planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation" },
     observesNativeAgents: true,
     compaction: { kind: "unavailable", reason: "Cursor's SDK does not expose manual compaction. Start a new thread and carry over what matters." },
     // Verified 2026-09-27 (SDK 1.0.31): a shell the SDK moved to the

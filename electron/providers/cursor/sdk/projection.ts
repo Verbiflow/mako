@@ -244,7 +244,7 @@ export class CursorSdkProjection {
       kind: "tool",
       id,
       title: toolTitle(name, args),
-      toolKind: name,
+      name,
       status: "running",
     }
     const input = args === undefined ? undefined : clip(JSON.stringify(args, null, 2))
