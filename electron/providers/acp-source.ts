@@ -9,7 +9,8 @@ import type { AcpAccessPolicy } from "../acp-access.js"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contracts/approval-response.js"
 import type { JsonObject } from "../codex-app-json.js"
 import type { NativeNotice } from "../contracts/native-activity.js"
-import type { LiveSessionState } from "../contracts/providers-acp.js"
+import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
+import type { LiveUpdate } from "../contracts/live-content.js"
 
 export type AcpTuning = SessionSettings
 
@@ -35,7 +36,6 @@ export interface AcpLaunch {
   args: string[]
   configureEnvironment(env: NodeJS.ProcessEnv): void
   prepareMcp?(servers: readonly McpServer[], env: NodeJS.ProcessEnv): Promise<() => Promise<void>>
-  permissionTitle?(request: RequestPermissionRequest): string | undefined
   /** Observe native decisions without taking over the provider's permission policy. */
   prepareApprovals?(input: {
     root: string
@@ -80,6 +80,16 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
    * payloads. `undefined` for a method the provider does not own.
    */
   decodeNotification?(method: string, params: JsonObject): AcpNotificationDecoding | undefined
+  /**
+   * How the agent's plan mode hands over its plan: the update that carries
+   * the plan document, and the request whose approval builds it. Opened once
+   * per session, since a provider may number a plan's revisions. Pure.
+   */
+  plans?(): AcpPlanDecoder
+  /** Vendor requests (`_`-prefixed methods) the agent sends and waits on. */
+  requests?: AcpVendorRequests
+  /** A permission request's title when the agent leaves the tool call's title out. */
+  permissionTitle?(request: RequestPermissionRequest): string | undefined
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
   canResume: boolean
   /**
@@ -150,6 +160,55 @@ export interface AcpNotificationDecoding {
   state?: Pick<Partial<LiveSessionState>, "title">
   /** The native event's own id, when the provider gives one; it names the notification's markers. */
   id?: string
+}
+
+/** A plan the user builds by answering a request with `approve`. */
+export interface AcpPlanApproval {
+  plan: string
+  approve: string
+}
+
+/**
+ * One session's plan handover. `update` returns the proposed-plan updates a
+ * session update carries, `[]` for any other; `approval` names the plan a
+ * permission request builds.
+ */
+export interface AcpPlanDecoder {
+  update(update: SessionUpdate, sessionId: string): LiveUpdate[]
+  approval?(request: RequestPermissionRequest): AcpPlanApproval | undefined
+}
+
+/** What the agent is sent when the user picks `optionId`. */
+export interface AcpAnswer {
+  optionId: string
+  result: JsonObject
+}
+
+/** A request put to the user: what the desk shows, and for a vendor request, what each choice sends. */
+export interface AcpAsk {
+  request: Pick<LivePermissionRequest, "title" | "kind" | "options" | "implementsPlan">
+  /** Absent for ACP's own permission request, whose answer is the chosen option. */
+  answers?: AcpAnswer[]
+  /** Sent when the request ends with no choice, as when the session stops. */
+  dismissed?: JsonObject
+}
+
+/**
+ * The vendor requests an agent sends, each read as a question for the user
+ * and the answer each choice sends back. Pure. Mako answers any other
+ * method, or one that does not parse, method-not-found.
+ */
+export interface AcpVendorRequests {
+  methods: ReadonlySet<string>
+  decode(method: string, params: JsonObject): AcpVendorRequest | undefined
+}
+
+export interface AcpVendorRequest {
+  /** The session the request names; one for another session is refused. */
+  sessionId: string
+  /** Transcript content the request carries, such as the plan it asks to approve. */
+  updates: LiveUpdate[]
+  ask: AcpAsk
 }
 
 /** Vendor notifications about turns the agent started itself. */

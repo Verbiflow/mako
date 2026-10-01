@@ -2,6 +2,7 @@ import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderArtifactPreview } from "./artifact-preview.js"
 import type { ProviderConnectionCapability } from "./connection-capability.js"
+import type { ProviderDecoderSource } from "./decoder-source.js"
 import type { ProviderHost } from "./host.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import type { ProviderMcpSource } from "./mcp-source.js"
@@ -36,6 +37,11 @@ export interface HarnessDefinition {
   provider: string
   /** Starts, streams, steers, answers and stops turns. */
   live: ProviderLiveDriver
+  /**
+   * Turns the harness's native messages into Mako's decoded events, outside
+   * the driver, so recorded sessions replay as fixtures.
+   */
+  decoder: ProviderDecoderSource | Absent
   /** Models, modes, settings and sign-in state. */
   profile: ProviderProfileLoader
   accounts: ProviderAccountCapability | Absent
@@ -84,6 +90,7 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
     registry.register(value)
   }
   install(host.liveDrivers, "live", harness.live)
+  install(host.decoders, "decoder", harness.decoder)
   install(host.profiles, "profile", harness.profile)
   install(host.accountCapabilities, "accounts", harness.accounts)
   install(host.acpSources, "acp", harness.acp)
