@@ -2,8 +2,9 @@ import { useEffect } from "react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Avatar } from "@/components/ui/avatar"
 import { IdentityMenu } from "@/components/identity/identity-menu"
+import { confirmStore } from "@/state/confirm"
 import { github, useGitHub } from "@/state/github"
-import { useAccounts } from "@/state/accounts"
+import { accounts } from "@/state/accounts"
 import { UserIcon } from "lucide-react"
 
 /**
@@ -15,9 +16,6 @@ import { UserIcon } from "lucide-react"
 export function IdentityRow() {
   const login = useGitHub((state) => state.status?.login)
   const avatar = useGitHub((state) => state.userAvatar)
-  const activePlan = useAccounts(
-    (state) => state.usage[activeKey(state.accounts)]?.plan
-  )
 
   useEffect(() => {
     void github.ensureStatus()
@@ -25,7 +23,7 @@ export function IdentityRow() {
 
   return (
     <div className="px-2 pb-2 pt-1">
-      <Popover>
+      <Popover onOpenChange={(open) => open && accounts.load()}>
         <PopoverTrigger asChild>
           <button
             type="button"
@@ -41,20 +39,21 @@ export function IdentityRow() {
             <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">
               {login ?? "Connect GitHub"}
             </span>
-            {activePlan ? (
-              <span className="shrink-0 text-label text-faint">{activePlan}</span>
-            ) : null}
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" side="top" sideOffset={6} className="w-auto p-2">
+        <PopoverContent
+          align="start"
+          side="top"
+          sideOffset={6}
+          className="w-auto p-1.5"
+          // A confirmation asked from the menu sits above it; answering one is not leaving the menu.
+          onInteractOutside={(event) => {
+            if (confirmStore.get().request) event.preventDefault()
+          }}
+        >
           <IdentityMenu />
         </PopoverContent>
       </Popover>
     </div>
   )
-}
-
-function activeKey(list: Array<{ harness: string; name: string; active: boolean }>): string {
-  const active = list.find((account) => account.active)
-  return active ? `${active.harness}:${active.name}` : ""
 }
