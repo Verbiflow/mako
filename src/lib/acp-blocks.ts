@@ -1,5 +1,5 @@
 import { eventText } from "@mako/sessions/events"
-import { liveToolName } from "@/lib/tools"
+import { liveToolIdentity } from "@/lib/tools"
 import type { Block, ChatMessage } from "@/lib/types"
 
 export interface AcpPlanEntry {
@@ -76,14 +76,16 @@ export function acpBlocksToMessages(
         append({ type: "thinking", thinking: block.text }, absolute)
         break
       case "tool": {
-        const name = liveToolName(block.toolKind, block.title)
+        const tool = liveToolIdentity(block, turnProvider)
+        const name = tool.name
         append(
           {
             type: "toolCall",
             id: `${turn}:${block.id}`,
             name,
             kind: block.toolKind,
-            arguments: block.input,
+            tool,
+            arguments: tool.input ?? block.input,
           },
           absolute
         )

@@ -1,6 +1,8 @@
 import { normalizeToolOutput } from "@mako/sessions/tool-output"
-import type { Block, ChatMessage } from "@/lib/types"
+import { identifyTool, toolKindWork, type ToolIdentity, type ToolSource } from "@mako/sessions/tool-identity"
+import type { Block, ChatMessage, EntryBlock } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
+import type { LiveBlock } from "../../electron/contracts/live-content"
 
 export { normalizeToolOutput }
 
@@ -16,108 +18,47 @@ interface ToolEdit {
   newText: string
 }
 
-const TOOL_LABELS = new Map([
-  ["bash", "Shell"],
-  ["Bash", "Shell"],
-  ["shell", "Shell"],
-  ["Shell", "Shell"],
-  ["exec_command", "Shell"],
-  ["edit", "Edit"],
-  ["Edit", "Edit"],
-  ["write", "Write"],
-  ["Write", "Write"],
-  ["read", "Read"],
-  ["Read", "Read"],
-  ["grep", "Search"],
-  ["Grep", "Search"],
-  ["rg", "Search"],
-  ["find", "Find"],
-  ["glob", "Find"],
-  ["Glob", "Find"],
-  ["ls", "List"],
-  ["webfetch", "Web"],
-  ["WebFetch", "Web"],
-  ["websearch", "Web search"],
-  ["WebSearch", "Web search"],
-  ["apply_patch", "Edit"],
-  ["ReadFile", "Read"],
-  ["read_file", "Read"],
-  ["web_search", "Web search"],
-  ["list_agents", "Agents"],
-  ["wait_agent", "Wait for agent"],
-  ["send_message", "Message agent"],
-  ["read_subagent", "Read agent"],
-  ["Agent", "Agent"],
-  ["Subagent", "Agent"],
-  ["subagent", "Agent"],
-  ["Task", "Agent"],
-  ["task", "Agent"],
-  ["run_subagent", "Background agent"],
-  ["AwaitShell", "Wait for shell"],
-  ["wait", "Wait for command"],
-  ["write_stdin", "Terminal input"],
-  ["TodoWrite", "Plan"],
-  ["todo_write", "Plan"],
-  ["update_plan", "Plan"],
-  ["updateTodos", "Plan"],
-  ["CreatePlan", "Plan"],
-  ["createPlan", "Plan"],
-  ["askQuestion", "Question"],
-  ["AskQuestion", "Question"],
-  ["AskUserQuestion", "Question"],
-  ["question", "Question"],
-  ["generateImage", "Generate image"],
-  ["TaskCreate", "Create task"],
-  ["TaskUpdate", "Update task"],
-  ["ToolSearch", "Find tool"],
-  ["ScheduleWakeup", "Schedule"],
-  ["delete", "Delete"],
-  ["move", "Move"],
-  ["think", "Think"],
-  ["switch_mode", "Switch mode"],
-])
+const identities = new WeakMap<Block | EntryBlock | LiveBlock, ToolIdentity>()
+
 /**
- * ACP names a tool by what it does (`execute`, `search`), Devin by its
- * inference name (`exec`), Claude and history by the tool's own name. The
- * transcript keys icons, labels and views on names, so every live source
- * lands on the same vocabulary here.
+ * A call's identity, resolved once per source block: blocks are replaced, not
+ * mutated, when a call changes, so a long transcript re-resolves only the call
+ * that moved.
  */
-const LIVE_TOOL_KINDS = new Map([
-  ["execute", "bash"],
-  ["exec", "bash"],
-  ["shell", "bash"],
-  ["command", "bash"],
-  ["read", "read"],
-  ["edit", "edit"],
-  ["write", "write"],
-  ["search", "grep"],
-  ["fetch", "webfetch"],
-  ["delete", "delete"],
-  ["move", "move"],
-  ["think", "think"],
-  ["switch_mode", "switch_mode"],
-])
-
-/** Titles that only restate the kind carry no identity of their own. */
-const WEAK_TITLES = /^(tool|command|other|shell|execute|search|fetch|read|edit)$/i
-
-export function liveToolName(kind: string | undefined, title: string): string {
-  if (kind) {
-    const mapped = LIVE_TOOL_KINDS.get(kind.toLowerCase())
-    if (mapped) return mapped
-    if (kind !== "other") return kind
-  }
-  // `other` and no kind at all: the title is the only name there is, and only
-  // when it is a name ("read_file", "server: tool") rather than a sentence.
-  const candidate = title.trim()
-  if (candidate && !WEAK_TITLES.test(candidate) && /^[\w.:-]+(?:\s[\w.-]+)?$/.test(candidate))
-    return candidate.replace(/:\s/, ".")
-  return kind ?? "tool"
+export function cachedToolIdentity(owner: Block | EntryBlock, source: ToolSource): ToolIdentity {
+  const cached = identities.get(owner)
+  if (cached) return cached
+  const identity = identifyTool(source)
+  identities.set(owner, identity)
+  return identity
 }
 
-const NORMALIZED_TOOL_LABELS = new Map(
-  [...TOOL_LABELS].map(([name, label]) => [name.toLowerCase(), label])
-)
+/**
+ * A live call's identity. The title stands in for a target only when the
+ * harness put something in it besides the name, as Grok's server-side search
+ * does with `Web search: <query>`.
+ */
+export function liveToolIdentity(block: Extract<LiveBlock, { type: "tool" }>, harness: string | undefined): ToolIdentity {
+  const cached = identities.get(block)
+  if (cached) return cached
+  const identity = identifyTool({ harness, name: block.name, acpKind: block.toolKind, title: block.title, input: block.input })
+  const title = block.title.trim()
+  if (!identity.target && title && title !== identity.name && title !== identity.label) identity.target = title
+  identities.set(block, identity)
+  return identity
+}
+
+/** Arguments as `identifyTool` reads them: the JSON text, or a script's source. */
+export function toolInputText<Content>(value: Content): string | undefined {
+  if (value === undefined || value === null) return undefined
+  const text = stringContent(parseToolContent(value))
+  if (text !== undefined) return text
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return undefined
+  }
+}
 
 function parseToolContent<Content>(value: Content): ToolContent | undefined {
   let serialized: string | undefined
@@ -171,9 +112,9 @@ function parseToolEdit(content: ToolContent): ToolEdit {
   const edit = isToolArguments(content) ? content : undefined
   return {
     oldText:
-      stringContent(edit?.oldText) ?? stringContent(edit?.old_string) ?? "",
+      stringContent(edit?.oldText) ?? stringContent(edit?.old_string) ?? stringContent(edit?.old_str) ?? "",
     newText:
-      stringContent(edit?.newText) ?? stringContent(edit?.new_string) ?? "",
+      stringContent(edit?.newText) ?? stringContent(edit?.new_string) ?? stringContent(edit?.new_str) ?? "",
   }
 }
 
@@ -229,12 +170,14 @@ export function pairTools(blocks: Block[]): ToolCall[] {
   for (const block of blocks) {
     if (block.type === "toolCall") {
       const id = block.id || `${block.name}-${order.length}`
+      const tool = block.tool ?? cachedToolIdentity(block, { name: block.name, acpKind: block.kind, input: toolInputText(block.arguments) })
       order.push(id)
       byId.set(id, {
         id,
-        name: block.name ?? "tool",
+        name: block.name ?? tool.name,
         kind: block.kind,
-        arguments: block.arguments,
+        tool,
+        arguments: tool.input ?? block.arguments,
         pending: true,
       })
       continue
@@ -259,6 +202,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
       byId.set(id, {
         id,
         name: block.name ?? "tool",
+        tool: cachedToolIdentity(block, { name: block.name }),
         result: block.text,
         attachments: block.attachments,
         details: block.details,
@@ -292,64 +236,30 @@ export interface ToolWorkSummary {
 export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
   const changedFiles = new Set<string>()
   let unlocatedChanges = 0
-  let commands = 0
-  let reads = 0
-  let searches = 0
-  let skills = 0
-  let agents = 0
-  let plans = 0
-  let other = 0
+  const counts = { command: 0, read: 0, search: 0, skill: 0, agent: 0, plan: 0, other: 0 }
   let failed = 0
   let cutOff = 0
   for (const call of calls) {
-    const name = call.name.toLowerCase()
     if (call.isError) failed += 1
     if (call.isCutOff) cutOff += 1
-    if (isSubagentLaunch(call)) {
-      agents += 1
-      continue
-    }
-    if (["edit", "multiedit", "apply_patch", "write", "delete", "move"].includes(name)) {
-      const path = primaryArgument(call.arguments)
-      if (path) changedFiles.add(path)
+    const work = toolKindWork(call.tool.kind)
+    if (work === "change") {
+      if (call.tool.path) changedFiles.add(call.tool.path)
       else unlocatedChanges += 1
-    } else if (["bash", "shell", "exec_command"].includes(name)) {
-      commands += 1
-    } else if (["read", "readfile", "read_file"].includes(name)) {
-      reads += 1
-    } else if (
-      [
-        "grep",
-        "rg",
-        "find",
-        "glob",
-        "webfetch",
-        "websearch",
-        "web_search",
-        "toolsearch",
-      ].includes(name)
-    ) {
-      searches += 1
-    } else if (name === "skill") {
-      skills += 1
-    } else if (
-      ["todowrite", "todo_write", "update_plan", "updatetodos", "plan", "createplan", "taskcreate", "taskupdate"].includes(name)
-    ) {
-      plans += 1
     } else {
-      other += 1
+      counts[work] += 1
     }
   }
   return {
     tools: calls.length,
     changedFiles: changedFiles.size + unlocatedChanges,
-    commands,
-    reads,
-    searches,
-    skills,
-    agents,
-    plans,
-    other,
+    commands: counts.command,
+    reads: counts.read,
+    searches: counts.search,
+    skills: counts.skill,
+    agents: counts.agent,
+    plans: counts.plan,
+    other: counts.other,
     failed,
     cutOff,
   }
@@ -413,13 +323,6 @@ export function argAt<Content>(
   return stringContent(parseToolArguments(value)?.[key])
 }
 
-/** The first question of a structured ask, which Claude and OpenCode both send as `{ questions: [{ question }] }`. */
-export function firstQuestion<Content>(value: Content): string | undefined {
-  const questions = parseToolArguments(value)?.questions
-  const first = Array.isArray(questions) ? questions[0] : undefined
-  return isToolArguments(first) ? stringContent(first.question) : undefined
-}
-
 export function booleanArgAt<Content>(
   value: Content,
   key: string
@@ -430,58 +333,8 @@ export function booleanArgAt<Content>(
     : undefined
 }
 
-export const SUBAGENT_LAUNCH_TOOLS = [
-  "Agent",
-  "Subagent",
-  "Task",
-  "task",
-  "run_subagent",
-  "spawn_agent",
-] as const
-
-export const SUBAGENT_CONTROL_TOOLS = [
-  "subagent",
-  "read_subagent",
-  "send_input",
-  "close_agent",
-  "send_message",
-  "list_agents",
-  "wait_agent",
-] as const
-
-export const SUBAGENT_TOOLS = [
-  ...SUBAGENT_LAUNCH_TOOLS,
-  ...SUBAGENT_CONTROL_TOOLS,
-] as const
-
-export function isSubagentLaunch(call: ToolCall): boolean {
-  const name = call.name.toLowerCase()
-  if (
-    SUBAGENT_LAUNCH_TOOLS.some((candidate) => candidate.toLowerCase() === name)
-  ) {
-    return true
-  }
-  return (
-    name === "subagent" &&
-    Boolean(
-      argAt(call.arguments, "task") ??
-      argAt(call.arguments, "prompt") ??
-      argAt(call.arguments, "description") ??
-      argAt(call.arguments, "agent_id") ??
-      argAt(call.arguments, "agentId")
-    )
-  )
-}
-
-export function isSubagentTool(name: string): boolean {
-  const normalized = name.toLowerCase()
-  return SUBAGENT_TOOLS.some(
-    (candidate) => candidate.toLowerCase() === normalized
-  )
-}
-
 export function reportedSubagentCount(call: ToolCall): number {
-  if (call.name !== "list_agents" || !call.result) return 0
+  if (call.tool.kind !== "agents" || !call.result) return 0
   try {
     const parsed: ToolContent = JSON.parse(call.result)
     const agents = isToolArguments(parsed) ? parsed.agents : undefined
@@ -513,49 +366,17 @@ export function subagentResultText(
     : result
 }
 
-/** The tools on Mako's `mako` server, by their own names. */
-const MAKO_TOOL_LABELS = new Map([
-  ["recipe_guide", "Setup guide"],
-  ["recipe_save", "Save recipe"],
-  ["app_status", "App status"],
-  ["app_start", "Start app"],
-  ["app_stop", "Stop app"],
-  ["app_restart", "Restart app"],
-  ["app_logs", "App logs"],
-  ["app_check", "Check app"],
-  ["port_holder", "Port holder"],
-  ["workspace_status", "Workspace"],
-  ["workspace_move", "Move to worktree"],
-  ["workspace_merge", "Merge worktree"],
-  ["workspace_remove", "Remove worktree"],
-])
-
-/** Claude Code names an MCP tool `mcp__mako__app_start`; Codex's `mako: app_start` arrives here as `mako.app_start`; Devin asks to run `mako: app_start`. */
-export function makoToolLabel(name: string): string | undefined {
-  const tool = /^(?:mcp__mako__|mako\.|mako: )(\w+)$/.exec(name)?.[1]
-  return tool ? MAKO_TOOL_LABELS.get(tool) : undefined
-}
-
-export function toolLabel(name: string): string {
-  const label = NORMALIZED_TOOL_LABELS.get(name.toLowerCase()) ?? makoToolLabel(name)
-  if (label) return label
-  if (name.startsWith("mako_computer_")) {
-    return `Computer ${name.slice("mako_computer_".length).replaceAll("_", " ")}`
-  }
-  if (name.startsWith("mako_browser_")) {
-    return `Browser ${name.slice("mako_browser_".length).replaceAll("_", " ")}`
-  }
-  if (name.startsWith("browser_")) {
-    return `Browser ${name.slice("browser_".length).replaceAll("_", " ")}`
-  }
-  return name
-}
-
 export function countLines(text?: string) {
   if (!text) return 0
   let lines = 1
   for (const char of text) if (char === "\n") lines += 1
   return lines
+}
+
+/** What a write call puts in its file, under whichever key the harness uses. */
+export function writtenText(call: ToolCall): string | undefined {
+  const args = parseToolArguments(call.arguments)
+  return stringContent(args?.content) ?? stringContent(args?.contents) ?? stringContent(args?.file_text) ?? stringContent(args?.text)
 }
 
 /** Normalize the edit tool's arguments: a list of edits, or the legacy pair. */

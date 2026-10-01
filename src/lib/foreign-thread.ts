@@ -1,18 +1,10 @@
 import { eventText } from "@mako/sessions/events"
+import { identifyTool } from "@mako/sessions/tool-identity"
+import { cachedToolIdentity } from "@/lib/tools"
 import type { Block, ChatMessage, MessageAnchor, ThreadEntry } from "@/lib/types"
 
-const INPUT_TOOLS = new Set([
-  "askquestion",
-  "askuserquestion",
-  "awaituserinput",
-  "humaninput",
-  "promptuser",
-  "question",
-  "requestuserinput",
-])
-
 function isInputTool(name: string): boolean {
-  return INPUT_TOOLS.has(name.toLowerCase().replace(/[^a-z0-9]/g, ""))
+  return identifyTool({ name }).kind === "question"
 }
 
 export function pendingThreadInput(entries: ThreadEntry[]): string | null {
@@ -96,11 +88,13 @@ export function threadToMessages(
         blocks.push({ type: "thinking", thinking: block.text })
       if (block.type === "tool") {
         const callId = `${messageId}-tool-${block.id ?? blockIndex}`
+        const tool = cachedToolIdentity(block, { harness: provider, name: block.name, input: block.input })
         blocks.push({
           type: "toolCall",
           id: callId,
           name: block.name,
-          arguments: block.input,
+          tool,
+          arguments: tool.input ?? block.input,
         })
         if (
           block.output !== undefined ||
