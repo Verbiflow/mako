@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { AccountUsage, ResetCreditOutcome, UsageBalance, UsageResetCredits, UsageWindow } from "../../account-types.js"
+import type { JsonValue } from "../../codex-app-json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
 
 /**
@@ -84,7 +85,7 @@ function resetCredits(value: z.infer<typeof ReadSchema>["rateLimitResetCredits"]
 }
 
 /** `account/rateLimits/read`'s result as the account's whole reading. */
-export function parseCodexRateLimits(value: unknown): AccountUsage {
+export function parseCodexRateLimits(value: JsonValue): AccountUsage {
   const parsed = ReadSchema.safeParse(value)
   if (!parsed.success) return { status: "error", detail: "Codex answered with limits Mako can't read" }
   const byId = parsed.data.rateLimitsByLimitId ?? {}
@@ -103,20 +104,22 @@ export function parseCodexRateLimits(value: unknown): AccountUsage {
 }
 
 /** The windows an `account/rateLimits/updated` names; the rest of the reading stands. */
-export function codexUpdatedWindows(value: unknown): UsageWindow[] {
+export function codexUpdatedWindows(value: JsonValue): UsageWindow[] {
   const parsed = UpdatedSchema.safeParse(value)
   return parsed.success ? snapshotWindows(parsed.data.rateLimits) : []
 }
 
-const OUTCOMES: Record<string, ResetCreditOutcome> = {
+const OutcomeSchema = z.object({ outcome: z.enum(["reset", "nothingToReset", "noCredit", "alreadyRedeemed"]) })
+
+const OUTCOMES = {
   reset: "reset",
   nothingToReset: "nothing-to-reset",
   noCredit: "no-credit",
   alreadyRedeemed: "already-used",
-}
+} satisfies Record<z.infer<typeof OutcomeSchema>["outcome"], ResetCreditOutcome>
 
 /** `account/rateLimitResetCredit/consume`'s answer; anything else is unknown. */
-export function parseResetOutcome(value: unknown): ResetCreditOutcome | null {
-  const outcome = z.object({ outcome: z.string() }).safeParse(value)
-  return outcome.success ? OUTCOMES[outcome.data.outcome] ?? null : null
+export function parseResetOutcome(value: JsonValue): ResetCreditOutcome | null {
+  const outcome = OutcomeSchema.safeParse(value)
+  return outcome.success ? OUTCOMES[outcome.data.outcome] : null
 }
