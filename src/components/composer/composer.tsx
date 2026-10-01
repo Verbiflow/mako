@@ -33,6 +33,8 @@ import {
 import { Banner } from "@/components/composer/banner"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ComposerRouting } from "@/components/composer/composer-routing"
+import type { PlanHandle } from "@/components/composer/plan-toggle"
+import { recordSentPlanBuilds } from "@/state/plan-mode"
 import { steeringTitle } from "@/components/composer/steering"
 import { ROUTING_COMPACT_LEVELS, useCompactRow } from "@/components/composer/use-compact-row"
 
@@ -550,6 +552,9 @@ export function Composer() {
       if (ok) {
         attachments.discard(restorableDraft.attachments)
         skills.rememberHanded(skillKey, withSkills.handed)
+        recordSentPlanBuilds(text, draftPlans, continuesViewing
+          ? { thread: viewingRef.path }
+          : { conversation: activeAcp(acpStore.get())?.key })
       } else {
         const currentDraftKey =
           activeAcp(acpStore.get())?.draftKey ??
@@ -627,6 +632,8 @@ export function Composer() {
   )
 
   const stopCurrentTurn = useCallback(() => actions.stopCurrentTurn(), [])
+  const plan = useRef<PlanHandle>(null)
+  const [planning, setPlanning] = useState(false)
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return
@@ -686,6 +693,17 @@ export function Composer() {
       } else {
         update(history.list[history.at]!)
       }
+      return
+    }
+    if (
+      event.key === "Tab" &&
+      event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      plan.current?.toggle()
+    ) {
+      event.preventDefault()
       return
     }
     if (event.key === "Enter" && !event.shiftKey) {
@@ -778,7 +796,9 @@ export function Composer() {
     Boolean(state.viewing?.ref.archived)
   )
   const newHarness = useThreads((state) => state.composerHarness)
-  const placeholder = opening
+  const placeholder = planning && !opening && !turnRunning
+    ? `Describe what to plan — ${harnessTitle(newHarness)} proposes a plan before changing anything`
+    : opening
     ? opening.kind !== "loading"
       ? `Draft a reply for ${harnessTitle(newHarness)} — conversation could not load`
       : newHarness === opening.ref.harness
@@ -1000,7 +1020,7 @@ export function Composer() {
               ref={routingRow}
               className="composer-routing flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
             >
-              <ComposerRouting />
+              <ComposerRouting plan={plan} onPlanning={setPlanning} />
             </div>
 
             <div className="ml-2 flex shrink-0 items-center gap-1">

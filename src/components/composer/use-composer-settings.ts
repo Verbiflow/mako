@@ -131,6 +131,8 @@ export function useComposerSettings(provider?: string) {
     composerModelLabel({ target, profile, error, reporting })
   return {
     target,
+    /** The conversation the composer answers, live or still starting. */
+    conversation: live.harness === harness ? live.id : undefined,
     profile,
     resolved,
     model,

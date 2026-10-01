@@ -206,7 +206,14 @@ function ModePicker() {
  * picked the provider's own default stands, so the level is never hidden
  * until the agent is already working.
  */
-export function NextSessionModePicker() {
+export function NextSessionModePicker({
+  planned,
+  onChoose,
+}: {
+  /** The plan mode chosen for the next session, which outranks the saved level. */
+  planned?: string
+  onChoose?: () => void
+}) {
   const scope = useConversationScope()
   const scopedRef = scope?.kind === "history" ? scope.ref : undefined
   const harness = useThreads((state) => scopedRef?.harness ?? state.composerHarness)
@@ -227,12 +234,14 @@ export function NextSessionModePicker() {
   return (
     <AccessPicker
       modes={modes}
-      current={remembered ?? saved ?? defaulted}
+      current={planned ?? remembered ?? saved ?? defaulted}
       harness={harness}
       heading={thread ? "Access when this thread continues" : "Access for the next session"}
-      onSelect={(value) =>
-        thread ? chooseThreadMode(thread, value) : chooseProviderMode(harness, value)
-      }
+      onSelect={(value) => {
+        onChoose?.()
+        if (thread) chooseThreadMode(thread, value)
+        else chooseProviderMode(harness, value)
+      }}
     />
   )
 }

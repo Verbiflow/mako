@@ -4,6 +4,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   BrainIcon,
+  ClipboardListIcon,
   PinIcon,
   PinOffIcon,
   RulerIcon,
@@ -453,7 +454,9 @@ function rankModels(
 /* ------------------------------------------------------------- options */
 
 function OptionRows({ view }: { view: ComposerSettingsView }) {
-  const ordered = [...view.options].sort((left, right) => roleOrder(left) - roleOrder(right))
+  const ordered = view.options
+    .filter((option) => option.role !== "plan")
+    .sort((left, right) => roleOrder(left) - roleOrder(right))
   const issues = view.resolved.issues
   const missing = useMissingRoles(view)
   if (ordered.length === 0 && issues.length === 0 && missing.length === 0) return null
@@ -487,12 +490,13 @@ function OptionRows({ view }: { view: ComposerSettingsView }) {
 
 type OptionRole = NonNullable<ModelOption["role"]>
 
-const ROLE_ORDER = ["reasoning", "speed", "context"] satisfies OptionRole[]
+const ROLE_ORDER: readonly OptionRole[] = ["reasoning", "speed", "context", "plan"]
 
 const ROLE_NAMES = {
   reasoning: "Effort",
   speed: "Fast",
   context: "Context window",
+  plan: "Plan mode",
 } satisfies Record<OptionRole, string>
 
 const ROLE_KEYS = {
@@ -514,7 +518,7 @@ function useMissingRoles(view: ComposerSettingsView): OptionRole[] {
     (state) =>
       ROLE_ORDER.filter(
         (role) =>
-          role !== "context" &&
+          role !== "context" && role !== "plan" &&
           (state.contexts[providerProfileKey(view.target.harness, view.target.cwd)]?.models ?? []).some(
             (model) => model.options.some((option) => option.role === role)
           )
@@ -619,6 +623,7 @@ const ROLE_GLYPHS = {
   reasoning: BrainIcon,
   speed: ZapIcon,
   context: RulerIcon,
+  plan: ClipboardListIcon,
 } satisfies Record<OptionRole, typeof ZapIcon>
 
 function OptionGlyph({ role }: { role: ModelOption["role"] }) {
