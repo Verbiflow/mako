@@ -74,5 +74,23 @@ assert.deepEqual(markers(await new CodexProvider(home).read(legacy)), [
   { label: "Context compacted" },
 ], "a compaction recorded twice is marked once; a lone record still marks one")
 
+// Codex records no start for a compaction. Inside a turn it starts right after
+// the record before it; outside one that record could be hours old.
+const timed = join(sessions, "rollout-timed.jsonl")
+const at = (timestamp, type, payload) => JSON.stringify({ timestamp, type, payload }) + "\n"
+await writeFile(timed,
+  line("session_meta", { id: "timed", cwd: home }) +
+  at("2026-08-18T02:43:08.427Z", "event_msg", { type: "task_complete", turn_id: "t0", error: null }) +
+  at("2026-08-18T08:24:29.964Z", "event_msg", { type: "task_started", turn_id: "t1" }) +
+  at("2026-08-18T08:24:40.350Z", "compacted", { message: "", replacement_history: [] }) +
+  at("2026-08-18T08:24:40.630Z", "response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text: "Compacted." }] }) +
+  at("2026-08-18T08:24:41.000Z", "event_msg", { type: "task_complete", turn_id: "t1", error: null }) +
+  at("2026-08-18T14:00:00.000Z", "compacted", { message: "", replacement_history: [] })
+)
+assert.deepEqual(markers(await new CodexProvider(home).read(timed)), [
+  { label: "Context compacted", detail: "took 10s" },
+  { label: "Context compacted" },
+], "a compaction in a turn is timed from the record before it; one outside a turn is not")
+
 await rm(home, { recursive: true, force: true })
 console.log("Codex history markers: compactions, failed turns and review boundaries read as Mako events.")

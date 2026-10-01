@@ -431,7 +431,7 @@ try {
     "compaction",
     3,
     7000,
-    7000,
+    7042,
     json({
       status: "completed",
       reason: "manual",
@@ -598,7 +598,7 @@ try {
       kind: "event",
       at: "1970-01-01T01:56:40.000Z",
       label: "Context compacted",
-      detail: "Manual · from 360 tokens",
+      detail: "Manual · from 360 tokens · took 42s",
       body: "The user asked about the README; it was read and answered.",
     },
     {

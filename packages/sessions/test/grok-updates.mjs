@@ -368,7 +368,7 @@ try {
     [
       "user",
       "assistant",
-      "event:Context compacted — Automatic · 404k → 21k tokens",
+      "event:Context compacted — Automatic · 404k → 21k tokens · took 1m 34s",
       "assistant",
       'event:opens:Subagent "Sleep 20 then reply" completed',
       "assistant",
