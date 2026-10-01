@@ -1,4 +1,5 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import { z } from "zod"
 
 type Kind<Message> = Message extends { type: "system"; subtype: infer Subtype extends string }
   ? `system/${Subtype}`
@@ -54,11 +55,43 @@ const KNOWN = {
   "system/mirror_error": "ignored",
 } satisfies Record<Kind<SDKMessage>, "shown" | "state" | "ignored">
 
+/**
+ * Kinds Claude Code sends that the SDK's types don't declare yet, with the
+ * CLI they were first seen from. Parse these before reading them.
+ */
+const NEWER = {
+  /**
+   * Claude Code 2.1.283: each prompt Mako sends, by its uuid, is `queued`,
+   * `started`, `completed` or `cancelled`. `queued` arrives before the turn's
+   * `init`, so the driver takes it as the earliest receipt.
+   */
+  command_lifecycle: "state",
+} as const
+
+const CommandLifecycleSchema = z.object({
+  type: z.literal("command_lifecycle"),
+  command_uuid: z.string(),
+  state: z.string(),
+})
+
+/** A prompt's progress through Claude Code's queue, from a CLI newer than the SDK's types. */
+export function claudeCommandLifecycle(message: SDKMessage): z.infer<typeof CommandLifecycleSchema> | undefined {
+  return (message.type as string) === "command_lifecycle" ? CommandLifecycleSchema.safeParse(message).data : undefined
+}
+
+const kinds = (where: "shown" | "state" | "ignored") =>
+  [...Object.entries(KNOWN), ...Object.entries(NEWER)].flatMap(([kind, place]) => place === where ? [kind] : [])
+
+/** Kinds the decoder or driver turns into something the user sees or the session reads. */
+export const CLAUDE_DECODED_KINDS: ReadonlySet<string> = new Set([...kinds("shown"), ...kinds("state")])
+/** Kinds known as bookkeeping; they decode to nothing. */
+export const CLAUDE_SILENT_KINDS: ReadonlySet<string> = new Set(kinds("ignored"))
+
 export function claudeMessageKind(message: SDKMessage): string {
   return message.type === "system" ? `system/${message.subtype}` : message.type
 }
 
 /** Whether this SDK declares the kind; one it does not is a newer Claude Code's. */
 export function knownClaudeMessageKind(kind: string): boolean {
-  return Object.hasOwn(KNOWN, kind)
+  return Object.hasOwn(KNOWN, kind) || Object.hasOwn(NEWER, kind)
 }

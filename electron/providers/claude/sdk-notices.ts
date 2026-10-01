@@ -5,11 +5,14 @@ import type {
   SDKResultMessage,
   TerminalReason,
 } from "@anthropic-ai/claude-agent-sdk"
-import { compactionFailedEvent, event, messageEvent, modelChangedEvent, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { compactionFailedEvent, event, mcpServerFailedEvent, messageEvent, modelChangedEvent, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import type { NativeNotice } from "../../shared.js"
 import { claudeMessageKind, knownClaudeMessageKind } from "./sdk-message-kinds.js"
 
 const NOTHING: readonly NativeNotice[] = []
+
+/** The `init` statuses of an MCP server Claude could not start, in Mako's words. */
+const MCP_FAILURES = new Map([["failed", "could not connect"], ["needs-auth", "sign-in required"]])
 
 /**
  * What Claude's own reports mean in Mako's shared vocabulary: compaction,
@@ -24,6 +27,12 @@ export class ClaudeNotices {
   private readonly said = new Set<string>()
   /** The turn's refusal is already on record; its `refusal` stop adds nothing. */
   private refused = false
+  /** Dates a retry; recorded sessions decode against a fixed clock. */
+  private readonly now: () => number
+
+  constructor(now: () => number = Date.now) {
+    this.now = now
+  }
 
   readonly hook: HookCallback = async (input) => {
     if (input.hook_event_name === "PostCompact" && !input.agent_id) this.summary = input.compact_summary
@@ -68,7 +77,7 @@ export class ClaudeNotices {
           reason: message.no_response
             ? "No response from the API"
             : `${sentence(message.error)}${message.error_status ? ` (${message.error_status})` : ""}`,
-          retryAt: Date.now() + message.retry_delay_ms,
+          retryAt: this.now() + message.retry_delay_ms,
         } }]
       case "model_refusal_fallback":
         return notice(modelChangedEvent(
@@ -91,8 +100,22 @@ export class ClaudeNotices {
         return notice(messageEvent("Notice", message.content))
       case "hook_response":
         return message.outcome === "error"
-          ? notice({ ...event("Warning", `${message.hook_name} hook failed`, message.stderr || message.output), tone: "warning" })
+          ? notice({ ...event("Warning", `${message.hook_name} hook failed`, message.stderr || message.output), tone: "warning", setup: true })
           : NOTHING
+      case "init":
+        // Every turn opens with `init` and the servers' and plugins' status again.
+        return [
+          ...message.mcp_servers.flatMap((server): NativeNotice[] => {
+            const reason = MCP_FAILURES.get(server.status)
+            return reason !== undefined && this.once(`mcp\0${server.name}\0${server.status}`)
+              ? notice(mcpServerFailedEvent(server.name, reason))
+              : []
+          }),
+          ...(message.plugin_errors ?? []).flatMap((error): NativeNotice[] =>
+            this.once(`plugin\0${error.plugin}\0${error.message}`)
+              ? notice({ ...messageEvent(`${error.plugin} plugin didn't load`, error.message, "warning"), setup: true })
+              : []),
+        ]
       default:
         return NOTHING
     }
@@ -101,7 +124,7 @@ export class ClaudeNotices {
   private rateLimit(info: SDKRateLimitInfo): readonly NativeNotice[] {
     if (info.status === "allowed" || !this.once(`limit\0${info.status}\0${info.rateLimitType}\0${info.resetsAt}`)) return NOTHING
     const limit = info.rateLimitType ? LIMITS[info.rateLimitType] : "usage limit"
-    const resets = info.resetsAt ? `resets ${resetTime(info.resetsAt)}` : ""
+    const resets = info.resetsAt ? `resets ${resetTime(info.resetsAt, this.now())}` : ""
     if (info.status === "allowed_warning") return notice(warning(line(`Approaching your ${limit}`, resets)))
     if (info.isUsingOverage) return notice(event("Notice", `Reached your ${limit} · using extra usage`))
     return notice({ ...event("Rate limited", line(`Reached your ${limit}`, resets)), tone: "warning" })
@@ -183,11 +206,11 @@ function line(...parts: string[]): string {
 }
 
 /** A reset time in the host's own clock, as short as it can be and still be unambiguous. */
-function resetTime(at: number): string {
+function resetTime(at: number, clock: number): string {
   // Claude Code reports epoch seconds; a millisecond value reads the same.
   const date = new Date(at < 1e12 ? at * 1000 : at)
   const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-  const now = new Date()
+  const now = new Date(clock)
   if (date.toDateString() === now.toDateString()) return time
   if (date.getTime() - now.getTime() < 6 * 86_400_000)
     return `${date.toLocaleDateString(undefined, { weekday: "short" })} ${time}`

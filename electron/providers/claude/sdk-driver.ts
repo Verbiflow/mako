@@ -4,16 +4,14 @@ import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type {
-  ModelUsage,
   Options,
   Query,
   SDKMessage,
-  SDKRateLimitInfo,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
-import type { LiveSessionCommand, LiveSessionMode, LiveSessionState, LiveSessionUsage } from "../../shared.js"
+import type { LiveSessionMode, LiveSessionState } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type {
   ProviderLiveDriver,
@@ -26,9 +24,11 @@ import {
   ClaudeTuningSchema,
   claudeInputContent,
 } from "./input.js"
-import { ClaudeProjection } from "./sdk-projection.js"
-import { claudeRateLimitWindow } from "./accounts.js"
+import { ClaudeDecoder } from "./decoder.js"
 import { mergeWindows } from "../../contracts/account-usage.js"
+import { deliverDecoded, type DecodedSink } from "../../contracts/native-decoding.js"
+import type { UsageWindow } from "../../account-types.js"
+import { nativeCapture, type NativeCapture } from "../../native-capture.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
@@ -38,8 +38,8 @@ import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../../prov
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { claudeAuthDiagnostics } from "./auth-diagnostics.js"
-import { claudeMessageKind } from "./sdk-message-kinds.js"
-import { ClaudeNotices, claudeStopReason } from "./sdk-notices.js"
+import { claudeStopReason } from "./sdk-notices.js"
+import { claudeCommandLifecycle } from "./sdk-message-kinds.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
 const CLAUDE_MODES: LiveSessionMode[] = [
@@ -67,27 +67,22 @@ interface Receipt {
   timer: ReturnType<typeof setTimeout>
 }
 /** A turn reported where its account stands: the meter moves without a request. */
-function observeLimits(live: Live, info: SDKRateLimitInfo): void {
-  const window = claudeRateLimitWindow(info)
-  if (!window) return
+function observeLimits(live: Live, windows: UsageWindow[]): void {
   void Promise.all([live.account, import("../../accounts.js")]).then(([name, accounts]) =>
-    accounts.observeAccountUsage("claude", name, (previous) => mergeWindows(previous, [window], Date.now())))
+    accounts.observeAccountUsage("claude", name, (previous) => mergeWindows(previous, windows, Date.now())))
 }
 
 interface Live {
   /** The account this session spends, resolved beside its start. */
   account: Promise<string>
   compaction?: { actionId: string; runId: string; confirmed: boolean }
-  notices: ClaudeNotices
-  /** The model and context of the main loop's latest request, for the usage its turn's result reports. */
-  lastCall?: { model: string; tokens: number }
-  /** Commands `init` said belong to a terminal; a later command list leaves them out too. */
-  terminalCommands: Set<string>
+  decoder: ClaudeDecoder
+  sink?: DecodedSink<never>
+  capture: NativeCapture | null
   state: LiveSessionState
   query: ClaudeQuery
   input: ClaudeInput
   agents: ClaudeAgents
-  projection: ClaudeProjection
   permissions: ClaudePermissions
   approvals: ClaudeApprovalObserver
   disposeApprovals(): Promise<void>
@@ -137,6 +132,8 @@ function stop(live: Live): void {
 
 function acknowledge(live: Live, message: SDKMessage): void {
   const ids = new Set<string>()
+  const lifecycle = claudeCommandLifecycle(message)
+  if (lifecycle && lifecycle.state !== "cancelled") ids.add(lifecycle.command_uuid)
   if (message.type === "user" && message.uuid) ids.add(message.uuid)
   if ("user_message_uuid" in message && message.user_message_uuid)
     ids.add(message.user_message_uuid)
@@ -156,53 +153,15 @@ function acknowledge(live: Live, message: SDKMessage): void {
   }
 }
 
-/** Claude's own reports, and the session state they move outside a turn's content. */
-function observe(engine: Engine, live: Live, message: SDKMessage): void {
-  engine.observe(live, claudeMessageKind(message), live.notices.decode(message), message.uuid)
-  if (message.type === "assistant") {
-    const { model, usage } = message.message
-    if (!message.parent_tool_use_id && model !== "<synthetic>")
-      live.lastCall = { model, tokens: usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) +
-        (usage.cache_read_input_tokens ?? 0) + usage.output_tokens }
-  } else if (message.type === "result") {
-    const size = live.lastCall && contextWindow(message.modelUsage, live.lastCall.model)
-    if (live.lastCall && size)
-      reportUsage(engine, live, { used: live.lastCall.tokens, size,
-        cost: message.total_cost_usd > 0 ? { amount: message.total_cost_usd, currency: "USD" } : live.state.usage?.cost })
-  } else if (message.type === "conversation_reset") {
-    live.lastCall = undefined
-    engine.patch(live, { nativeId: message.new_conversation_id, usage: undefined })
-  } else if (message.type === "system" && message.subtype === "status") {
-    if (message.permissionMode && message.permissionMode !== live.state.currentMode)
-      engine.patch(live, { currentMode: message.permissionMode })
-  } else if (message.type === "system" && message.subtype === "compact_boundary") {
-    live.lastCall = undefined
-    const after = message.compact_metadata.post_tokens
-    if (after !== undefined && live.state.usage) reportUsage(engine, live, { ...live.state.usage, used: after })
-  } else if (message.type === "system" && message.subtype === "commands_changed") {
-    const described = message.commands
-      .filter((command) => !live.terminalCommands.has(command.name))
-      .map((command): LiveSessionCommand => ({ name: command.name, description: command.description || undefined, hint: command.argumentHint || undefined }))
-    engine.patch(live, { commands: described })
-  }
-}
-
-function reportUsage(engine: Engine, live: Live, usage: LiveSessionUsage): void {
-  const held = live.state.usage
-  if (held?.used === usage.used && held.size === usage.size && held.cost?.amount === usage.cost?.amount) return
-  engine.patch(live, { usage })
-}
-
-/** The answering model's window. Usage can key it with a suffix the reply's model id lacks (`[1m]`). */
-function contextWindow(models: Record<string, ModelUsage>, model: string): number | undefined {
-  const usage = Object.hasOwn(models, model)
-    ? models[model]
-    : Object.entries(models).find(([name]) => name.startsWith(model))?.[1]
-  return usage?.contextWindow || undefined
+/** What the decoder makes of a message reaches the session; plan-limit windows move the account's meter. */
+function decode(engine: Engine, live: Live, message: SDKMessage): void {
+  if (live.capture) live.capture.record(JSON.parse(JSON.stringify(message)))
+  live.sink ??= engine.sink(live, { effect: () => undefined, usage: (windows) => observeLimits(live, windows) })
+  deliverDecoded(live.decoder.decode(message), live.sink)
 }
 
 function openProviderTurn(engine: Engine, live: Live): void {
-  live.projection.reset()
+  live.decoder.startTurn()
   live.transcript.reset()
   engine.patch(live, {
     status: "running",
@@ -228,7 +187,6 @@ async function pump(engine: Engine, live: Live): Promise<void> {
           conversation: live.state.id, event: message.subtype,
         })
       acknowledge(live, message)
-      observe(engine, live, message)
       live.authDiagnostics.observe(message)
       live.transcript.observe(message)
       live.approvals.observe(message)
@@ -237,10 +195,6 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         live.compaction.confirmed = true
       const agent = live.agents.project(message)
       if (agent) engine.emitAgent(live, agent)
-      if (message.type === "system" && message.subtype === "background_tasks_changed") {
-        const running = message.tasks.filter((task) => !task.ambient).length
-        if (running !== (live.state.backgroundTasks ?? 0)) engine.patch(live, { backgroundTasks: running })
-      }
       if (message.type === "system" && message.subtype === "task_notification" &&
         !message.ambient && live.state.status !== "running")
         live.providerTurnCause = message.summary
@@ -250,32 +204,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (message.type === "system" && message.subtype === "init" &&
         (live.state.status === "ready" || live.state.status === "failed"))
         openProviderTurn(engine, live)
-      if (message.type === "rate_limit_event") observeLimits(live, message.rate_limit_info)
-      const withdrawn = live.projection.withdraw(message)
-      if (withdrawn.length) engine.emitUpdates(live, withdrawn)
-      const updates = live.projection.project(message)
-      if (updates.length)
-        engine.emitUpdates(live, updates)
-      if (message.type === "system" && message.subtype === "init") {
-        const options = { ...live.state.settings?.options }
-        if (message.effort) options.effort = message.effort
-        if (message.fast_mode_state)
-          options.fast = message.fast_mode_state !== "off"
-        live.terminalCommands = new Set(message.terminal_slash_commands ?? [])
-        const described = new Map(live.state.commands?.map((command) => [command.name, command]))
-        engine.patch(live, {
-          nativeId: message.session_id,
-          currentMode: message.permissionMode,
-          commands: (message.slash_commands ?? [])
-            .filter((name) => !live.terminalCommands.has(name))
-            .map((name) => described.get(name) ?? { name }),
-          settings: {
-            ...live.state.settings,
-            model: message.model,
-            options,
-          },
-        })
-      }
+      decode(engine, live, message)
       if (message.type !== "result" || live.state.status !== "running") continue
       if (live.compaction && message.user_message_uuid &&
         message.user_message_uuid !== live.compaction.runId &&
@@ -431,7 +360,7 @@ export function createClaudeSdkDriver(
       }
       const input = new ClaudeInput()
       const transcript = new ClaudeTranscript((config.env ?? process.env).CLAUDE_CONFIG_DIR || join(homedir(), ".claude"))
-      const notices = new ClaudeNotices()
+      const decoder = new ClaudeDecoder({ get state() { return live.state } })
       const permissions = new ClaudePermissions(
         options.conversationId,
         options.emit,
@@ -465,7 +394,7 @@ export function createClaudeSdkDriver(
               { hooks: [transcript.hook] },
             ],
             Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
-            PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [notices.hook] }],
+            PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [decoder.hook] }],
           },
           spawnClaudeCodeProcess: (options) => {
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
@@ -505,9 +434,8 @@ export function createClaudeSdkDriver(
         authDiagnostics,
         transcript,
         emit: options.emit,
-        projection: new ClaudeProjection(),
-        notices,
-        terminalCommands: new Set(),
+        decoder,
+        capture: nativeCapture("claude", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } })),
         agents: new ClaudeAgents(),
         receipts: new Map(),
         closed: false,
@@ -601,7 +529,7 @@ export function createClaudeSdkDriver(
         live.promptReceipt = undefined
         throw error
       }
-      live.projection.reset()
+      live.decoder.startTurn()
       live.transcript.reset()
       engine.patch(live, {
         status: "running",
