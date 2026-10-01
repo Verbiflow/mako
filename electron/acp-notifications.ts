@@ -6,7 +6,7 @@ import type {
   SessionNotification,
   SessionUpdate,
 } from "@agentclientprotocol/sdk"
-import { normalizeAcpOptions } from "./harnesses.js"
+import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
 import { decoded, type Decoded } from "./contracts/native-decoding.js"
 import type { LiveSessionState, LiveUpdate, LiveDriverEvent } from "./shared.js"
 

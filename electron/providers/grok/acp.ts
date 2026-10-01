@@ -16,7 +16,9 @@ import type { AccessTier } from "../../contracts/access.js"
  * after it), so Grok advertises no steering. In every permission mode except
  * always-approve the ACP server denies tool calls instead of sending
  * session/request_permission, so the host cannot approve on the user's
- * behalf; the tier is fixed by the launch flag. Grok reports no session
+ * behalf; the tier is fixed by the launch flag. Grok 1.0.44 in plan mode does
+ * send session/request_permission, for writing its plan.md (traced
+ * 2026-09-30), so permission requests still need answering. Grok reports no session
  * modes over ACP, so the default is pinned explicitly: without it an
  * unchosen session ran Grok's own default while the desk reported nothing.
  */
