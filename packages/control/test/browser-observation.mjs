@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import {
   pageNodeLines,
+  pageOutlineLine,
+  pageOutlineLines,
   selectPageNodes,
 } from "../dist/browser/index.js"
 
@@ -46,8 +48,23 @@ const checked = selectPageNodes(observation, {
 })
 assert.deepEqual(checked.nodes.map((node) => node.ref), ["a1:4"])
 assert.deepEqual(pageNodeLines(checked.nodes), [
-  'a1:4     checkbox "Allow diagnostics" checked=true',
+  'a1:4 checkbox "Allow diagnostics" checked=true',
 ])
+assert.deepEqual(pageOutlineLines(observation.nodes), [
+  'RootWebArea "Settings"',
+  '  region "Privacy"',
+  '    heading "Permissions" level=2',
+  '    a1:3 button "Open permissions" expanded',
+  '    a1:4 checkbox "Allow diagnostics" checked',
+])
+assert.deepEqual(pageOutlineLines(observation.nodes.slice(3), { flat: true }), [
+  'a1:3 button "Open permissions" expanded',
+  'a1:4 checkbox "Allow diagnostics" checked',
+])
+assert.equal(
+  pageOutlineLine({ ref: "e7", depth: 0, role: "textbox", name: "Email", value: "ada@example.com", required: true, focused: true, expanded: "false" }),
+  'e7 textbox "Email" value="ada@example.com" expanded=false focused required'
+)
 
 const bounded = selectPageNodes(observation, {
   roles: ["heading", "button", "checkbox"],
