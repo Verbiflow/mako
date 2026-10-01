@@ -614,6 +614,7 @@ function translator(): ClaudeTranslator {
           trigger: trigger === "auto" ? "automatic" : trigger === "manual" ? "manual" : undefined,
           tokensBefore: numberValue(metadata["preTokens"]),
           tokensAfter: numberValue(metadata["postTokens"]),
+          durationMs: numberValue(metadata["durationMs"]),
         }
         compaction = { entry: mark(compactionEvent(kept), line.timestamp, line.uuid), kept }
         return

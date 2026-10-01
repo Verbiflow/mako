@@ -60,6 +60,8 @@ interface StoredRow {
   id: string
   type?: string
   timeCreated?: number
+  /** When the row last changed: a compaction row settles here. */
+  timeUpdated?: number
   data: JsonObject
 }
 
@@ -601,8 +603,8 @@ function currentEntries(
 ): ThreadEntry[] {
   const stored = database
     .prepare(
-      `SELECT id, type, time_created, data FROM (
-         SELECT id, type, seq, time_created, data FROM session_message
+      `SELECT id, type, time_created, time_updated, data FROM (
+         SELECT id, type, seq, time_created, time_updated, data FROM session_message
          WHERE session_id = ? ORDER BY seq DESC, id DESC LIMIT ?
        ) ORDER BY seq, id`
     )
@@ -755,6 +757,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
         trigger: compactionTrigger(jsonText(row.data.reason)),
         tokensBefore: execution.context,
         summary: jsonText(row.data.summary),
+        durationMs: elapsed(timeCreated(row.data) ?? row.timeCreated, row.timeUpdated),
       }))
     return
   }
@@ -1116,6 +1119,7 @@ function parseStoredRow(fields: SqliteFields): StoredRow | null {
     id,
     type: sqliteText(fields.type),
     timeCreated: sqliteNumber(fields.time_created),
+    timeUpdated: sqliteNumber(fields.time_updated),
     data,
   }
 }
@@ -1128,6 +1132,11 @@ function parseObject(raw: string | undefined): JsonObject | undefined {
   } catch {
     return undefined
   }
+}
+
+function elapsed(from: number | undefined, to: number | undefined): number | undefined {
+  if (from === undefined || to === undefined || from <= 0 || to <= from) return undefined
+  return (to - from) * (to > 1e12 ? 1 : 1000)
 }
 
 function timeCreated(data: JsonObject): number | undefined {

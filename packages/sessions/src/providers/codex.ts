@@ -78,6 +78,8 @@ interface JsonObject {
 
 interface CodexRolloutBase {
   at?: string
+  /** `task_started` opens a turn; `task_complete` and `turn_aborted` close it. */
+  turn?: "started" | "ended"
 }
 
 interface CodexSessionMeta extends CodexRolloutBase {
@@ -506,18 +508,22 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
             at,
             usage: parseTokenUsage(payload),
           }
+        case "task_started":
+          return { kind: "ignored", at, turn: "started" }
         case "turn_aborted":
           return {
             kind: "event",
             at,
+            turn: "ended",
             event: marker("Interrupted", abortDetail(stringValue(payload["reason"]))),
           }
         case "task_complete": {
           const error = objectValue(payload["error"])
-          if (!error) return { kind: "ignored", at }
+          if (!error) return { kind: "ignored", at, turn: "ended" }
           return {
             kind: "event",
             at,
+            turn: "ended",
             event: codexFailureEvent(errorVariant(error["codex_error_info"]), stringValue(error["message"])),
           }
         }
@@ -557,6 +563,12 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
     default:
       return { kind: "ignored", at }
   }
+}
+
+function elapsedBetween(from: string | undefined, to: string | undefined): number | undefined {
+  if (!from || !to) return undefined
+  const elapsed = Date.parse(to) - Date.parse(from)
+  return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
 }
 
 function sqliteText(value: SQLOutputValue | undefined): string | undefined {
@@ -978,6 +990,14 @@ function translator(): CodexTranslator {
   let contextTokens: number | undefined
   /** The record that marked the latest compaction, until content follows it. */
   let compaction: CodexCompactedLine["source"] | undefined
+  /**
+   * Codex records no start for a compaction. Inside a turn it begins right
+   * after the record before it — the turn's start, or the reply that filled
+   * the context — so that record's time is its start. Outside a turn the
+   * record before could be hours old, and no duration is better than a wrong one.
+   */
+  let turnOpen = false
+  let lastAt: string | undefined
 
   const openAssistant = (at?: string): AssistantEntry => {
     compaction = undefined
@@ -997,6 +1017,10 @@ function translator(): CodexTranslator {
   const push = (raw: string): void => {
     const event = parseCodexRolloutLine(raw)
     if (!event) return
+    const previousAt = lastAt
+    const inTurn = turnOpen
+    if (event.at) lastAt = event.at
+    if (event.turn) turnOpen = event.turn === "started"
 
     switch (event.kind) {
       case "turn_context":
@@ -1099,7 +1123,14 @@ function translator(): CodexTranslator {
           return
         }
         compaction = event.source
-        pushMarker(compactionEvent({ tokensBefore: contextTokens, summary: clip(event.summary, MAX_SUMMARY) }), event.at)
+        pushMarker(
+          compactionEvent({
+            tokensBefore: contextTokens,
+            summary: clip(event.summary, MAX_SUMMARY),
+            durationMs: inTurn ? elapsedBetween(previousAt, event.at) : undefined,
+          }),
+          event.at
+        )
         contextTokens = undefined
         return
       case "session_meta":

@@ -192,6 +192,7 @@ export function grokUpdateMarker(kind: string | undefined, update: JsonObject): 
         trigger: "automatic",
         tokensBefore: numberValue(update["tokens_before"]),
         tokensAfter: numberValue(update["tokens_after"]),
+        durationMs: numberValue(update["elapsed_ms"]),
         summary: stringValue(update["summary_preview"]),
       })
     case "auto_compact_failed":
