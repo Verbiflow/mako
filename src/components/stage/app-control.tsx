@@ -7,6 +7,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/compo
 import { Shimmer } from "@/components/ui/shimmer"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { desktop } from "@/state/desktop"
 import {
   setUpInThisThread,
@@ -238,7 +239,7 @@ function NoneMenu({ cwd, view, focused }: { cwd: string; view: Extract<ThreadApp
   const here = useThreadAgent()
   const hide = () => {
     hideSetupFor(view.root)
-    toast(`Run app is hidden for ${view.project}`, { action: { label: "Undo", onClick: () => showSetupFor(view.root) } })
+    toast(`Run app is hidden for ${view.project}`, { duration: ACTION_TOAST_MS, action: { label: "Undo", onClick: () => showSetupFor(view.root) } })
   }
   return (
     <>

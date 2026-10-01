@@ -565,15 +565,15 @@ function shortStatus(usage: AccountUsage): string {
   return "No limits reported"
 }
 
-const OPENCODE_PROVIDERS: Record<string, string> = {
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  google: "Google",
-  openrouter: "OpenRouter",
-}
+const OPENCODE_PROVIDERS = new Map([
+  ["openai", "OpenAI"],
+  ["anthropic", "Anthropic"],
+  ["google", "Google"],
+  ["openrouter", "OpenRouter"],
+])
 
 function providerName(id: string): string {
-  return OPENCODE_PROVIDERS[id] ?? id.charAt(0).toUpperCase() + id.slice(1)
+  return OPENCODE_PROVIDERS.get(id) ?? id.charAt(0).toUpperCase() + id.slice(1)
 }
 
 function authName(type: ProviderAccount["authType"]): string {
