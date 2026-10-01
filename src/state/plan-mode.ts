@@ -28,7 +28,7 @@ import {
   usePlanChoice,
   type NativePlan,
 } from "@/state/plan-choice"
-import { recordPlanBuild, type PlanBuildTarget } from "@/state/plan-builds"
+import { buildOnce, recordPlanBuild, type PlanBuildTarget } from "@/state/plan-builds"
 import { prefsStore, usePrefs } from "@/state/prefs"
 import {
   chooseThreadMode,
@@ -307,7 +307,18 @@ function latestInEntries(entries: readonly ViewedThreadEntry[]): string | undefi
   return undefined
 }
 
-/** The newest plan of the conversation a card belongs to; only it gets the build actions. */
+function latestPlan(source: PlanSource, conversation: AcpConversation | undefined): string | undefined {
+  const viewing = threadsStore.get().viewing
+  return (conversation ? latestInBlocks(conversation.blocks) : undefined) ??
+    (source.threadPath && viewing?.ref.path === source.threadPath ? latestInEntries(viewing.entries) : undefined)
+}
+
+/**
+ * The newest plan of the conversation a card belongs to. Only it builds in
+ * the session that wrote it: that session's context and any approval it
+ * waits on belong to its newest plan, so an earlier revision builds only in
+ * a new session.
+ */
 export function useLatestPlan(source: PlanSource): string | undefined {
   const live = useAcp((state) => {
     const conversation = sourceConversation(state, source)
@@ -350,6 +361,9 @@ export async function buildPlan(source: PlanSource, plan: ProposedPlan): Promise
     await answerLiveApproval(conversation.key, approval.id, { kind: "choice", optionId: approval.implementsPlan.approve })
     return
   }
+  const latest = latestPlan(source, conversation)
+  if (latest !== undefined && latest !== plan.id)
+    throw new Error("This is an earlier revision. Build it in a new session from the plan's menu.")
   if (conversation?.kind === "live" && conversation.permission?.implementsPlan)
     throw new Error("The agent is waiting on its newest plan. Build or answer that one first.")
   const ref = source.threadPath ? threadRef(threadsStore.get(), source.threadPath) : undefined
@@ -358,14 +372,13 @@ export async function buildPlan(source: PlanSource, plan: ProposedPlan): Promise
   const context = planContextFor(target, conversation)
   if (context.control.kind !== "none") await setPlanMode(context, false)
   const request = appendPlanContext(proposedPlanReply(plan, "implement"), [plan])
-  if (conversation) {
-    if (acpStore.get().activeKey !== conversation.key) acp.activate(conversation.key, false)
-    if (!(await acp.send(request))) throw new Error("The implementation request was not sent.")
-    recordPlanBuild(plan, { conversation: conversation.key })
-    return
-  }
-  if (!ref || !(await threads.reply(ref, request, []))) throw new Error("The implementation request was not sent.")
-  recordPlanBuild(plan, { thread: ref.path })
+  const sent = conversation
+    ? await buildOnce(plan, { conversation: conversation.key }, () => {
+        if (acpStore.get().activeKey !== conversation.key) acp.activate(conversation.key, false)
+        return acp.send(request)
+      })
+    : ref ? await buildOnce(plan, { thread: ref.path }, () => threads.reply(ref, request, [])) : false
+  if (!sent) throw new Error("The implementation request was not sent.")
 }
 
 /**

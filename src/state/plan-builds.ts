@@ -57,6 +57,42 @@ export function recordPlanBuild(plan: Pick<ProposedPlan, "id">, target: PlanBuil
   })
 }
 
+/** Someone else built the plan since this window last saw it; the Build click sends nothing. */
+export class PlanBuiltElsewhereError extends Error {
+  constructor() {
+    super("Someone else built this plan a moment ago. Build again if you still want another run.")
+    this.name = "PlanBuiltElsewhereError"
+  }
+}
+
+/**
+ * Claims the plan's build on the host before its implementation is sent, so
+ * two Build clicks can't both send one; `send` runs only if this click wins,
+ * and a send that fails gives the claim back.
+ */
+export async function buildOnce(plan: Pick<ProposedPlan, "id">, target: PlanBuildTarget, send: () => Promise<boolean>): Promise<boolean> {
+  if (!hasBridge()) {
+    if (!(await send())) return false
+    recordPlanBuild(plan, target)
+    return true
+  }
+  const claimId = crypto.randomUUID()
+  const seen = planBuildsStore.get().builds[plan.id]?.at ?? null
+  const claim = await getMako().claimPlanBuild(claimId, plan.id, target, seen)
+  if (!claim.claimed) {
+    const builds = { ...planBuildsStore.get().builds }
+    if (claim.current) builds[plan.id] = claim.current
+    planBuildsStore.set({ builds })
+    throw new PlanBuiltElsewhereError()
+  }
+  planBuildsStore.set({ builds: { ...planBuildsStore.get().builds, [plan.id]: claim.build } })
+  let sent = false
+  try { sent = await send() } finally {
+    if (!sent) await getMako().releasePlanBuild(claimId).catch(() => {})
+  }
+  return sent
+}
+
 /** The build recorded for a plan, if any. */
 export function usePlanBuild(plan: Pick<ProposedPlan, "id">): PlanBuild | undefined {
   return usePlanBuilds((state) => state.builds[plan.id])

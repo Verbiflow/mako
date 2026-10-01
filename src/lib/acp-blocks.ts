@@ -131,7 +131,7 @@ export function acpBlocksToMessages(
         break
       case "event": {
         assistant = null
-        const note = { label: block.label, detail: block.detail, body: block.body, tone: block.tone }
+        const note = { label: block.label, detail: block.detail, body: block.body, tone: block.tone, setup: block.setup }
         messages.push({
           id: `acp-event-${absolute}`,
           role: "system",
