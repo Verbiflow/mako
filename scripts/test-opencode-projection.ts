@@ -107,6 +107,31 @@ const message = "msg_assistant"
   assert.ok(cutOff.length > 0 && cutOff.every(update => update.kind === "tool-update" && update.unfinished),
     "a failed turn's open calls never returned; a stopped one's were stopped")
 
+  // A Plan step that ends the turn: its streamed reply folds into the plan card.
+  const planning = new OpenCodeContent(root, cwd)
+  const step = (id: string, agent: string) => planning.observe(event("session.step.started", { sessionID: root, assistantMessageID: id, agent,
+    model: { id: "m", providerID: "p" } }))
+  const text = (id: string, ordinal: number, value: string) =>
+    planning.observe(event("session.text.ended", { sessionID: root, assistantMessageID: id, ordinal, text: value }))
+  const ended = (id: string, finish: string, sessionID = root) => planning.observe(event("session.step.ended", { sessionID, assistantMessageID: id, finish,
+    cost: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }))
+  assert.deepEqual(step("msg_look", "plan"), [])
+  text("msg_look", 0, "Let me read the code first.")
+  assert.deepEqual(ended("msg_look", "tool-calls"), [], "a step that goes on to call tools is not the plan")
+  step("msg_plan", "plan")
+  text("msg_plan", 1, "## Steps\n1. Add `hello()`.")
+  text("msg_plan", 0, "# Plan: Add a greeting\n")
+  assert.deepEqual(ended("msg_plan", "stop"), [
+    { kind: "retract", ids: ["msg_plan:0", "msg_plan:1"] },
+    { kind: "proposed-plan", id: "opencode:msg_plan", text: "# Plan: Add a greeting\n\n## Steps\n1. Add `hello()`.", status: "proposed", replace: true },
+  ], "the final Plan reply, in part order, replaces its streamed text")
+  step("msg_build", "build")
+  text("msg_build", 0, "Done.")
+  assert.deepEqual(ended("msg_build", "stop"), [], "another agent's reply stays prose")
+  step("msg_empty", "plan")
+  assert.deepEqual(ended("msg_empty", "stop"), [], "a Plan step with no text has no plan")
+  assert.deepEqual(ended("msg_child", "stop", child), [], "a child session's step is not the conversation's plan")
+
   const bounded = new OpenCodeContent(root, cwd)
   for (let index = 0; index <= 4096; index++)
     bounded.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: `b${index}`, name: "bash" }))

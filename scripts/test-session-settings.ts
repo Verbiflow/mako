@@ -3,7 +3,7 @@ import { normalizeCodexModels } from "@mako/sessions/model-catalog"
 import assert from "node:assert/strict"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import { applyAcpSettings } from "../electron/acp-config.ts"
-import { codexInteractiveConfig, codexWireSettings } from "../electron/providers/codex/settings.ts"
+import { codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "../electron/providers/codex/settings.ts"
 
 const model: SessionConfigOption = {
   id: "model",
@@ -251,6 +251,22 @@ assert.equal(
   codexWireSettings({ options: { serviceTier: "fast" } }).serviceTier,
   "priority"
 )
+
+assert.ok(
+  dualCatalog.models[0]!.options.some((option) => option.role === "plan" && option.kind === "boolean"),
+  "every Codex model offers plan mode"
+)
+assert.deepEqual(codexCollaborationMode(undefined, "gpt"), {}, "an unknown plan setting leaves Codex's own mode alone")
+assert.deepEqual(codexCollaborationMode({ options: { plan: true, effort: "high" } }, "gpt"), {
+  collaborationMode: { mode: "plan", settings: { model: "gpt", reasoning_effort: "high", developer_instructions: null } },
+})
+assert.deepEqual(
+  codexCollaborationMode({ model: "chosen", options: { plan: false } }, "gpt").collaborationMode,
+  { mode: "default", settings: { model: "chosen", reasoning_effort: null, developer_instructions: null } },
+  "Codex keeps a collaboration mode across turns, so leaving plan is sent explicitly"
+)
+assert.deepEqual(codexCollaborationMode({ options: { plan: false } }, undefined), {})
+assert.throws(() => codexCollaborationMode({ options: { plan: true } }, undefined), /needs a model to plan/)
 
 const observedChanges: unknown[] = []
 forward(

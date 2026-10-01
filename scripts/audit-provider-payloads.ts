@@ -14,6 +14,7 @@ import {
   consumeStdout,
   MAX_STDOUT_BUFFER,
   type ProtocolContext,
+  CodexDecoder,
 } from "../electron/codex-app-protocol.js"
 import {
   reduceLiveUpdates,
@@ -102,7 +103,7 @@ const context: ProtocolContext = {
   state,
   nextRequestId: 0,
   pending: new Map(),
-  items: new Map(),
+  decoder: new CodexDecoder({ threadId: "thread", state }),
   background: { running: new Set() },
   stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
   exited: false,

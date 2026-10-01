@@ -24,6 +24,7 @@ import {
   consumeStdout,
   rpcRequest,
   MAX_STDOUT_BUFFER,
+  CodexDecoder,
   type ProtocolContext,
 } from "../electron/codex-app-protocol.ts"
 import type {
@@ -32,6 +33,7 @@ import type {
   HostEvent,
 } from "../electron/shared.ts"
 import type { TranscriptEvent } from "@mako/sessions/events"
+import type { UsageWindow } from "../electron/account-types.ts"
 
 assert.deepEqual(parseJsonRpcEnvelope("not-json"), { kind: "invalid" })
 assert.deepEqual(parseJsonRpcEnvelope("[]"), { kind: "ignored" })
@@ -251,7 +253,7 @@ const context: ProtocolContext = {
   state,
   nextRequestId: 0,
   pending: new Map(),
-  items: new Map(),
+  decoder: new CodexDecoder({ threadId: "thread-1", state }),
   background: { running: new Set() },
   stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
   exited: false,
@@ -395,12 +397,13 @@ for (const confirmed of [false, true]) {
 }
 console.log("PASS: Codex compaction requires the matching turn and native compaction boundary")
 
-const limits: JsonObject[] = []
-context.protocol.rateLimits = (params) => limits.push(params)
+const limits: UsageWindow[][] = []
+context.protocol.usage = (windows) => limits.push(windows)
 const spent = { rateLimits: { limitId: "codex", primary: { usedPercent: 41, windowDurationMins: 300, resetsAt: 1_900_000_000 } } }
 notify("account/rateLimits/updated", spent)
-assert.deepEqual(limits, [spent], "the account's limits go to the account, not the ignore list")
-context.protocol.rateLimits = undefined
+assert.deepEqual(limits, [[{ usedPercent: 41, windowMinutes: 300, resetsAt: 1_900_000_000_000 }]],
+  "the account's limits go to the account, not the ignore list")
+context.protocol.usage = undefined
 console.log("PASS: Codex rate-limit updates reach the account")
 
 const activities: unknown[] = []
@@ -661,7 +664,7 @@ console.log("PASS: Codex approval missing request, validation refusal and unconf
     state: backgroundState,
     threadId: "thread-bg",
     pending: new Map(),
-    items: new Map(),
+    decoder: new CodexDecoder({ threadId: "thread-bg", state: backgroundState }),
     background: { running: new Set() },
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     protocol: { ...context.protocol, updateState: (patch) => Object.assign(backgroundState, patch) },

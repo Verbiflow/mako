@@ -31,6 +31,7 @@ import { reconcileMessages } from "../src/lib/reconcile.ts"
 import { responseText, toExchanges } from "../src/lib/exchanges.ts"
 import {
   proposedPlanMarkdown,
+  proposedPlanTitle,
   proposedPlanReply,
   appendPlanContext,
   parsePlanContext,
@@ -138,6 +139,11 @@ assert.equal(emittedPlan.updates[0]?.kind, "proposed-plan")
 const permission = events.find((event) => event.type === "live-permission")
 assert.ok(permission?.type === "live-permission")
 assert.equal(permission.request.options[0]?.name, "Approve plan")
+assert.deepEqual(
+  permission.request.implementsPlan,
+  { plan: plan.id, approve: "allow_once" },
+  "the plan approval names the plan it implements, so Build answers it instead of sending a prompt"
+)
 permissions.respond("permission", { kind: "choice", optionId: "reject_once" })
 const decision = await response
 assert.ok(decision)
@@ -231,3 +237,9 @@ try {
 console.log(
   "Proposed plans: SDK permission capture, revisions, canonical conversion, copy/export, limits, journal and non-overwriting workspace save passed"
 )
+
+assert.equal(proposedPlanTitle("# Plan: Split the rail store\n\n1. Do it"), "Split the rail store", "the UI already says it is a plan")
+assert.equal(proposedPlanTitle("# Plan — Ship\n"), "Ship")
+assert.equal(proposedPlanTitle("# Planning the release\n"), "Planning the release")
+assert.equal(proposedPlanTitle("# Plan:\n"), "Plan:")
+assert.equal(proposedPlanTitle("No heading"), "Proposed plan")

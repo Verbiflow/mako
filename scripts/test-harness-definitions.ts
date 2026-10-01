@@ -18,6 +18,7 @@ import type { ProviderRegistry, ProviderCapability } from "../electron/providers
 
 const families = {
   live: "liveDrivers",
+  decoder: "decoders",
   profile: "profiles",
   accounts: "accountCapabilities",
   acp: "acpSources",
@@ -70,6 +71,7 @@ const host = createProviderHost()
 const definition: HarnessDefinition = {
   provider: "example",
   live: providerHost.liveDrivers.get("codex")!,
+  decoder: lacks("test"),
   profile: providerHost.profiles.get("codex")!,
   accounts: lacks("test"),
   acp: lacks("test"),

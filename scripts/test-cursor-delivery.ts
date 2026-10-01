@@ -266,6 +266,46 @@ try {
   assert.equal(evidence.at(-1)?.kind, "accepted")
   await orphan.close(orphanId)
   console.log("Cursor lost turn: the next prompt shows it live without sending; settled turns stay closed")
+
+  // Plan is the SDK's per-send mode: a planning turn asks for it beside the
+  // model, and the model the run reports back does not turn it off.
+  const sent: string[] = []
+  let planEvent: (event: SdkEvent) => void = () => {}
+  const planClient: CursorSdkLiveClient = {
+    ...client,
+    request: async (method, params) => {
+      if (method !== "send") return client.request(method, params)
+      sent.push(JSON.stringify(params))
+      return { runId: `plan-run-${sent.length}` }
+    },
+  }
+  const planStates: LiveSessionState[] = []
+  const planned = createCursorSdkDriver({
+    auth, stateRoot: () => root, home: root,
+    client: (options) => {
+      planEvent = options.onEvent
+      return planClient
+    },
+    models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
+  })
+  const planId = randomUUID()
+  await planned.start(root, { conversationId: planId, emit(event) {
+    if (event.type === "live-session") planStates.push(event.session)
+  } })
+  assert.ok(planStates.at(-1)?.configOptions.some((option) => option.id === "plan" && option.role === "plan"),
+    "every Cursor model offers plan mode")
+  const planTurn = dispatch()
+  await planned.prompt(planId, "plan it", [], { options: { plan: true } }, planTurn)
+  assert.equal(sent.at(-1), JSON.stringify({ turn: planTurn.attemptId, text: "plan it", model: { id: "fixture-model" }, plan: true }))
+  assert.equal(planStates.at(-1)?.settings?.options?.plan, true)
+  planEvent({ event: "result", turn: planTurn.attemptId, result: { runId: "plan-run-1", status: "finished", model: { id: "fixture-model" } } })
+  assert.equal(planStates.at(-1)?.settings?.options?.plan, true, "the run's reported model keeps the plan choice")
+  assert.ok(planStates.at(-1)?.configOptions.some((option) => option.id === "plan" && option.kind === "boolean" && option.current === true))
+  await planned.prompt(planId, "build it", [], { options: { plan: false } }, dispatch())
+  assert.ok(sent.at(-1)?.endsWith('"plan":false}'), "building sends Agent again")
+  assert.equal(planStates.at(-1)?.settings?.options?.plan, false)
+  await planned.close(planId)
+  console.log("Cursor plan: a planning send asks for the SDK's plan mode and the session keeps reporting it")
 } finally {
   await driver.close(id)
   rmSync(root, { recursive: true, force: true })
