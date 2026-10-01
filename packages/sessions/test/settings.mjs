@@ -115,12 +115,12 @@ const sdk = normalizeCursorSdkModels([
 ])
 const [opus, grok] = sdk.models
 // Every family's reasoning parameter is the composer's effort, whatever the SDK calls it.
-assert.deepEqual(opus.options.map(o => [o.id, o.wireId, o.role]), [["context", "context", "context"], ["effort", "effort", "reasoning"], ["fast", "fast", "speed"]])
-assert.deepEqual(grok.options.map(o => [o.id, o.wireId, o.role]), [["effort", "reasoning_effort", "reasoning"]])
+assert.deepEqual(opus.options.map(o => [o.id, o.wireId, o.role]), [["context", "context", "context"], ["effort", "effort", "reasoning"], ["fast", "fast", "speed"], ["plan", undefined, "plan"]])
+assert.deepEqual(grok.options.map(o => [o.id, o.wireId, o.role]), [["effort", "reasoning_effort", "reasoning"], ["plan", undefined, "plan"]])
 assert.equal(opus.options[2].values[1].label, "Fast")
 // A choice saved under the SDK's own id still resolves, and does not raise an unsupported-option issue.
 const saved = resolveSessionSettings({ models: sdk.models, context: "new", preference: { source: "saved", settings: { model: "grok-4.7", options: { reasoning_effort: "low" } } } })
-assert.deepEqual(saved.settings, { model: "grok-4.7", options: { effort: "low" } })
+assert.deepEqual(saved.settings, { model: "grok-4.7", options: { effort: "low", plan: false } })
 assert.deepEqual(saved.issues, [])
 // A new conversation on the provider's default model reads that model's defaults; an existing one does not guess.
 const fresh = resolveSessionSettings({ models: sdk.models, context: "new", defaults: { model: "claude-opus-5-5" } })
@@ -138,3 +138,14 @@ const autos = normalizeCursorSdkModels([
 assert.deepEqual(autos.models.map(m => [m.id, m.aliases]), [["auto-smart", ["default"]], ["composer-2.5", undefined]])
 assert.equal(resolveSessionSettings({ models: autos.models, context: "new", preference: { source: "saved", settings: { model: "default" } } }).issues.length, 0)
 console.log("Cursor SDK catalog: one Auto row")
+
+// Plan is Cursor's per-send conversation mode: every model offers it, it is never a model parameter,
+// and the settings a run reports keep the mode Mako sent.
+const { cursorSdkSelection, cursorSdkReportedSettings } = await import("../dist/index.js")
+assert.ok(autos.models.every(m => m.options.some(o => o.id === "plan" && o.role === "plan")), "every model, the folded Auto included, can plan")
+const planned = cursorSdkSelection({ model: "grok-4.7", options: { effort: "high", plan: true } }, sdk.models)
+assert.deepEqual(planned, { selection: { id: "grok-4.7", params: [{ id: "reasoning_effort", value: "high" }] }, dropped: [] })
+assert.deepEqual(cursorSdkReportedSettings(planned.selection, sdk.models, true), { model: "grok-4.7", options: { effort: "high", plan: true } })
+assert.deepEqual(cursorSdkReportedSettings({ id: "grok-4.7" }, sdk.models), { model: "grok-4.7" })
+assert.deepEqual(cursorSdkReportedSettings({ id: "grok-4.7" }, sdk.models, "yes"), { model: "grok-4.7" }, "only a boolean is a plan choice")
+console.log("Cursor SDK plan: a per-send mode on every model, never a model parameter, kept in reported settings")
