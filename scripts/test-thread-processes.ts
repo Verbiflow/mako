@@ -476,10 +476,12 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   await deskTools.guide(setupConversation)
   assert.deepEqual(await desk.view(bare), settingUp({ recipe: "running", app: "waiting", checks: "waiting" }), "reading the guide marks the project as being set up")
   setupWorking = false
-  assert.equal((await desk.view(bare)).kind, "setting-up", "a turn that ends before a recipe is saved is the agent asking something; the setup stands")
+  const stoppedSetup = { kind: "none", project: basename(bare), root: bare, stopped: { title: "Set up the app", conversation: setupConversation } }
+  assert.deepEqual(await desk.view(bare), stoppedSetup, "a turn that ends before a recipe is saved ends the setup; the menu offers that Thread, which may be asking something")
   setupWorking = true
+  assert.deepEqual(await desk.view(bare), stoppedSetup, "the same conversation working on something else doesn't read as setting up again")
   setupLive = false
-  assert.equal((await desk.view(bare)).kind, "none", "until that conversation ends")
+  assert.deepEqual(await desk.view(bare), { kind: "none", project: basename(bare), root: bare }, "once that conversation ends, there's no Thread to go back to")
   setupLive = true
   await deskTools.guide(setupConversation)
   writeFileSync(join(bare, "server.mjs"), readFileSync(server, "utf8"))

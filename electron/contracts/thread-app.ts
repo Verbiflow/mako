@@ -41,13 +41,19 @@ export interface SetupProgress {
 }
 
 export type ThreadAppView =
-  | { kind: "none"; project: string; root: string }
+  | {
+      kind: "none"
+      project: string
+      root: string
+      /** The Thread whose setup turn ended before it saved a recipe; it may be asking something. */
+      stopped?: { title: string; conversation: string }
+    }
   | { kind: "invalid"; project: string; root: string; message: string }
   | {
       kind: "setting-up"
       project: string
       root: string
-      /** The Thread setting it up: from reading the guide until its checks pass, or its turn ends with a recipe saved. */
+      /** The Thread setting it up: from reading the guide until its checks pass or its turn ends. */
       thread: { title: string; harness: string; conversation: string }
       /** How far it has got, from what Mako ran for that Thread. */
       progress?: SetupProgress

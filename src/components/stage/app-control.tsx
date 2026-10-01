@@ -237,6 +237,7 @@ function Action({ children, ...props }: { children: ReactNode } & Omit<Parameter
 function NoneMenu({ cwd, view, focused }: { cwd: string; view: Extract<ThreadAppView, { kind: "none" }>; focused: boolean }) {
   const fresh = useSetupAgent()
   const here = useThreadAgent()
+  const stopped = view.stopped
   const hide = () => {
     hideSetupFor(view.root)
     toast(`Run app is hidden for ${view.project}`, { duration: ACTION_TOAST_MS, action: { label: "Undo", onClick: () => showSetupFor(view.root) } })
@@ -248,6 +249,11 @@ function NoneMenu({ cwd, view, focused }: { cwd: string; view: Extract<ThreadApp
         {fresh?.standingInFor ? ` ${harnessLabel(fresh.standingInFor)} isn't signed in, so ${harnessLabel(fresh.harness)} stands in for it.` : null}
         {fresh ? null : " Sign in to an agent in Settings first."}
       </Head>
+      {stopped ? (
+        <Action data-app-action="open-stopped-setup" onSelect={() => void openConversation(stopped.conversation)}>
+          <span className="min-w-0 truncate">Continue in “{stopped.title}”</span>
+        </Action>
+      ) : null}
       {focused && here ? (
         <SetupChoice action="set-up-here" agent={here} onSelect={() => void setUpInThisThread(cwd)}>
           Set up in this Thread

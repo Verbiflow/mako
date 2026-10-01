@@ -158,6 +158,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
    * come up, since a stopped process leaves no record to read that from later.
    */
   const setups = new Map<string, Setup>()
+  /** The conversation whose setup's turn ended before a recipe was saved, by main checkout: it may be asking something. */
+  const stoppedSetups = new Map<string, string>()
   const context = async (conversationId: string): Promise<Context & { read: Read }> => {
     const cwd = deps.cwd(conversationId)
     if (!cwd) throw new Error("Mako isn't running this conversation.")
@@ -448,13 +450,24 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (setup && !thread) setups.delete(found.root)
     if (setup && thread) {
       const progress = await setupProgress(setup)
-      // Done once its checks pass, or once its turn ends with a recipe saved; a turn
-      // that ends without one is the agent asking something, so the setup stands.
+      // Done once its checks pass, or once its turn ends. A turn that ends without a
+      // recipe may be asking something, so the project reads as not set up, with a way back to it.
       if (progress.recipe === "done" && (progress.checks === "done" || !thread.working)) setups.delete(found.root)
-      else return { kind: "setting-up", project: found.project, root: found.root, thread: { title: thread.title, harness: thread.harness, conversation: setup.conversation }, progress }
+      else if (thread.working) return { kind: "setting-up", project: found.project, root: found.root, thread: { title: thread.title, harness: thread.harness, conversation: setup.conversation }, progress }
+      else {
+        setups.delete(found.root)
+        stoppedSetups.set(found.root, setup.conversation)
+      }
     }
     if (read.kind !== "ready") {
-      if (read.kind === "none") return { kind: "none", project: found.project, root: found.root }
+      if (read.kind === "none") {
+        const left = stoppedSetups.get(found.root)
+        const leftThread = left && deps.conversation?.(left)
+        const none: Extract<ThreadAppView, { kind: "none" }> = { kind: "none", project: found.project, root: found.root }
+        if (left && leftThread) none.stopped = { title: leftThread.title, conversation: left }
+        else if (left) stoppedSetups.delete(found.root)
+        return none
+      }
       return { kind: "invalid", project: found.project, root: found.root, message: read.message }
     }
     const runs = found.environment ? await deps.processes.status(found.app) : []
@@ -551,6 +564,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         const root = await projectRoot(await checkoutOf(cwd))
         if (setups.get(root)?.conversation !== conversationId)
           setups.set(root, { conversation: conversationId, since: (deps.now ?? Date.now)(), appStarted: false })
+        stoppedSetups.delete(root)
       }
       return ENVIRONMENT_GUIDE
     },

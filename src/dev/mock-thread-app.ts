@@ -7,7 +7,8 @@
 // opened, as when the agent's edit lands),
 // setup (not set up; Set up starts a scripted setup Thread, and the strip
 // follows it to a running app), and
-// setup-fallback (the same, with Codex chosen for setting up but signed out).
+// setup-fallback (the same, with Codex chosen for setting up but signed out), and
+// setup-asking (not set up, after a setup Thread's turn ended without a recipe).
 import { toast } from "sonner"
 import { setPref } from "@/state/prefs"
 import { threadsStore } from "@/state/thread-store"
@@ -318,6 +319,9 @@ export function installMockThreadApp(): void {
       break
     case "none":
       putThreadApp(CWD, { kind: "none", project: "mako", root: CWD })
+      break
+    case "setup-asking":
+      putThreadApp(CWD, { kind: "none", project: "mako", root: CWD, stopped: { title: "Set up the app", conversation: "mock-setup" } })
       break
     case "invalid":
       putThreadApp(CWD, {
