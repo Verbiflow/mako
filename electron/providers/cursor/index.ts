@@ -1,7 +1,9 @@
 import { cursorCanvasPreview } from "./canvas-preview.js"
 import { cursorSdkStateRoot, emitCursorSession } from "@mako/sessions"
 import { accountEnv } from "../../accounts.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
+import { cursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
 import { cursorMcpSource } from "./mcp.js"
 import { cursorProcessProbe } from "./process-probe.js"
@@ -33,11 +35,11 @@ export const installCursor: ProviderModule = (host) => {
   const stateRoot = () => cursorSdkStateRoot()
   const credentials = new CursorCredentialStore(cursorCredentialPath(stateRoot()), electronSecretEncryption())
   const auth = new CursorSdkAuth({ env, openUrl: openExternal, credentials })
-  host.artifactPreviews.register(cursorCanvasPreview)
   const modelCache = createCursorModelCache()
-  host.liveDrivers.register(createCursorSdkDriver({ auth, stateRoot, modelCache }))
-  host.profiles.register(
-    createCursorProfileLoader({
+  installHarness(host, {
+    provider: "cursor",
+    live: createCursorSdkDriver({ auth, stateRoot, modelCache }),
+    profile: createCursorProfileLoader({
       sdkModels: async (_env, cwd) => {
         const env = await auth.childEnv()
         return modelCache(env, () => listCursorSdkModels({ env, cwd }), true)
@@ -48,31 +50,35 @@ export const installCursor: ProviderModule = (host) => {
           ? `${state.source}:${state.email ?? ""}:${state.keyName ?? ""}`
           : "signed-out"
       },
-    })
-  )
-  // Resolve credentials when Cursor is used. A locked keychain must not
-  // prevent the shared host from starting for every other provider.
-  host.processProbes.register(cursorProcessProbe)
-  host.mcpSources.register(cursorMcpSource)
-  host.skillSources.register(cursorSkillSource)
-  host.connections.register(cursorConnection(auth, () => credentials.secure()))
-  host.sessionEmitters.register({
-    provider: "cursor",
-    emit: (thread) => emitCursorSession(thread, {}),
-  })
-  // The install script keeps versions under ~/.local/share/cursor-agent and
-  // links ~/.local/bin/cursor-agent; there is no package to read a public
-  // version from, so `cursor-agent update` is both the check and the update.
-  host.updateSources.register({
-    provider: "cursor",
-    binary: (env) => resolveExecutable("cursor-agent", env),
-    native: {
-      label: "Update Cursor Agent",
-      args: ["update"],
-      ownsPath: (path) =>
-        path.includes("/.local/share/cursor-agent/") ||
-        path.endsWith("/.local/bin/cursor-agent"),
+    }),
+    accounts: cursorAccountCapability(auth),
+    acp: lacks("Runs on the Cursor SDK"),
+    nativeRunner: notBuilt("Mako runs Cursor through its SDK and does not start `cursor-agent` itself"),
+    processProbe: cursorProcessProbe,
+    mcp: cursorMcpSource,
+    skills: cursorSkillSource,
+    sessionEmitter: {
+      provider: "cursor",
+      emit: (thread) => emitCursorSession(thread, {}),
     },
-    install: [scriptInstall("https://cursor.com/install")],
+    // Resolve credentials when Cursor is used. A locked keychain must not
+    // prevent the shared host from starting for every other provider.
+    connection: cursorConnection(auth, () => credentials.secure()),
+    // The install script keeps versions under ~/.local/share/cursor-agent and
+    // links ~/.local/bin/cursor-agent; there is no package to read a public
+    // version from, so `cursor-agent update` is both the check and the update.
+    updates: {
+      provider: "cursor",
+      binary: (env) => resolveExecutable("cursor-agent", env),
+      native: {
+        label: "Update Cursor Agent",
+        args: ["update"],
+        ownsPath: (path) =>
+          path.includes("/.local/share/cursor-agent/") ||
+          path.endsWith("/.local/bin/cursor-agent"),
+      },
+      install: [scriptInstall("https://cursor.com/install")],
+    },
+    artifactPreview: cursorCanvasPreview,
   })
 }
