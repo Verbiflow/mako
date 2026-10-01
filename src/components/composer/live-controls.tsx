@@ -263,7 +263,8 @@ function AccessPicker({
   const selected =
     modes.find((mode) => mode.id === current) ??
     (modes.length === 1 ? modes[0] : undefined)
-  const label = selected ? modeLabel(selected) : "Access"
+  // The Plan toggle beside it already names plan mode; the chip says what it allows.
+  const label = selected ? (selected.access === "plan" ? "Read-only" : modeLabel(selected)) : "Access"
   const full = selected?.access === "full"
   if (modes.length === 1 && selected) {
     // A one-mode provider offers nothing to choose: the chip states the one

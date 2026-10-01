@@ -199,20 +199,15 @@ export function ProposedPlanCard({
       ) : null}
       {(source.liveId || source.threadPath) && !superseded ? (
         <div className="flex flex-wrap items-center gap-1.5 border-t border-hairline px-3 py-2">
-          {built ? (
-            <span className="mr-auto flex items-center gap-1.5 text-label text-faint">
+          {canOpenBuild && builtIn ? (
+            <button
+              type="button"
+              className="pressable mr-auto flex items-center gap-1.5 rounded px-1 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+              onClick={() => acp.activate(builtIn)}
+            >
               <CheckIcon className="size-3.5" />
-              {builtHere ? "Built in this session" : "Built in another session"}
-              {canOpenBuild && builtIn ? (
-                <button
-                  type="button"
-                  className="pressable rounded px-1 text-ui underline-offset-2 hover:underline"
-                  onClick={() => acp.activate(builtIn)}
-                >
-                  Open
-                </button>
-              ) : null}
-            </span>
+              Open build session
+            </button>
           ) : null}
           <Action
             tone={built ? "outline" : "solid"}
