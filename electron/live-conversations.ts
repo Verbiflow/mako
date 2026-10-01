@@ -52,6 +52,7 @@ import { isDeepStrictEqual } from "node:util"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import type { SessionFacts } from "./session-memory.js"
+import type { StartPurpose } from "./contracts/thread-purposes.js"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { threadIdentity, type ThreadPage } from "@mako/sessions"
 import { z } from "zod"
@@ -247,6 +248,24 @@ export class LiveConversations {
       if (first && facts.session) this.announceGroup(placed.thread)
     } catch (error) {
       hostWarn("threads", "journal registration failed", { conversation: facts.conversationId, error: errorMessage({ error }) })
+    }
+  }
+
+  /**
+   * Only a new Thread is started for a purpose; a resume or a `+` tab joins
+   * one that already is what it is. Written before the provider spawns, so
+   * the row shows it from the first frame; a failure leaves it unmarked.
+   */
+  private markPurpose(conversationId: string, purpose: StartPurpose, options: LiveStartOptions): void {
+    const threads = this.dependencies.threads
+    if (!threads || options.resume || options.session !== undefined) return
+    try {
+      const placed = threads.journalPlacement(conversationId)
+      if (!placed) throw new Error("the conversation has no Thread yet")
+      threads.markPurpose(placed.thread, purpose.kind, purpose.project)
+      this.dependencies.emit({ type: "thread-purposes", purposes: threads.purposes() })
+    } catch (error) {
+      hostWarn("threads", "a Thread's purpose could not be recorded", { conversation: conversationId, purpose: purpose.kind, error: errorMessage({ error }) })
     }
   }
 
@@ -669,7 +688,8 @@ export class LiveConversations {
     provider: string,
     cwd: string,
     options: LiveStartOptions,
-    actor?: Actor
+    actor?: Actor,
+    purpose?: StartPurpose
   ): Promise<LiveSessionState> {
     assertLifecycleAdmission()
     z.string().uuid().parse(options.conversationId)
@@ -688,7 +708,7 @@ export class LiveConversations {
         )
       return Promise.resolve(existing.snapshot.session)
     }
-    const start = this.open(provider, cwd, options, actor)
+    const start = this.open(provider, cwd, options, actor, purpose)
     this.starts.set(options.conversationId, start)
     void start
       .finally(() => this.starts.delete(options.conversationId))
@@ -700,7 +720,8 @@ export class LiveConversations {
     provider: string,
     cwd: string,
     options: LiveStartOptions,
-    actor?: Actor
+    actor?: Actor,
+    purpose?: StartPurpose
   ): Promise<LiveSessionState> {
     const driver = this.dependencies.driver(provider)
     if (!driver?.available(this.dependencies.appPath))
@@ -826,6 +847,7 @@ export class LiveConversations {
     this.records.set(id, resident)
     this.bindingOwners.set(id, id)
     this.registerThread(snapshot, this.actor(actor))
+    if (purpose) this.markPurpose(id, purpose, options)
     const generation = resident.generation
     const openingOperation = Promise.resolve()
       .then(async () =>

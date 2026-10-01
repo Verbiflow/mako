@@ -38,6 +38,8 @@ const reads = [
   "mako:transcript-document",
   "mako:thread-archives",
   "mako:thread-groups",
+  "mako:thread-purposes",
+  "mako:thread-app-marks",
   "mako:worktrees",
   "mako:worktree-ahead",
   "mako:worktree-inventory",

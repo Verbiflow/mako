@@ -85,14 +85,18 @@ export function useThreadAgent(): SetupAgent | undefined {
   return agent
 }
 
-/** Ask the focused Thread's own conversation to set the project up; a Thread with none starts one here. */
-export async function setUpInThisThread(cwd: string): Promise<boolean> {
+/**
+ * Ask the focused Thread's own conversation to set the project up. A Thread
+ * with none starts one here, which Mako started for the setup, so it is
+ * recorded as a setup Thread; a Thread asked in place keeps what it was.
+ */
+export async function setUpInThisThread(cwd: string, project: string): Promise<boolean> {
   const to = recipient(threadsStore.get().viewing?.ref, activeAcp(acpStore.get()))
   if (to.kind === "reply") return threads.reply(to.ref, ENVIRONMENT_SETUP_PROMPT)
   if (to.kind === "live") return acp.send(ENVIRONMENT_SETUP_PROMPT)
   const agent = currentSetupAgent()
   if (!agent) return false
-  return acp.startFresh(agent.harness, cwd, ENVIRONMENT_SETUP_PROMPT)
+  return acp.startSetup(agent.harness, cwd, ENVIRONMENT_SETUP_PROMPT, setupTitle(project), false)
 }
 
 /** Start setting a project up at once: a new Thread in a worktree of its own, with the plain request as its first message. */
@@ -100,7 +104,11 @@ export async function startProjectSetup(root: string, project: string): Promise<
   const agent = currentSetupAgent()
   if (!agent) return
   if (!(await actions.newConversationIn(root))) return
-  await acp.startInWorktree(agent.harness, root, ENVIRONMENT_SETUP_PROMPT, `Set up ${project}`)
+  await acp.startSetup(agent.harness, root, ENVIRONMENT_SETUP_PROMPT, setupTitle(project), true)
+}
+
+function setupTitle(project: string): string {
+  return `Set up ${project}`
 }
 
 /** The app of the folder the composer sends to: its live conversation's, the open one's, or the workspace's. */

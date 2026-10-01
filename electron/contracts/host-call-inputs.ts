@@ -410,6 +410,7 @@ export const hostCallInputs = {
         .optional(),
       session: z.string().optional(),
       worktree: z.boolean().optional(),
+      purpose: z.literal("setup").optional(),
     }),
   ]),
   "mako:live-state": z.tuple([z.string()]),
@@ -803,6 +804,7 @@ export const hostCallInputs = {
     z.number().optional(),
   ]),
   "mako:thread-preview": z.tuple([z.string()]),
+  "mako:thread-purposes": z.tuple([]),
   "mako:thread-remember-mode": z.tuple([z.string(), z.string()]),
   "mako:thread-run": z.tuple([z.string()]),
   "mako:thread-stop": z.tuple([

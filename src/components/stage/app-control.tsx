@@ -255,7 +255,7 @@ function NoneMenu({ cwd, view, focused }: { cwd: string; view: Extract<ThreadApp
         </Action>
       ) : null}
       {focused && here ? (
-        <SetupChoice action="set-up-here" agent={here} onSelect={() => void setUpInThisThread(cwd)}>
+        <SetupChoice action="set-up-here" agent={here} onSelect={() => void setUpInThisThread(cwd, view.project)}>
           Set up in this Thread
         </SetupChoice>
       ) : null}

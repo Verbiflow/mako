@@ -25,7 +25,10 @@ const storePath = join(root, "threads.sqlite")
 const journals = join(root, "journals")
 const CWD = "/tmp/thread-groups-project"
 
-function driver(harness: string, owner: () => LiveConversations): ProviderLiveDriver {
+/** What each conversation's Thread was recorded as when its provider spawned. */
+const purposeAtSpawn = new Map<string, string | undefined>()
+
+function driver(harness: string, owner: () => LiveConversations, threads: ThreadStore): ProviderLiveDriver {
   const sessions = new Map<string, LiveSessionState>()
   return {
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
@@ -33,6 +36,8 @@ function driver(harness: string, owner: () => LiveConversations): ProviderLiveDr
     canResume: true,
     available: () => true,
     start: async (cwd, options) => {
+      const thread = threads.journalPlacement(options.conversationId)?.thread
+      purposeAtSpawn.set(options.conversationId, threads.purposes().find((purpose) => purpose.thread === thread)?.kind)
       const session: LiveSessionState = {
         id: options.conversationId,
         nativeId: options.resume ?? `native-${harness}-${options.conversationId}`,
@@ -66,7 +71,7 @@ function host(threads: ThreadStore, events: HostEvent[]): LiveConversations {
     assert.ok(owner)
     return owner
   }
-  const drivers = new Map<string, ProviderLiveDriver>(HARNESSES.map((harness) => [harness, driver(harness, self)]))
+  const drivers = new Map<string, ProviderLiveDriver>(HARNESSES.map((harness) => [harness, driver(harness, self, threads)]))
   owner = new LiveConversations({
     root: journals,
     appPath: root,
@@ -140,7 +145,26 @@ async function main(): Promise<void> {
 
     await assert.rejects(owner.start(other, CWD, { conversationId: randomUUID(), session: randomUUID() }), /no longer exists/,
       `${other}: a tab whose Session is gone starts nothing`)
+
+    const setupId = randomUUID()
+    const told = events.length
+    await owner.start(harness, `${CWD}-worktree`, { conversationId: setupId, title: "Set up project", initialRequest: { id: randomUUID(), text: "set up", attachments: [] } }, undefined, { kind: "setup", project: CWD })
+    await until(() => purposeAtSpawn.has(setupId), `${harness}: the setup Thread's provider spawns`)
+    const setup = threads.journalPlacement(setupId)
+    assert.ok(setup)
+    assert.equal(purposeAtSpawn.get(setupId), "setup", `${harness}: a setup Thread is recorded before its provider spawns`)
+    const heard = events.slice(told).find((event) => event.type === "thread-purposes")
+    assert.ok(heard?.type === "thread-purposes" && heard.purposes.some((purpose) => purpose.thread === setup.thread && purpose.project === CWD),
+      `${harness}: windows hear it, with the project it sets up rather than the worktree it runs in`)
+    const setupTab = threads.createSession({ operationId: randomUUID(), thread: home.thread, actor: threads.person() })
+    const setupTabId = randomUUID()
+    await owner.start(harness, CWD, { conversationId: setupTabId, session: setupTab.session, initialRequest: { id: randomUUID(), text: "set up", attachments: [] } }, undefined, { kind: "setup", project: CWD })
+    await until(() => purposeAtSpawn.has(setupTabId), `${harness}: the new tab's provider spawns`)
+    assert.equal(purposeAtSpawn.get(setupTabId), undefined, `${harness}: a new tab of a Thread never makes it a setup Thread`)
+    expected.set(setupId, setup)
+    expected.set(setupTabId, setupTab)
   }
+  assert.equal(threads.purposes().length, HARNESSES.length, "one setup Thread per harness, and nothing else marked")
   await owner.stop()
   threads.close()
 
@@ -150,9 +174,10 @@ async function main(): Promise<void> {
     assert.deepEqual(reopened.journalPlacement(id), placed, "a restart places every journal where it was")
     assert.deepEqual(placementOf(owner, id), { thread: placed.thread, session: placed.session }, "and its summary says so")
   }
+  assert.equal(reopened.purposes().length, HARNESSES.length, "setup Threads stay marked across a restart")
   await owner.stop()
   reopened.close()
-  console.log(`thread groups host: ${HARNESSES.length} harnesses name their Thread, fork into it and start in a new tab, stable across restart`)
+  console.log(`thread groups host: ${HARNESSES.length} harnesses name their Thread, fork into it, start in a new tab and record setup Threads before spawning, stable across restart`)
 }
 
 try {

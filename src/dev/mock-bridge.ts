@@ -4,7 +4,8 @@ import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
-import { RAIL_WORKTREES, railCwd } from "./mock-rail-worktrees"
+import { RAIL_PURPOSES, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
+import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
@@ -162,6 +163,8 @@ export function installMockBridge() {
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
   /** The setup Thread's worktree, once its Session has started in one. */
   let setupWorktree: ThreadWorktree | undefined
+  /** Threads started for a purpose, as the host records them on start. */
+  const purposes: ThreadPurpose[] = scene === "rail" ? [...RAIL_PURPOSES] : []
   const profiles = () =>
     MOCK_PROFILES.map((profile) =>
       scene === "setup-fallback" && profile.id === "codex" ? { ...profile, available: false, error: "Not signed in" } : profile
@@ -202,6 +205,7 @@ export function installMockBridge() {
       external: false,
     }),
     threadGroups: async () => [],
+    threadPurposes: async () => [...purposes],
     worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
@@ -706,7 +710,7 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
-      const threads = scene === "rail" ? fixture.threads.map((ref) => ({ ...ref, cwd: railCwd(ref.path, ref.cwd) })) : fixture.threads
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : fixture.threads
       return { ...fixture, threads, activity: {} }
     },
     openThread: async (path: string) => ({
@@ -1133,10 +1137,11 @@ export function installMockBridge() {
         ? ((await window.mako?.pageThread(options.threadPath)) ?? null)
         : null
       if (setupScene && options.initialRequest?.text === ENVIRONMENT_SETUP_PROMPT) {
+        const thread = ThreadIdSchema.parse(crypto.randomUUID())
         if (options.worktree) {
           setupWorktree = {
             path: `${SETUP_WORKTREE_ROOT}/mako-set-up`,
-            thread: ThreadIdSchema.parse(crypto.randomUUID()),
+            thread,
             repoRoot: cwd,
             project: cwd,
             branch: "mako/set-up",
@@ -1144,12 +1149,17 @@ export function installMockBridge() {
             createdAt: Date.now(),
           }
         }
+        if (options.purpose) {
+          purposes.push({ thread, kind: options.purpose, project: cwd, createdAt: Date.now() })
+          emit({ type: "thread-purposes", purposes: [...purposes] })
+        }
         const working: LiveSessionState = { ...session, cwd: setupWorktree?.path ?? cwd, status: "running" }
         acpSessions.set(session.id, working)
         const snapshot: LiveSnapshot = {
           session: working,
           revision: 0,
           createdAt: Date.now(),
+          threadId: thread,
           threadPath: options.threadPath,
           base,
           permissions: [],

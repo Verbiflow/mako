@@ -7,6 +7,7 @@ import type {
   StopTarget,
 } from "./thread-lifecycle.js"
 import type { ThreadGroup } from "./thread-groups.js"
+import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
 import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
@@ -181,6 +182,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadArchives: () =>
       invokeTrustedHost<ThreadArchiveSnapshot>("mako:thread-archives"),
     threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
+    threadPurposes: () => invokeTrustedHost<ThreadPurpose[]>("mako:thread-purposes"),
     worktrees: () => invokeTrustedHost<ThreadWorktrees>("mako:worktrees"),
     checkoutHeads: (folders: string[]) => invokeTrustedHost<CheckoutHeads>("mako:checkout-heads", folders),
     threadApp: (cwd: string) => invokeTrustedHost<ThreadAppView>("mako:thread-app", cwd),

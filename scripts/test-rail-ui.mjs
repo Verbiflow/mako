@@ -10,8 +10,9 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * The rail against the production components and the fixture catalogue:
  * position never carries status, a folder moves only when you work there,
  * the pointer holds the order, rows that move glide and scrolling moves
- * none of them, the status board regroups by state in a fixed order, and
- * Archived lives behind the filter.
+ * none of them, the status board regroups by state in a fixed order,
+ * Archived lives behind the filter, and a Thread Mako started to set a
+ * project up says so.
  * Screenshots of every view, dark and light, stay in the printed directory.
  */
 
@@ -326,8 +327,41 @@ async function checkWindow() {
   assert.equal((await rowsIn(firstFolder))[0], quietRiser)
   assert.equal(await flipping(quietRiser), false, "reduced motion moves rows without a glide")
   console.log("PASS: reduced motion is honoured")
+  await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] })
+
+  // 8. A Thread Mako starts to set a project up says so on its row, and keeps
+  // saying so once the host has recorded it; no other row does.
+  const purposeRows = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].filter(row => row.querySelector('[data-thread-purpose]')).map(row => ({ text: row.textContent, label: row.getAttribute('aria-label'), chip: row.querySelector('[data-thread-purpose]').textContent, tip: row.querySelector('[data-thread-purpose]').dataset.tip }))`)
+  await window.loadURL(`${base}?mock&app=setup`)
+  await until(`document.querySelector('[data-app-control]') !== null && document.querySelectorAll('.thread-jump-scope [data-thread-row]').length > 0`, "the setup desk rendered")
+  assert.deepEqual(await purposeRows(), [], "no row is a setup Thread before one starts")
+  await evaluate(`(() => { const trigger = document.querySelector('[data-app-control]'); trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' })); trigger.click(); return true })()`)
+  await until(`document.querySelector('[data-app-action="set-up"]') !== null`, "the setup choices opened")
+  await evaluate(`(document.querySelector('[data-app-action="set-up"]').click(), true)`)
+  await until(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].some(row => row.textContent.includes('Set up mako') && row.querySelector('[data-thread-purpose="setup"]'))`, "the new setup Thread's row shows Setup")
+  await until(`import('/src/state/acp-state.ts').then(({acpStore}) => Object.values(acpStore.get().conversations).some(conversation => conversation.kind === 'live' && conversation.title === 'Set up mako' && conversation.threadId))`, "the setup Thread is live under its Thread")
+  await until(`document.querySelector('.thread-jump-scope [data-thread-purpose]')?.dataset.tip === 'Mako started this Thread to set up mako'`, "the host's record names the project")
+  const started = await purposeRows()
+  assert.equal(started.length, 1, `one setup row, received ${JSON.stringify(started)}`)
+  assert.equal(started[0].chip, "Setup")
+  assert.match(started[0].label ?? started[0].text, /Set up mako/)
+  if (started[0].label) assert.match(started[0].label, /setup Thread/, "a row that names itself for assistive tech says it's a setup Thread")
+  await capture("rail-setup-chip.png")
+  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'light'}))`)
+  await until(`document.documentElement.classList.contains('light')`)
+  await capture("rail-setup-chip-light.png")
+  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
+
+  await window.loadURL(`${base}?mock&app=rail`)
+  await until(`document.querySelector('.thread-jump-scope [data-thread-purpose]') !== null`, "the rail desk's setup Thread is marked")
+  const recorded = await purposeRows()
+  assert.equal(recorded.length, 1, `only the Thread recorded as a setup Thread is marked, received ${JSON.stringify(recorded)}`)
+  assert.match(recorded[0].text, /Set up api/)
+  assert.equal(recorded[0].tip, "Mako started this Thread to set up api")
+  await capture("rail-setup-chip-recorded.png")
+  console.log("PASS: a setup Thread is marked on its row, and only it")
 
   clearTimeout(watchdog)
-  console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, status board, archived filter, reduced motion")
+  console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, status board, archived filter, reduced motion, setup Threads")
   app.exit(0)
 }

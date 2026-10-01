@@ -2,6 +2,7 @@ import { registerIpc } from "./register.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { ThreadStore } from "../thread-store.js"
 import type { ThreadGroup } from "../contracts/thread-groups.js"
+import type { ThreadPurpose } from "../contracts/thread-purposes.js"
 import { ThreadIdSchema, type ThreadPlacement } from "../contracts/thread-identity.js"
 
 /**
@@ -25,6 +26,7 @@ export function installThreadGroupsIpc(store: ThreadStore | null, live: LiveConv
     }
     return store.groups()
   })
+  registerIpc("mako:thread-purposes", (): ThreadPurpose[] => store?.purposes() ?? [])
   registerIpc("mako:thread-create-session", (_event, operationId: string, thread: string): ThreadPlacement => {
     if (!store) throw new Error("This Mako couldn't open its Thread store, so it can't add a session to a Thread.")
     const placed = store.createSession({ operationId, thread: ThreadIdSchema.parse(thread), actor: store.person() })

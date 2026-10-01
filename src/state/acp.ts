@@ -424,13 +424,19 @@ export const acp = {
     return sent
   },
 
-  /** A new Thread in a worktree of its own whatever the choice for new Threads, named for its job. */
-  async startInWorktree(harness: string, cwd: string, prompt: string, title: string): Promise<boolean> {
+  /**
+   * A new Thread Mako starts to set a project up, named for its job and
+   * recorded as a setup Thread; in a worktree of its own when asked,
+   * whatever the choice for new Threads.
+   */
+  async startSetup(harness: string, cwd: string, prompt: string, title: string, worktree: boolean): Promise<boolean> {
     if (!hasBridge()) return false
-    const starting = beginStart({ harness, cwd, title, blocks: [{ type: "user", text: prompt }], hiddenUserPrompt: null, worktree: true })
-    const sent = await launch(starting, { title, worktree: true }, prompt)
+    const starting = beginStart({ harness, cwd, title, blocks: [{ type: "user", text: prompt }], hiddenUserPrompt: null, worktree, purpose: "setup" })
+    const options: AcpStartOptions = { title, purpose: "setup" }
+    if (worktree) options.worktree = true
+    const sent = await launch(starting, options, prompt)
     if (sent) {
-      void refreshWorktrees().catch(() => {})
+      if (worktree) void refreshWorktrees().catch(() => {})
       keepTitle(starting.key, title)
     }
     return sent

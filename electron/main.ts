@@ -1702,7 +1702,13 @@ function bindIpc() {
       )
       trace("profile")
       try {
-        await liveConversations.start(harness, startCwd, { ...options, worktree: undefined, tuning })
+        await liveConversations.start(
+          harness,
+          startCwd,
+          { ...options, worktree: undefined, purpose: undefined, tuning },
+          undefined,
+          options.purpose ? { kind: options.purpose, project: cwd } : undefined
+        )
       } catch (error) {
         // A refused start gives its worktree back; one with anything in it stays, listed in Settings.
         if (worktree) await threadWorktrees?.abandon(options.conversationId).catch(() => undefined)

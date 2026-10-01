@@ -3,6 +3,7 @@ import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
 import { AppMarkIcon } from "@/components/rail/app-mark"
+import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
@@ -335,6 +336,7 @@ export const ThreadRow = memo(function ThreadRow({
             {title}
           </span>
         )}
+        <ThreadPurposeChip thread={thread} />
         {folded ? <SessionCount count={folded.members.length} /> : null}
         {/* The branch itself is in the tip and on the chat's strip; the row
             spends its width on the title. */}

@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
+import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
@@ -12,6 +13,7 @@ import { threadFolderKey } from "@/lib/thread-folders"
 import { acp } from "@/state/acp"
 import type { AcpPresence } from "@/state/acp-presence"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
+import { useThreadPurposes } from "@/state/thread-purposes"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
@@ -28,6 +30,7 @@ export function LiveAgentRow({
 }) {
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(presence, state.threadOf))
+  const setup = useThreadPurposes((state) => (thread ? state.byThread[thread]?.kind : undefined) ?? presence.purpose) === "setup"
   const [since] = useState(() => performance.now())
   const checkout = useWorktrees((state) => worktreeAt(state.worktrees, presence.cwd)?.worktree.path)
   const label =
@@ -76,7 +79,7 @@ export function LiveAgentRow({
         role="button"
         tabIndex={0}
         onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open() } }}
-        aria-label={folded ? `${title}, ${folded.members.length} sessions, ${label}` : `${title}, ${label}`}
+        aria-label={[title, setup ? "setup Thread" : undefined, folded ? `${folded.members.length} sessions` : undefined, label].filter(Boolean).join(", ")}
         data-thread-row
         data-flip-key={presence.key}
         data-conversation-id={presence.key}
@@ -100,6 +103,7 @@ export function LiveAgentRow({
         <span className="min-w-0 flex-[1_1_60%] truncate text-ui text-foreground/85">
           {title}
         </span>
+        <ThreadPurposeChip thread={thread} starting={presence.purpose} />
         {folded ? <SessionCount count={folded.members.length} /> : null}
         {!indent ? (
           <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">

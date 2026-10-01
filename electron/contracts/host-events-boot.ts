@@ -4,6 +4,7 @@ import type { CheckoutHeads } from "./checkout-heads.js"
 import type { WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
+import type { ThreadPurpose } from "./thread-purposes.js"
 import {
   type ControlActivity,
   type BrowserControlStatus,
@@ -107,6 +108,8 @@ export type HostEventBody =
   | { type: "thread-ref"; ref: CatalogThreadRef }
   /** A Thread gained or lost a Session; window-wide. */
   | { type: "thread-group"; change: ThreadGroupChange }
+  /** Every Thread Mako started for a job of its own, after one more was recorded; window-wide. */
+  | { type: "thread-purposes"; purposes: ThreadPurpose[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */
   | { type: "thread-removed"; path: string }
   | {

@@ -11,6 +11,7 @@ import { applyLiveSnapshot } from "@/state/live-recovery"
 import { getMako } from "@/lib/bridge"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
+import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
 import type { LiveStartOptions, LiveSnapshot, PromptAttachment } from "@/lib/types"
 import {
   acpStore,
@@ -70,6 +71,7 @@ interface BeginStartInput {
   blocks: AcpBlock[]
   hiddenUserPrompt: string | null
   worktree?: boolean
+  purpose?: ThreadPurposeKind
 }
 
 export function beginStart(input: BeginStartInput): StartingAcpConversation {
@@ -95,6 +97,7 @@ export function beginStart(input: BeginStartInput): StartingAcpConversation {
     updatedAt: now,
   }
   if (input.worktree) conversation.worktree = "making"
+  if (input.purpose) conversation.purpose = input.purpose
   conversation.projection = projectAcp(conversation)
   replaceAcpConversation(key, conversation)
   acpStore.set({ activeKey: key })

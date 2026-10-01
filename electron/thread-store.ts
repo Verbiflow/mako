@@ -35,6 +35,7 @@ import {
 } from "./contracts/thread-execution.js"
 import { ThreadGroupSchema, type ThreadGroup } from "./contracts/thread-groups.js"
 import type { ThreadWorktree } from "./contracts/thread-worktrees.js"
+import type { ThreadPurpose, ThreadPurposeKind } from "./contracts/thread-purposes.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "./contracts/thread-environments.js"
 import { hostWarn } from "./host-log.js"
 import { enableSharedWal } from "./sqlite-wal.js"
@@ -352,6 +353,17 @@ const WorktreeRowSchema = z.object({
   branch: z.string(), base: z.string(), created_at: z.number(),
 })
 /**
+ * Threads Mako started for a job of its own, such as setting up a project's
+ * app. `purpose` is unchecked so a later build can add one; a build that
+ * doesn't know a purpose leaves its Thread unmarked.
+ */
+const PURPOSE_TABLE = `
+CREATE TABLE IF NOT EXISTS thread_purposes (
+  thread_id TEXT PRIMARY KEY REFERENCES threads(id), purpose TEXT NOT NULL, project TEXT NOT NULL, created_at INTEGER NOT NULL);
+`
+const PurposeRowSchema = z.object({ thread_id: z.string(), purpose: z.string(), project: z.string(), created_at: z.number() })
+const PurposeKindSchema = z.enum(["setup"])
+/**
  * The values that keep one folder's running app from colliding with
  * another's on a device: its hostname and the first of its block of ports.
  * Each is held by one app per device, and an app keeps its values for its
@@ -578,6 +590,31 @@ export class ThreadStore {
           createdAt: row.created_at,
         }
       })
+  }
+
+  /** Record what Mako started a Thread for; the first purpose recorded for it stays. */
+  markPurpose(thread: ThreadId, kind: ThreadPurposeKind, project: string): void {
+    const current = this.thread(thread)
+    if (!current) throw new Error("This Thread no longer exists")
+    this.write(() => {
+      this.sql("INSERT OR IGNORE INTO thread_purposes VALUES (?, ?, ?, ?)").run(current.id, kind, project, this.now())
+    })
+  }
+
+  /**
+   * Every Thread Mako started for a purpose this build knows, under the
+   * Thread it belongs to now. Two that were merged keep the earlier purpose.
+   */
+  purposes(): ThreadPurpose[] {
+    const found = new Map<string, ThreadPurpose>()
+    for (const row of this.sql("SELECT thread_id, purpose, project, created_at FROM thread_purposes ORDER BY created_at").all()) {
+      const parsed = PurposeRowSchema.parse(row)
+      const kind = PurposeKindSchema.safeParse(parsed.purpose)
+      const thread = this.thread(ThreadIdSchema.parse(parsed.thread_id))
+      if (!kind.success || !thread || found.has(thread.id)) continue
+      found.set(thread.id, { thread: thread.id, kind: kind.data, project: parsed.project, createdAt: parsed.created_at })
+    }
+    return [...found.values()]
   }
 
   /** An app's values on this device, marked as used now. */
@@ -1364,6 +1401,7 @@ export class ThreadStore {
     this.db.exec(WORKTREE_TABLE)
     this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
+    this.db.exec(PURPOSE_TABLE)
     const stored = this.meta("self")
     if (stored === undefined) {
       const owner = self ?? { kind: "device", device: DeviceIdSchema.parse(this.meta("device")) }

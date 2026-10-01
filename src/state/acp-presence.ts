@@ -1,4 +1,5 @@
 import type { AcpState } from "@/state/acp-state"
+import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
 
 export interface AcpPresence {
@@ -12,6 +13,8 @@ export interface AcpPresence {
   threadPath?: string
   threadId?: string
   sessionId?: string
+  /** What Mako is starting this Thread for, before the host has recorded it. */
+  purpose?: ThreadPurposeKind
   status: "starting" | "ready" | "running" | "needs-permission" | "failed"
 }
 
@@ -31,6 +34,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
           sessionId: conversation.sessionId,
           status: "starting",
         }
+        if (conversation.purpose) presence.purpose = conversation.purpose
         return [presence]
       }
       if (conversation.session.status === "closed") return []
@@ -79,6 +83,7 @@ export function sameAcpPresence(
         candidate.threadPath === presence.threadPath &&
         candidate.threadId === presence.threadId &&
         candidate.sessionId === presence.sessionId &&
+        candidate.purpose === presence.purpose &&
         (candidate.nativePaths ?? []).join("\0") ===
           (presence.nativePaths ?? []).join("\0") &&
         candidate.status === presence.status

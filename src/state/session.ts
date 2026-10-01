@@ -6,6 +6,7 @@ import { promptClipboard } from "@/lib/prompt-clipboard"
 import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
+import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
 import { refreshWorktrees } from "@/state/worktrees"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
@@ -241,6 +242,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-group") {
     applyThreadGroupChange(event.change)
+    return
+  }
+  if (event.type === "thread-purposes") {
+    applyThreadPurposes(event.purposes)
     return
   }
   if (event.type === "host-reconnected") {
@@ -617,6 +622,11 @@ async function loadGroups() {
     await loadThreadGroups()
   } catch (error) {
     toast.error("Threads with several sessions show as separate rows", { description: error instanceof Error ? error.message : String(error) })
+  }
+  try {
+    await loadThreadPurposes()
+  } catch (error) {
+    toast.error("Setup Threads show without their Setup label", { description: error instanceof Error ? error.message : String(error) })
   }
 }
 

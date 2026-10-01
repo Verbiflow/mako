@@ -9,6 +9,7 @@ import type {
   ConversationControl,
 } from "./conversation-control.js"
 import type { ThreadPage } from "@mako/sessions"
+import type { ThreadPurposeKind } from "./thread-purposes.js"
 import type {
   LivePermissionRequest,
   PromptAttachment,
@@ -36,6 +37,8 @@ export interface LiveStartOptions {
   session?: string
   /** Start a new Thread in its own Git worktree of `cwd`'s repository, made on this first send. */
   worktree?: boolean
+  /** Mako starts this new Thread for a job of its own; ignored for a resume or a `+` tab. */
+  purpose?: ThreadPurposeKind
 }
 
 /**

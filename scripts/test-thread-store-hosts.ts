@@ -69,6 +69,33 @@ try {
   const placed = installed.placeMany(catalog, actor)
   assert.equal(placed.size, catalog.length, "every row of a large catalog is placed")
   assert.equal(placed.get("/sessions/fork-of-last.jsonl")?.thread, placed.get("/sessions/parent-last.jsonl")?.thread, "a fork joins its parent even when they fall in different batches")
+
+  // What Mako started a Thread for, recorded by one host and read by another.
+  const told: HostEvent[] = []
+  const following = followOtherHosts(development, (event) => told.push(event), 20)
+  installed.markPurpose(first.thread, "setup", "/projects/api")
+  for (let tries = 0; tries < 100 && !told.some((event) => event.type === "thread-purposes"); tries++) await delay(20)
+  following()
+  const purposesTold = told.find((event) => event.type === "thread-purposes")
+  assert.ok(purposesTold?.type === "thread-purposes", "another host's windows learn a Thread's purpose")
+  assert.deepEqual(purposesTold.purposes.map(({ thread, kind, project }) => ({ thread, kind, project })), [{ thread: first.thread, kind: "setup", project: "/projects/api" }])
+  installed.markPurpose(first.thread, "setup", "/projects/elsewhere")
+  assert.equal(development.purposes()[0]?.project, "/projects/api", "the first purpose recorded for a Thread stays")
+  const raw = new DatabaseSync(path)
+  const later = installed.place(ref("later-build"), actor)
+  raw.prepare("INSERT INTO thread_purposes VALUES (?, 'review', '/projects/api', 1)").run(later.thread)
+  raw.close()
+  assert.deepEqual(development.purposes().map((purpose) => purpose.thread), [first.thread], "a purpose from a later build leaves its Thread unmarked")
+  const joining = installed.place(ref("joins-first"), actor)
+  installed.markPurpose(joining.thread, "setup", "/projects/joining")
+  const merger = new ThreadStore(path, options)
+  assert.equal(merger.place(ref("joins-first", "first"), actor).thread, first.thread)
+  merger.close()
+  assert.deepEqual(
+    development.purposes().map(({ thread, project }) => ({ thread, project })),
+    [{ thread: first.thread, project: "/projects/api" }],
+    "a Thread that joins another takes its purpose there, and the earlier one stays"
+  )
   installed.close()
   development.close()
 
@@ -115,7 +142,7 @@ try {
     })))
     assert.deepEqual(failures.filter(Boolean), [], "every host opening a new store at once gets it")
   }
-  console.log("thread store hosts: moved Sessions reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, damaged stores start over, newer stores refused with a reason, eight hosts create one store at once")
+  console.log("thread store hosts: moved Sessions reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, a Thread's purpose reaches other hosts and follows a merge, damaged stores start over, newer stores refused with a reason, eight hosts create one store at once")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
