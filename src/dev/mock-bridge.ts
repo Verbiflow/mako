@@ -1,6 +1,7 @@
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
+import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
@@ -187,6 +188,7 @@ export function installMockBridge() {
   const archivedThreads = new Set<string>()
   let archiveRevision = 0
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
+  let planBuilds: PlanBuilds = {}
   window.mako = {
     boot: async () => boot,
     threadArchives: async () => ({
@@ -243,6 +245,11 @@ export function installMockBridge() {
     forgetWorkspaceMoves: async (project) => {
       workspaceMoves = { ...workspaceMoves, alwaysAllowed: workspaceMoves.alwaysAllowed.filter((candidate) => candidate !== project) }
       emit({ type: "workspace-moves", moves: workspaceMoves })
+    },
+    planBuilds: async () => planBuilds,
+    recordPlanBuild: async (planId, build) => {
+      planBuilds = { ...planBuilds, [planId]: build }
+      emit({ type: "plan-builds", builds: planBuilds })
     },
     threadCreateSession: async () => {
       throw new Error("The mock desk has no Thread store, so it can't add a session to a Thread.")
@@ -1962,11 +1969,12 @@ const MOCK_MODES = new Map<string, MockModes>([
     ],
   }],
   ["grok", {
-    defaultMode: "default",
+    defaultMode: "access:ask",
     modes: [
-      { id: "plan", name: "Plan", access: "plan", enforcement: "launch" },
-      { id: "default", name: "Ask", access: "deny", enforcement: "launch" },
-      { id: "bypassPermissions", name: "Full access", access: "full", enforcement: "launch" },
+      { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },
+      { id: "access:ask", name: "Ask before acting", access: "ask", enforcement: "launch" },
+      { id: "access:auto", name: "Auto review", access: "auto", enforcement: "launch" },
+      { id: "access:full", name: "Full access", access: "full", enforcement: "launch" },
     ],
   }],
   ["devin", {
@@ -2003,7 +2011,7 @@ const MOCK_PLAN_APPROVALS = new Map<string, MockPlanApproval>([
   }],
   ["grok", {
     approve: "approved",
-    after: "default",
+    after: "access:ask",
     request: {
       title: "Build the proposed plan?",
       kind: "switch_mode",

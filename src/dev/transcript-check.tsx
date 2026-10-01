@@ -9,9 +9,12 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { threadToMessages } from "@/lib/foreign-thread"
 import { toExchanges } from "@/lib/exchanges"
 import { installMockBridge } from "./mock-bridge"
+import { installBuiltins } from "@/desk/builtins"
+import { HARNESS_TOOL_SAMPLES } from "./harness-tool-samples"
 import "../index.css"
 
 installMockBridge()
+installBuiltins()
 let reads = 0
 const listeners = new Set<() => void>()
 const source = { threadPath: "/fixture/native-thread" }
@@ -114,13 +117,26 @@ const providerTurnEntries: ThreadEntry[] = [
   { kind: "assistant", blocks: [{ type: "text", text: "The watcher exited with code 1 after the fixture server closed." }] },
 ]
 const providerTurnExchanges = toExchanges(threadToMessages(providerTurnEntries, 0, "claude"))
+// One Thread per harness, each call as its native store records it, read
+// through the same history path a real Thread takes.
+const harnessToolExchanges = [...new Set(HARNESS_TOOL_SAMPLES.flatMap((sample) => sample.source.harness ?? []))].flatMap((harness) =>
+  toExchanges(threadToMessages([
+    { kind: "user", text: harness },
+    {
+      kind: "assistant",
+      blocks: HARNESS_TOOL_SAMPLES.flatMap((sample, index) => sample.source.harness === harness && sample.source.name
+        ? [{ type: "tool" as const, id: `${harness}-${index}`, name: sample.source.name, input: sample.source.input, output: "ok" }]
+        : []),
+    },
+  ], 0, harness))
+)
 const code =
   "```typescript\nconst answer: number = 42\n\nconsole.log(answer)\n```\n\n```mermaid\nflowchart LR\n  Prompt --> Agent\n  Agent --> Tool\n  Tool --> Answer\n```"
 const table =
   "| File | Confidence | Result |\n| --- | --- | --- |\n| `src/app.ts:12` | Confirmed | A complete readable result without splitting the header |\n| `package.json` | Confirmed | 3 checks passed |"
 export function Fixtures() {
   const [mode, setMode] = useState<
-    "Media" | "Code and diagrams" | "Tool results" | "Tables" | "Provider turns"
+    "Media" | "Code and diagrams" | "Tool results" | "Tables" | "Provider turns" | "Harness tools"
   >("Media")
   const count = useSyncExternalStore(subscribe, () => reads)
   return (
@@ -129,7 +145,7 @@ export function Fixtures() {
         <header className="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-hairline bg-shell p-4">
           <h1 className="text-title font-semibold">Transcript fixtures</h1>
           {(
-            ["Media", "Code and diagrams", "Tool results", "Tables", "Provider turns"] as const
+            ["Media", "Code and diagrams", "Tool results", "Tables", "Provider turns", "Harness tools"] as const
           ).map((value) => (
             <button
               key={value}
@@ -176,6 +192,13 @@ export function Fixtures() {
               <Prose text={code} />
             ) : mode === "Tables" ? (
               <Prose text={table} />
+            ) : mode === "Harness tools" ? (
+              <ConversationTimeline
+                identity="harness-tools-fixture"
+                source={source}
+                exchanges={harnessToolExchanges}
+                empty={null}
+              />
             ) : mode === "Provider turns" ? (
               <ConversationTimeline
                 identity="provider-turn-fixture"
