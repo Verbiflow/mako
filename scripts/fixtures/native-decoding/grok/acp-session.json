@@ -1,0 +1,246 @@
+{
+  "harness": "grok",
+  "source": "Written from the ACP schema (SDK zod types) for the kinds Grok shares with every ACP harness, 2026-09-30",
+  "about": "Ordinary ACP traffic every ACP harness shares: a replayed user message, thinking, a reply, a plan of entries, a mode change, a model change, a title, and the usage and command lists Mako reads elsewhere.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Add a retry budget"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "user",
+            "text": "Add a retry budget"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {
+              "type": "text",
+              "text": "The worker retries forever."
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "text": "The worker retries forever."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "I will cap retries at five."
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "text": "I will cap retries at five."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Add the budget",
+                "priority": "high",
+                "status": "completed"
+              },
+              {
+                "content": "Test the cap",
+                "priority": "medium",
+                "status": "in_progress"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "plan",
+            "entries": [
+              {
+                "content": "Add the budget",
+                "status": "completed"
+              },
+              {
+                "content": "Test the cap",
+                "status": "in_progress"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "current_mode_update",
+            "currentModeId": "default"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "default"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "config_option_update",
+            "configOptions": [
+              {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "type": "select",
+                "currentValue": "grok-4.7",
+                "options": [
+                  {
+                    "value": "grok-4.7",
+                    "name": "grok-4.7"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "configOptions": [
+              {
+                "kind": "select",
+                "id": "model",
+                "wireId": "model",
+                "label": "Model",
+                "role": "(undefined)",
+                "current": "grok-4.7",
+                "values": [
+                  {
+                    "value": "grok-4.7",
+                    "label": "grok-4.7"
+                  }
+                ]
+              }
+            ],
+            "settings": {
+              "model": "grok-4.7",
+              "options": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "Retry budget"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "title": "Retry budget"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "used": 12000,
+            "size": 200000
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [
+              {
+                "name": "compact",
+                "description": "Summarise the conversation"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    }
+  ]
+}
