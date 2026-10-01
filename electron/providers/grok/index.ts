@@ -1,4 +1,5 @@
 import { acpLiveDriver } from "../acp-live-driver.js"
+import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitGrokSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
@@ -19,6 +20,7 @@ import {
 export const installGrok: ProviderModule = (host) => installHarness(host, {
   provider: "grok",
   live: acpLiveDriver(grokAcpSource),
+  decoder: acpDecoderSource(grokAcpSource),
   profile: grokProfileLoader,
   accounts: grokAccountCapability,
   acp: grokAcpSource,
