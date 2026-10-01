@@ -13,10 +13,6 @@ import {
 import type { JsonValue } from "../codex-app-json.js"
 import { orderWindows } from "../contracts/account-usage.js"
 
-function booleanValue(value: JsonValue | undefined): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined
-}
-
 function parseWindow(
   value: JsonValue | undefined,
   now: number,
@@ -55,8 +51,8 @@ function parseRateLimit(
 
 function parseCredits(value: JsonValue | undefined): UsageBalance | null {
   const fields = valueFields(value)
-  if (!fields || booleanValue(fields.get("has_credits")) !== true) return null
-  if (booleanValue(fields.get("unlimited")) === true) return null
+  if (!fields || fields.get("has_credits") !== true) return null
+  if (fields.get("unlimited") === true) return null
   const balance = Number(
     stringValue(fields.get("balance")) ?? numberValue(fields.get("balance"))
   )

@@ -63,7 +63,7 @@ export interface HarnessRecord {
   absent: Partial<Record<HarnessFamily, Absent>>
 }
 
-export function isAbsent(value: object): value is Absent {
+export function isAbsent<T extends ProviderCapability>(value: T | Absent): value is Absent {
   return "absent" in value && "reason" in value
 }
 
