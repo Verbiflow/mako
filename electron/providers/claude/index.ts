@@ -1,5 +1,5 @@
 import { emitClaudeSession } from "@mako/sessions"
-import { installHarness, lacks } from "../harness-definition.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { claudeLiveDriver } from "./live-driver.js"
 import { claudeAccountCapability } from "./accounts.js"
@@ -14,6 +14,7 @@ import { claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
 export const installClaude: ProviderModule = (host) => installHarness(host, {
   provider: "claude",
   live: claudeLiveDriver,
+  decoder: notBuilt("Its SDK messages decode inside the live driver"),
   profile: claudeProfileLoader,
   accounts: claudeAccountCapability,
   acp: lacks("Runs on the Claude Agent SDK"),

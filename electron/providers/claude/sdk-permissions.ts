@@ -134,8 +134,7 @@ export class ClaudePermissions {
         ? "Start implementing the proposed plan?"
         : options.title) ??
       `${name}${detail.file_path || detail.command ? `: ${(detail.file_path ?? detail.command ?? "").slice(0, 1000)}` : ""}`
-    const response = await this.ask(
-      {
+    const request: Omit<LivePermissionRequest, "sessionId"> = {
         id: options.requestId,
         native: !options.agentID && !options.signal.aborted ? this.toolApprovals?.identify(options.toolUseID) : undefined,
         title,
@@ -163,9 +162,9 @@ export class ClaudePermissions {
             kind: "reject_once",
           },
         ],
-      },
-      options.signal
-    )
+      }
+    if (name === "ExitPlanMode") request.implementsPlan = { plan: options.toolUseID, approve: "allow_once" }
+    const response = await this.ask(request, options.signal)
     if (
       response.kind !== "choice" ||
       !["allow_once", "allow_session"].includes(response.optionId ?? "")
