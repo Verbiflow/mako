@@ -85,6 +85,19 @@ new AgentSideConnection((connection) => {
       await grokUpdate({ sessionUpdate: "scheduled_task_fired" })
       await update({ sessionUpdate: "session_info_update", title: "Renamed by the agent" })
     },
+    // Updates the ACP SDK refuses: Grok's own kinds on ACP's method (one
+    // completion sent twice, as a replay would), a kind nobody declares, and
+    // a known kind missing a required field.
+    async "refused-updates"() {
+      const own = (update, eventId) => connection.sessionUpdate({ sessionId, update, _meta: { eventId, agentTimestampMs: 1 } })
+      await own({ sessionUpdate: "auto_compact_started", tokens_used: 1000, context_window: 2000, percentage: 50 }, "fixture-1")
+      const completed = { sessionUpdate: "auto_compact_completed", tokens_before: 1000, tokens_after: 200, elapsed_ms: 4200, summary_preview: null }
+      await own(completed, "fixture-2")
+      await own(completed, "fixture-2")
+      await update({ sessionUpdate: "mystery_update", value: 1 })
+      await update({ sessionUpdate: "tool_call", toolCallId: "no-title" })
+      await chunk("agent_message_chunk", "Still streaming.")
+    },
     async "native-devin"() {
       await connection.extNotification("_cognition.ai/connection_retry", { sessionId, attempt: 1, maxAttempts: 5, isStreamRetry: true })
       await chunk("agent_message_chunk", "Reconnected.")
