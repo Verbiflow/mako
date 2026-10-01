@@ -23,7 +23,8 @@ Object.assign(globalThis, {
   CustomEvent: class { constructor(public type: string) {} },
 })
 
-const { planControl, leavePlanMode, setPlanMode, planContextFor, buildPlan } = await import("../src/state/plan-mode.ts")
+const { planControl, leavePlanMode, setPlanMode, planContextFor, buildPlan, recordSentPlanBuilds } = await import("../src/state/plan-mode.ts")
+const { planBuildsStore } = await import("../src/state/plan-builds.ts")
 const { planChoiceStore, pendingPlan, restorePendingPlan, setPendingPlan, takePendingPlan, withNativePlan } =
   await import("../src/state/plan-choice.ts")
 const { CODEX_PLAN_OPTION } = await import("@mako/sessions/model-catalog")
@@ -33,7 +34,7 @@ const { settingsTargetKey } = await import("../src/state/composer-settings.ts")
 const { providerStore, providerProfileKey } = await import("../src/state/providers.ts")
 const { acp } = await import("../src/state/acp.ts")
 const { draftText, rememberDraft } = await import("../src/state/drafts.ts")
-const { parsePlanContext } = await import("../src/lib/proposed-plan.ts")
+const { parsePlanContext, proposedPlanReply } = await import("../src/lib/proposed-plan.ts")
 
 const claudeModes: LiveSessionMode[] = [
   { id: "default", name: "Default", access: "ask" },
@@ -149,6 +150,7 @@ bridge.length = 0
 await buildPlan({ liveId: "live" }, plan)
 assert.deepEqual(bridge[0], ["livePermission", ["live", "request", { kind: "choice", optionId: "allow_once" }]],
   "approving the waiting plan builds it; no second prompt is sent")
+assert.equal(planBuildsStore.get().builds["tool-2"]?.conversation, "live", "the card learns the approval built it here")
 bridge.length = 0
 await assert.rejects(buildPlan({ liveId: "live" }, older), /waiting on its newest plan/)
 assert.deepEqual(bridge, [], "an earlier plan neither answers the current approval nor sends beside it")
@@ -188,5 +190,15 @@ const { body, plans } = parsePlanContext(sent[0]!)
 assert.equal(body, "Implement the proposed plan: Ship it.")
 assert.deepEqual(plans, [plan], "the whole plan travels with the request")
 assert.equal(draftText("codex"), "an unrelated thought", "the composer's draft is untouched")
+assert.equal(planBuildsStore.get().builds["tool-2"]?.conversation, "codex", "a sent implementation request records where it went")
 
-console.log("Plan mode: per-harness mapping, launch locks, return modes, pending plans, no saved defaults, approval-backed builds")
+// A sent message builds the plans it asks to implement, wherever it went; a revision builds nothing.
+const revised: ProposedPlan = { ...plan, id: "tool-3", text: "# Revise me" }
+recordSentPlanBuilds(proposedPlanReply(revised, "revise"), [revised], { conversation: "codex" })
+assert.equal(planBuildsStore.get().builds["tool-3"], undefined, "a revision request builds nothing")
+recordSentPlanBuilds(`Use the staging database.\n\n${proposedPlanReply(revised, "implement")}`, [revised], { conversation: "new-session" })
+assert.equal(planBuildsStore.get().builds["tool-3"]?.conversation, "new-session", "a new session's first send builds the plan it carries")
+recordSentPlanBuilds("Never mind", [older], { thread: "/sessions/x.jsonl" })
+assert.equal(planBuildsStore.get().builds["tool-1"], undefined, "a plan attached without its implementation request is not built")
+
+console.log("Plan mode: per-harness mapping, launch locks, return modes, pending plans, no saved defaults, approval-backed builds, built plans")

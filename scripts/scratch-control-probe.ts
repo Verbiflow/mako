@@ -66,11 +66,18 @@ try {
   await js("connect", `await control.connectBrowser("live")`)
   for (const url of (process.env.URLS ?? "https://news.ycombinator.com").split(",")) {
     await js(`open ${url}`, `const tab = await control.openTab({browser:"live", url:${JSON.stringify(url)}}); tab`)
+    if (scenarios.includes("dump")) {
+      const slug = url.replace(/\W+/g, "_").slice(8, 60)
+      await js(`dump ${slug}`, `const all = await tab.observe({max:1000}); const fs = await import("node:fs/promises"); await fs.writeFile("/tmp/mako-cu-audit/nodes-${slug}.json", JSON.stringify({nodes: all.nodes, coverage: all.coverage})); all.nodes.length`)
+      await js(`dump-i ${slug}`, `const ia = await tab.observe({max:1000, interactive:true}); await (await import("node:fs/promises")).writeFile("/tmp/mako-cu-audit/inodes-${slug}.json", JSON.stringify({nodes: ia.nodes})); ia.nodes.length`)
+      continue
+    }
     await js("observe default", "await tab.observe()")
     await js("observe interactive", "await tab.observe({interactive:true})")
     if (scenarios.includes("act")) {
       await js("observe query", `await tab.observe({query:${JSON.stringify(process.env.QUERY ?? "login")}})`)
       await js("screenshot", "const shot = await tab.screenshot(); shot")
+      await js("shot fields", "const {data, ...rest} = shot; rest")
       await js("tabs", `await control.tabs("live")`)
       await js("click first link", `const v = await tab.observe({interactive:true}); const link = v.nodes.find(n=>n.role==="link"); await tab.click(link.ref)`)
       await js("expect url", `await tab.expect({url:{contains:"/"}})`)

@@ -17,6 +17,7 @@ import { ControlFault, controlFaultData } from "@mako/control/control"
 import {
   ControlProgramRuntime,
   ControlProgramError,
+  programErrorText,
 } from "@mako/control/program"
 import { browserFixture } from "./browser-control-fixture.js"
 
@@ -109,7 +110,9 @@ try {
     'await control.connectBrowser("fixture"); let tab=await control.openTab({browser:"fixture"}); state.tab=tab; await tab.observe()'
   )
   assert.equal(open.isError, undefined, text(open))
-  assert.match(text(open), /Proof/)
+  assert.match(text(open), /^page "[^"]*" \S+/m, "an observation prints its page first")
+  assert.match(text(open), /^ *e\d+ textbox "Proof"/m, "an observation prints as an outline with short refs")
+  assert.doesNotMatch(text(open), /"nodes"|\{"ref"/, "an observation prints as text, not JSON")
   assert.doesNotMatch(text(open), /Mako browser and computer use|Observation has nodes/, "action results carry no guides")
   assert.equal(fixture.targets.size, 1)
   const named = await js(
@@ -119,7 +122,15 @@ try {
   assert.deepEqual(JSON.parse(text(named)), [true, 1, 1])
   const missed = await js('await tab.locator({role:"textbox",name:"Proo"}).setValue("x")')
   assert.equal(missed.isError, true)
-  assert.match(JSON.parse(text(missed)).message, /Observed textbox names: \[\{"ref":"[^"]+","name":"Proof"\}\]/)
+  assert.match(text(missed), /^Error target-not-found \(nothing dispatched\): No textbox is named "Proo"\. Observed textbox names: \[\{"ref":"e\d+","name":"Proof"\}\]/)
+  assert.doesNotMatch(text(missed), /Before failing/, "a cell that changed nothing names no effects")
+  const guessed = await js('await tab.fill("e1", "x")')
+  assert.equal(guessed.isError, true)
+  assert.match(text(guessed), /^Error: tab\.fill is not a function\. Use setValue\(ref, text\)/)
+  const listed = await js('[{id:"a",n:1},{id:"b\\tc",n:2}]')
+  assert.equal(text(listed), "id\tn\na\t1\nb\\tc\t2", "record lists print as TSV")
+  const logged = await js('console.log("plain", {a:1}, [{x:1},{x:2}])')
+  assert.equal(text(logged), 'plain {"a":1} x\n1\n2')
   const redeclared = await js("const marker = 1; marker")
   assert.equal(redeclared.isError, undefined, text(redeclared))
   assert.equal(JSON.parse(text(await js("const marker = 2; marker"))), 2, "const redeclares across cells")
@@ -130,15 +141,18 @@ try {
   assert.equal(docless.isError, undefined, text(docless))
   assert.doesNotMatch(text(docless), /Mako browser and computer use/)
   assert.ok(!fixture.calls.some((c) => c.method === "Page.captureScreenshot"))
-  // The basic CLI's exec operation uses the same socket/engine, invalidating the
-  // MCP-held ref. No second owner or observation cache is created.
-  await request({ method: "exec", source: "return await state.tab.observe()" })
+  // The basic CLI's exec operation uses the same socket/engine. Its reads keep
+  // the MCP-held ref; its action expires it. No second owner or cache is created.
+  await request({ method: "exec", source: "return await state.tab.observe({interactive:true})" })
+  const kept = await js("await tab.inspect(field.ref)")
+  assert.equal(kept.isError, undefined, `a ref outlives later reads of the same document: ${text(kept)}`)
+  await request({ method: "exec", source: 'await state.tab.observe(); await state.tab.pressKey("Escape"); return 1' })
   const dispatched = fixture.calls.filter((c) =>
     c.method.startsWith("Input.")
   ).length
   const stale = await js("await tab.click(field.ref)")
   assert.equal(stale.isError, true)
-  assert.match(text(stale), /stale|expired/i)
+  assert.match(text(stale), /not from a read of this tab since its last action/)
   assert.equal(
     fixture.calls.filter((c) => c.method.startsWith("Input.")).length,
     dispatched
@@ -151,7 +165,7 @@ try {
   assert.match(text(await js("await tab.observe()")), /Proof/)
   const exact = "  日本語 🧪 é\n\t  "
   await js(`let exact=${JSON.stringify(exact)}; state.exact=exact`)
-  assert.equal(JSON.parse(text(await js("exact"))), exact)
+  assert.equal(text(await js("exact")), exact, "a string value prints as itself")
   const cross = z
     .array(z.object({ type: z.string(), text: z.string() }))
     .parse(await request({ method: "exec", source: "return state.exact" }))
@@ -177,10 +191,7 @@ try {
   const fresh = await js("typeof tab")
   assert.match(text(fresh), /Program state was reset/)
   assert.doesNotMatch(text(fresh), /Mako browser and computer use/, "a timeout does not reprint the documentation")
-  assert.equal(
-    JSON.parse(fresh.content.filter((c) => c.type === "text").at(-1)!.text),
-    "undefined"
-  )
+  assert.equal(fresh.content.filter((c) => c.type === "text").at(-1)!.text, "undefined")
   assert.equal(
     fixture.targets.size,
     1,
@@ -210,11 +221,7 @@ try {
   assert.doesNotMatch(text(invalid), /should not execute/)
   const broken = await js("let unclosed = (1")
   assert.equal(broken.isError, true)
-  const reported = z
-    .object({ code: z.string(), outcome: z.string(), recovery: z.string() })
-    .parse(JSON.parse(text(broken)))
-  assert.deepEqual([reported.code, reported.outcome], ["syntax-error", "not-dispatched"])
-  assert.match(reported.recovery, /No statement ran/)
+  assert.match(text(broken), /^Error syntax-error \(nothing dispatched\): The program did not run: .*fix the source and run it again\.$/)
   await client.close()
   assert.equal(
     fixture.targets.size,
@@ -264,6 +271,7 @@ const native = new ControlProgramRuntime({
       })
       .parse(value),
   ],
+  effect: (command) => (command.action === "dispatch" ? "set-text e1" : undefined),
   fault: (d) => new ControlFault(d.code, d.message, d.outcome),
 })
 const evaluate = (code: string, active = signal) =>
@@ -316,6 +324,26 @@ try {
   }
   assert.equal(await evaluate("typeof win").then((value) => JSON.stringify(value).includes("object")), true, "a syntax error keeps REPL state")
   summary.syntaxErrorsNotDispatched = true
+  // The fixture answers dispatch with a non-receipt: the call ran, then the cell failed.
+  try {
+    await evaluate('await win.events(); await win.setValue("e1", "x")')
+    assert.fail("a malformed receipt fails the cell")
+  } catch (error) {
+    assert.ok(error instanceof ControlProgramError, String(error))
+    assert.deepEqual(error.effects, ["set-text e1"], "reads are not named; the dispatched call is")
+    assert.match(programErrorText(error), /\nBefore failing, this cell ran: set-text e1\. Observe before acting again; do not rerun the cell\.$/)
+  }
+  await evaluate('void setTimeout(() => { throw new Error("late boom") }, 20)')
+  await delay(80)
+  const reported = await evaluate("typeof win")
+  assert.match(JSON.stringify(reported), /its callbacks threw; bindings and state were kept: late boom/)
+  assert.match(JSON.stringify(reported), /object/, "a late throw keeps REPL bindings")
+  await assert.rejects(
+    evaluate('setTimeout(() => { throw new Error("during") }, 5); await new Promise(r => setTimeout(r, 60))'),
+    /A callback threw outside the awaited program: during/
+  )
+  assert.match(JSON.stringify(await evaluate("typeof win")), /object/)
+  summary.lateFailuresKeepState = true
   await evaluate(
     "void setTimeout(async()=>{try{await win.events()}catch(e){state.late=e.message}},30)"
   )

@@ -67,6 +67,14 @@ for (const { provider, absent } of harnesses) {
   assert.ok(registry("live").get(provider), `${provider} has a live driver`)
 }
 
+// Every harness decodes its native messages through a declared decoder with
+// fixtures. These three still decode inside their drivers; the list only shrinks.
+assert.deepEqual(
+  harnesses.filter((harness) => harness.absent.decoder).map((harness) => harness.provider).sort(),
+  ["claude", "cursor", "opencode"],
+  "a harness gains a decoder and fixtures (scripts/fixtures/native-decoding/<harness>/) instead of joining the list without one"
+)
+
 const host = createProviderHost()
 const definition: HarnessDefinition = {
   provider: "example",

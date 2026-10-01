@@ -8,6 +8,7 @@ import type { JsonObject } from "../electron/codex-app-json.ts"
 import type { NativeNotice } from "../electron/contracts/native-activity.ts"
 import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { forward } from "../electron/acp-notifications.ts"
+import { AcpDecoder, acpAnswer } from "../electron/acp-decoder.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { grokNotification } from "../electron/providers/grok/notifications.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
@@ -212,3 +213,21 @@ send({ sessionUpdate: "plan_removed", planId: "p" })
 assert.deepEqual(patches, [{ title: "Fix the flaky build" }])
 assert.deepEqual(unhandled, ["plan_removed"])
 console.log("PASS: session_info_update names the thread; host-read updates are known; unstable plan updates are logged")
+
+// Requests the agent waits on: what each choice sends back, and requests no provider reads.
+const exitPlan = grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { sessionId: "s", toolCallId: "call_1", planContent: null })
+assert.ok(exitPlan)
+assert.deepEqual(exitPlan.updates, [], "an empty plan file adds no card; the tool call's own copy stands")
+assert.deepEqual(exitPlan.ask.request.implementsPlan, { plan: "grok:s:call_1", approve: "approved" })
+assert.deepEqual(acpAnswer(exitPlan.ask, "approved"), { outcome: "approved" })
+assert.deepEqual(acpAnswer(exitPlan.ask, "abandoned"), { outcome: "abandoned" })
+assert.deepEqual(acpAnswer(exitPlan.ask, "keep-planning"), { outcome: "rejected" })
+assert.deepEqual(acpAnswer(exitPlan.ask, null), { outcome: "rejected" }, "a request the session dropped keeps planning; it never builds")
+assert.equal(grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { toolCallId: 1 }), undefined, "a malformed request is refused")
+assert.equal(new AcpDecoder(grokAcpSource).request("_x.ai/elsewhere", {}), undefined, "a method no provider reads is refused")
+assert.equal(new AcpDecoder(undefined).request("_x.ai/exit_plan_mode", {}), undefined)
+const untitled = new AcpDecoder(devinAcpSource).permission({ sessionId: "s", toolCall: { toolCallId: "t" },
+  options: [{ optionId: "allow_once", name: "Allow", kind: "allow_once" }] })
+assert.equal(untitled.request.title, "The agent wants to use a tool")
+assert.equal(untitled.request.implementsPlan, undefined, "a permission for no plan builds none")
+console.log("PASS: vendor requests answer each choice the provider's way; unknown and malformed requests are refused")

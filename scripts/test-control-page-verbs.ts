@@ -146,7 +146,20 @@ try {
     `await tab.waitFor({text:"Never shown"},{timeoutMs:300})`
   )
   assert.equal(missed.error, true)
-  assert.equal(JSON.parse(missed.text).code, "assertion-failed")
+  assert.match(missed.text, /^Error assertion-failed \(nothing dispatched\): Not established within 300 ms/)
+  const titled = await js(`await tab.expect({title:"Live"})`)
+  assert.equal(titled.error, false, titled.text)
+  assert.match(titled.text, /^satisfied \{"title":"Live"\} after \d+ ms$/, "expect takes a page condition")
+  const located = await js(`await tab.expect({url:"data:text/html"}, {timeoutMs:2000})`)
+  assert.equal(located.error, false, located.text)
+
+  const paged = await js(`await tab.observe({max:2})`)
+  assert.equal(paged.error, false, paged.text)
+  assert.match(paged.text, /^page "Live" data:text\/html/, paged.text)
+  assert.match(paged.text, /rows 1–2 of \d+; observe\(\{offset:2\}\) reads on/, paged.text)
+  const next = await js(`await tab.observe({max:2, offset:2})`)
+  assert.equal(next.error, false, next.text)
+  assert.match(next.text, /rows 3–4 of \d+/, next.text)
 
   const live = await js(
     `await tab.locator({role:"button",name:{prefix:"inbox"}}).click(); (await tab.observe({match:{role:"button",name:/^Inbox \\d+$/}})).nodes.map((node) => node.name)`
@@ -161,8 +174,8 @@ try {
   const thrown = await js(`await tab.evaluate("null.x")`)
   assert.equal(thrown.error, true)
   assert.match(
-    JSON.parse(thrown.text).message,
-    /^Page script threw TypeError: Cannot read properties of null .* at line 1, column \d+/
+    thrown.text,
+    /^Error [a-z-]+ \([a-z ]+\): Page script threw TypeError: Cannot read properties of null .* at line 1, column \d+/
   )
 
   const inspected = await js(

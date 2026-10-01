@@ -17,6 +17,7 @@ import type { Attachment } from "../src/lib/attachments"
 import { projectDraftKey } from "../src/state/drafts"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
 import { draftPlanReply } from "../src/state/plans"
+import { planBuildsStore, recordPlanBuild } from "../src/state/plan-builds"
 import {
   draftText,
   rememberDraft,
@@ -305,8 +306,30 @@ const planCard = renderToStaticMarkup(
   </TranscriptSourceContext>
 )
 assert.match(planCard, /Route recovery/)
-assert.match(planCard, /Draft implementation/)
-assert.match(planCard, /aria-expanded="false"/)
+assert.match(planCard, />Build<\/button>/)
+assert.match(planCard, /Build in new session/)
+assert.match(planCard, /Revise/)
+assert.match(planCard, /aria-expanded="true"/, "the newest plan opens as the document it is")
+assert.doesNotMatch(planCard, /Built in/)
+recordPlanBuild(proposal, { conversation: id })
+const builtHere = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: id }}>
+    <ProposedPlanCard plan={proposal} />
+  </TranscriptSourceContext>
+)
+assert.match(builtHere, /Built in this session/)
+assert.match(builtHere, /Build again/, "a built plan can still be built, as a quieter choice")
+assert.doesNotMatch(builtHere, /Open build session/, "a plan built here links nowhere")
+assert.equal(builtHere.match(/Built in this session/g)?.length, 1, "the status says it once")
+recordPlanBuild(proposal, { conversation: "another-session" })
+const builtElsewhere = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: id }}>
+    <ProposedPlanCard plan={proposal} />
+  </TranscriptSourceContext>
+)
+assert.match(builtElsewhere, /Built in another session/)
+assert.doesNotMatch(builtElsewhere, /Open build session/, "a session that is gone is not offered")
+planBuildsStore.set({ builds: {} })
 rememberDraft(id, "Also preserve accessibility.")
 draftPlanReply({ liveId: id }, proposal, "implement")
 const preparedPlan = draftText(id)

@@ -1163,7 +1163,7 @@ return control.window({pid:42,window_id:9}).activate(ref);`,
   assert.equal(crossTarget.isError, true)
   assert.match(
     String(crossTarget.structuredContent?.message),
-    /not from this target's latest observation/
+    /belongs to another target/
   )
   assert.equal(crossTarget.structuredContent?.code, "stale-reference")
   assert.equal(crossTarget.structuredContent?.outcome, "not-dispatched")
