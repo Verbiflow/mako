@@ -1398,6 +1398,14 @@ check passes; a diagnosis or documentation change alone may leave UX work open.
 Preserve failed runs. Put detailed chronology in [history](local-control-history.md)
 and measurements in audit artifacts, keeping the current map readable.
 
+Before committing Local Control source, run `npm run lint`, not only the
+typecheck and suites. Its `lint:anti-slop` step runs while a local update
+compiles, and on October 1 it failed an update with 73 errors from these
+packages. The rules ban `typeof`, conditional empty-object spreads, `unknown`
+parameters other than `cause`, and type assertions without a `SAFETY:` comment.
+Decode values with Zod instead. A program's values can come from the REPL's own
+realm, where `instanceof` checks fail.
+
 Original LC-01–07 are the completed API replacement. LC-11's no-image-read/schema
 cost fixes are tested. LC-18's explicit connect and LC-19's request-shape fixes are
 implemented; installed/fresh-agent proof belongs to LC-22/23/27. Other original IDs
