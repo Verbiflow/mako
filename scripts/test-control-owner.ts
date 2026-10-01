@@ -77,7 +77,7 @@ try {
   const afterLateFailure = await agent.callTool({ name: "js", arguments: { code: 'await control.browsers(); survivor' } })
   assert.equal(afterLateFailure.isError, undefined, JSON.stringify(afterLateFailure))
   assert.match(JSON.stringify(afterLateFailure), /its callbacks threw; bindings and state were kept: late fixture callback/)
-  assert.match(JSON.stringify(afterLateFailure), /"text":"kept"/, "a late callback failure keeps REPL bindings")
+  assert.match(JSON.stringify(afterLateFailure), /late fixture callback\\nkept"/, "a late callback failure keeps REPL bindings")
   assert.equal(fixture.targets.size, 1, "An idle program fault must not close the task's targets")
   assert.ok(sessions.get("binding"), "An idle Worker error must not kill the desktop owner")
   const descriptor = JSON.parse(await readFile(launch.sessionFile, "utf8"))

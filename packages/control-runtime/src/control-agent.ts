@@ -1,4 +1,8 @@
-import { ControlProgramError, programErrorText } from "@mako/control/program"
+import {
+  ControlProgramError,
+  programErrorText,
+  type ControlProgramOutput,
+} from "@mako/control/program"
 import type { JsonValue } from "./json.js"
 import type { ControlSession } from "./control-session.js"
 import type { SessionOperation } from "./control-session-protocol.js"
@@ -40,17 +44,37 @@ export function controlAgent(
       )
       return {
         content: content.length
-          ? content
+          ? joinText(content)
           : [{ type: "text", text: "Completed; no value emitted." }],
       }
     } catch (error) {
       return {
         isError: true,
-        content: [
+        content: joinText([
           ...(error instanceof ControlProgramError ? error.output : []),
           { type: "text", text: programErrorText(error) },
-        ],
+        ]),
       }
     }
   }
+}
+
+/**
+ * MCP clients join a result's text blocks differently, some with nothing
+ * between them, so printed lines leave as one block. Images stay separate.
+ */
+function joinText(
+  blocks: readonly ControlProgramOutput[]
+): ControlProgramOutput[] {
+  const joined: ControlProgramOutput[] = []
+  for (const block of blocks) {
+    const previous = joined.at(-1)
+    if (block.type === "text" && previous?.type === "text")
+      joined[joined.length - 1] = {
+        type: "text",
+        text: `${previous.text}\n${block.text}`,
+      }
+    else joined.push(block)
+  }
+  return joined
 }

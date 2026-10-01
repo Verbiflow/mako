@@ -97,7 +97,7 @@ They come from reading every SDK call agents made through Mako. The changes:
 
 `scripts/test-control-page-verbs.ts` checks them against a real Chromium it launches itself. Two fresh agents finished a seven-step page task with at most one help lookup, no raw CDP and no sleeps. The next installed candidate must include them; then repeat that fresh-agent task on it.
 
-**September 30, second pass ([U13–U24](local-control-agent-issues.md#september-30-usage-audit)): what agents read, in source, not installed.**
+**September 30, second pass ([U13–U24](local-control-agent-issues.md#september-30-usage-audit)): what agents read. Installed October 1 in build `e5b103991ebe70ef`.**
 Every result now prints in a form made for what it is, and keeps its full value
 for code. The changes:
 - page observations print as a reading outline, with prose as `text:` lines and
@@ -148,7 +148,28 @@ in 6 calls, with no errors and no help lookups. Following its reports:
 - the first cell's result now follows a `This cell's output:` line;
 - the docs say how `within`, `absent` and `hidden` behave in `expect`.
 
-Next: the installed candidate carries all of this.
+**October 1: installed check of the second pass ([U25, U26](local-control-agent-issues.md#september-30-usage-audit)).**
+- The packaged CLI and recording tests passed on build `e5b103991ebe70ef`.
+- The end-to-end API test then found U25: installed control workers run in
+  Electron's Node mode, and the commands they ran inherited it. So
+  `launch_app` with `page_route:true` started every Electron app as plain Node.
+  Development workers run under Node, which is why only an installed build
+  shows it.
+- Reading the installed MCP tool from Cursor found U26: text blocks run
+  together in clients that join them with nothing between them.
+- Both are fixed in source, not installed. With the fixed runtime, the
+  end-to-end test passed against the installed `dist-electron`.
+
+To run a repo test against installed code without rebuilding `dist-electron`:
+1. Copy the test and `scripts/lib` into a scratch folder under `scripts/`.
+2. Point its `../dist-electron/` and `packages/control-runtime/dist` imports
+   into `/Applications/Mako.app/Contents/Resources/app.asar`.
+3. Run it with `ELECTRON_RUN_AS_NODE=1 /Applications/Mako.app/Contents/MacOS/Mako`.
+4. Delete the scratch folder.
+
+Next: install U25 and U26, then rerun `test-control-api-e2e` on the installed
+runtime. The packaged MCP test's browser half needs a dedicated Aside profile,
+and Aside is no longer installed.
 
 **Next (September 29): candidate from `dac8a05` installs when the default host is idle (`release/rollout-20260929`).**
 Both earlier jobs stopped the same way. The host quit for the install, Mako was
@@ -1405,6 +1426,11 @@ packages. The rules ban `typeof`, conditional empty-object spreads, `unknown`
 parameters other than `cause`, and type assertions without a `SAFETY:` comment.
 Decode values with Zod instead. A program's values can come from the REPL's own
 realm, where `instanceof` checks fail.
+
+The installed app runs control workers in Electron's Node mode, and the repo
+runs them under Node. Anything a worker spawns must not inherit
+`ELECTRON_RUN_AS_NODE`, and only an installed or packaged test shows a
+mistake there.
 
 Original LC-01–07 are the completed API replacement. LC-11's no-image-read/schema
 cost fixes are tested. LC-18's explicit connect and LC-19's request-shape fixes are

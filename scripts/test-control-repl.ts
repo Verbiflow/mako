@@ -76,6 +76,9 @@ try {
   assert.doesNotMatch(text(first).split("\n\n")[0]!, /\\n/)
   assert.match(text(first), /^fixture "Fixture Chrome" disconnected → await control\.connectBrowser\("fixture"\)$/m, "a browser prints as one line, its ID first")
   assert.match(text(first), /\n\nThis cell's output:\nfixture "Fixture Chrome"/, "the first cell's own output is set apart from the documentation")
+  assert.equal(first.content.length, 1, "clients that join blocks with nothing between them still see separate lines")
+  const joined = await js("console.log('first line'); 'second line'")
+  assert.deepEqual(joined.content, [{ type: "text", text: "first line\nsecond line" }])
   assert.equal(fixture.calls.length, 0, "discovery does not connect")
   summary.firstCallBytes = Buffer.byteLength(JSON.stringify(first))
   const imported = await js(
@@ -196,7 +199,7 @@ try {
   const fresh = await js("typeof tab")
   assert.match(text(fresh), /Program state was reset/)
   assert.doesNotMatch(text(fresh), /Mako browser and computer use/, "a timeout does not reprint the documentation")
-  assert.equal(fresh.content.filter((c) => c.type === "text").at(-1)!.text, "undefined")
+  assert.equal(text(fresh).split("\n").at(-1), "undefined")
   assert.equal(
     fixture.targets.size,
     1,

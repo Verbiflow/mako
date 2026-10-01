@@ -581,6 +581,10 @@ function runCommand(
   signal: AbortSignal
 ): Promise<CommandResult> {
   const started = Date.now()
+  const env: NodeJS.ProcessEnv = { ...process.env, MAKO_CONTROL_TOKEN: "" }
+  // Installed workers run in Electron's Node mode. An Electron app launched by
+  // a command (open -a Slack, npx electron) would inherit it and run as Node.
+  delete env.ELECTRON_RUN_AS_NODE
   return new Promise((resolve, reject) => {
     const child = execFile(
       file,
@@ -590,7 +594,7 @@ function runCommand(
         timeout: options.timeout,
         maxBuffer: COMMAND_OUTPUT_LIMIT,
         signal,
-        env: { ...process.env, MAKO_CONTROL_TOKEN: "" },
+        env,
       },
       (error, stdout, stderr) => {
         if (error && signal.aborted) {

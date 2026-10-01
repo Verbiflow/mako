@@ -320,6 +320,7 @@ try {
   const port = z.object({ port: z.number() }).parse(control.address()).port
   process.env.MAKO_CONTROL_URL = `http://127.0.0.1:${port}/browser`
   process.env.MAKO_CONTROL_TOKEN = "fixture-token"
+  process.env.ELECTRON_RUN_AS_NODE = "1"
   const server = controlSessionProbe(
     {
       command: process.execPath,
@@ -854,6 +855,19 @@ try {
         truncated: false,
       }
     )
+    // Installed workers run in Electron's Node mode; an Electron app started
+    // from a command must start as an app.
+    const inherited = await exec(
+      client,
+      `return await computer.shell({command: 'printf %s "\${ELECTRON_RUN_AS_NODE-unset}:\${MAKO_CONTROL_TOKEN}"'})`
+    )
+    assert.equal(
+      z
+        .object({ stdout: z.string() })
+        .loose()
+        .parse(JSON.parse(firstText(inherited.content))).stdout,
+      "unset:"
+    )
     const slow = await exec(
       client,
       "return await computer.shell({command: 'sleep 5', timeout_ms: 200})"
@@ -955,6 +969,7 @@ try {
     control.close()
     delete process.env.MAKO_CONTROL_URL
     delete process.env.MAKO_CONTROL_TOKEN
+    delete process.env.ELECTRON_RUN_AS_NODE
   }
   assert.deepEqual(
     warnings.filter((line) => /unknown format/i.test(line)),

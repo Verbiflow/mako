@@ -95,11 +95,12 @@ Packaging and final installed proof also depend on LC-26 and LC-23.
 
 Source: every Local Control SDK call stored in Mako's conversation databases
 (1,425 calls across 59 threads), plus Codex rollouts for calls whose inputs Mako
-does not store. Thread `dd30d560` alone made 661 calls. Fixed locally on
-September 30; none of this is installed yet. U13–U22 came from a second pass the
-same evening that measured what agents receive from each call and reviewed the
-API's design; U23 from the fresh agents that then tried it; U24 from running
-the documentation's example against real Chromium.
+does not store. Thread `dd30d560` alone made 661 calls. Fixed on September 30
+and installed on October 1 in build `e5b103991ebe70ef` (revision `055afdc`,
+with uncommitted edits). U13–U22 came from a second pass the same evening that
+measured what agents receive from each call and reviewed the API's design; U23
+from the fresh agents that then tried it; U24 from running the documentation's
+example against real Chromium; U25 and U26 from checking the installed build.
 
 | ID / problem found | Current disposition | Closure check |
 | --- | --- | --- |
@@ -127,6 +128,8 @@ the documentation's example against real Chromium.
 | U22 — A data or signed URL printed whole in every observation header. | **Fixed locally.** Past 200 characters the header shows the first 160 and says `… (N chars in .page.url)`; the value keeps the whole URL. | `test-control-page-verbs.ts` (a data URL longer than 2 KB). |
 | U23 — Found by two fresh agents on the new forms. An unnamed container such as `main` could not be a `within` scope, and the refusal buried why. Nothing said that `evaluate` expires refs, and the stale-ref error blamed an "action". `view.select()` read like an array. Receipts said `activate` for `click`. `inspect` printed dense JSON that repeated inline styles. | **Fixed locally.** A `within` scope may leave out the name when only one container has that role; an ambiguous one is refused with "Add its name or an outer within scope". A stale page ref names the call that changed the tab, such as `(evaluate)` or `(pressKey "Escape")`, even when another client made it. The docs list which calls keep refs and which expire them, and say that `select` keeps its rows in `.nodes` and that `text:` rows are `StaticText`. Receipts and failed-cell lists name the SDK call (`click e2`, `setValue e4`). `inspect` prints the element, its box, then the styles and attributes asked for. | `test-control-page-verbs.ts` (unnamed and ambiguous scopes, receipt text, inspection text), `test-control-repl.ts` (stale ref names `pressKey "Escape"` made through the CLI). |
 | U24 — Found running the documentation's example cell on real Chromium. A form printed each label twice: `text: Name`, then `textbox "Name"`. A ref no read had printed, such as a typo, was reported as expired by a page change. A page wait in a hidden tab, which is where task tabs run, saw new text about 1,000 ms late, because it polled with page timers that Chrome runs about once a second. An invalid wait selector failed as a multi-line schema dump marked outcome unknown. | **Fixed locally.** A label's text is left out when the control it names already holds it, using Chromium's name sources (`<label>`, `for=` and `aria-labelledby`); the labelling element keeps its own row. A never-printed ref says "No read of this tab has printed ref". Waits poll every 50 ms from the session, at a slower pace on pages where reading the text is slow; measured lag in a hidden tab fell from about 1,000 ms to 17–53 ms, and a text wait across a navigation still succeeds. An invalid selector is `invalid-request` with the CSS error. The documentation now opens with an example task cell, then short sections, one fact per line. | `test-browser-service.ts` (wrapped, `for=` and `aria-labelledby` labels), `test-control-repl.ts` (never-printed ref), `test-control-page-verbs.ts` (wait lag under 400 ms in a hidden tab, measured 21 ms; invalid selector). |
+| U25 — Found running the end-to-end API test against the installed app. `launch_app` with `page_route:true` failed for every Electron app: "no DevTools endpoint answered". Installed control workers run in Electron's Node mode (`ELECTRON_RUN_AS_NODE=1`), and every command they ran inherited it, including `open -a`. An Electron app launched that way runs as plain Node and exits. The same applied to an Electron app started from `computer.shell`. Development workers run under Node, which hid it. | **Fixed locally (October 1); not installed.** Commands the session runs no longer inherit `ELECTRON_RUN_AS_NODE`. Reproduced directly: `ELECTRON_RUN_AS_NODE=1 open -g -n -a Electron.app --args --remote-debugging-port=P` serves nothing, and without it DevTools answers at once. | `test-computer-tools.ts` runs a shell command with the variable set, as an installed worker has it, and requires it unset. `test-control-api-e2e.mjs` passed against the installed `dist-electron` with the fixed runtime. |
+| U26 — Found reading the installed MCP tool from Cursor. Each printed piece was its own MCP text block, and Cursor joins blocks with nothing between them, so `This cell's output:` ran into the first result line and `console.log('a'); 'b'` read as `ab`. | **Fixed locally (October 1); not installed.** The MCP `js` tool joins neighbouring text blocks with a newline; images stay separate blocks. | `test-control-repl.ts` requires the first cell to arrive as one block and a logged line and a value to arrive as `first line\nsecond line`. |
 
 **Fresh-agent check (source build, not installed).** Two new agents did the same
 seven-step task through the MCP `js` tool against real Chromium: open a page,
@@ -174,7 +177,16 @@ to these fixes:
 - The docs now say that element `expect` takes `within`, what `absent:true`
   means, and that `hidden:true` waits until the text and selector are gone.
 
-Remaining: the installed candidate.
+**Installed check (October 1, build `e5b103991ebe70ef`).**
+- The packaged CLI and recording tests passed.
+- The installed MCP tool from Cursor printed the new documentation and compact discovery lines, and showed U26.
+- The end-to-end API test's native half passed on the installed code. Its Electron page half then found U25. With the fixed runtime, the whole test passed against the installed `dist-electron`, foreground unchanged.
+- Two tests were stale against U10 and U16 and are updated:
+  - The packaged MCP test parsed printed results as JSON.
+  - Both tests read `targetId` and `selectable` from `tabs()` rows, which are now `tab` and selectable only.
+- The packaged MCP test's browser half needs a dedicated Aside profile. Aside is no longer installed, so it can't run. It was not pointed at the user's own Chrome, because it disconnects that browser's connection and answers dialogs.
+
+Remaining: install U25 and U26, then rerun the end-to-end API test on the installed runtime.
 
 ## How to close an issue
 

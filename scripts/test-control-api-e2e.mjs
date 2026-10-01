@@ -208,8 +208,8 @@ return {proof,negative};`)
   })
   assert.notEqual((await read(page.status)).input, "must-not-write")
   const pageProof = await cell(
-    `const tabs=await control.tabs(${browser}); const selected=tabs.pages.find(t=>t.selectable && /API page fixture/.test(t.title)); if(!selected) throw new Error('Fixture tab missing');
-state.tab=await control.claimTab({browser:${browser},tab:selected.targetId}); const view=await state.tab.observe();
+    `const tabs=await control.tabs(${browser}); const selected=tabs.pages.find(t=>/API page fixture/.test(t.title)); if(!selected) throw new Error('Fixture tab missing');
+state.tab=await control.claimTab({browser:${browser},tab:selected.tab}); const view=await state.tab.observe();
 const receipt=await state.tab.setValue(view.get({role:'textbox',name:'Proof'}).ref,'page-v2');
 const proof=await state.tab.expect({role:'textbox',name:'Proof',value:'page-v2'}); emitImage(await state.tab.screenshot({format:'png'})); return {receipt,proof};`,
     true

@@ -87,7 +87,7 @@ if (!worker) {
     assert.equal(result.isError === true, failed, JSON.stringify(result))
     return result
   }
-  const last = result => JSON.parse(result.content.filter(block => block.type === "text").at(-1).text)
+  const last = result => JSON.parse(result.content.filter(block => block.type === "text").at(-1).text.split("\n").at(-1))
   try {
     await sessions.start("fixture", service.mint("packaged-mcp", "fixture"), async () => { await service.revoke("packaged-mcp", "fixture") })
     const grant = grants.mint("fixture", "packaged-mcp")
@@ -95,9 +95,9 @@ if (!worker) {
       requestInit: { headers: { Authorization: `Bearer ${grant.token}` } },
     }))
     assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["js", "js_reset"])
-    const inventory = last(await js("await control.browsers()"))
+    const inventory = last(await js("JSON.stringify(await control.browsers())"))
     const aside = inventory.browsers.filter(browser => browser.product === "Aside")
-    assert.equal(aside.length, 1, "Acceptance needs one exact installed Aside profile")
+    assert.equal(aside.length, 1, `Acceptance needs one exact installed Aside profile; found ${JSON.stringify(inventory.browsers.map(({ id, name, product, status }) => ({ id, name, product, status })))}`)
     const value = "  Zoë 東京 🧪 00123  "
     await js(`await control.connectBrowser(${JSON.stringify(aside[0].id)}); let tab=await control.openTab({browser:${JSON.stringify(aside[0].id)},url:${JSON.stringify(`http://127.0.0.1:${page.address().port}`)},background:true}); await tab.observe()`)
     await js(`await tab.locator({role:'form',name:'Shipping'}).locator({role:'textbox',name:'Recipient'}).setValue(${JSON.stringify(value)})`)
@@ -140,7 +140,7 @@ if (!worker) {
     }
     abort.abort()
     assert.ok((await pending).error, "Cancelled MCP request must reject")
-    const recovered = await js("typeof tab")
+    const recovered = await js("JSON.stringify(typeof tab)")
     assert.equal(last(recovered), "undefined")
     assert.match(JSON.stringify(recovered), /Mako browser and computer use/)
     await js(`let tab=control.tab(${JSON.stringify(target)}); await tab.observe(); await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}})`)
@@ -154,22 +154,22 @@ if (!worker) {
       compactionScope: "SDK documentation/state recovery; model compaction is a separate provider check" }
     const reset = await client.callTool({ name: "js_reset", arguments: {} })
     assert.ok(!reset.isError)
-    assert.equal(last(await js("typeof tab")), "undefined")
+    assert.equal(last(await js("JSON.stringify(typeof tab)")), "undefined")
     const image = await js(`let tab=control.tab(${JSON.stringify(target)}); emitImage(await tab.locator({role:'form',name:'Shipping'}).screenshot())`)
     assert.ok(image.content.some(block => block.type === "image"))
     await js('setTimeout(()=>{throw Error("late packaged fixture callback")},100); "scheduled"')
     await new Promise(done => setTimeout(done, 300))
-    assert.equal(last(await js("typeof tab")), "undefined")
+    assert.equal(last(await js("JSON.stringify(typeof tab)")), "undefined")
     await js(`let tab=control.tab(${JSON.stringify(target)}); await tab.observe()`)
     // Drop this test's browser connection. Reconnect explicitly and reconcile
     // the exact original tab; old generations must never remain usable.
     browsers.disconnect(aside[0].id)
     const stale = await js("await tab.observe()", true)
     assert.match(JSON.stringify(stale), /stale|lease|connection|target|connect/i)
-    const connection = last(await js(`await control.connectBrowser(${JSON.stringify(aside[0].id)})`))
+    const connection = last(await js(`JSON.stringify(await control.connectBrowser(${JSON.stringify(aside[0].id)}))`))
     assert.notEqual(connection.generation, target.generation)
-    const pages = last(await js(`await control.tabs(${JSON.stringify(aside[0].id)})`))
-    const original = pages.pages.find(page => page.targetId === target.tab)
+    const pages = last(await js(`JSON.stringify(await control.tabs(${JSON.stringify(aside[0].id)}))`))
+    const original = pages.pages.find(page => page.tab === target.tab)
     if (original) {
       await js(`tab=await control.claimTab({browser:${JSON.stringify(aside[0].id)},tab:${JSON.stringify(target.tab)}}); await tab.observe(); await tab.expect({within:[{role:'form',name:'Shipping'}],role:'textbox',name:'Recipient',value:${JSON.stringify(value)}}); await tab.close()`)
     }
@@ -177,12 +177,12 @@ if (!worker) {
       staleTargetRefused: true, originalTab: original ? "reclaimed-and-verified" : "confirmed-absent" }
     assert.equal(saves.length, 1, "Reconnect must not replay the original save")
     assert.equal(interruptions.length, 1, "Cancelled input must not resume later")
-    assert.ok(!last(await js(`await control.tabs(${JSON.stringify(aside[0].id)})`)).pages.some(page => page.targetId === target.tab))
+    assert.ok(!last(await js(`JSON.stringify(await control.tabs(${JSON.stringify(aside[0].id)}))`)).pages.some(page => page.tab === target.tab))
     evidence.browser = { transport: "installed Aside extension", exactSaveCount: saves.length, resetPreservedTarget: true, idleWorkerFaultPreservedTarget: true, screenshot: true }
     fixture = await startCocoaFixture({ root, title: "Mako packaged MCP native proof" })
     const { pid } = await fixture.started()
     sampler = sampleFrontmost()
-    const windows = last(await js(`await control.windows(${pid})`))
+    const windows = last(await js(`JSON.stringify(await control.windows(${pid}))`))
     const selected = windows.windows.filter(window => window.title === "Mako packaged MCP native proof")
     assert.equal(selected.length, 1)
     const nativeValue = "  Renée é 🧪 00123  "
