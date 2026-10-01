@@ -719,6 +719,11 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
             .max(2000)
             .optional()
             .describe("Substring the tab URL must contain."),
+          title: z
+            .string()
+            .max(2000)
+            .optional()
+            .describe("Substring the tab title must contain."),
           networkIdle: z
             .boolean()
             .default(false)
