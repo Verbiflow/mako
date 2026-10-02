@@ -17,6 +17,7 @@ import {
 } from "./contracts/thread-environments.js"
 import type { ThreadStore } from "./thread-store.js"
 import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "./thread-recipe.js"
+import { linkedEntries } from "./worktree-carry.js"
 
 const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
@@ -64,6 +65,7 @@ function recipeInstructions(environment: ThreadEnvironment): string | undefined 
     names.length ? `The project's recipe also sets ${names.join(", ")} in your shell.` : undefined,
     processes.length ? `Its processes (${processes.join(", ")}) run through the mako server's app_start, app_stop, app_restart, app_status and app_logs tools; start them there rather than by hand, so they stay this Thread's and survive your turn.` : undefined,
     recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with app_check; a passing full check is the proof to report.` : undefined,
+    recipe.linked?.length ? `This checkout's ${recipe.linked.join(", ")} link each package to the main checkout's, so it needed no install. An install here would write through the links into the main checkout's packages: before you install, add, remove or upgrade any dependency, call app_own_packages, which gives this checkout its own copy in a few seconds, then install as usual.` : undefined,
     "port_holder names whoever holds a port.",
     "If your change alters how the project installs, starts or is checked, update the recipe in the same turn with recipe_save.",
   ].filter(Boolean).join(" ")
@@ -138,6 +140,7 @@ export class ThreadEnvironments {
     }
     if (read.kind === "none") return { ...environment, recipe: { kind: "none" } }
     if (read.kind === "invalid") return { ...environment, recipe: { kind: "invalid", message: read.message } }
+    const linked = await linkedEntries(checkout, read.recipe.prepare).catch((): string[] => [])
     return {
       ...environment,
       values: recipeValues(read.recipe, environment),
@@ -150,6 +153,7 @@ export class ThreadEnvironments {
           return entry
         }),
         checks: Object.keys(read.recipe.checks),
+        ...(linked.length ? { linked } : {}),
       },
     }
   }

@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
-import { copyFile, cp, lstat, mkdir, readlink, rename, rm, symlink } from "node:fs/promises"
-import { basename, dirname, join, matchesGlob } from "node:path"
+import { copyFile, cp, lstat, mkdir, readdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve } from "node:path"
 import { promisify } from "node:util"
 import { belowAgents } from "./background-priority.js"
 import type { Prepared } from "./thread-processes.js"
@@ -128,6 +128,95 @@ async function sharesBlocks(repoRoot: string, checkout: string): Promise<boolean
   }
 }
 
+/** In a package folder whose packages link to the main checkout's: where they link to. */
+export const LINKED_MARK = ".mako-linked"
+
+/**
+ * A package folder of this checkout's own whose packages link to the main
+ * checkout's, in milliseconds. A link that leads back into the project,
+ * such as a workspace package, is copied as it is, so it reaches this
+ * checkout's own code; `.bin`'s relative links reach this folder's
+ * packages the same way. Other dot entries are caches and the package
+ * manager's own state (`.vite`, `.cache`, `.package-lock.json`), and stay
+ * each checkout's. An install replaces a changed package's link with a
+ * folder of its own, but writes through the link of a package that
+ * depends on it, into the main checkout, so no install may run over the
+ * links (`ownPackages`). Built at `at`, which is renamed to the entry
+ * afterwards. Returns how many links it made.
+ */
+export async function linkPackages(repoRoot: string, checkout: string, entry: string, at = join(checkout, entry)): Promise<number> {
+  const from = join(repoRoot, entry)
+  const to = at
+  let links = 0
+  const place = async (source: string, target: string, asIs: boolean) => {
+    const info = await lstat(source)
+    if (info.isSymbolicLink()) {
+      const text = await readlink(source)
+      const reached = resolve(dirname(source), text)
+      if (asIs || (inside(reached, repoRoot) && !inside(reached, from))) {
+        await symlink(isAbsolute(text) && inside(reached, repoRoot) ? join(checkout, relative(repoRoot, reached)) : text, target)
+        links += 1
+        return
+      }
+    }
+    await symlink(source, target)
+    links += 1
+  }
+  await mkdir(to, { recursive: true })
+  await Promise.all((await readdir(from)).map(async (name) => {
+    if (name === LINKED_MARK || (name.startsWith(".") && name !== ".bin")) return
+    const source = join(from, name)
+    const info = await lstat(source)
+    if (info.isDirectory() && (name === ".bin" || name.startsWith("@"))) {
+      await mkdir(join(to, name))
+      await Promise.all((await readdir(source)).map((inner) => place(join(source, inner), join(to, name, inner), name === ".bin")))
+    } else await place(source, join(to, name), false)
+  }))
+  await writeFile(join(to, LINKED_MARK), `${from}\n`)
+  return links
+}
+
+/** Which of `steps`' package folders in `checkout` link to the main checkout's. */
+export async function linkedEntries(checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
+  const patterns = steps.filter((step) => step.link).flatMap((step) => step.outputs ?? [])
+  if (!patterns.length) return []
+  const entries = await matchedEntries(checkout, patterns)
+  return entries.filter((entry) => existsSync(join(checkout, entry, LINKED_MARK)))
+}
+
+/**
+ * Each linked package folder in `checkout` made its own: a clone of the
+ * main checkout's, swapped in whole, so an install can run there. Where
+ * the volume can't clone, or the main checkout's folder is gone, the
+ * links go and the install makes the folder in full. Returns the entries.
+ */
+export async function ownPackages(checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
+  const entries = await linkedEntries(checkout, steps)
+  if (!entries.length) return []
+  const staging = join(dirname(checkout), CARRYING)
+  await mkdir(staging, { recursive: true, mode: 0o700 })
+  const staged = await Promise.all(entries.map(async (entry) => {
+    const to = join(checkout, entry)
+    const from = (await readFile(join(to, LINKED_MARK), "utf8")).trim()
+    return { entry, from, to, clone: join(staging, randomUUID()), links: join(staging, randomUUID()) }
+  }))
+  const present = staged.filter(({ from }) => existsSync(from))
+  const cloned = await cloneTrees(present.map(({ from, clone }) => [from, clone]), false)
+  for (const item of staged) {
+    await rename(item.to, item.links)
+    const index = present.indexOf(item)
+    if (index >= 0 && cloned[index]) await rename(item.clone, item.to)
+    else await rm(item.clone, { recursive: true, force: true })
+    await rm(item.links, { recursive: true, force: true })
+  }
+  return entries
+}
+
+function inside(path: string, root: string): boolean {
+  const inner = relative(root, path)
+  return inner === "" || (!inner.startsWith("..") && !isAbsolute(inner))
+}
+
 /**
  * The files the recipe's `carry` names, from the main checkout, before the
  * agent starts. Entries the checkout already has are left alone, so a retry
@@ -175,13 +264,13 @@ export async function carryOutputs(repoRoot: string, checkout: string, steps: re
   const result: OutputsCarry = { carried: [], skipped: [] }
   const producing = steps.filter((step) => step.outputs?.length)
   if (!producing.length) return result
-  if (!(await sharesBlocks(repoRoot, checkout))) {
+  const clones = producing.some((step) => !step.link) && (await sharesBlocks(repoRoot, checkout))
+  if (producing.some((step) => !step.link) && !clones)
     result.skipped.push("This volume can't share files between copies, so each would cost its full size; installs run in full here.")
-    return result
-  }
   const staging = join(dirname(checkout), CARRYING)
   const main = records ? await records.prepared(repoRoot) : { done: {} }
   for (const step of producing) {
+    if (!step.link && !clones) continue
     const [there, here] = await Promise.all([inputsDigest(repoRoot, step.inputs), inputsDigest(checkout, step.inputs)])
     if (there !== here) {
       result.skipped.push(`${step.command}: ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "differs" : "differ"} from the main checkout's, so it installs here in full.`)
@@ -193,6 +282,22 @@ export async function carryOutputs(repoRoot: string, checkout: string, steps: re
     const wanted = matched.filter((entry) => !unsafe.includes(entry) && !existsSync(join(checkout, entry)))
     const staged = wanted.map((entry) => ({ entry, from: join(repoRoot, entry), to: join(checkout, entry), temporary: join(staging, randomUUID()) }))
     const entries: string[] = []
+    if (step.link) {
+      // The links are the main checkout's packages, so there's nothing for the step to catch up on until the inputs change.
+      if (staged.length) await mkdir(staging, { recursive: true, mode: 0o700 })
+      for (const { entry, to, temporary } of staged) {
+        try {
+          await mkdir(dirname(to), { recursive: true })
+          await linkPackages(repoRoot, checkout, entry, temporary)
+          await rename(temporary, to)
+          entries.push(entry)
+        } catch {
+          await rm(temporary, { recursive: true, force: true })
+        }
+      }
+      if (entries.length) result.carried.push({ command: step.command, inputs: step.inputs, digest: here, entries })
+      continue
+    }
     if (staged.length) {
       await mkdir(staging, { recursive: true, mode: 0o700 })
       await Promise.all(staged.map(({ to }) => mkdir(dirname(to), { recursive: true })))
@@ -265,7 +370,9 @@ export async function carryReport(recipe: Recipe, repoRoot: string, granted: rea
     const entries = await matchedEntries(repoRoot, step.outputs)
     refuse(entries)
     lines.push(entries.length
-      ? `${step.command}: ${listed(entries)} ${entries.length === 1 ? "is" : "are"} cloned into a new checkout when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there.`
+      ? step.link
+        ? `${step.command}: a new checkout's ${listed(entries)} link each package to the main checkout's when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there, so it starts without installing. Prove the app runs on them with app_restart and app_check "full"; if it doesn't, leave link out.`
+        : `${step.command}: ${listed(entries)} ${entries.length === 1 ? "is" : "are"} cloned into a new checkout when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there.`
       : `${step.command}: nothing Git ignores in the main checkout matches ${step.outputs.join(", ")} yet; once the step has run there, new checkouts get them.`)
   }
   return lines

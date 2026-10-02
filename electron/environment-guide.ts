@@ -64,7 +64,7 @@ Pass it to recipe_save as the recipe. Mako checks it against this Thread's ports
     "api": { "command": "npm run api", "port": "{port+1}", "cwd": "server", "values": { "HOME": "{data}/home" } }
   },
   "checks": { "quick": "npm run typecheck && npm test", "full": "npm run e2e" },
-  "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"], "outputs": ["**/node_modules"] }],
+  "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"], "outputs": ["**/node_modules"], "link": true }],
   "carry": ["config/dev.local.json"],
   "secrets": [".env.local", "server/.env"]
 }
@@ -86,6 +86,8 @@ The fields:
   - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch. Never a clean reinstall (npm ci, or deleting what it installs first): it throws away what a new checkout was given.
   - inputs: the files the step reads, usually the lockfiles. A folder counts only the files Git tracks or would track there.
   - outputs: what the step writes, as paths or patterns (* stays in one folder, ** crosses folders), such as **/node_modules. A new checkout gets them cloned from the main checkout when its inputs are the same there, which costs no disk and takes a second or two, so its first install only catches up. List only what still works in another folder. Never a Python virtual environment (.venv): it names its own folder, so a copy quietly runs the main checkout's code, and Mako refuses it; uv sync makes one from its cache in well under a second anyway. A build cache that checks itself works: with Rust's target/ cloned in, Cargo keeps the dependencies and rebuilds only the project's own crates.
+  - link: true, for package folders (outputs such as **/node_modules and nothing else). A new checkout's node_modules is then a folder of its own whose packages link to the main checkout's: about a second instead of a clone of every file, which for a large project is several seconds and hundreds of thousands of files per Thread. Workspace packages and caches such as .vite stay the checkout's own. Try it first for node_modules. Keep it if the app starts and the full check passes; some bundlers refuse packages that live outside the project, such as Next.js with Turbopack ("couldn't find the Next.js package"), and then leave link out.
+  - With link, an install must never run over the links, since it writes through them into the main checkout's packages. Mako gives the checkout its own copy before its own install step runs, and an agent calls app_own_packages before installing or changing a dependency; every agent in such a checkout is told.
 - carry: files Git ignores that a new checkout gets from the main checkout as they are, before its agent starts, such as a local settings file. Paths or patterns. Never credentials: recipe_save refuses a file that holds them by its name, such as .env, and says to list it under secrets.
 - secrets: files Git ignores that hold credentials, such as .env.local or server/.env. A new checkout gets them from the main checkout only once the user allows it in Mako, where they see the list; until then, Threads outside the main checkout start without them. Nobody reads them, you included.
 - oneAtATime: true for an app whose fixed port, local database or Docker stack copies can't split (rung 4 above).

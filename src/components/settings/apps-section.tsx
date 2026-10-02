@@ -334,8 +334,9 @@ function Recipe({ setup, state, saving, onAllow }: { setup: ProjectAppSetup; sta
         <Part title="Before it starts">
           {recipe.prepare.map((step) => (
             <Line key={step.command} name={<Command className="text-foreground">{step.command}</Command>}>
-              Runs once in each Thread’s checkout, and again after a change to {list(step.inputs, "or")}.
-              {step.outputs.length ? ` A new Thread starts with ${list(step.outputs.map(atAnyDepth))} cloned from the main folder while ${list(step.inputs)} ${step.inputs.length === 1 ? "is" : "are"} the same there.` : ""}
+              {step.link
+                ? `A new Thread’s ${list(step.outputs.map(atAnyDepth))} link to the main folder’s packages, so it starts without installing while ${list(step.inputs)} ${step.inputs.length === 1 ? "is" : "are"} the same there. Before anything installs in a Thread, it gets its own copy.`
+                : <>Runs once in each Thread’s checkout, and again after a change to {list(step.inputs, "or")}.{step.outputs.length ? ` A new Thread starts with ${list(step.outputs.map(atAnyDepth))} cloned from the main folder while ${list(step.inputs)} ${step.inputs.length === 1 ? "is" : "are"} the same there.` : ""}</>}
             </Line>
           ))}
         </Part>

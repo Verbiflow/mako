@@ -15,7 +15,7 @@ export interface RecipeView {
   values: Record<string, string>
   processes: RecipeProcessView[]
   checks: { quick?: string; full?: string }
-  prepare: { command: string; inputs: string[]; outputs: string[] }[]
+  prepare: { command: string; inputs: string[]; outputs: string[]; link: boolean }[]
   carry: string[]
   oneAtATime: boolean
 }

@@ -41,7 +41,7 @@ export interface ThreadRecipeProcess {
 
 export type ThreadRecipeSummary =
   | { kind: "none" }
-  | { kind: "ready"; processes: ThreadRecipeProcess[]; checks: string[] }
+  | { kind: "ready"; processes: ThreadRecipeProcess[]; checks: string[]; /** Package folders here whose packages link to the main checkout's. */ linked?: string[] }
   | { kind: "invalid"; message: string }
 
 /**

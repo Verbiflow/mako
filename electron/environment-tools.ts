@@ -13,7 +13,7 @@ import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView } from "./c
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
-import { carryFiles, carryReport, matchedEntries } from "./worktree-carry.js"
+import { carryFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
 import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
   checkoutOf,
@@ -72,6 +72,8 @@ export interface EnvironmentTools {
   logs(conversationId: string, target: { process: string } | { check: CheckTier }, lines: number): Promise<string>
   /** What the Thread's app touches outside its checkout and ports, for finding what two copies would fight over. */
   probe(conversationId: string): Promise<string>
+  /** Linked package folders made the checkout's own, so an install there can't write into the main checkout. */
+  ownPackages(conversationId: string): Promise<string>
   check(conversationId: string, tier: CheckTier): Promise<string>
   port(conversationId: string, port: number): Promise<string>
   save(conversationId: string, recipe: Recipe): Promise<string>
@@ -280,8 +282,18 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (earlier) return earlier
     const record = await deps.processes.prepared(checkout)
     const digests = await Promise.all(steps.map((step) => inputsDigest(checkout, step.inputs)))
-    const due = steps.flatMap((step, index) => record.done[step.command] === digests[index] ? [] : [{ command: step.command, digest: digests[index]! }])
+    const root = await projectRoot(checkout)
+    const linked = root === checkout ? [] : await linkedEntries(checkout, steps)
+    const mains = linked.length ? await Promise.all(steps.map((step) => step.link ? inputsDigest(root, step.inputs) : undefined)) : []
+    const due = steps.flatMap((step, index) => {
+      if (record.done[step.command] === digests[index]) return []
+      // Linked packages are the main checkout's own, so there's nothing to catch up on while the inputs match it.
+      if (step.link && linked.length && mains[index] === digests[index]) return []
+      return [{ step, command: step.command, digest: digests[index]! }]
+    })
     if (!due.length) return undefined
+    // An install over the links would write into the main checkout's packages.
+    if (linked.length && due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
     await deps.processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((step) => [step.command, step.digest])) })
     const command = due.map((step) => step.command).join(" && ")
     const result = await deps.processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: env(current, current.recipe) }])
@@ -318,6 +330,13 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       notes,
       refused: `Waiting in line for memory: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing has started yet; Mako starts it by itself once there's room, and app_status shows when. If it can't wait, ask the user whether to stop one of those apps; app_stop takes it out of the line.`,
     }
+  }
+  const packagesSummary = async (read: Read, checkout: string) => {
+    if (read.kind !== "ready" || !read.recipe.prepare.some((step) => step.link)) return undefined
+    const linked = await linkedEntries(checkout, read.recipe.prepare)
+    return linked.length
+      ? `${linked.join(", ")} link each package to the main checkout's. Call app_own_packages before you install, add, remove or upgrade a dependency here; an install over the links writes into the main checkout.`
+      : "This checkout's own (installed or cloned here, or the main checkout); install as usual."
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
     const { done } = await deps.processes.prepared(checkout)
@@ -741,6 +760,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
             .map((entry) => ({ ...summary(entry.name, entry.command, entry.port, entry), note: "no longer in the recipe; app_stop with its name stops it" })),
         ],
         prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(read.recipe, checkout) : undefined,
+        packages: await packagesSummary(read, checkout),
         room: await roomReport(environment.app),
         checks: (["quick", "full"] as const).flatMap((tier) => {
           const command = read.kind === "ready" ? read.recipe.checks[tier] : undefined
@@ -766,6 +786,19 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     },
     async probe(conversationId) {
       return probe(await context(conversationId))
+    },
+    async ownPackages(conversationId) {
+      const current = await withRecipe(conversationId)
+      const steps = current.recipe.prepare.filter((step) => step.link)
+      const linked = await linkedEntries(current.checkout, steps)
+      if (!linked.length)
+        return "This checkout's packages are its own already (installed or cloned here, or this is the main checkout), so installing here touches nothing else. Install as you normally would."
+      const running = (await deps.processes.status(current.environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
+      const owned = await ownPackages(current.checkout, steps)
+      return [
+        `${owned.join(", ")} ${owned.length === 1 ? "is" : "are"} now this checkout's own: a copy of the main checkout's packages, so installing here no longer touches the main checkout. Install, add, remove or upgrade packages as you normally would.`,
+        running ? "The running app still has the old packages loaded; app_restart it after installing." : undefined,
+      ].filter(Boolean).join(" ")
     },
     async logs(conversationId, target, lines) {
       const { environment } = await context(conversationId)
@@ -897,7 +930,7 @@ async function recipeState(read: Read): Promise<ProjectRecipeState> {
         return written
       }),
       checks: recipe.checks,
-      prepare: recipe.prepare.map((step) => ({ command: step.command, inputs: step.inputs, outputs: step.outputs ?? [] })),
+      prepare: recipe.prepare.map((step) => ({ command: step.command, inputs: step.inputs, outputs: step.outputs ?? [], link: step.link === true })),
       carry: recipe.carry ?? [],
       oneAtATime: recipe.oneAtATime ?? false,
     },
@@ -1062,6 +1095,16 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => reply(() => tools.probe(conversationId()))
+  )
+  server.registerTool(
+    "app_own_packages",
+    {
+      description:
+        "Call before you install, add, remove or upgrade any dependency when this checkout's packages link to the main checkout's (your instructions and app_status say when). An install over the links would write into the main checkout's packages; this gives the checkout its own copy of them in a few seconds, after which you install as usual. Mako does the same by itself before its own install step once the lockfile changes.",
+      inputSchema: z.object({}).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    () => reply(() => tools.ownPackages(conversationId()))
   )
   server.registerTool(
     "app_check",

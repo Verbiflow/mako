@@ -357,7 +357,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   await withQuery.close()
   const agent = await connect(conversation)
   const listedTools = (await agent.listTools()).tools
-  assert.deepEqual(listedTools.map((tool) => tool.name), ["app_status", "app_start", "app_stop", "app_restart", "app_logs", "app_probe", "app_check", "recipe_guide", "recipe_save", "port_holder"])
+  assert.deepEqual(listedTools.map((tool) => tool.name), ["app_status", "app_start", "app_stop", "app_restart", "app_logs", "app_probe", "app_own_packages", "app_check", "recipe_guide", "recipe_save", "port_holder"])
   for (const tool of listedTools) assert.match(tool.description ?? "", /^(Call|Run|Stop|Read|Prove|Replace|Who)\b/, `${tool.name} says when to use it first`)
   assert.match(listedTools.find((tool) => tool.name === "recipe_save")?.description ?? "", /in the same turn as any change of yours that alters how the project installs, starts or is checked/)
   assert.match(JSON.stringify(await agent.callTool({ name: "app_status", arguments: {} })), /running on port/)

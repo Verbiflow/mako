@@ -65,7 +65,17 @@ const prepareSchema = z.object({
    * first run only catches up.
    */
   outputs: z.array(checkoutPattern).min(1).max(10).optional(),
-}).strict()
+  /**
+   * A new checkout's package folders link each package to the main
+   * checkout's, in a second, instead of cloning them. An install must
+   * never run over the links, since it writes through them into the main
+   * checkout; Mako gives the checkout its own copy first.
+   */
+  link: z.boolean().optional(),
+}).strict().refine(
+  (step) => !step.link || (step.outputs?.length && step.outputs.every((pattern) => pattern.split("/").at(-1) === "node_modules")),
+  { message: "link is for package folders: give outputs such as **/node_modules, and nothing else", path: ["link"] },
+)
 
 export const RecipeSchema = z.object({
   $schema: z.string().optional(),
