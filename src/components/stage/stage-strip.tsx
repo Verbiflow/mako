@@ -14,7 +14,7 @@ import { useWorktrees, workingFolder } from "@/state/worktrees"
 import { useThreads } from "@/state/threads"
 import { AGENT_TAB_ID, viewer, useViewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
-import { Columns2Icon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
+import { ClipboardListIcon, Columns2Icon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
 
 export function StageStrip({
   paneId,
@@ -93,7 +93,7 @@ export function StageStrip({
             )
           const title = agent ? agentTitle : document.title
           const pinned = agent || document.pinned
-          const named = !agent && document.kind === "transcript" ? `Transcript of ${document.title}` : document?.path
+          const named = !agent && document.kind === "transcript" ? `Transcript of ${document.title}` : !agent && document.kind === "plan" ? `Plan: ${document.title}` : document?.path
           return (
             <div
               key={id}
@@ -174,6 +174,8 @@ export function StageStrip({
                   )
                 ) : document.kind === "transcript" ? (
                   <ScrollTextIcon className="size-3.5 shrink-0" />
+                ) : document.kind === "plan" ? (
+                  <ClipboardListIcon className="size-3.5 shrink-0" />
                 ) : null}
                 <span className="truncate">{title}</span>
               </button>
