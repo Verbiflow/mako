@@ -6,8 +6,9 @@ import { harnessLabel } from "@/lib/harness-label"
 import { appendPlanContext, proposedPlanReply } from "@/lib/proposed-plan"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import type { LivePermissionRequest, LiveSessionMode, ThreadRef } from "@/lib/types"
+import { useMemo } from "react"
 import { acp, useAcp } from "@/state/acp"
-import { acpForThread, acpStore, type AcpConversation, type AcpState } from "@/state/acp-state"
+import { acpForThread, acpStore, activeLiveAcp, type AcpConversation, type AcpState } from "@/state/acp-state"
 import {
   chooseComposerOption,
   composerSettingsInput,
@@ -28,7 +29,8 @@ import {
   usePlanChoice,
   type NativePlan,
 } from "@/state/plan-choice"
-import { buildOnce, recordPlanBuild, type PlanBuildTarget } from "@/state/plan-builds"
+import { buildOnce, recordPlanBuild, usePlanBuilds, type PlanBuildTarget } from "@/state/plan-builds"
+import { shallowEqual } from "@/state/store"
 import { prefsStore, usePrefs } from "@/state/prefs"
 import {
   chooseThreadMode,
@@ -287,30 +289,139 @@ function sourceConversation(state: AcpState, source: PlanSource): AcpConversatio
     (source.threadPath ? (acpForThread(state, { path: source.threadPath }) ?? undefined) : undefined)
 }
 
-function latestInBlocks(blocks: readonly AcpBlock[]): string | undefined {
+function planInBlocks(blocks: readonly AcpBlock[], id?: string): ProposedPlan | undefined {
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]
-    if (block?.type === "proposed-plan") return block.id
+    if (block?.type === "proposed-plan" && (id === undefined || block.id === id)) return block
   }
   return undefined
 }
 
-function latestInEntries(entries: readonly ViewedThreadEntry[]): string | undefined {
+function planInEntries(entries: readonly ViewedThreadEntry[], id?: string): ProposedPlan | undefined {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]
     if (entry?.kind !== "assistant") continue
     for (let at = entry.blocks.length - 1; at >= 0; at--) {
       const block = entry.blocks[at]
-      if (block?.type === "proposed-plan") return block.id
+      if (block?.type === "proposed-plan" && (id === undefined || block.id === id)) return block
     }
   }
   return undefined
 }
 
+/** The plan of the latest turn: none once a message follows it. */
+function pendingInBlocks(blocks: readonly AcpBlock[]): ProposedPlan | undefined {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index]
+    if (block?.type === "user") return undefined
+    if (block?.type === "proposed-plan") return block
+  }
+  return undefined
+}
+
+function pendingInEntries(entries: readonly ViewedThreadEntry[]): ProposedPlan | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]
+    if (entry?.kind === "user") return undefined
+    if (entry?.kind !== "assistant") continue
+    for (let at = entry.blocks.length - 1; at >= 0; at--) {
+      const block = entry.blocks[at]
+      if (block?.type === "proposed-plan") return block
+    }
+  }
+  return undefined
+}
+
+const latestInBlocks = (blocks: readonly AcpBlock[]) => planInBlocks(blocks)?.id
+const latestInEntries = (entries: readonly ViewedThreadEntry[]) => planInEntries(entries)?.id
+
 function latestPlan(source: PlanSource, conversation: AcpConversation | undefined): string | undefined {
   const viewing = threadsStore.get().viewing
   return (conversation ? latestInBlocks(conversation.blocks) : undefined) ??
     (source.threadPath && viewing?.ref.path === source.threadPath ? latestInEntries(viewing.entries) : undefined)
+}
+
+/**
+ * A plan as its conversation has it now, revised or still streaming, or
+ * undefined once neither the open conversation nor the viewed Thread holds it.
+ */
+export function useSourcePlan(source: PlanSource, id: string): ProposedPlan | undefined {
+  const live = useAcp((state) => {
+    const conversation = sourceConversation(state, source)
+    return conversation ? planInBlocks(conversation.blocks, id) : undefined
+  })
+  const viewed = useThreads((state) =>
+    source.threadPath && state.viewing?.ref.path === source.threadPath ? planInEntries(state.viewing.entries, id) : undefined
+  )
+  return live ?? viewed
+}
+
+/** The plan waiting on the user in the conversation the composer talks to. */
+export interface PlanDecision {
+  source: PlanSource
+  plan: ProposedPlan
+  /** The harness's own approval of this plan, when it waits on one. */
+  approval?: LivePermissionRequest
+  harness?: string
+}
+
+/**
+ * The plan of the composer's conversation that still needs a decision: from
+ * its latest turn, complete, not built, and either that turn has ended or
+ * the harness is waiting on its approval.
+ */
+export function usePlanDecision(): PlanDecision | null {
+  const live = useAcp((state) => {
+    const active = activeLiveAcp(state)
+    if (!active) return null
+    const plan = pendingInBlocks(active.blocks)
+    const approval = plan ? planApproval(active, plan) : undefined
+    const settled = active.session.status !== "running" && active.session.status !== "starting"
+    return {
+      liveId: active.session.id,
+      harness: active.harness,
+      threadPath: active.threadPath,
+      plan: plan && (approval || settled) ? plan : undefined,
+      approval,
+    }
+  }, shallowEqual)
+  // A viewed Thread other than the live conversation's owns the composer.
+  const viewed = useThreads((state) => {
+    const viewing = state.viewing
+    if (!viewing?.ref.path || (live && viewing.ref.path === live.threadPath)) return null
+    const plan = state.run?.status === "running" ? undefined : pendingInEntries(viewing.entries)
+    return { threadPath: viewing.ref.path, plan, harness: viewing.ref.harness }
+  }, shallowEqual)
+  const plan = viewed ? viewed.plan : live?.plan
+  const built = usePlanBuilds((state) => (plan ? state.builds[plan.id] : undefined))
+  const viewedPath = viewed?.threadPath
+  const liveId = live?.liveId
+  const source = useMemo<PlanSource>(
+    () => (viewedPath ? { threadPath: viewedPath } : { liveId }),
+    [viewedPath, liveId]
+  )
+  if (!plan || built || plan.status !== "proposed" || plan.truncated) return null
+  return viewed
+    ? { source, plan, harness: viewed.harness }
+    : { source, plan, approval: live?.approval, harness: live?.harness }
+}
+
+/** The harness's own "keep planning" answer: a one-time refusal before any lasting one. */
+export function planRejection(approval: LivePermissionRequest) {
+  return approval.options.find((option) => option.kind === "reject_once") ??
+    approval.options.find((option) => option.kind?.startsWith("reject"))
+}
+
+/**
+ * Turn down the plan the harness is waiting on, with its own "keep
+ * planning" answer. Feedback typed with it is sent as the next message.
+ */
+export async function keepPlanning(decision: PlanDecision): Promise<void> {
+  const approval = decision.approval
+  const conversation = sourceConversation(acpStore.get(), decision.source)
+  const reject = approval ? planRejection(approval) : undefined
+  if (!approval || !conversation || !reject) return
+  await answerLiveApproval(conversation.key, approval.id, { kind: "choice", optionId: reject.optionId })
 }
 
 /**

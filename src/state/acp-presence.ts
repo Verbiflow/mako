@@ -92,10 +92,44 @@ export function sameAcpPresence(
   )
 }
 
+/** The native sessions a conversation stands for. */
+export type SessionOwner = Pick<AcpPresence, "harness" | "nativeId" | "title" | "threadPath" | "nativePaths">
+
+/**
+ * Every conversation's native sessions, closed ones included: a conversation
+ * that has ended still stands for each session it moved through, so a move
+ * across harnesses stays one row after the app restarts.
+ */
+export function selectSessionOwners(state: AcpState): SessionOwner[] {
+  return Object.values(state.conversations).map((conversation) => ({
+    harness: conversation.harness,
+    nativeId: conversation.kind === "live" ? conversation.session.nativeId : undefined,
+    title: conversation.title,
+    threadPath: conversation.threadPath,
+    nativePaths: conversation.nativePaths,
+  }))
+}
+
+export function sameSessionOwners(left: SessionOwner[], right: SessionOwner[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((owner, index) => {
+      const candidate = right[index]
+      return (
+        candidate?.harness === owner.harness &&
+        candidate.nativeId === owner.nativeId &&
+        candidate.title === owner.title &&
+        candidate.threadPath === owner.threadPath &&
+        (candidate.nativePaths ?? []).join("\0") === (owner.nativePaths ?? []).join("\0")
+      )
+    })
+  )
+}
+
 /** Preserve native references while choosing one row for an app-owned conversation. */
-export function canonicalThreadRefs<T extends { path: string; harness?: string; nativeId?: string; identity?: string }>(
+export function canonicalThreadRefs<T extends { path: string; harness?: string; nativeId?: string; identity?: string; title?: string }>(
   refs: T[],
-  conversations: AcpPresence[],
+  conversations: SessionOwner[],
   pinned: string[]
 ): T[] {
   const paths = new Set(refs.map((ref) => ref.path))
@@ -110,6 +144,7 @@ export function canonicalThreadRefs<T extends { path: string; harness?: string; 
     identityOf.set(ref.path, key)
   }
   const hidden = new Set<string>()
+  const titles = new Map<string, string>()
   for (const conversation of conversations) {
     // Rows are aliases of a conversation when they share the catalog identity
     // of a row it recorded. Two stores can share a native ID (a Cursor agent
@@ -132,6 +167,14 @@ export function canonicalThreadRefs<T extends { path: string; harness?: string; 
         ? conversation.threadPath
         : aliases[0])
     for (const path of aliases) if (path !== representative) hidden.add(path)
+    // A conversation that moved between sessions keeps its own name: the
+    // store each move wrote titles its file from the replayed first prompt.
+    if (conversation.title && representative && new Set(own).size > 1)
+      titles.set(representative, conversation.title)
   }
-  return refs.filter((ref) => !hidden.has(ref.path))
+  return refs.flatMap((ref) => {
+    if (hidden.has(ref.path)) return []
+    const title = titles.get(ref.path)
+    return [title ? { ...ref, title } : ref]
+  })
 }

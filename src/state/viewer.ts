@@ -1,6 +1,7 @@
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { acpStore } from "@/state/acp-state"
+import type { ProposedPlan } from "@mako/sessions/content"
 import type { FileContents, GitDiff } from "@/lib/types"
 import type { TranscriptDepth, TranscriptSource } from "../../electron/contracts/transcript-document.ts"
 
@@ -26,9 +27,20 @@ export interface TranscriptOf {
   harness?: string
 }
 
+/**
+ * A proposed plan open as a document. The tab follows the plan in its
+ * conversation, revisions and streaming included; `snapshot` is what it
+ * shows once that conversation is gone.
+ */
+export interface PlanOf {
+  id: string
+  source: { liveId?: string; threadPath?: string }
+  snapshot: ProposedPlan
+}
+
 export interface ViewerDocument {
   id: string
-  kind: "file" | "diff" | "transcript"
+  kind: "file" | "diff" | "transcript" | "plan"
   path: string
   liveId?: string
   threadPath?: string
@@ -36,6 +48,7 @@ export interface ViewerDocument {
   file?: FileContents
   diff?: { title: string; diffs: GitDiff[]; note?: string }
   transcript?: TranscriptOf
+  plan?: PlanOf
   loading: boolean
   error?: string
   line?: number
@@ -438,6 +451,36 @@ export const viewer = {
       if (source.kind === "live" && of.path) return viewer.readTranscript(id, false)
       updateDocument(id, document.file ? { loading: false } : { loading: false, error: error instanceof Error ? error.message : String(error) })
     }
+  },
+
+  /**
+   * A plan as a document tab, like a Markdown file: preview first, source a
+   * click away. Opening it again shows the tab it already has, pinned so a
+   * file preview doesn't replace it.
+   */
+  openPlan(plan: ProposedPlan, source: PlanOf["source"], title: string) {
+    placeDocument(
+      (id, previous) => ({
+        id,
+        kind: "plan",
+        path: `plan:${plan.id}`,
+        title,
+        plan: { id: plan.id, source, snapshot: plan },
+        loading: false,
+        error: undefined,
+        pinned: true,
+        renderMode: previous?.renderMode ?? "preview",
+      }),
+      (candidate) => candidate.kind === "plan" && candidate.plan?.id === plan.id
+    )
+    if (hasBridge()) void getMako().unwatchFile()
+  },
+
+  /** Keep a plan tab's fallback and title current while its conversation is open. */
+  updatePlan(id: string, plan: ProposedPlan, title: string) {
+    const document = viewerStore.get().documents[id]
+    if (!document?.plan || (document.plan.snapshot === plan && document.title === title)) return
+    updateDocument(id, { title, plan: { ...document.plan, snapshot: plan } })
   },
 
   setTranscriptDepth(id: string, depth: TranscriptDepth) {

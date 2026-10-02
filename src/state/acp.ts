@@ -21,6 +21,7 @@ import { performLiveAction } from "@/state/live-actions"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type {
+  ContextBreakdown,
   ContinuationResolution,
   PromptAttachment,
   ThreadRef,
@@ -524,6 +525,11 @@ export const acp = {
       acp.activate(snapshot.session.id)
   },
 
+  /** What fills a live conversation's context, for a harness that itemizes it; null otherwise. */
+  async contextBreakdown(conversationId: string): Promise<ContextBreakdown | null> {
+    return hasBridge() ? getMako().liveContextBreakdown(conversationId) : null
+  },
+
   async recoverRewinds(): Promise<number> {
     const snapshots = await getMako().liveRecoverRewinds()
     for (const snapshot of snapshots) applyLiveSnapshot(snapshot)
@@ -563,6 +569,7 @@ export const acp = {
         attachments,
         tuning:
           tuning ?? (await settingsForSend(currentSettingsTarget(harness))),
+        carry: prefsStore.get().conversionMode,
       }
       if (modeId) input.modeId = modeId
       return submitTransfer(current.key, input)
