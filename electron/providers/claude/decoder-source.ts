@@ -36,9 +36,10 @@ export const claudeDecoderSource: ProviderDecoderSource = {
     const decoder = new ClaudeDecoder({ state }, () => 0)
     return {
       decode(message: JsonValue) {
-        if (!MessageSchema.safeParse(message).success) return [decoded.unknown("(unreadable)", message, "unreadable")]
+        const recorded = MessageSchema.safeParse(message)
+        if (!recorded.success) return [decoded.unknown("(unreadable)", message, "unreadable")]
         // SAFETY: a capture records each message exactly as the SDK's query yielded it.
-        const out = decoder.decode(message as unknown as SDKMessage)
+        const out = decoder.decode(recorded.data as SDKMessage)
         // The live driver folds each state patch into the session the decoder reads.
         for (const item of out) if (item.kind === "state") Object.assign(state, item.patch)
         return out

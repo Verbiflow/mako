@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/approval-response.js"
 import { claudeProposedPlan } from "./sdk-plan.js"
-import type { CanUseTool, OnElicitation } from "@anthropic-ai/claude-agent-sdk"
+import type { CanUseTool, OnElicitation, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk"
 import { ElicitRequestFormParamsSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import type { ClaudeApprovalObserver } from "./approval-observer.js"
@@ -45,6 +45,12 @@ export class ClaudePermissions {
   private readonly emit: (event: LiveDriverEvent) => void
   private readonly approvals: ClaudeApprovalObserver | undefined
   private readonly toolApprovals: ClaudePermissionObserver | undefined
+  /**
+   * The mode Plan replaced, to return to when its plan is approved. Without
+   * it Claude leaves Plan for `default` and asks before every edit, whatever
+   * access the session had before planning.
+   */
+  planReturn: PermissionMode | undefined
   constructor(id: string, emit: (event: LiveDriverEvent) => void, approvals?: ClaudeApprovalObserver, toolApprovals?: ClaudePermissionObserver) {
     this.approvals = approvals
     this.toolApprovals = toolApprovals
@@ -182,6 +188,10 @@ export class ClaudePermissions {
             ? "The user has not approved implementation. Continue planning."
             : "The user declined this tool request",
       }
+    const leavePlan: PermissionUpdate[] | undefined =
+      name === "ExitPlanMode" && this.planReturn && this.planReturn !== "plan"
+        ? [{ type: "setMode", mode: this.planReturn, destination: "session" }]
+        : undefined
     return {
       behavior: "allow",
       // Native telemetry otherwise infers allow-once even when it applies session rules.
@@ -189,11 +199,12 @@ export class ClaudePermissions {
       decisionClassification: response.optionId === "allow_session" ? "user_permanent" : "user_temporary",
       updatedInput: input,
       updatedPermissions:
-        response.optionId === "allow_session"
+        leavePlan ??
+        (response.optionId === "allow_session"
           ? options.suggestions?.filter(
               (item) => item.destination === "session"
             )
-          : undefined,
+          : undefined),
     }
   }
 

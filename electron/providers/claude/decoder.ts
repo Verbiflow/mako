@@ -1,7 +1,8 @@
 import type { HookCallback, ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { JsonValue } from "../../codex-app-json.js"
 import { decoded, decodedNotices, type Decoded } from "../../contracts/native-decoding.js"
-import type { LiveSessionCommand, LiveSessionState, LiveSessionUsage } from "../../contracts/providers-acp.js"
+import type { LiveSessionCommand, LiveSessionState, TokenCounts } from "../../contracts/providers-acp.js"
+import { SessionUsage, type UsageObservation } from "../../session-usage.js"
 import { claudeRateLimitWindow } from "./accounts.js"
 import { claudeMessageKind } from "./sdk-message-kinds.js"
 import { ClaudeNotices } from "./sdk-notices.js"
@@ -26,8 +27,9 @@ export class ClaudeDecoder {
   private readonly projection = new ClaudeProjection()
   private readonly notices: ClaudeNotices
   private readonly view: ClaudeDecoderView
-  /** The model and context of the main loop's latest request, for the usage its turn's result reports. */
-  private lastCall?: { model: string; tokens: number }
+  /** The main loop's latest model, whose window the turn's result reports. */
+  private lastModel?: string
+  private readonly meter = new SessionUsage()
   /** Commands `init` said belong to a terminal; a later command list leaves them out too. */
   private terminalCommands = new Set<string>()
 
@@ -81,21 +83,28 @@ export class ClaudeDecoder {
     const { state } = this.view
     if (message.type === "assistant") {
       const { model, usage } = message.message
-      if (!message.parent_tool_use_id && model !== "<synthetic>")
-        this.lastCall = { model, tokens: usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) +
-          (usage.cache_read_input_tokens ?? 0) + usage.output_tokens }
-      return []
+      if (message.parent_tool_use_id || model === "<synthetic>") return []
+      this.lastModel = model
+      return this.usage({ kind: "call", tokens: {
+        input: usage.input_tokens,
+        cacheRead: usage.cache_read_input_tokens ?? 0,
+        cacheWrite: usage.cache_creation_input_tokens ?? 0,
+        output: usage.output_tokens,
+      } })
     }
     if (message.type === "result") {
-      const size = this.lastCall && contextWindow(message.modelUsage, this.lastCall.model)
-      return this.lastCall && size
-        ? this.usage({ used: this.lastCall.tokens, size,
-            cost: message.total_cost_usd > 0 ? { amount: message.total_cost_usd, currency: "USD" } : state.usage?.cost })
+      const size = this.lastModel && contextWindow(message.modelUsage, this.lastModel)
+      const observations: UsageObservation[] = Object.keys(message.modelUsage).length
+        ? [{ kind: "total", tokens: sessionTokens(message.modelUsage) }]
         : []
+      if (size) observations.push({ kind: "window", size })
+      if (message.total_cost_usd > 0) observations.push({ kind: "cost", amount: message.total_cost_usd, currency: "USD" })
+      return this.usage(...observations)
     }
     if (message.type === "conversation_reset") {
-      this.lastCall = undefined
-      return [decoded.state({ nativeId: message.new_conversation_id, usage: undefined })]
+      this.lastModel = undefined
+      this.meter.observe({ kind: "reset" })
+      return [decoded.state({ nativeId: message.new_conversation_id, usage: this.meter.current })]
     }
     if (message.type !== "system") return []
     switch (message.subtype) {
@@ -103,11 +112,8 @@ export class ClaudeDecoder {
         return message.permissionMode && message.permissionMode !== state.currentMode
           ? [decoded.state({ currentMode: message.permissionMode })]
           : []
-      case "compact_boundary": {
-        this.lastCall = undefined
-        const after = message.compact_metadata.post_tokens
-        return after !== undefined && state.usage ? this.usage({ ...state.usage, used: after }) : []
-      }
+      case "compact_boundary":
+        return this.usage({ kind: "compacted", after: message.compact_metadata.post_tokens })
       case "commands_changed":
         return [decoded.state({
           commands: message.commands
@@ -123,12 +129,23 @@ export class ClaudeDecoder {
     }
   }
 
-  private usage(usage: LiveSessionUsage): Decoded<never>[] {
-    const held = this.view.state.usage
-    return held?.used === usage.used && held.size === usage.size && held.cost?.amount === usage.cost?.amount
-      ? []
-      : [decoded.state({ usage })]
+  private usage(...observations: UsageObservation[]): Decoded<never>[] {
+    const usage = this.meter.observe(...observations)
+    return usage ? [decoded.state({ usage })] : []
   }
+}
+
+/** Every model the session used, background ones too: what the session has spent. */
+function sessionTokens(models: Record<string, ModelUsage>): TokenCounts {
+  const tokens: TokenCounts = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
+  for (const usage of Object.values(models)) {
+    tokens.input += usage.inputTokens
+    tokens.cacheRead += usage.cacheReadInputTokens
+    tokens.cacheWrite += usage.cacheCreationInputTokens
+    tokens.output += usage.outputTokens
+    if (usage.thinkingTokens) tokens.reasoning = (tokens.reasoning ?? 0) + usage.thinkingTokens
+  }
+  return tokens
 }
 
 /** The answering model's window. Usage can key it with a suffix the reply's model id lacks (`[1m]`). */

@@ -25,7 +25,11 @@ export const installClaude: ProviderModule = (host) => installHarness(host, {
   skills: claudeSkillSource,
   sessionEmitter: {
     provider: "claude",
-    emit: (thread) => emitClaudeSession(thread, {}),
+    // Loaded on use: `accounts` reaches the provider registry this module is part of.
+    emit: async (thread) => {
+      const { accountEnv } = await import("../../accounts.js")
+      return emitClaudeSession(thread, { store: (await accountEnv("claude", process.env)).CLAUDE_CONFIG_DIR || undefined })
+    },
   },
   connection: lacks("Signs in through Claude Code’s own login"),
   // The row sessions run first; the user's own `claude` is shown beside it

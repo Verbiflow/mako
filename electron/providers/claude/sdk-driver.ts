@@ -25,6 +25,7 @@ import {
   claudeInputContent,
 } from "./input.js"
 import { ClaudeDecoder } from "./decoder.js"
+import { claudeContextBreakdown } from "./context-breakdown.js"
 import { mergeWindows } from "../../contracts/account-usage.js"
 import { deliverDecoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import type { UsageWindow } from "../../account-types.js"
@@ -60,7 +61,7 @@ type ClaudeQuery = Pick<
   | "setPermissionMode"
   | "interrupt"
   | "close"
->
+> & Partial<Pick<Query, "getContextUsage">>
 interface Receipt {
   resolve(result: ProviderSteerResult): void
   reject(error: Error): void
@@ -367,6 +368,7 @@ export function createClaudeSdkDriver(
         approvals,
         toolApprovals
       )
+      if (options.modeId === "plan") permissions.planReturn = ClaudeModeSchema.safeParse(options.launchModeId).data
       let exited = Promise.resolve()
       let disposedApprovals: Promise<void> | undefined
       const disposeApprovals = () => disposedApprovals ??= exited.then(() => toolApprovals?.dispose()).then(() => {}, () => {
@@ -375,6 +377,7 @@ export function createClaudeSdkDriver(
       const startedAt = Date.now()
       let startupFinished = false
       let startupWatch: ProviderStartupWatch | undefined
+      let startupStderr = () => ""
       let observeSpawn: (watch: ProviderStartupWatch) => void = () => undefined
       const spawned = new Promise<ProviderStartupWatch>((resolve) => {
         observeSpawn = resolve
@@ -400,6 +403,7 @@ export function createClaudeSdkDriver(
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))
             if (!startupFinished) {
               startupWatch = new ProviderStartupWatch(child, { harness: "Claude", stderr })
+              startupStderr = stderr
               observeSpawn(startupWatch)
               hostLog("claude-sdk", "process spawned", {
                 conversation: conversationId, pid: child.pid, ms: Date.now() - startedAt,
@@ -409,7 +413,8 @@ export function createClaudeSdkDriver(
               child.once("exit", (code, signal) => {
                 const fields = { conversation: conversationId, pid: child.pid, code, signal, ms: Date.now() - startedAt }
                 if (code === 0 || signal === "SIGTERM") hostLog("claude-sdk", "process exited", fields)
-                else hostWarn("claude-sdk", "process exited", { ...fields, stderr: stderrDetail(stderr()) })
+                // Durable logs carry no native output; the failure itself surfaces through startup.
+                else hostWarn("claude-sdk", "process exited", { ...fields, stderrBytes: stderr().length })
                 resolve()
               })
               child.once("error", () => resolve())
@@ -467,7 +472,7 @@ export function createClaudeSdkDriver(
           spawned.then((watch) => watch.step("SDK initialization", initialization)),
           new Promise<never>((_, reject) => {
             timer = setTimeout(
-              () => reject(new Error("Claude SDK initialization exceeded the startup limit")),
+              () => reject(new Error(`Claude did not finish SDK initialization within ${STARTUP_TOTAL_MS / 1000} s`)),
               STARTUP_TOTAL_MS
             )
           }),
@@ -491,7 +496,11 @@ export function createClaudeSdkDriver(
           spawned: startupWatch !== undefined, steps: startupWatch?.summary(),
         })
         stop(live)
-        throw error
+        // The SDK's own "process exited" can win the race with the watch; what
+        // Claude printed is the cause either way.
+        const detail = stderrDetail(startupStderr())
+        const message = error instanceof Error ? error.message : String(error)
+        throw detail && !message.includes(detail) ? new Error(`${message}: ${detail}`, { cause: error }) : error
       } finally {
         startupFinished = true
         clearTimeout(timer)
@@ -608,6 +617,12 @@ export function createClaudeSdkDriver(
         message: { role: "user", content: "/compact" },
       })
     } },
+    // `summary` answers from the last response's usage without a token-count request per category.
+    async contextBreakdown(id) {
+      const { query } = requireLive(id)
+      if (!query.getContextUsage) throw new Error("This Claude session cannot itemize its context")
+      return claudeContextBreakdown(await query.getContextUsage({ detail: "summary" }))
+    },
     async permission(id, requestId, response, dispatch) {
       dispatch.assertCurrent()
       const live = sessions.get(id)
@@ -617,6 +632,8 @@ export function createClaudeSdkDriver(
     async setMode(id, modeId) {
       const live = requireLive(id)
       const mode = ClaudeModeSchema.parse(modeId)
+      const left = ClaudeModeSchema.safeParse(live.state.currentMode).data
+      if (mode === "plan" && left && left !== "plan") live.permissions.planReturn = left
       await live.query.setPermissionMode(mode)
       engine.patch(live, { currentMode: mode })
     },
