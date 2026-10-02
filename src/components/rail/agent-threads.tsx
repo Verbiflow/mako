@@ -56,7 +56,9 @@ import { useAcp } from "@/state/acp"
 import {
   canonicalThreadRefs,
   sameAcpPresence,
+  sameSessionOwners,
   selectAcpPresence,
+  selectSessionOwners,
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { prefsStore, setPref, setProjectHidden, togglePinnedProject, usePrefs } from "@/state/prefs"
@@ -172,9 +174,10 @@ export function AgentThreads() {
   const externalActivity = useThreads((state) => state.externalActivity)
   const filter = usePrefs((prefs) => prefs.agentHarnessFilter)
   const pinned = usePrefs((prefs) => prefs.pinnedThreads)
+  const owners = useAcp(selectSessionOwners, sameSessionOwners)
   const all = useMemo(
-    () => canonicalThreadRefs(nativeRefs, liveAgents, pinned),
-    [nativeRefs, liveAgents, pinned]
+    () => canonicalThreadRefs(nativeRefs, owners, pinned),
+    [nativeRefs, owners, pinned]
   )
   const pinnedProjects = usePrefs((prefs) => prefs.pinnedProjects)
   const hiddenProjects = usePrefs((prefs) => prefs.hiddenProjects)
