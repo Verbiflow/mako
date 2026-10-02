@@ -140,8 +140,10 @@ type Page = {
 }
 
 /** Slack's `ok: true` says nothing once a call has succeeded; failures throw. */
-function withoutOk<Reply extends { ok: true }>({ ok: _ok, ...rest }: Reply) {
-  return rest
+function withoutOk<Reply extends { ok: true }>(reply: Reply) {
+  return Object.fromEntries(
+    Object.entries(reply).filter(([key]) => key !== "ok")
+  )
 }
 
 /** The cursor for the next page, when there is one; Slack sends an empty one at the end. */
