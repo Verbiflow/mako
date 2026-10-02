@@ -12,6 +12,7 @@ import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "../contracts/live-content.js"
 import type { TranscriptEvent } from "@mako/sessions/events"
+import type { UsageObservation } from "../session-usage.js"
 
 export type AcpTuning = SessionSettings
 
@@ -87,6 +88,19 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
    * payloads. `undefined` for a method the provider does not own.
    */
   decodeNotification?(method: string, params: JsonObject): AcpNotificationDecoding | undefined
+  /**
+   * What a `usage_update`'s `_meta` adds to ACP's own used, size and cost,
+   * such as the call's tokens by kind. `null` for a reading that is not the
+   * main agent's, which the meter leaves out. Pure.
+   */
+  usageUpdate?(meta: JsonObject | undefined): UsageObservation[] | null
+  /**
+   * How the agent reports its MCP servers starting, opened once per session:
+   * which servers it will start, and which did not, as setup notices.
+   * Consulted before `decodeNotification`. A notice naming no session is the
+   * connection's, so this session's, even said before the session has an id.
+   */
+  mcpStartup?(): AcpMcpStartupDecoder
   /**
    * How the agent's plan mode hands over its plan: the update that carries
    * the plan document, and the request whose approval builds it. Opened once
@@ -165,8 +179,17 @@ export interface AcpNotificationDecoding {
   /** `[]` for a notification deliberately not shown; `undefined` for one the provider does not know. */
   notices: NativeNotice[] | undefined
   state?: Pick<Partial<LiveSessionState>, "title">
+  /** What the notification says about tokens, cost or the window, for the session's usage meter. */
+  usage?: UsageObservation[]
+  /** About the agent process rather than one session; Mako runs one session per process, so it is this session's. */
+  connectionWide?: true
   /** The native event's own id, when the provider gives one; it names the notification's markers. */
   id?: string
+}
+
+export interface AcpMcpStartupDecoder {
+  /** `undefined` for a notification that says nothing about MCP startup. */
+  decode(method: string, params: JsonObject): AcpNotificationDecoding | undefined
 }
 
 /** A plan the user builds by answering a request with `approve`. */

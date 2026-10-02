@@ -135,6 +135,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   /** The mode a fresh session runs under when nothing was chosen — the level the chip reports before launch. */
   defaultMode?: string
   compaction?: ProviderCompaction
+  /** What fills the running session's context, by category, from a harness that itemizes it. */
+  contextBreakdown?(id: string): Promise<import("../contracts/providers-acp.js").ContextBreakdown>
   backgroundStop: BackgroundStop
   turnRecovery: TurnRecovery
   forkPoint?: "run" | "checkpoint"

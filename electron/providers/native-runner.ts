@@ -8,7 +8,7 @@ export interface NativeRunOptions extends SessionSettings {
   /**
    * The catalog's default for each option of the selected model. A live
    * session holds its own defaults; a command line has none, so a runner
-   * that must name a level (Cursor's flat ids) reads the provider's here.
+   * that must name a level reads the provider's here.
    */
   defaults?: NonNullable<SessionSettings["options"]>
 }
@@ -23,9 +23,8 @@ export interface NativeCommand {
 /**
  * What `prepare` settled before a command is built: the options the command
  * carries, the option ids it cannot carry, and the ids whose selected value
- * is the command line's own default and so goes unstated (Cursor's
- * `gpt-5.3-codex` is medium with no suffix). A dropped option is reported to
- * the user; an implicit one is verified by `describe`.
+ * is the command line's own default and so goes unstated. A dropped option
+ * is reported to the user; an implicit one is verified by `describe`.
  */
 export interface PreparedRun {
   options: NativeRunOptions
@@ -46,9 +45,9 @@ export interface NativeRunner extends ProviderCapability {
   configureEnvironment?(env: NodeJS.ProcessEnv): void
   /**
    * Settle the settings a command line can carry before the command is
-   * built, with the account's environment in hand: Cursor's CLI takes one
-   * flat id from an account-dependent list, so the model is resolved against
-   * that list here. Throws when the selection has no honest command-line
+   * built, with the account's environment in hand: Cursor resolves the
+   * selection against the account's own model list here. Throws when the
+   * selection has no honest command-line
    * form; the run then fails with that reason instead of running elsewhere.
    * Runners without their own step get `dropUncarried`.
    */
@@ -65,9 +64,8 @@ export interface NativeRunner extends ProviderCapability {
   fresh(prompt: string, options: NativeRunOptions, env?: NodeJS.ProcessEnv): NativeCommand | Promise<NativeCommand>
   /**
    * The settings a built command states, read back from its arguments
-   * against the provider's catalog: a runner whose command line folds
-   * settings into the model id (Cursor) needs the catalog's model ids and
-   * option vocabulary to name what the id says. `test-transport-agreement.ts`
+   * against the provider's catalog, whose model ids and option vocabulary
+   * name what the arguments say. `test-transport-agreement.ts`
    * pins this against the settings the ACP transport applies from one
    * selection.
    */
