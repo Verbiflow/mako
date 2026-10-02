@@ -11,8 +11,8 @@ import {
   cursorStoreOrigin,
   normalizeCursorSdkModels,
 } from "@mako/sessions"
-import type { SessionModel, SessionSettings, SettingValue } from "@mako/sessions/settings"
-import { messageEvent, TURN_FAILED } from "@mako/sessions/events"
+import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
+import { mcpServerFailedEvent, messageEvent, TURN_FAILED } from "@mako/sessions/events"
 import { CURSOR_PLAN_OPTION } from "@mako/sessions"
 import { compareNativeCheckpoint, type ProviderBinding, type ResumeVerdict } from "../../../contracts/conversation-control.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
@@ -24,6 +24,7 @@ import {
   type PromptAttachment,
 } from "../../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../../live-engine.js"
+import { unlaunchableMcpServers } from "../../../mcp-preflight.js"
 import {
   conversationServers,
   type ProviderLiveDriver,
@@ -34,8 +35,9 @@ import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from 
 import { CursorSdkClient, CursorSdkError } from "./client.js"
 import { createCursorModelCache, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
-import { compactionSummary, CursorSdkProjection } from "./projection.js"
-import { CursorAgents } from "./agents.js"
+import { cursorConfigOptions, CursorDecoder, type CursorEffect, type CursorTurnOutcome } from "./decoder.js"
+import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
+import { nativeCapture, type NativeCapture } from "../../../native-capture.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
 import { migrateRetiredMakoMcpFile } from "../../../retired-mcp.js"
 import type {
@@ -73,27 +75,24 @@ interface Live {
   onRejected(message: string): void
   models: SessionModel[]
   turn: string | null
-  projection: CursorSdkProjection | null
+  decoder: CursorDecoder
+  sink?: DecodedSink<CursorEffect>
+  capture: NativeCapture | null
   /** Turns this driver ended; their late lines are never taken for a turn it lost track of. */
   settledTurns: Set<string>
-  agents: CursorAgents
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
-  compaction: CompactionMark
   closed: boolean
 }
 
-/**
- * Where the current compaction's marker stands. The summary (a `task`
- * message) and `summary-completed` (a delta) travel separately and may
- * arrive in either order: the summary always places the marker, and a
- * completion seen first holds it until the summary or the turn's end.
- */
-type CompactionMark = "idle" | "awaiting-summary" | "marked"
-
 /** The SDK's own error codes for a dropped or exhausted connection. */
 const CONNECTION_CODES = new Set(["unavailable", "canceled", "cancelled", "deadline_exceeded", "aborted"])
+/**
+ * The last alternative is the SDK giving up its own resumes (1.0.31): the
+ * connection broke repeatedly and each resume saved no checkpoint. It has no
+ * code, and the SDK's advice is to retry from the last saved state.
+ */
 const CONNECTION_MESSAGE =
-  /RetriableError|http\/2|HTTP\/2|RST_STREAM|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|stream closed|network error|fetch failed/i
+  /RetriableError|http\/2|HTTP\/2|RST_STREAM|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|stream closed|network error|fetch failed|resume attempts made no progress/i
 
 /** The SDK's `unauthenticated` code, or its wording, on a run's error. */
 export function authenticationFailure(error: { message: string; code?: string } | undefined): boolean {
@@ -110,20 +109,6 @@ export function connectionLost(result: SdkRunResult): boolean {
 }
 
 type Engine = LiveEngineApi<Live>
-
-function configOptions(models: readonly SessionModel[], selection: SdkModelSelection | undefined, plan?: SettingValue): SessionModel["options"] {
-  if (!selection) return []
-  const model = models.find((candidate) => candidate.id === selection.id)
-  if (!model) return []
-  const reported = cursorSdkReportedSettings(selection, models, plan)
-  return model.options.map((option) => {
-    const value = reported.options?.[option.id]
-    if (value === undefined) return option
-    if (option.kind === "select" && value !== true && value !== false) return { ...option, current: value }
-    if (option.kind === "boolean" && (value === true || value === false)) return { ...option, current: value }
-    return option
-  })
-}
 
 function promptImages(attachments: readonly PromptAttachment[]): SdkImage[] {
   const images: SdkImage[] = []
@@ -189,44 +174,20 @@ function unfinishedToolNote(outcome: "finished" | "cancelled" | "error", error?:
 
 const MAX_SETTLED_TURNS = 64
 
-function compactionStarted(engine: Engine, live: Live): void {
-  releaseCompaction(engine, live)
-  engine.activity(live, { kind: "compacting" })
-}
-
-function compactionCompleted(engine: Engine, live: Live): void {
-  if (live.compaction === "marked") {
-    live.compaction = "idle"
-    return
-  }
-  live.compaction = "awaiting-summary"
-  engine.activity(live, null)
-}
-
-function summarised(engine: Engine, live: Live, summary: string, id: string | undefined): void {
-  engine.compacted(live, { summary }, id)
-  live.compaction = live.compaction === "awaiting-summary" ? "idle" : "marked"
-}
-
-/** A completed compaction whose summary never came is still marked. */
-function releaseCompaction(engine: Engine, live: Live): void {
-  if (live.compaction === "awaiting-summary") engine.compacted(live)
-  live.compaction = "idle"
-}
-
 /** Ends the turn's projection, closing any tool row the run left open. */
-function settleTurn(engine: Engine, live: Live, outcome: "finished" | "cancelled" | "error", error?: string): void {
-  releaseCompaction(engine, live)
-  const projection = live.projection
+function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, error?: string): void {
   if (live.turn) {
     live.settledTurns.add(live.turn)
     if (live.settledTurns.size > MAX_SETTLED_TURNS)
       live.settledTurns.delete(live.settledTurns.values().next().value!)
   }
   live.turn = null
-  live.projection = null
-  if (!projection) return
-  engine.emitUpdates(live, projection.finish(outcome, unfinishedToolNote(outcome, error)))
+  deliver(engine, live, live.decoder.finish(outcome, unfinishedToolNote(outcome, error)))
+}
+
+function deliver(engine: Engine, live: Live, decoded: Decoded<CursorEffect>[]): void {
+  live.sink ??= engine.sink(live, { effect: (effect) => engine.emitAgent(live, effect.agent) })
+  deliverDecoded(decoded, live.sink)
 }
 
 /**
@@ -236,7 +197,7 @@ function settleTurn(engine: Engine, live: Live, outcome: "finished" | "cancelled
  */
 function adoptTurn(engine: Engine, live: Live, turn: string, reason: string, runId?: string): void {
   live.turn = turn
-  live.projection = new CursorSdkProjection(turn)
+  live.decoder.startTurn(turn)
   hostWarn("cursor-sdk", "showing a turn the host had lost track of", { conversation: live.state.id, turn })
   engine.patch(live, { status: "running", nativeRunId: runId, lastStop: undefined, error: undefined })
   engine.emitUpdate(live, { kind: "provider-turn", reason })
@@ -258,7 +219,7 @@ function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
   const settings = result.model ? cursorSdkReportedSettings(result.model, live.models, plan) : live.state.settings
   const patch: Partial<LiveSessionState> = {
     settings,
-    configOptions: result.model ? configOptions(live.models, result.model, plan) : live.state.configOptions,
+    configOptions: result.model ? cursorConfigOptions(live.models, result.model, plan) : live.state.configOptions,
   }
   switch (result.status) {
     case "finished":
@@ -291,31 +252,13 @@ function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
 
 function receive(engine: Engine, live: Live, event: SdkEvent): void {
   if (live.closed) return
+  live.capture?.record(event)
   switch (event.event) {
-    case "message": {
-      if (!claimTurn(engine, live, event.turn) || !live.projection) return
-      if (event.message.type === "system" && event.message.model) {
-        live.state = {
-          ...live.state,
-          settings: cursorSdkReportedSettings(event.message.model, live.models, live.state.settings?.options?.plan),
-          configOptions: configOptions(live.models, event.message.model, live.state.settings?.options?.plan),
-        }
-      }
-      engine.emitUpdates(live, live.projection.message(event.message))
-      const summary = compactionSummary(event.message)
-      if (summary) summarised(engine, live, summary, event.seq === undefined ? undefined : `${event.turn}:${event.seq}`)
-      const agent = live.agents.project(event.message)
-      if (agent) engine.emitAgent(live, agent)
+    case "message":
+    case "delta":
+      if (!claimTurn(engine, live, event.turn) || !live.decoder.open) return
+      deliver(engine, live, live.decoder.decode(event))
       return
-    }
-    case "delta": {
-      if (!claimTurn(engine, live, event.turn) || !live.projection) return
-      engine.emitUpdates(live, live.projection.delta(event.delta))
-      if (event.delta.type === "summary-started") compactionStarted(engine, live)
-      else if (event.delta.type === "summary-completed") compactionCompleted(engine, live)
-      else if (event.delta.type === "unhandled") engine.unhandled(live, event.delta.kind)
-      return
-    }
     case "result":
       if (!claimTurn(engine, live, event.turn)) return
       finishTurn(engine, live, event.result)
@@ -488,11 +431,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         onRejected: (message) => dependencies.auth.reportRejected(message),
         models: [],
         turn: null,
-        projection: null,
+        decoder: new CursorDecoder({ get models() { return live.models }, get state() { return live.state } }),
+        capture: nativeCapture("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } })),
         settledTurns: new Set(),
-        agents: new CursorAgents(),
         pendingPermissions: new Map(),
-        compaction: "idle",
         closed: false,
         state: {
           id: options.conversationId,
@@ -563,8 +505,13 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           nativePath: cursorSdkStorePath(stateRoot, opened.agentId),
           currentMode: CURSOR_SDK_DEFAULT_MODE,
           settings: cursorSdkReportedSettings(reported, live.models, options.tuning?.options?.plan),
-          configOptions: configOptions(live.models, reported, options.tuning?.options?.plan),
+          configOptions: cursorConfigOptions(live.models, reported, options.tuning?.options?.plan),
         })
+        // Cursor's SDK says nothing about its MCP servers; this is the failure
+        // Mako can name for it, in the words the other harnesses use.
+        const stdio = Object.entries(servers).map(([name, server]) => (server.type === "stdio" ? { name, command: server.command, env: server.env } : { name }))
+        for (const name of unlaunchableMcpServers(stdio, cwd))
+          engine.event(live, mcpServerFailedEvent(name, "could not be launched"))
         hostLog("cursor-sdk", opened.imported ? "imported and resumed a cursor-agent session" : options.resume ? "resumed agent" : "created agent", {
           conversation: options.conversationId,
           agent: opened.agentId,
@@ -613,14 +560,14 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       })
       const turn = dispatch.attemptId
       live.turn = turn
-      live.projection = new CursorSdkProjection(turn)
+      live.decoder.startTurn(turn)
       engine.patch(live, {
         status: "running",
         nativeRunId: undefined,
         lastStop: undefined,
         error: undefined,
         settings: cursorSdkReportedSettings(selection, live.models, plan),
-        configOptions: configOptions(live.models, selection, plan),
+        configOptions: cursorConfigOptions(live.models, selection, plan),
       })
       engine.emitUpdate(live, { kind: "user", text })
       try {

@@ -40,7 +40,10 @@ import {
 } from "./import.js"
 import {
   CURSOR_SDK_EXIT,
+  CURSOR_SDK_HEADLESS,
   CURSOR_SDK_WIRE_VERSION,
+  SdkHeadlessSpecSchema,
+  type SdkHeadlessSpec,
   JsonValueSchema,
   SdkRequestSchema,
   sdkMessageForWire,
@@ -86,8 +89,11 @@ let sending: string | undefined
 /** Stop arrived while `sending`: the run is cancelled the moment it exists. */
 let cancelWhileSending = false
 let closing = false
+/** One-shot mode: stdout carries the reply's text, so protocol lines have no reader. */
+let headless = false
 
 function write(line: SdkChildLine): void {
+  if (headless) return
   process.stdout.write(`${JSON.stringify(line)}\n`)
 }
 
@@ -142,7 +148,8 @@ function fatal(kind: string, cause: unknown): void {
   const deadline = setTimeout(() => process.exit(CURSOR_SDK_EXIT.fatal), 1_000)
   deadline.unref()
   try {
-    process.stdout.write(`${JSON.stringify({ event: "log", level: "warn", message: `fatal ${kind}: ${crashSummary(cause)}` } satisfies SdkChildLine)}\n`, () => process.exit(CURSOR_SDK_EXIT.fatal))
+    if (headless) process.stderr.write(`Cursor's SDK stopped on an uncaught error: ${crashSummary(cause)}\n`, () => process.exit(CURSOR_SDK_EXIT.fatal))
+    else process.stdout.write(`${JSON.stringify({ event: "log", level: "warn", message: `fatal ${kind}: ${crashSummary(cause)}` } satisfies SdkChildLine)}\n`, () => process.exit(CURSOR_SDK_EXIT.fatal))
   } catch {
     process.exit(CURSOR_SDK_EXIT.fatal)
   }
@@ -393,6 +400,24 @@ function flushShellOutput(): void {
   write({ event: "delta", turn: pending.turn, delta: { type: "shell-output", text: pending.text } })
 }
 
+type SendOptions = NonNullable<Parameters<SDKAgent["send"]>[1]>
+
+async function startRun(open: OpenAgent, message: Parameters<SDKAgent["send"]>[0], options: SendOptions): Promise<Run> {
+  try {
+    return await open.handle.send(message, options)
+  } catch (cause) {
+    // SDK 1.0.31 wraps this SQLite preflight refusal as UnknownAgentError,
+    // not AgentBusyError. Match only this agent's persisted-run refusal:
+    // other failures may follow delivery and must never resend a prompt.
+    // Mako acquires the native-session hold before opening this child;
+    // active/sending exclude a run belonging to this process.
+    if (!(cause instanceof Error) || cause.message !== `Agent ${open.agentId} already has active run`) throw cause
+    const run = await open.handle.send(message, { ...options, local: { force: true } })
+    log("warn", "recovered a run left active by an earlier process")
+    return run
+  }
+}
+
 async function send(params: SendParams): Promise<SdkResult<"send">> {
   const open = agent
   if (!open) throw new ConfigurationError("No agent is open in this child")
@@ -445,19 +470,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
   sending = params.turn
   cancelWhileSending = false
   try {
-    let run: Run
-    try {
-      run = await open.handle.send(message, options)
-    } catch (cause) {
-      // SDK 1.0.31 wraps this SQLite preflight refusal as UnknownAgentError,
-      // not AgentBusyError. Match only this agent's persisted-run refusal:
-      // other failures may follow delivery and must never resend a prompt.
-      // Mako acquires the native-session hold before opening this child;
-      // active/sending exclude a run belonging to this process.
-      if (!(cause instanceof Error) || cause.message !== `Agent ${open.agentId} already has active run`) throw cause
-      run = await open.handle.send(message, { ...options, local: { force: true } })
-      log("warn", "recovered a run left active by an earlier process")
-    }
+    const run = await startRun(open, message, options)
     active = { turn: params.turn, run, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0 }
     void pump(params.turn, run)
     if (cancelWhileSending) await run.cancel().catch((cause) => log("warn", `could not stop a run Stop asked for while it started: ${cursorSdkWireError(cause).message}`))
@@ -612,12 +625,52 @@ async function handle(line: string): Promise<void> {
   if (request.data.method === "close") process.exit(CURSOR_SDK_EXIT.closed)
 }
 
+/** `--headless`: one prompt, its reply's text on stdout, and an exit code that says how the run ended. */
+async function runHeadless(spec: SdkHeadlessSpec): Promise<number> {
+  await openAgent({ ...spec, cwd: process.cwd() })
+  const open = agent!
+  const run = await startRun(open, { text: spec.prompt }, {
+    model: spec.model,
+    mode: "agent",
+    onDelta: ({ update }) => {
+      if (update.type === "text-delta" && update.text) process.stdout.write(update.text)
+    },
+  })
+  // Stop reaches the run before the signal ends this process, so the store records no run left active.
+  process.once("SIGTERM", () => {
+    void run.cancel().catch(() => undefined).finally(() => process.kill(process.pid, "SIGTERM"))
+  })
+  const result = await run.wait()
+  await close()
+  if (result.status === "finished") return 0
+  process.stderr.write(`\n${result.error?.message ?? `Cursor's run ended ${result.status}`}\n`)
+  return 1
+}
+
+function headlessMain(raw: string | undefined): void {
+  headless = true
+  const spec = SdkHeadlessSpecSchema.safeParse(parseLine(raw ?? ""))
+  if (!spec.success) {
+    process.stderr.write("Cursor's headless run was started without a readable spec\n")
+    process.exit(CURSOR_SDK_EXIT.fatal)
+  }
+  process.on("uncaughtException", (cause) => fatal("exception", cause))
+  process.on("unhandledRejection", (cause) => fatal("rejection", cause))
+  configureRipgrep()
+  guardShellFolder(() => agent?.cwd, () => undefined)
+  void runHeadless(spec.data).then((code) => process.exit(code), (cause) => {
+    process.stderr.write(`\n${cursorSdkWireError(cause).message}\n`)
+    process.exit(1)
+  })
+}
+
 function main(): void {
   process.title = "mako-cursor-sdk"
   // Anything the SDK prints belongs on stderr; stdout is the protocol.
   console.log = (...args) => console.error(...args)
   console.info = (...args) => console.error(...args)
   console.debug = (...args) => console.error(...args)
+  if (process.argv[2] === CURSOR_SDK_HEADLESS) return headlessMain(process.argv[3])
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
   lines.on("line", (line) => {
     if (!line.trim()) return

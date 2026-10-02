@@ -200,6 +200,8 @@ export class CursorSdkProjection {
       case "system":
       case "status":
       case "request":
+        return []
+      // The decoder counts the turn's spend; nothing here is transcript.
       case "usage":
         return []
     }

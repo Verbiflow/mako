@@ -307,6 +307,19 @@ export const SdkOpenParamsSchema = z.object({
   importFrom: SdkImportSourceSchema.optional(),
 })
 
+/**
+ * The child's one-shot mode, `child.js --headless <spec>`: open the agent,
+ * run one prompt, print the reply's text, and exit 0 when the run finished.
+ * Any other ending exits 1 with its reason as the last stderr line; SIGTERM
+ * cancels the run first. Mako's headless replies and automations run this.
+ * The agent's workspace is the folder the process starts in.
+ */
+export const CURSOR_SDK_HEADLESS = "--headless"
+export const SdkHeadlessSpecSchema = SdkOpenParamsSchema.pick({
+  stateRoot: true, agentId: true, create: true, model: true, importFrom: true,
+}).extend({ prompt: z.string() })
+export type SdkHeadlessSpec = z.infer<typeof SdkHeadlessSpecSchema>
+
 export const SdkSendParamsSchema = z.object({
   /** Mako's id for the turn; every message, delta and result of the run carries it back. */
   turn: z.string(),
