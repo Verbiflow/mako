@@ -98,6 +98,11 @@ new AgentSideConnection((connection) => {
       await update({ sessionUpdate: "tool_call", toolCallId: "no-title" })
       await chunk("agent_message_chunk", "Still streaming.")
     },
+    // grok 1.0.44 answering /compact, recorded 2026-10-01: only the
+    // completion its automatic compactions also send, then the turn's end.
+    async "/compact"() {
+      await grokUpdate({ sessionUpdate: "auto_compact_completed", tokens_before: 23278, tokens_after: 9100, summary_preview: null })
+    },
     async "native-devin"() {
       await connection.extNotification("_cognition.ai/connection_retry", { sessionId, attempt: 1, maxAttempts: 5, isStreamRetry: true })
       await chunk("agent_message_chunk", "Reconnected.")
@@ -109,7 +114,22 @@ new AgentSideConnection((connection) => {
     async initialize() {
       return { protocolVersion: 1, agentCapabilities: { loadSession: false } }
     },
+    // MCP servers failing while the session opens, before its id reaches
+    // the client, as grok 1.0.44 and devin 3000.10.23 report them.
     async newSession() {
+      if (process.env.FIXTURE_PROVIDER === "provider-turn-grok") {
+        await connection.extNotification("_x.ai/mcp/servers_updated", { mcpServers: [{ name: "okserver" }, { name: "crashes" }] })
+        await connection.extNotification("_x.ai/mcp/server_status", { sessionId, name: "crashes", status: "unavailable", reason: "handshake_failed",
+          detail: "MCP server 'crashes' handshake failed: connection closed: initialize response" })
+        await connection.extNotification("_x.ai/mcp/server_status", { sessionId, name: "okserver", status: "ready", reason: "initialized" })
+      }
+      if (process.env.FIXTURE_PROVIDER === "provider-turn-devin") {
+        const output = (channel, message, session = "") => connection.extNotification("_cognition.ai/output", { sessionId: session, channel, level: "warn", message })
+        await output("MCP: missing", "MCP server 'missing' connection failed: cannot find binary path")
+        await output("MCP", "Failed to connect to MCP server 'missing' for description: cannot find binary path")
+        await output("MCP: crashes", "MCP server 'crashes' connection failed: connection closed: initialize response", sessionId)
+        await output("MCP", "Failed to connect to MCP server 'crashes' for description: connection closed: initialize response", sessionId)
+      }
       return { sessionId }
     },
     async authenticate() {
