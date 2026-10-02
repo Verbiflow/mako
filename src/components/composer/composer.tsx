@@ -15,6 +15,7 @@ import { promptDelivery } from "@/state/prompt-delivery"
 import type { ProposedPlan } from "@mako/sessions/content"
 import { appendPlanContext, parsePlanContext } from "@/lib/proposed-plan"
 import { PlanContextChips } from "@/components/composer/plan-context"
+import { PlanDecisionBar } from "@/components/composer/plan-decision"
 import { hostConnectionStore, useHostConnection } from "@/state/host-connection"
 import { toast } from "sonner"
 import {
@@ -33,8 +34,9 @@ import {
 import { Banner } from "@/components/composer/banner"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ComposerRouting } from "@/components/composer/composer-routing"
+import { ContextMeter } from "@/components/composer/context-meter"
 import type { PlanHandle } from "@/components/composer/plan-toggle"
-import { recordSentPlanBuilds } from "@/state/plan-mode"
+import { keepPlanning, recordSentPlanBuilds, usePlanDecision } from "@/state/plan-mode"
 import { steeringTitle } from "@/components/composer/steering"
 import { ROUTING_COMPACT_LEVELS, useCompactRow } from "@/components/composer/use-compact-row"
 
@@ -592,17 +594,21 @@ export function Composer() {
     [attachments, draft, storedDraft, draftKey, draftPlans, cwd]
   )
 
+  const planDecision = usePlanDecision()
   const submit = useCallback(async (mode?: "steer" | "followUp") => {
     if (preparingSends.current.has(draftKey)) return
     preparingSends.current.add(draftKey)
     try {
+      // A reply to a plan the harness is waiting on asks for changes: turn
+      // the plan down first, so the reply isn't queued behind its approval.
+      if (planDecision?.approval && (draft.trim() || attachments.items.length > 0)) await keepPlanning(planDecision)
       await submitDraft(mode)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     } finally {
       preparingSends.current.delete(draftKey)
     }
-  }, [draftKey, submitDraft])
+  }, [draftKey, submitDraft, planDecision, draft, attachments.items.length])
 
   const pick = useCallback(
     (value: string) => {
@@ -796,7 +802,9 @@ export function Composer() {
     Boolean(state.viewing?.ref.archived)
   )
   const newHarness = useThreads((state) => state.composerHarness)
-  const placeholder = planning && !opening && !turnRunning
+  const placeholder = planDecision && !opening
+    ? `Tell ${harnessTitle(planDecision.harness ?? newHarness)} what to change in the plan`
+    : planning && !opening && !turnRunning
     ? `Describe what to plan — ${harnessTitle(newHarness)} proposes a plan before changing anything`
     : opening
     ? opening.kind !== "loading"
@@ -809,7 +817,9 @@ export function Composer() {
         ? `Queue a message for ${harnessTitle(liveHarness)}`
         : liveRunning
           ? composerRunningPlaceholder(harnessTitle(liveHarness), enterAction, canSteer)
-          : `Reply — ${harnessTitle(liveHarness)} answers live`
+          : newHarness !== liveHarness
+            ? `Reply — moves this conversation to ${harnessTitle(newHarness)}`
+            : `Reply — ${harnessTitle(liveHarness)} answers live`
       : routedHarness
         ? newHarness !== routedHarness
           ? `Reply — moves this conversation to ${harnessTitle(newHarness)}`
@@ -854,6 +864,8 @@ export function Composer() {
             </button>
           </div>
         ) : null}
+
+        {planDecision ? <PlanDecisionBar key={planDecision.plan.id} decision={planDecision} /> : null}
 
         <input
           ref={filePicker}
@@ -1030,6 +1042,7 @@ export function Composer() {
                 disabled={busy}
                 attachFiles={attach}
               />
+              {liveOwnsComposer ? <ContextMeter /> : null}
               {draft.length > 0 || expanded ? <IconAction label={expanded ? "Collapse draft" : "Expand draft"} size="xs" side="top" onClick={() => { setExpanded((value) => !value); textarea.current?.focus({ preventScroll: true }) }}>
                 {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
               </IconAction> : null}

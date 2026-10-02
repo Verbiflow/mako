@@ -1,5 +1,7 @@
 import type { ProposedPlan } from "@mako/sessions/content"
-import { FileTextIcon, XIcon } from "lucide-react"
+import { FileTextIcon, Maximize2Icon, XIcon } from "lucide-react"
+import { openPlanTab } from "@/components/transcript/plan-state"
+import { Action } from "@/components/ui/kit"
 import {
   Popover,
   PopoverContent,
@@ -38,9 +40,15 @@ export function PlanContextChips({
             <PopoverContent
               side="top"
               align="start"
-              className="max-h-[60vh] w-[min(100vw_-_32px,520px)] overflow-y-auto p-4"
+              className="max-h-[60vh] w-[min(100vw_-_32px,520px)] overflow-y-auto p-0"
             >
-              <Prose text={plan.text} />
+              <div className="sticky top-0 z-10 flex items-center justify-end border-b border-hairline bg-popover px-2 py-1">
+                <Action size="xs" onClick={() => openPlanTab({}, plan)}>
+                  <Maximize2Icon />
+                  Open in a tab
+                </Action>
+              </div>
+              <Prose text={plan.text} className="p-4" />
             </PopoverContent>
           </Popover>
           {onRemove ? (
