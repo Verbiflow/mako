@@ -22,6 +22,7 @@ import { ConversationTimeline } from "@/components/transcript/conversation-timel
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
+import { usePlanDecision } from "@/state/plan-mode"
 import { viewerHandedOff } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/lib/types"
@@ -233,8 +234,9 @@ function AcpActivity({
   const activity = useAcp((state) => {
     const live = scopedLiveAcp(state, scope)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
-    // The approval notice owns this status; do not repeat it in the transcript.
-    if (approval) return { kind: "idle" as const, label: "" }
+    // The approval notice, or the plan bar for a plan's approval, owns this
+    // status; do not repeat it in the transcript.
+    if (approval || live?.permission?.implementsPlan) return { kind: "idle" as const, label: "" }
     return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, preparing, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
@@ -315,7 +317,9 @@ function Permission() {
     const live = activeLiveAcp(state)
     return live?.control?.approvalResponses?.find(item => item.id === live.permission?.id)
   })
-  if (!permission) return null
+  // A plan approval is answered from the plan bar above the composer.
+  const planApproval = usePlanDecision()?.approval?.id
+  if (!permission || planApproval === permission.id) return null
   // Keep a structured draft mounted while its answer is in flight. A proven
   // refusal can renew the public occurrence without clearing the user's input.
   return <div hidden={Boolean(receipt)}>
@@ -695,7 +699,7 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
     setResent(accepted ? "sent" : null)
   }
   // A new thread opens in the same folder over the same transport, so it can't escape these.
-  const freshThread = request.status === "failed" && request.failure !== "transport-limit" && request.failure !== "missing-folder"
+  const freshThread = request.status === "failed" && request.failure !== "transport-limit" && request.failure !== "missing-folder" && request.failure !== "launch-failed"
   return (
     <RecoveryBody expanded={expanded} summary={`${continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message`} request={request}>
       {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
@@ -716,6 +720,12 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
               setResent("sending")
               void acp.recoverFresh(conversationId, request.id).then((accepted) => setResent(accepted ? "sent" : null))
             }}>Use in new thread</button>
+        ) : null}
+        {request.status === "failed" && (request.failure === "auth" || request.failure === "launch-failed" || request.failure === "launch-stalled") ? (
+          <button type="button" className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground"
+            onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: request.failure === "launch-stalled" ? "mcp" : "agents" }))}>
+            {request.failure === "launch-stalled" ? "MCP settings" : "Agents settings"}
+          </button>
         ) : null}
         <button type="button" onClick={() => void copy()} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
       </div>

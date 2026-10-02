@@ -15,6 +15,7 @@ import { Divider } from "@/components/shell/divider"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { GitLoading } from "@/components/inspector/git-loading"
 import { StageStrip } from "@/components/stage/stage-strip"
+import { PlanDocumentView } from "@/components/viewer/plan-view"
 import { TranscriptControls } from "@/components/viewer/transcript-controls"
 import { engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
 import { useTabDrag, type DropSide } from "@/state/tab-drag"
@@ -298,6 +299,7 @@ function PaneDropOverlay({ paneId }: { paneId: string }) {
 }
 
 function DocumentView({ document }: { document: ViewerDocument }) {
+  if (document.kind === "plan" && document.plan) return <PlanDocumentView document={document} of={document.plan} />
   const previewable =
     document.kind === "transcript" ||
     (document.kind === "file" &&

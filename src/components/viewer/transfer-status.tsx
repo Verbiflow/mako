@@ -71,10 +71,13 @@ export function TransferStatus({ history = false }: { history?: boolean }) {
       details={
         state.kind === "accepted" ? (
           <p>
-            {state.manifest.fromBlock > 0
-              ? "Prepared context added since this provider last ran."
-              : "Prepared the captured conversation as context."}{" "}
-            {state.manifest.losses.join(" ")}
+            {state.carried === "native"
+              ? `Imported the conversation into a ${provider} session, so it resumes as its own history.`
+              : state.manifest.fromBlock > 0
+                ? "Prepared context added since this provider last ran."
+                : "Prepared the captured conversation as context."}{" "}
+            {state.fallback ? `Session import did not work, so it went as a transcript. ${state.fallback} ` : ""}
+            {state.carried === "native" ? "" : state.manifest.losses.join(" ")}
           </p>
         ) : troubled ? (
           <>
