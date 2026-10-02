@@ -1,5 +1,5 @@
 import type { McpServer, OpenCodeEvent } from "@opencode/client"
-import { event, type TranscriptEvent } from "@mako/sessions/events"
+import { event, mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 
 type Interruption = Extract<OpenCodeEvent, { type: "session.execution.interrupted" }>["data"]["reason"]
 
@@ -10,7 +10,7 @@ type Interruption = Extract<OpenCodeEvent, { type: "session.execution.interrupte
  * tool call that loaded it, a background shell from `OpenCodeShells`. A toast
  * is TUI chrome; the one OpenCode raises for an MCP server is its status.
  */
-const IGNORED = new Set<OpenCodeEvent["type"]>([
+export const OPENCODE_IGNORED: ReadonlySet<string> = new Set<OpenCodeEvent["type"]>([
   "server.connected",
   "models-dev.refreshed",
   "credential.updated",
@@ -58,7 +58,7 @@ const IGNORED = new Set<OpenCodeEvent["type"]>([
 ])
 
 export function openCodeIgnores(event: OpenCodeEvent): boolean {
-  return IGNORED.has(event.type) || event.type.startsWith("rpc.")
+  return OPENCODE_IGNORED.has(event.type) || event.type.startsWith("rpc.")
 }
 
 const STOPPED = {
@@ -89,7 +89,7 @@ export class OpenCodeMcpHealth {
   observe(servers: readonly McpServer[]): TranscriptEvent[] {
     return servers.flatMap(({ name, status: state }) => {
       if (state.status === "failed") return this.report(name, state.status, state.error)
-      if (state.status === "needs_auth") return this.report(name, state.status, "needs sign-in")
+      if (state.status === "needs_auth") return this.report(name, state.status, "sign-in required")
       if (state.status === "connected" || state.status === "disabled") this.reported.delete(name)
       return []
     })
@@ -103,8 +103,6 @@ export class OpenCodeMcpHealth {
   private report(name: string, status: McpStatus, error: string): TranscriptEvent[] {
     if (this.reported.get(name) === status) return []
     this.reported.set(name, status)
-    const line = error.trim().split("\n", 1)[0]!.trim()
-    const short = line.length > 160 ? `${line.slice(0, 159)}…` : line
-    return [{ ...event("MCP server failed", short ? `${name} · ${short}` : name, short === error.trim() ? undefined : error), tone: "warning" }]
+    return [mcpServerFailedEvent(name, error)]
   }
 }

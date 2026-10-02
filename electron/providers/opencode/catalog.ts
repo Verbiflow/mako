@@ -31,16 +31,24 @@ export async function loadOpenCodeCatalog(
 ): Promise<OpenCodeCatalog> {
   const location = { directory }
   const options = { signal }
-  const [models, fallback, agents, commands, skills, config, recent] = await Promise.all([
+  const [models, fallback, agents, commands, skills, config, state] = await Promise.all([
     client.model.list({ location }, options),
     client.model.default({ location }, options),
     client.agent.list({ location }, options),
     client.command.list({ location }, options),
     client.skill.list({ location }, options),
     client.config.get({ location }, options).catch(() => []),
-    recentOpenCodeModels(env),
+    openCodeModelState(env),
   ])
   const enabled = models.data.filter(model => model.enabled && model.status !== "deprecated")
+  // OpenCode starts a model on the variant its interface last used for it,
+  // else on its unnamed default when the model has one.
+  const startingVariant = (model: (typeof enabled)[number]) => {
+    const offered = new Set(model.variants.map(variant => variant.id))
+    const remembered = state.variants.get(openCodeLaunchId(model))
+    if (remembered !== undefined && offered.has(remembered)) return remembered
+    return offered.has(NATIVE_DEFAULT_VARIANT) ? NATIVE_DEFAULT_VARIANT : undefined
+  }
   const catalog = normalizeOpenCodeModels(enabled.map(model => ({
     id: model.id,
     providerID: model.providerID,
@@ -48,7 +56,7 @@ export async function loadOpenCodeCatalog(
     family: model.family,
     status: model.status,
     variants: model.variants.length ? Object.fromEntries(model.variants.map(variant => [variant.id, {}])) : undefined,
-    defaultVariant: model.variants.some(variant => variant.id === NATIVE_DEFAULT_VARIANT) ? NATIVE_DEFAULT_VARIANT : undefined,
+    defaultVariant: startingVariant(model),
     limit: model.limit,
     capabilities: { input: { text: model.capabilities.input.includes("text"), image: model.capabilities.input.includes("image") } },
   })))
@@ -60,11 +68,16 @@ export async function loadOpenCodeCatalog(
   // server's default skips the recent list, which can land on a provider the
   // account has credentials for but can't use.
   const configured = config.some(entry => entry.type === "document" && entry.info.model !== undefined)
-  const used = configured ? undefined : recent.find(ref => limits.has(openCodeLaunchId(ref)))
+  const used = configured ? undefined : state.recent.find(ref => limits.has(openCodeLaunchId(ref)))
+  const defaultRef = used ?? (fallback.data ? { id: fallback.data.id, providerID: fallback.data.providerID } : undefined)
+  const defaultEntry = defaultRef && enabled.find(model => openCodeLaunchId(model) === openCodeLaunchId(defaultRef))
+  const defaultVariant = defaultEntry && startingVariant(defaultEntry)
   return {
     models: catalog.models,
     limits,
-    defaultModel: used ?? (fallback.data ? { id: fallback.data.id, providerID: fallback.data.providerID } : undefined),
+    defaultModel: defaultRef && defaultVariant && defaultVariant !== NATIVE_DEFAULT_VARIANT
+      ? { ...defaultRef, variant: defaultVariant }
+      : defaultRef,
     agents: agents.data.filter(agent => agent.mode !== "subagent" && !agent.hidden)
       .map(agent => ({ id: agent.id, name: agent.name, description: agent.description })),
     commands: [
@@ -76,18 +89,30 @@ export async function loadOpenCodeCatalog(
   }
 }
 
-const RecentModelsSchema = z.object({
+const ModelStateSchema = z.object({
   recent: z.array(z.object({ providerID: z.string().min(1), modelID: z.string().min(1) })).catch([]),
+  variant: z.record(z.string(), z.string().min(1)).catch({}),
 })
 
-/** The models OpenCode's own interface last used, newest first, from its state file. */
-async function recentOpenCodeModels(env: NodeJS.ProcessEnv): Promise<OpenCodeModelRef[]> {
+interface OpenCodeModelState {
+  /** Newest first. */
+  recent: OpenCodeModelRef[]
+  /** The variant OpenCode last used per `provider/model`. */
+  variants: Map<string, string>
+}
+
+/** The models and variants OpenCode's own interface last used, from its state file. */
+async function openCodeModelState(env: NodeJS.ProcessEnv): Promise<OpenCodeModelState> {
   const state = env.XDG_STATE_HOME || join(homedir(), ".local", "state")
   try {
-    const parsed = RecentModelsSchema.safeParse(JSON.parse(await readFile(join(state, "opencode", "model.json"), "utf8")))
-    return parsed.success ? parsed.data.recent.map(entry => ({ id: entry.modelID, providerID: entry.providerID })) : []
+    const parsed = ModelStateSchema.safeParse(JSON.parse(await readFile(join(state, "opencode", "model.json"), "utf8")))
+    if (!parsed.success) return { recent: [], variants: new Map() }
+    return {
+      recent: parsed.data.recent.map(entry => ({ id: entry.modelID, providerID: entry.providerID })),
+      variants: new Map(Object.entries(parsed.data.variant)),
+    }
   } catch {
-    return []
+    return { recent: [], variants: new Map() }
   }
 }
 

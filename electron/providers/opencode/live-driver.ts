@@ -17,6 +17,8 @@ import { OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import type { LiveActionResult } from "../../contracts/live-actions.js"
 import type { LiveSessionState, McpRegistrySnapshot, PromptAttachment } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
+import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
+import { nativeCapture, type NativeCapture } from "../../native-capture.js"
 import type { FailureBoundary } from "../../live-runtime.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
@@ -40,11 +42,10 @@ import {
   type OpenCodeCatalog,
   type OpenCodeModelRef,
 } from "./catalog.js"
-import { OpenCodeContent } from "./content.js"
+import { OpenCodeDecoder, openCodeCatalogChange, type OpenCodeEffect } from "./decoder.js"
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
-import { OpenCodeShells } from "./background.js"
-import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "./notices.js"
+import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
 import { openCodeCheckpoint, openCodeResumeVerdict } from "./resume.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
@@ -83,17 +84,18 @@ interface Live {
   /** The launch environment, which says where OpenCode keeps its state. */
   env: NodeJS.ProcessEnv
   root?: string
-  children: Set<string>
+  /** What the stream says, from the moment the root session exists. */
+  decoder?: OpenCodeDecoder
+  sink?: DecodedSink<OpenCodeEffect>
+  capture: NativeCapture | null
   catalog?: OpenCodeCatalog
   /** Bumped by each native catalog change; a load answers for the generation it started at. */
   catalogGeneration: number
   catalogRefresh?: Promise<void>
   model?: OpenCodeModelRef
   launchAccess: AccessTier
-  content?: OpenCodeContent
   interactions?: OpenCodeInteractions
   agents?: OpenCodeAgents
-  shells: OpenCodeShells
   turn: Turn | null
   /** Waiting for the running turn to settle, or for the session to end. */
   settling: Array<() => void>
@@ -105,9 +107,6 @@ interface Live {
   stopped: Set<string>
   /** Those notices, by inbox item. A turn OpenCode starts on one is stopped too. */
   stopNotices: Set<string>
-  /** Context tokens of the root session's latest step; cost is the session's own total. */
-  context?: number
-  cost?: number
   mcp: OpenCodeMcpHealth
   /** MCP status reads, in order, so an older read never reports over a newer one. */
   mcpReads: Promise<void>
@@ -120,7 +119,6 @@ interface Live {
 }
 
 type Engine = LiveEngineApi<Live>
-const SessionScopeSchema = z.object({ sessionID: z.string() })
 type ConnectedLive = Live & { root: string; catalog: OpenCodeCatalog; model: OpenCodeModelRef; interactions: OpenCodeInteractions }
 
 export interface OpenCodeDriverDependencies {
@@ -183,10 +181,6 @@ async function mcpServers(options: ProviderStartOptions): Promise<Array<{ name: 
   return servers
 }
 
-function contextTokens(tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }): number {
-  return tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
-}
-
 function errorText({ error }: FailureBoundary): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -211,12 +205,17 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     return live
   }
 
-  const owns = (live: Live, sessionID: string) => sessionID === live.root || live.children.has(sessionID)
+  const owns = (live: Live, sessionID: string) => live.decoder?.owns(sessionID) ?? false
+
+  /** Effects act on the native event they were decoded from. */
+  function deliver(live: Live, decoded: readonly Decoded<OpenCodeEffect>[], event?: OpenCodeEvent): void {
+    if (!decoded.length) return
+    live.sink ??= engine.sink(live, { effect: () => {} })
+    deliverDecoded(decoded, event ? { ...live.sink, effect: effect => act(live, effect, event) } : live.sink)
+  }
 
   function usage(live: Live) {
-    const size = live.model ? live.catalog?.limits.get(openCodeLaunchId(live.model)) : undefined
-    if (live.context === undefined || !size) return
-    engine.patch(live, { usage: { used: live.context, size, cost: live.cost === undefined ? undefined : { amount: live.cost, currency: "USD" } } })
+    if (live.decoder) deliver(live, live.decoder.usage())
   }
 
   /** Load until no native catalog change arrived during the load. */
@@ -245,14 +244,15 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     live.model = ref
     if (!live.catalog) return
     engine.patch(live, openCodeReportedSettings(live.catalog, ref))
+    usage(live)
   }
 
   function finish(live: Live, outcome: { kind: "succeeded" } | { kind: "failed"; message: string; type?: string; exited?: true } | { kind: "interrupted"; reason: string }) {
     const turn = live.turn
     if (!turn) return
     live.turn = null
-    if (live.root && live.content && outcome.kind !== "succeeded")
-      engine.emitUpdates(live, live.content.settle(live.root, outcome.kind === "failed" ? "failed" : "cancelled",
+    if (live.decoder && outcome.kind !== "succeeded")
+      engine.emitUpdates(live, live.decoder.content.settle(live.decoder.root, outcome.kind === "failed" ? "failed" : "cancelled",
         outcome.kind === "failed" ? `OpenCode ended the turn before this call finished: ${outcome.message}` : "Stopped before this call finished."))
     if (turn.kind === "compaction" && turn.actionId) {
       const result: LiveActionResult = outcome.kind === "succeeded" ? { kind: "completed" }
@@ -276,7 +276,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   async function endShells(live: Live): Promise<void> {
     const location = { directory: live.cwd }
     const listed = await live.api.client.shell.list({ location })
-    await Promise.all(live.shells.ending(listed.data).map(shell => {
+    await Promise.all((live.decoder?.shells.ending(listed.data) ?? []).map(shell => {
       live.stopped.add(shell.id)
       return live.api.client.shell.remove({ id: shell.id, location })
     }))
@@ -284,7 +284,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   /** Interrupt every subagent session still executing, and wait for each to settle. */
   async function interruptChildren(live: Live): Promise<void> {
-    await Promise.all([...live.children].map(async sessionID => {
+    await Promise.all([...live.decoder?.children ?? []].map(async sessionID => {
       let settle = () => {}
       const settled = new Promise<void>(resolve => { settle = resolve })
       live.childSettling.set(sessionID, [...(live.childSettling.get(sessionID) ?? []), settle])
@@ -315,25 +315,6 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   /** Shells outlive the server, so they end before it closes, while it can still reach them. */
   async function endBackgroundWithinGrace(live: Live): Promise<void> {
     await Promise.race([endBackground(live).catch(() => {}), delay(SHUTDOWN_GRACE_MS, undefined, { ref: false })])
-  }
-
-  function observeAgent(live: Live, event: OpenCodeEvent) {
-    const agents = live.agents
-    if (!agents || !live.root) return
-    switch (event.type) {
-      case "session.tool.called":
-        agents.observe({ sessionId: event.data.sessionID, toolCallId: event.data.id, title: live.content?.name(event.data.sessionID, event.data.id),
-          rawInput: event.data.input, status: "in_progress" })
-        return
-      case "session.tool.progress":
-        agents.observe({ sessionId: event.data.sessionID, toolCallId: event.data.id, rawOutput: { metadata: event.data.metadata } })
-        return
-      case "session.tool.success":
-      case "session.tool.failed":
-        agents.observe({ sessionId: event.data.sessionID, toolCallId: event.data.id, rawOutput: { metadata: event.data.metadata },
-          status: event.type === "session.tool.success" ? "completed" : "failed" })
-        return
-    }
   }
 
   function observeNotice(live: Live, inboxID: string, notice: NoticePayload): void {
@@ -368,29 +349,38 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     live.providerTurnCause = undefined
   }
 
-  function receive(live: Live, event: OpenCodeEvent): void {
-    if (live.closed) return
-    if (event.type === "catalog.updated" || event.type === "agent.updated" || event.type === "command.updated" || event.type === "skill.updated") {
-      if (event.location && event.location.directory !== live.cwd) return
-      live.catalogGeneration++
-      refreshCatalog(live)
-      return
+  /** What the driver does with what its decoder read; `event` is the native event it came from. */
+  function act(live: Live, effect: OpenCodeEffect, event: OpenCodeEvent): void {
+    switch (effect.type) {
+      case "turn":
+        bindTurn(live, event)
+        return
+      case "request":
+        if (event.type === "form.created" || event.type === "form.replied" || event.type === "form.cancelled" || event.type === "permission.asked" || event.type === "permission.replied")
+          live.queue = live.queue.then(() => live.interactions?.observe(event)).catch(error =>
+            hostWarn("opencode", "a native request could not be shown", { conversation: live.state.id, error: errorText({ error }) }))
+        return
+      case "catalog":
+        live.catalogGeneration++
+        refreshCatalog(live)
+        return
+      case "mcp":
+        readMcp(live)
+        return
+      case "model":
+        selectModel(live, effect.model)
+        return
+      case "agent-call":
+        live.agents?.observe(effect.call)
+        return
     }
-    if (!live.root) return
+  }
+
+  /** Inbox receipts and execution ends, bound to the turn Mako sent or one OpenCode started. */
+  function bindTurn(live: Live, event: OpenCodeEvent): void {
     const root = live.root
-    const background = live.shells.observe(event)
-    if (background !== undefined) engine.patch(live, { backgroundTasks: background })
+    if (!root) return
     switch (event.type) {
-      case "session.created":
-        if (event.data.parentID && owns(live, event.data.parentID)) {
-          live.children.add(event.data.sessionID)
-          live.content?.nameSession(event.data.sessionID, event.data.title)
-        }
-        return
-      case "session.renamed":
-        if (event.data.sessionID === root) engine.patch(live, { title: event.data.title })
-        else if (live.children.has(event.data.sessionID)) live.content?.nameSession(event.data.sessionID, event.data.title)
-        return
       case "session.inbox.enqueued": {
         if (event.data.sessionID !== root) return
         if (event.data.item.type === "synthetic") observeNotice(live, event.data.inboxID, event.data.item.payload)
@@ -425,8 +415,6 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       case "session.execution.interrupted": {
         const sessionID = event.data.sessionID
         if (sessionID !== root) {
-          if (live.children.has(sessionID) && event.type !== "session.execution.succeeded" && live.content)
-            engine.emitUpdates(live, live.content.settle(sessionID, event.type === "session.execution.failed" ? "failed" : "cancelled", "The subagent stopped before this call finished."))
           for (const settle of live.childSettling.get(sessionID) ?? []) settle()
           return
         }
@@ -445,67 +433,39 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       }
       case "session.compaction.failed":
         if (event.data.sessionID !== root) return
-        engine.activity(live, null)
         // Compaction Mako asked for fails its action and turn; any other would leave no trace.
         if (live.turn?.kind === "compaction" && (!event.data.inputID || event.data.inputID === live.turn.inboxId))
           finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
         else engine.event(live, compactionFailedEvent(event.data.error.message), event.id)
         return
-      case "session.step.ended":
-        if (event.data.sessionID === root) { live.context = contextTokens(event.data.tokens); usage(live) }
-        break
-      case "session.usage.updated":
-        if (event.data.sessionID === root) { live.cost = event.data.cost; usage(live) }
-        return
-      case "session.agent.selected":
-        if (event.data.sessionID === root) engine.patch(live, { currentMode: openCodeModeForAgent(event.data.agent, live.launchAccess) })
-        return
-      case "session.model.selected":
-        if (event.data.sessionID === root) selectModel(live, event.data.model)
-        return
-      case "session.retry.scheduled":
-        if (event.data.sessionID === root) {
-          hostLog("opencode", "provider retry scheduled", { conversation: live.state.id, attempt: event.data.attempt, error: event.data.error.message })
-          // OpenCode's `at` is epoch ms on this host's clock.
-          engine.activity(live, { kind: "retrying", attempt: event.data.attempt, reason: event.data.error.message, retryAt: event.data.at })
-        }
-        return
-      case "session.compaction.started":
-        if (event.data.sessionID === root) engine.activity(live, { kind: "compacting" })
-        return
-      case "session.compaction.delta":
-        return
-      case "session.compaction.ended":
-        if (event.data.sessionID === root)
-          engine.compacted(live, { trigger: event.data.reason === "auto" ? "automatic" : "manual", tokensBefore: live.context, summary: event.data.text }, event.id)
-        return
-      case "mcp.status.changed":
-        if (!event.location || event.location.directory === live.cwd) readMcp(live)
-        return
-      case "form.created":
-      case "form.replied":
-      case "form.cancelled":
-      case "permission.asked":
-      case "permission.replied":
-        live.queue = live.queue.then(() => live.interactions?.observe(event)).catch(error =>
-          hostWarn("opencode", "a native request could not be shown", { conversation: live.state.id, error: errorText({ error }) }))
-        return
       default:
-        break
+        return
     }
-    if (openCodeIgnores(event)) return
-    const scope = SessionScopeSchema.safeParse(event.data).data
-    if (!scope) { engine.unhandled(live, event.type); return }
-    if (!owns(live, scope.sessionID) || !live.content) return
-    if (!live.projection && !unnamedCall(live, event)) { project(live, event); return }
+  }
+
+  function receive(live: Live, event: OpenCodeEvent): void {
+    if (live.closed) return
+    const decoder = live.decoder
+    if (!decoder) {
+      // Before the session exists, a catalog change only restarts the load in progress.
+      if (openCodeCatalogChange(event, live.cwd)) live.catalogGeneration++
+      return
+    }
+    if (live.capture) live.capture.record(JSON.parse(JSON.stringify(event)))
+    if (event.type === "session.retry.scheduled" && event.data.sessionID === decoder.root)
+      hostLog("opencode", "provider retry scheduled", { conversation: live.state.id, attempt: event.data.attempt, error: event.data.error.message })
+    if (!decoder.transcript(event) || (!live.projection && !unnamedCall(live, event))) {
+      deliver(live, decoder.decode(event), event)
+      return
+    }
     // Later content waits behind a native name lookup so rows keep their order.
     const projection: Promise<void> = (live.projection ?? Promise.resolve()).then(async () => {
       if (live.closed) return
       if (unnamedCall(live, event)) {
         const name = await nativeToolName(live, event)
-        if (name && !live.closed) engine.emitUpdates(live, live.content!.open(event.data.sessionID, event.data.id, name))
+        if (name && !live.closed) engine.emitUpdates(live, decoder.content.open(event.data.sessionID, event.data.id, name))
       }
-      if (!live.closed) project(live, event)
+      if (!live.closed) deliver(live, decoder.decode(event), event)
     }).catch(error => hostWarn("opencode", "a native event could not be applied", { conversation: live.state.id, type: event.type, error: errorText({ error }) }))
       .finally(() => { if (live.projection === projection) live.projection = undefined })
     live.projection = projection
@@ -516,7 +476,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   /** A call seen first after its start: a resubscribed stream missed the event that names it. */
   function unnamedCall(live: Live, event: OpenCodeEvent): event is ToolCallEvent {
     return (event.type === "session.tool.called" || event.type === "session.tool.success" || event.type === "session.tool.failed")
-      && live.content?.name(event.data.sessionID, event.data.id) === undefined
+      && live.decoder?.content.name(event.data.sessionID, event.data.id) === undefined
   }
 
   async function nativeToolName(live: Live, event: ToolCallEvent): Promise<string | undefined> {
@@ -531,25 +491,13 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     }
   }
 
-  function project(live: Live, event: OpenCodeEvent): void {
-    const content = live.content
-    if (!content) return
-    // The call's name must still be open when the observer reads it; the result closes it.
-    if (event.type === "session.tool.success" || event.type === "session.tool.failed") {
-      observeAgent(live, event)
-      engine.emitUpdates(live, content.observe(event))
-    } else {
-      engine.emitUpdates(live, content.observe(event, (type) => engine.unhandled(live, type)))
-      observeAgent(live, event)
-    }
-  }
-
   /** After a gap, native state says what the missed events would have: open requests and whether the turn ended. */
   async function reconcile(live: Live): Promise<void> {
     const root = live.root
-    if (!root || !live.interactions) return
-    for (const sessionID of [root, ...live.children]) await live.interactions.reconcile(sessionID)
-    const background = live.shells.reconcile((await live.api.client.shell.list({ location: { directory: live.cwd } })).data)
+    const decoder = live.decoder
+    if (!root || !decoder || !live.interactions) return
+    for (const sessionID of [root, ...decoder.children]) await live.interactions.reconcile(sessionID)
+    const background = decoder.shells.reconcile((await live.api.client.shell.list({ location: { directory: live.cwd } })).data)
     if (background !== undefined) engine.patch(live, { backgroundTasks: background })
     const turn = live.turn
     const active = await live.api.client.session.active()
@@ -708,9 +656,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const approvalRoot = await dependencies.approvalRoot()
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
       const live: Live = {
-        api, cwd, env, emit: options.emit, launchAccess, children: new Set(), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
+        api, cwd, env, emit: options.emit, launchAccess, capture: null, catalogGeneration: 0, turn: null, queue: Promise.resolve(),
         mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
-        shells: new OpenCodeShells(sessionID => owns(live, sessionID)), settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
+        settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
         state: {
           id: options.conversationId, harness: "opencode", cwd, title: options.title, nativeId: options.resume, nativePath,
           status: "starting", connection: "starting", modes: [...openCodeModes], currentMode: null, configOptions: [], settings: options.tuning,
@@ -755,14 +703,16 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           live.model = ref
         }
         live.root = session.id
-        live.content = new OpenCodeContent(session.id, cwd)
+        const contextSize = () => live.model ? live.catalog?.limits.get(openCodeLaunchId(live.model)) : undefined
+        const decoder = live.decoder = new OpenCodeDecoder(session.id, cwd, { launchAccess, contextSize })
+        live.capture = nativeCapture("opencode", options.conversationId, () => ({ root: decoder.root, cwd, launchAccess, contextSize: contextSize() ?? null }))
         live.interactions = new OpenCodeInteractions({
           client: api.client, root: approvalRoot, conversationId: live.state.id,
           owns: sessionID => owns(live, sessionID),
           emit: event => { if (!live.closed) live.emit(event) },
           describe: (sessionID, toolID) => ({
-            title: toolID ? live.content?.title(sessionID, toolID) : undefined,
-            prefix: live.content?.prefix(sessionID),
+            title: toolID ? decoder.content.title(sessionID, toolID) : undefined,
+            prefix: decoder.content.prefix(sessionID),
           }),
         })
         await trace.step("observation", () => live.interactions!.restore(options.observedApprovals ?? []))

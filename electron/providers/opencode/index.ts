@@ -1,13 +1,15 @@
 import { join } from "node:path"
 import { accountEnv } from "../../accounts.js"
-import { installHarness, lacks, notBuilt } from "../harness-definition.js"
+import { installHarness, lacks } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { openCodeAccountCapability } from "./accounts.js"
+import { openCodeDecoderSource } from "./decoder-source.js"
 import { createOpenCodeDriver } from "./live-driver.js"
 import { openCodeMcpSource } from "./mcp.js"
 import { openCodeNativeRunner } from "./native-runner.js"
 import { openCodeProcessProbe } from "./process-probe.js"
 import { openCodeProfileLoader } from "./profile.js"
+import { emitOpenCodeSession } from "./session-emitter.js"
 import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
 
@@ -26,7 +28,7 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
       return join(app.getPath("userData"), "approval-evidence")
     },
   }),
-  decoder: notBuilt("Its content decodes in OpenCodeContent, but turn, state and request events still decode inside the live driver"),
+  decoder: openCodeDecoderSource,
   profile: openCodeProfileLoader,
   accounts: openCodeAccountCapability,
   acp: lacks("Runs on OpenCode’s native API"),
@@ -34,7 +36,10 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   processProbe: openCodeProcessProbe,
   mcp: openCodeMcpSource,
   skills: openCodeSkillSource,
-  sessionEmitter: notBuilt("Mako cannot write an OpenCode session to continue in"),
+  sessionEmitter: {
+    provider: "opencode",
+    emit: async (thread) => emitOpenCodeSession(thread, await accountEnv("opencode", process.env)),
+  },
   connection: lacks("Signs in through OpenCode’s own providers"),
   updates: openCodeUpdateSource,
   artifactPreview: lacks("Writes no artifact Mako previews"),
