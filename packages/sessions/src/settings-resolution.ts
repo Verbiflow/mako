@@ -197,11 +197,15 @@ export function resolveModelLaunch(
     if (values[option.id] === undefined && value !== undefined)
       values[option.id] = value
   }
+  // Variants encode model parameters, while options can also carry session
+  // controls (Cursor's plan mode). Those controls survive beside the model
+  // id; they cannot constrain which model variant is selected.
+  const encodedIds = new Set(
+    model.variants.flatMap((candidate) => Object.keys(candidate.values))
+  )
   const variant = model.variants.find((candidate) =>
-    model.options.every(
-      (option) =>
-        values[option.id] === undefined ||
-        candidate.values[option.id] === values[option.id]
+    [...encodedIds].every(
+      (id) => values[id] === undefined || candidate.values[id] === values[id]
     )
   )
   if (!variant)

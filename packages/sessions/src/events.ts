@@ -14,6 +14,49 @@ export interface TranscriptEvent {
   /** Long text the reader opens on demand: a compaction summary, an error body. */
   body?: string
   tone?: EventTone
+  /**
+   * A fact about how the harness is set up rather than about this
+   * conversation's work: an MCP server that did not start, a configuration
+   * warning, a setting imported from another tool. Every session start
+   * reports it again, so a conversation keeps the first of each (same label
+   * and detail) and the transcript gathers them into one row.
+   */
+  setup?: boolean
+}
+
+export const MCP_SERVER_FAILED = "MCP server failed"
+
+/**
+ * Why an MCP server did not start, in the words every harness shares, first
+ * match wins. Each harness words the same failure its own way (Codex's
+ * "handshaking with MCP server failed", OpenCode's "MCP error -32000:
+ * Connection closed", Grok's "handshake failed"); its own text stays in the
+ * marker's body.
+ */
+const MCP_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\b(?:sign[ -]?in|log[ -]?in|(?:re)?authentication|auth(?:orization)?)[ _-]required\b|\bneeds?[ _-]auth\b|\bunauthori[sz]ed\b|\b401\b/i, "sign-in required"],
+  [/\bsetup[ _-]required\b/i, "setup required"],
+  [/could not be launched|\bENOENT\b|\bEACCES\b|NotFound: ChildProcess\.spawn|cannot find binary|command not found|executable not found|no such file or directory|\bspawn\b.*\bE[A-Z]{3,}\b/i, "could not be launched"],
+  [/\btimed? ?out\b|\btimeout\b|deadline exceeded/i, "timed out"],
+  [/could not connect|handshak|initiali[sz]e response|connection (?:closed|refused|reset)|transport (?:closed|error)|send message error|\bEPIPE\b|\bECONNRE(?:SET|FUSED)\b|process exited|exited with (?:code|status)|-32000\b/i, "could not connect"],
+]
+
+/** An MCP server the harness could not start, in the same words on every harness. */
+export function mcpServerFailedEvent(server: string, reason?: string): TranscriptEvent {
+  const whole = reason?.trim() ?? ""
+  const shared = MCP_REASONS.find(([pattern]) => pattern.test(whole))?.[1]
+  const line = shared ?? whole.split("\n", 1)[0]!.trim()
+  const short = line.length > DETAIL_LENGTH ? `${line.slice(0, DETAIL_LENGTH - 1).trimEnd()}…` : line
+  return {
+    ...event(MCP_SERVER_FAILED, short ? `${server} · ${short}` : server, short === whole ? undefined : whole),
+    tone: "warning",
+    setup: true,
+  }
+}
+
+/** A setup notice for one already kept: the same fact from a later session start. */
+export function sameSetupEvent(left: TranscriptEvent, right: TranscriptEvent): boolean {
+  return Boolean(left.setup && right.setup) && left.label === right.label && left.detail === right.detail
 }
 
 export const CONTEXT_COMPACTED = "Context compacted"

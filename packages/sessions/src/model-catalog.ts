@@ -706,7 +706,12 @@ function normalizeDevinVariants(
     if (row.description) variant.description = row.description
     byId.set(id, variant)
   }
-  return [...byId.values()]
+  const variants = [...byId.values()]
+  // A standard-only family has no speed control. Keep false as a variant
+  // value only when it distinguishes Standard from an available Fast tier.
+  if (!variants.some((variant) => variant.values.fast === true))
+    for (const variant of variants) delete variant.values.fast
+  return variants
 }
 
 function canonicalDevinDefault(

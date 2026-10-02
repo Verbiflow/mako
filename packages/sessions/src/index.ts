@@ -74,8 +74,11 @@ export {
   emitClaudeSession,
   emitCodexSession,
   emitCursorSession,
+  emitDevinSession,
   emitGrokSession,
+  openCodeImport,
   type EmitResult,
+  type OpenCodeImport,
 } from "./emit.js"
 export { type NativeFile, type SessionProvider } from "./providers/types.js"
 export { CodexProvider } from "./providers/codex.js"

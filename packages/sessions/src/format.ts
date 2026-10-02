@@ -24,7 +24,11 @@ export type { AttachmentContent } from "./content.js"
 export type Harness =
   "codex" | "claude" | "cursor" | "grok" | "devin" | (string & {})
 
-/** Token counts and spend for one assistant turn, when the harness records them. */
+/**
+ * Token counts and spend for one assistant turn, when the harness records
+ * them. `input` leaves out cached input, which `cacheRead` and `cacheWrite`
+ * count; readers of harnesses that count it inside input subtract it.
+ */
 export interface TurnUsage {
   input?: number
   output?: number

@@ -22,8 +22,9 @@ import { persistThreadAttachments } from "./attachment-storage.js"
  * Code and Codex confirming that emitted history returns in model context.
  */
 
-import { createHash, randomUUID } from "node:crypto"
-import { mkdir, writeFile } from "node:fs/promises"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { z } from "zod"
+import { access, mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Thread, ThreadEntry } from "./format.js"
@@ -36,6 +37,8 @@ export interface EmitResult {
 export interface EmitOptions {
   cwd?: string
   home?: string
+  /** The provider's own root when an account moves it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). */
+  store?: string
 }
 
 interface Message {
@@ -147,7 +150,7 @@ export async function emitClaudeSession(
   const home = options.home ?? homedir()
   const sessionId = randomUUID()
   const slug = cwd.replace(/[^a-zA-Z0-9-]/g, "-")
-  const dir = join(home, ".claude", "projects", slug)
+  const dir = join(options.store ?? join(home, ".claude"), "projects", slug)
   await mkdir(dir, { recursive: true })
 
   const lines: string[] = []
@@ -196,8 +199,7 @@ export async function emitCodexSession(
   const now = new Date()
   const iso = now.toISOString()
   const dir = join(
-    home,
-    ".codex",
+    options.store ?? join(home, ".codex"),
     "sessions",
     String(now.getFullYear()),
     String(now.getMonth() + 1).padStart(2, "0"),
@@ -329,6 +331,204 @@ export async function emitGrokSession(
     "utf8"
   )
   return { sessionId, path: join(dir, "chat_history.jsonl") }
+}
+
+/** The `refinery_schema_history` version of Devin's store this writer matches. */
+export const DEVIN_STORE_VERSION = 17
+
+/** The model of the latest Devin session, which an imported one continues on. */
+const DevinModel = z.string().catch("swe-2-high")
+
+/**
+ * Write a thread into the Devin CLI's store: a `sessions` row and a chain of
+ * `message_nodes` its `main_chain_id` ends at, in the one SQLite database
+ * every Devin session shares. Devin adds its own system prompt as new roots
+ * when it loads the session, so the chain holds only the conversation. The
+ * write is one transaction, and a store at another schema version is left
+ * untouched. `devin -r <id>` or ACP `session/load` resumes it.
+ */
+export async function emitDevinSession(
+  thread: Thread,
+  options: EmitOptions = {}
+): Promise<EmitResult> {
+  const sqlite = await import("node:sqlite").catch(() => {
+    throw new Error(
+      "Writing Devin sessions needs Node's built-in SQLite (Node 22.5+)"
+    )
+  })
+  const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
+  const home = options.home ?? homedir()
+  const data = options.home
+    ? join(home, ".local", "share")
+    : process.env.XDG_DATA_HOME || join(home, ".local", "share")
+  const path = join(data, "devin", "cli", "sessions.db")
+  const messages = await flatten(
+    (await persistThreadAttachments(thread, join(home, ".mako", "attachments")))
+      .entries,
+    home
+  )
+  // Opening creates a missing database, and an empty store is not Devin's.
+  await access(path).catch(() => {
+    throw new Error("Devin has no session store yet; run Devin once first")
+  })
+  const database = new sqlite.DatabaseSync(path)
+  database.exec("PRAGMA busy_timeout = 5000")
+  const sessionId = `mako-${randomUUID().slice(0, 13)}`
+  try {
+    database.exec("BEGIN IMMEDIATE")
+    try {
+      const version = database
+        .prepare("SELECT MAX(version) AS version FROM refinery_schema_history")
+        .get()?.version
+      if (version !== DEVIN_STORE_VERSION)
+        throw new Error(
+          `Devin's session store is at version ${String(version)}; Mako writes version ${DEVIN_STORE_VERSION}`
+        )
+      const nowSeconds = Math.floor(Date.now() / 1000)
+      const seconds = (at: string | undefined) => {
+        const parsed = at ? Date.parse(at) : Number.NaN
+        return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : nowSeconds
+      }
+      const latest = DevinModel.parse(database
+        .prepare("SELECT model FROM sessions WHERE model != '' ORDER BY last_activity_at DESC LIMIT 1")
+        .get()?.model)
+      database
+        .prepare(
+          `INSERT INTO sessions (id, working_directory, backend_type, model, agent_mode, created_at,
+             last_activity_at, title, main_chain_id, workspace_dirs, hidden, metadata)
+           VALUES (?, ?, 'windsurf', ?, 'normal', ?, ?, ?, ?, '[]', 0, ?)`
+        )
+        .run(
+          sessionId,
+          cwd,
+          latest,
+          seconds(thread.ref.startedAt),
+          nowSeconds,
+          thread.ref.title ?? "Imported conversation",
+          messages.length - 1,
+          JSON.stringify({ total_credit_cost: 0, total_acu_cost: 0 })
+        )
+      const node = database.prepare(
+        `INSERT INTO message_nodes (session_id, node_id, parent_node_id, chat_message, created_at)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      messages.forEach((message, index) => {
+        const user = message.role === "user"
+        const said = {
+          message_id: randomUUID(),
+          role: message.role,
+          content: message.text,
+          metadata: {
+            num_tokens: null,
+            is_user_input: user ? true : null,
+            request_id: null,
+            metrics: null,
+            finish_reason: user ? null : "stop",
+            created_at: new Date(seconds(message.at) * 1000).toISOString(),
+            telemetry: user
+              ? { source: "user", operation: "unknown" }
+              : { source: "assistant", operation: "inference" },
+          },
+        }
+        const chat = user ? said : { ...said, tool_calls: [] }
+        node.run(sessionId, index, index ? index - 1 : null, JSON.stringify(chat), seconds(message.at))
+      })
+      database.exec("COMMIT")
+    } catch (error) {
+      database.exec("ROLLBACK")
+      throw error
+    }
+  } finally {
+    database.close()
+  }
+  return { sessionId, path: `${path}#${sessionId}` }
+}
+
+export interface OpenCodeImport {
+  sessionId: string
+  /** The working directory the session belongs to. */
+  directory: string
+  /** The body `opencode session import` takes. */
+  document: unknown
+}
+
+/**
+ * The model imported assistant turns name. OpenCode refuses an assistant turn
+ * without one, has no such model, and resumes the session on the user's
+ * default; Mako's reader shows no model for these turns.
+ */
+export const OPENCODE_IMPORTED_MODEL = { id: "imported", providerID: "imported" } as const
+
+const OPENCODE_ID_ALPHABET =
+  "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+/** OpenCode's identifier shape: message ids ascend with time; session ids descend. */
+function openCodeIds(): (prefix: "ses" | "msg", at: number) => string {
+  let counter = 0
+  return (prefix, at) => {
+    let time = BigInt(at) * 4096n + BigInt(++counter)
+    if (prefix === "ses") time = ~time
+    const random = Array.from(
+      randomBytes(14),
+      (byte) => OPENCODE_ID_ALPHABET[byte % OPENCODE_ID_ALPHABET.length]
+    ).join("")
+    return `${prefix}_${(time & 0xffffffffffffn).toString(16).padStart(12, "0")}${random}`
+  }
+}
+
+/**
+ * A thread as the session `opencode session import` takes. OpenCode's own
+ * import is the supported way into its store, so this writes no file.
+ */
+export async function openCodeImport(
+  thread: Thread,
+  options: EmitOptions = {}
+): Promise<OpenCodeImport> {
+  const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
+  const home = options.home ?? homedir()
+  const messages = await flatten(
+    (await persistThreadAttachments(thread, join(home, ".mako", "attachments")))
+      .entries,
+    home
+  )
+  const id = openCodeIds()
+  const now = Date.now()
+  const started = Date.parse(thread.ref.startedAt ?? "")
+  const created = Number.isFinite(started) ? started : now
+  const sessionId = id("ses", created)
+  // Ascending times keep OpenCode's ordering when timestamps are missing or tie.
+  let last = created
+  const at = (iso: string | undefined) => {
+    const parsed = iso ? Date.parse(iso) : Number.NaN
+    last = Math.max(last + 1, Number.isFinite(parsed) ? parsed : last + 1)
+    return last
+  }
+  const document = {
+    info: {
+      id: sessionId,
+      projectID: "global",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created, updated: now },
+      title: thread.ref.title ?? "Imported conversation",
+      location: { directory: cwd },
+    },
+    messages: messages.map((message) => {
+      const time = at(message.at)
+      return message.role === "user"
+        ? { id: id("msg", time), type: "user", text: message.text, time: { created: time } }
+        : {
+            id: id("msg", time),
+            type: "assistant",
+            agent: "build",
+            model: OPENCODE_IMPORTED_MODEL,
+            content: [{ type: "text", text: message.text }],
+            time: { created: time, completed: time },
+            finish: "stop",
+          }
+    }),
+  }
+  return { sessionId, directory: cwd, document }
 }
 
 /**
