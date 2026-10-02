@@ -1,5 +1,6 @@
 import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "../content.js"
 import { stat } from "node:fs/promises"
+import { OPENCODE_IMPORTED_MODEL } from "../emit.js"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
@@ -977,6 +978,7 @@ function modelFromData(
     jsonText(data.providerID) ??
     (model ? jsonText(model.providerID) : undefined)
   const effort = jsonText(data.variant) ?? (model ? jsonText(model.variant) : undefined)
+  if (provider === OPENCODE_IMPORTED_MODEL.providerID && id === OPENCODE_IMPORTED_MODEL.id) return null
   return id || provider ? { id, provider, effort } : null
 }
 

@@ -426,11 +426,13 @@ function parseUsage(value: JsonValue | undefined): TurnUsage | undefined {
     return undefined
   }
   const parsed: TurnUsage = {}
-  if (input !== undefined) parsed.input = input
+  // Grok's turn totals count cached input inside `inputTokens`; Mako counts it apart.
+  if (input !== undefined) parsed.input = Math.max(0, input - (cacheRead ?? 0) - (cacheWrite ?? 0))
   if (output !== undefined) parsed.output = output
   if (cacheRead !== undefined) parsed.cacheRead = cacheRead
   if (cacheWrite !== undefined) parsed.cacheWrite = cacheWrite
-  if (costTicks !== undefined) parsed.costUsd = costTicks / 1_000_000_000
+  // Grok's own documentation: 1 USD is 10^10 ticks.
+  if (costTicks !== undefined) parsed.costUsd = costTicks / 10_000_000_000
   return parsed
 }
 

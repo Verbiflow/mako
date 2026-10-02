@@ -308,11 +308,14 @@ function parseTokenUsage(payload: JsonObject): CodexTokenUsage | undefined {
   const info = objectValue(payload["info"])
   const usage = objectValue(info?.["last_token_usage"])
   if (!usage) return undefined
+  // Codex counts cached input inside `input_tokens`; Mako counts it apart.
+  const cacheRead = Number(usage["cached_input_tokens"] ?? 0)
+  const cacheWrite = Number(usage["cache_write_input_tokens"] ?? 0)
   return {
-    input: Number(usage["input_tokens"] ?? 0),
+    input: Math.max(0, Number(usage["input_tokens"] ?? 0) - cacheRead - cacheWrite),
     output: Number(usage["output_tokens"] ?? 0),
-    cacheRead: Number(usage["cached_input_tokens"] ?? 0),
-    cacheWrite: Number(usage["cache_write_input_tokens"] ?? 0),
+    cacheRead,
+    cacheWrite,
     context: Number(usage["total_tokens"] ?? 0),
   }
 }
