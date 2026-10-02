@@ -1,0 +1,985 @@
+{
+  "harness": "opencode",
+  "source": "Composed from @opencode/client 2.0.1's event types (shell events as recorded in test-opencode-background), 2026-10-01",
+  "about": "Catalog, MCP and model changes; a retry; a subagent session whose open read is settled when it fails; a failed root call with progress; a call that moves its shell to the background until it exits; automatic compaction after a step's usage, then a failed one; a cancelled inbox item, an interrupt, a form; and two kinds newer than 2.0.1.",
+  "session": {
+    "root": "ses_root",
+    "cwd": "/work",
+    "launchAccess": "ask",
+    "contextSize": 262144
+  },
+  "steps": [
+    {
+      "message": {
+        "id": "evt_0001",
+        "created": 1,
+        "type": "catalog.updated",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {}
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "catalog"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0002",
+        "created": 1,
+        "type": "agent.updated",
+        "location": {
+          "directory": "/elsewhere"
+        },
+        "data": {}
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0003",
+        "created": 1,
+        "type": "command.updated",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {}
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "catalog"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0004",
+        "created": 1,
+        "type": "skill.updated",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {}
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "catalog"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0005",
+        "created": 1,
+        "type": "mcp.status.changed",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "server": "docs"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "mcp"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0006",
+        "created": 1,
+        "type": "session.model.selected",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 6,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "model": {
+            "id": "mimo-v2.6-flash-free",
+            "providerID": "opencode"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "model",
+            "model": {
+              "id": "mimo-v2.6-flash-free",
+              "providerID": "opencode"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0007",
+        "created": 1,
+        "type": "session.retry.scheduled",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 7,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "attempt": 2,
+          "at": 1790000000000,
+          "error": {
+            "type": "provider.rate-limit",
+            "message": "Too many requests"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "retrying",
+            "attempt": 2,
+            "reason": "Too many requests",
+            "retryAt": 1790000000000
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0008",
+        "created": 1,
+        "type": "session.created",
+        "durable": {
+          "aggregateID": "ses_child",
+          "seq": 8,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_child",
+          "parentID": "ses_root",
+          "title": "Explore the parser",
+          "slug": "quiet-otter",
+          "version": "2.0.1",
+          "projectID": "project_0001",
+          "location": {
+            "directory": "/work"
+          },
+          "agent": "explore"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0009",
+        "created": 1,
+        "type": "session.tool.input.started",
+        "durable": {
+          "aggregateID": "ses_child",
+          "seq": 9,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_child",
+          "assistantMessageID": "msg_0002",
+          "id": "call_0001",
+          "name": "read"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "ses_child:call_0001",
+            "title": "Explore the parser: read",
+            "name": "read",
+            "toolKind": "read",
+            "status": "pending"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0010",
+        "created": 1,
+        "type": "session.tool.called",
+        "durable": {
+          "aggregateID": "ses_child",
+          "seq": 10,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_child",
+          "assistantMessageID": "msg_0002",
+          "id": "call_0001",
+          "input": {
+            "filePath": "/work/src/parser.ts"
+          },
+          "executed": true
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_child:call_0001",
+            "title": "Explore the parser: /work/src/parser.ts",
+            "status": "in_progress",
+            "input": "{\n  \"filePath\": \"/work/src/parser.ts\"\n}",
+            "details": [
+              {
+                "type": "location",
+                "path": "/work/src/parser.ts"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0011",
+        "created": 1,
+        "type": "session.tool.input.started",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 11,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "id": "call_0002",
+          "name": "bash"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "ses_root:call_0002",
+            "title": "bash",
+            "name": "bash",
+            "toolKind": "execute",
+            "status": "pending"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0012",
+        "created": 1,
+        "type": "session.tool.called",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 12,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "id": "call_0002",
+          "input": {
+            "command": "npm test"
+          },
+          "executed": true
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_root:call_0002",
+            "title": "npm test",
+            "status": "in_progress",
+            "input": "{\n  \"command\": \"npm test\"\n}",
+            "details": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent-call",
+            "call": {
+              "sessionId": "ses_root",
+              "toolCallId": "call_0002",
+              "title": "bash",
+              "rawInput": {
+                "command": "npm test"
+              },
+              "status": "in_progress"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0013",
+        "created": 1,
+        "type": "session.tool.progress",
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "id": "call_0002",
+          "metadata": {
+            "output": "running 12 tests"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent-call",
+            "call": {
+              "sessionId": "ses_root",
+              "toolCallId": "call_0002",
+              "rawOutput": {
+                "metadata": {
+                  "output": "running 12 tests"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0014",
+        "created": 1,
+        "type": "session.tool.failed",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 14,
+          "version": 2
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "id": "call_0002",
+          "error": {
+            "type": "execution",
+            "message": "2 tests failed"
+          },
+          "metadata": {},
+          "executed": true
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent-call",
+            "call": {
+              "sessionId": "ses_root",
+              "toolCallId": "call_0002",
+              "rawOutput": {
+                "metadata": {}
+              },
+              "status": "failed"
+            }
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_root:call_0002",
+            "status": "failed",
+            "output": "2 tests failed",
+            "attachments": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0015",
+        "created": 1,
+        "type": "session.tool.input.started",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 15,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "id": "call_0003",
+          "name": "bash"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "ses_root:call_0003",
+            "title": "bash",
+            "name": "bash",
+            "toolKind": "execute",
+            "status": "pending"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0016",
+        "created": 1,
+        "type": "session.tool.called",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 16,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "id": "call_0003",
+          "input": {
+            "command": "npm run dev"
+          },
+          "executed": true
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_root:call_0003",
+            "title": "npm run dev",
+            "status": "in_progress",
+            "input": "{\n  \"command\": \"npm run dev\"\n}",
+            "details": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent-call",
+            "call": {
+              "sessionId": "ses_root",
+              "toolCallId": "call_0003",
+              "title": "bash",
+              "rawInput": {
+                "command": "npm run dev"
+              },
+              "status": "in_progress"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0017",
+        "created": 1,
+        "type": "shell.created",
+        "data": {
+          "info": {
+            "id": "sh_0001",
+            "status": "running",
+            "command": "npm run dev",
+            "cwd": "/work",
+            "shell": "/bin/zsh",
+            "file": "/work/.shell/sh_0001.out",
+            "metadata": {
+              "sessionID": "ses_root"
+            },
+            "time": {
+              "started": 1
+            }
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0018",
+        "created": 1,
+        "type": "session.tool.success",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 18,
+          "version": 2
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "id": "call_0003",
+          "content": [
+            {
+              "type": "text",
+              "text": "Command moved to the background"
+            }
+          ],
+          "metadata": {
+            "shellID": "sh_0001"
+          },
+          "executed": true
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "backgroundTasks": 1
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent-call",
+            "call": {
+              "sessionId": "ses_root",
+              "toolCallId": "call_0003",
+              "rawOutput": {
+                "metadata": {
+                  "shellID": "sh_0001"
+                }
+              },
+              "status": "completed"
+            }
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_root:call_0003",
+            "status": "completed",
+            "output": "Command moved to the background",
+            "attachments": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0019",
+        "created": 1,
+        "type": "shell.exited",
+        "data": {
+          "id": "sh_0001",
+          "exit": 0,
+          "status": "exited"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "backgroundTasks": 0
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0020",
+        "created": 1,
+        "type": "shell.deleted",
+        "data": {
+          "id": "sh_0001"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0021",
+        "created": 1,
+        "type": "session.execution.failed",
+        "durable": {
+          "aggregateID": "ses_child",
+          "seq": 21,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_child",
+          "error": {
+            "type": "provider",
+            "message": "The model stopped responding"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_child:call_0001",
+            "status": "failed",
+            "output": "The subagent stopped before this call finished.",
+            "unfinished": true
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0022",
+        "created": 1,
+        "type": "session.step.ended",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 22,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "assistantMessageID": "msg_0001",
+          "finish": "tool-calls",
+          "cost": 0,
+          "tokens": {
+            "input": 41000,
+            "output": 900,
+            "reasoning": 300,
+            "cache": {
+              "read": 12000,
+              "write": 0
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 54200,
+              "size": 262144
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0023",
+        "created": 1,
+        "type": "session.compaction.started",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 23,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "reason": "auto",
+          "recent": ""
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "compacting"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0024",
+        "created": 1,
+        "type": "session.compaction.delta",
+        "data": {
+          "sessionID": "ses_root",
+          "text": "Summary of"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0025",
+        "created": 1,
+        "type": "session.compaction.ended",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 25,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "reason": "auto",
+          "text": "Summary of the work so far.",
+          "recent": ""
+        }
+      },
+      "decoded": [
+        {
+          "kind": "compacted",
+          "compaction": {
+            "trigger": "automatic",
+            "tokensBefore": 54200,
+            "summary": "Summary of the work so far."
+          },
+          "source": "evt_0025"
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 54200,
+              "size": 262144,
+              "compacted": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0026",
+        "created": 1,
+        "type": "session.compaction.started",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 26,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "reason": "manual",
+          "recent": ""
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "compacting"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0027",
+        "created": 1,
+        "type": "session.compaction.failed",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 27,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "reason": "manual",
+          "error": {
+            "type": "provider",
+            "message": "Context window exceeded"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": null
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0028",
+        "created": 1,
+        "type": "session.inbox.cancelled",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 28,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "inboxID": "msg_0003"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0029",
+        "created": 1,
+        "type": "session.execution.interrupted",
+        "durable": {
+          "aggregateID": "ses_root",
+          "seq": 29,
+          "version": 1
+        },
+        "data": {
+          "sessionID": "ses_root",
+          "reason": "user"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0030",
+        "created": 1,
+        "type": "form.created",
+        "data": {
+          "form": {
+            "id": "frm_0001",
+            "sessionID": "ses_root",
+            "title": "Pick a colour",
+            "fields": [
+              {
+                "key": "colour",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "request"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0031",
+        "created": 1,
+        "type": "form.replied",
+        "data": {
+          "id": "frm_0001",
+          "sessionID": "ses_root",
+          "answer": {
+            "colour": "blue"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "request"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0032",
+        "created": 1,
+        "type": "form.cancelled",
+        "data": {
+          "id": "frm_0002",
+          "sessionID": "ses_root"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "request"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0033",
+        "created": 1,
+        "type": "session.summary.updated",
+        "data": {
+          "sessionID": "ses_root",
+          "text": "A newer kind in a session"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "session.summary.updated",
+          "reason": "unknown",
+          "raw": {
+            "type": "session.summary.updated"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0034",
+        "created": 1,
+        "type": "workspace.indexed",
+        "data": {
+          "files": 120
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "workspace.indexed",
+          "reason": "unknown",
+          "raw": {
+            "type": "workspace.indexed"
+          }
+        }
+      ]
+    }
+  ]
+}

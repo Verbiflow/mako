@@ -1,0 +1,1617 @@
+{
+  "harness": "opencode",
+  "source": "OpenCode 2.0.1 serving opencode/space-bunny-free, captured through Mako with MAKO_NATIVE_CAPTURE=opencode, 2026-10-01; ids renumbered and paths replaced",
+  "about": "The Plan agent reasons, streams a one-step plan and ends its turn (the plan card replaces the streamed reply); after the switch to Build, a write asks permission, is allowed, and creates the file.",
+  "session": {
+    "root": "ses_0001",
+    "cwd": "/work",
+    "launchAccess": "ask",
+    "contextSize": 1048576
+  },
+  "steps": [
+    {
+      "message": {
+        "id": "evt_0001",
+        "created": 1790853814144,
+        "type": "session.created",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "slug": "hidden-falcon",
+          "version": "2.0.1",
+          "projectID": "project_0001",
+          "location": {
+            "directory": "/work"
+          },
+          "subpath": "../../../../../../../work",
+          "agent": "plan",
+          "model": {
+            "id": "space-bunny-free",
+            "providerID": "opencode"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 0,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0002",
+        "created": 1790853814146,
+        "type": "session.inbox.enqueued",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "inboxID": "msg_0001",
+          "sessionID": "ses_0001",
+          "item": {
+            "type": "synthetic",
+            "payload": {
+              "text": "<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n/home/user/.opencode/plan\n\nDo not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\n</system-reminder>"
+            },
+            "delivery": "steer"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 1,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0003",
+        "created": 1790853814217,
+        "type": "session.inbox.enqueued",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "inboxID": "msg_0002",
+          "sessionID": "ses_0001",
+          "item": {
+            "type": "user",
+            "payload": {
+              "text": "Plan creating hello.txt in the current folder containing the word hi. The plan is one step; ask me nothing.",
+              "files": []
+            },
+            "delivery": "steer"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 2,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0004",
+        "created": 1790853814218,
+        "type": "session.execution.started",
+        "data": {
+          "sessionID": "ses_0001"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 3,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0005",
+        "created": 1790853814229,
+        "metadata": {
+          "instructions": {
+            "initial": true
+          }
+        },
+        "type": "session.instructions.updated",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "delta": {
+            "core/environment": "4c27788c12119cc1c20e853f062bc1ba64372d99da295ac9065a6b59e9452241",
+            "core/date": "9d407747420cc512794008e266cb494f38764d6dcf796660ba21354b97d331f9",
+            "core/codemode": "e7f10d7a93f9afd99c80754147344f48f86214190e9d129c5ef44b41ed9a0493",
+            "core/skill-guidance": "3b6f5c037b2862199cf71256f3f7b9ebe0128d9ecb57cc2b7d614efb7ec89fe0"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 4,
+          "version": 2
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0006",
+        "created": 1790853814231,
+        "type": "session.inbox.delivered",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "inboxID": "msg_0001"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 5,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0007",
+        "created": 1790853814232,
+        "type": "session.inbox.delivered",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "inboxID": "msg_0002"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 6,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0008",
+        "created": 1790853816129,
+        "type": "session.usage.updated",
+        "data": {
+          "sessionID": "ses_0001",
+          "cost": 0,
+          "tokens": {
+            "input": 473,
+            "output": 5,
+            "reasoning": 54,
+            "cache": {
+              "read": 204,
+              "write": 0
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 473,
+                "cacheRead": 204,
+                "cacheWrite": 0,
+                "output": 59,
+                "reasoning": 54
+              },
+              "cost": {
+                "amount": 0,
+                "currency": "USD"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0009",
+        "created": 1790853816130,
+        "type": "session.renamed",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "title": "Create hello.txt containing hi"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 8,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "title": "Create hello.txt containing hi"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0010",
+        "created": 1790853816267,
+        "type": "session.step.started",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "agent": "plan",
+          "model": {
+            "id": "space-bunny-free",
+            "providerID": "opencode",
+            "variant": "default"
+          },
+          "assistantMessageID": "msg_0003"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 9,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0011",
+        "created": 1790853816270,
+        "type": "session.reasoning.started",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "state": {
+            "reasoningField": "reasoning_content"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 10,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0012",
+        "created": 1790853816374,
+        "type": "session.reasoning.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": "The user wants a"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg_0003:reasoning:0",
+            "text": "The user wants a"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0013",
+        "created": 1790853816639,
+        "type": "session.reasoning.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": " plan for creating hello.txt. I'm in Plan mode. I should discuss"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg_0003:reasoning:0",
+            "text": " plan for creating hello.txt. I'm in Plan mode. I should discuss"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0014",
+        "created": 1790853817072,
+        "type": "session.reasoning.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": " the plan directly in conversation. The plan is one step; ask nothing"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg_0003:reasoning:0",
+            "text": " the plan directly in conversation. The plan is one step; ask nothing"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0015",
+        "created": 1790853817948,
+        "type": "session.reasoning.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": ".\n\nI should present the plan inline. Should I create a plan file? The system"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg_0003:reasoning:0",
+            "text": ".\n\nI should present the plan inline. Should I create a plan file? The system"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0016",
+        "created": 1790853818201,
+        "type": "session.reasoning.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": " reminder says do not create plan files unless explicitly asked"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg_0003:reasoning:0",
+            "text": " reminder says do not create plan files unless explicitly asked"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0017",
+        "created": 1790853818959,
+        "type": "session.text.started",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 11,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0018",
+        "created": 1790853819043,
+        "type": "session.reasoning.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": ". So just state the plan."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg_0003:reasoning:0",
+            "text": ". So just state the plan."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0019",
+        "created": 1790853819063,
+        "type": "session.text.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": "Plan: create"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_0003:0",
+            "text": "Plan: create"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0020",
+        "created": 1790853819177,
+        "type": "session.text.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": " `hello.txt` in `/work` with the single line `hi` (no"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_0003:0",
+            "text": " `hello.txt` in `/work` with the single line `hi` (no"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0021",
+        "created": 1790853821691,
+        "type": "session.text.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": " trailing content beyond that).\n\nNo questions. Switch agents"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_0003:0",
+            "text": " trailing content beyond that).\n\nNo questions. Switch agents"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0022",
+        "created": 1790853821791,
+        "type": "session.reasoning.ended",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "text": "The user wants a plan for creating hello.txt. I'm in Plan mode. I should discuss the plan directly in conversation. The plan is one step; ask nothing.\n\nI should present the plan inline. Should I create a plan file? The system reminder says do not create plan files unless explicitly asked. So just state the plan.",
+          "state": {
+            "reasoningField": "reasoning_content"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 12,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0023",
+        "created": 1790853821794,
+        "type": "session.text.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "delta": " when you want it executed."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_0003:0",
+            "text": " when you want it executed."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0024",
+        "created": 1790853821794,
+        "type": "session.text.ended",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "ordinal": 0,
+          "text": "Plan: create `hello.txt` in `/work` with the single line `hi` (no trailing content beyond that).\n\nNo questions. Switch agents when you want it executed."
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 13,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0025",
+        "created": 1790853821796,
+        "type": "session.step.streamed",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 14,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0026",
+        "created": 1790853821798,
+        "type": "session.step.ended",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0003",
+          "finish": "stop",
+          "rawFinish": "stop",
+          "cost": 0,
+          "tokens": {
+            "input": 10995,
+            "output": 72,
+            "reasoning": 66,
+            "cache": {
+              "read": 128,
+              "write": 0
+            }
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 15,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 473,
+                "cacheRead": 204,
+                "cacheWrite": 0,
+                "output": 59,
+                "reasoning": 54
+              },
+              "cost": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "used": 11261,
+              "size": 1048576
+            }
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "retract",
+            "ids": [
+              "msg_0003:0"
+            ]
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "opencode:msg_0003",
+            "text": "Plan: create `hello.txt` in `/work` with the single line `hi` (no trailing content beyond that).\n\nNo questions. Switch agents when you want it executed.",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0027",
+        "created": 1790853821800,
+        "type": "session.usage.updated",
+        "data": {
+          "sessionID": "ses_0001",
+          "cost": 0,
+          "tokens": {
+            "input": 11468,
+            "output": 77,
+            "reasoning": 120,
+            "cache": {
+              "read": 332,
+              "write": 0
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 11468,
+                "cacheRead": 332,
+                "cacheWrite": 0,
+                "output": 197,
+                "reasoning": 120
+              },
+              "cost": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "used": 11261,
+              "size": 1048576
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0028",
+        "created": 1790853821801,
+        "type": "session.execution.succeeded",
+        "data": {
+          "sessionID": "ses_0001"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 16,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0029",
+        "created": 1790853821984,
+        "type": "session.agent.selected",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "agent": "build",
+          "previous": "plan"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 17,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "access:ask"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0030",
+        "created": 1790853821986,
+        "type": "session.inbox.enqueued",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "inboxID": "msg_0004",
+          "sessionID": "ses_0001",
+          "item": {
+            "type": "synthetic",
+            "payload": {
+              "text": "<system-reminder>\nYou are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active.\n</system-reminder>"
+            },
+            "delivery": "steer"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 18,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0031",
+        "created": 1790853821990,
+        "type": "session.inbox.enqueued",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "inboxID": "msg_0005",
+          "sessionID": "ses_0001",
+          "item": {
+            "type": "user",
+            "payload": {
+              "text": "Implement the plan.",
+              "files": []
+            },
+            "delivery": "steer"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 19,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0032",
+        "created": 1790853821991,
+        "type": "session.execution.started",
+        "data": {
+          "sessionID": "ses_0001"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 20,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0033",
+        "created": 1790853822002,
+        "type": "session.inbox.delivered",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "inboxID": "msg_0004"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 21,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0034",
+        "created": 1790853822003,
+        "type": "session.inbox.delivered",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "inboxID": "msg_0005"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 22,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0035",
+        "created": 1790853824573,
+        "type": "session.step.started",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "agent": "build",
+          "model": {
+            "id": "space-bunny-free",
+            "providerID": "opencode",
+            "variant": "default"
+          },
+          "assistantMessageID": "msg_0006"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 23,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0036",
+        "created": 1790853824574,
+        "type": "session.tool.input.started",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0006",
+          "id": "call_0001",
+          "name": "write"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 24,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "ses_0001:call_0001",
+            "title": "write",
+            "name": "write",
+            "toolKind": "write",
+            "status": "pending"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0037",
+        "created": 1790853825237,
+        "type": "session.tool.input.ended",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0006",
+          "id": "call_0001",
+          "text": "{\"path\": \"/work/hello.txt\", \"content\": \"hi\\n\"}"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 25,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0038",
+        "created": 1790853825238,
+        "type": "session.tool.called",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0006",
+          "id": "call_0001",
+          "input": {
+            "path": "/work/hello.txt",
+            "content": "hi\n"
+          },
+          "executed": false
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 26,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_0001:call_0001",
+            "title": "/work/hello.txt",
+            "status": "in_progress",
+            "input": "{\n  \"path\": \"/work/hello.txt\",\n  \"content\": \"hi\\n\"\n}",
+            "details": [
+              {
+                "type": "location",
+                "path": "/work/hello.txt"
+              },
+              {
+                "type": "diff",
+                "path": "/work/hello.txt",
+                "oldText": null,
+                "newText": "hi\n"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent-call",
+            "call": {
+              "sessionId": "ses_0001",
+              "toolCallId": "call_0001",
+              "title": "write",
+              "rawInput": {
+                "path": "/work/hello.txt",
+                "content": "hi\n"
+              },
+              "status": "in_progress"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0039",
+        "created": 1790853825239,
+        "type": "session.step.streamed",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0006"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 27,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0040",
+        "created": 1790853825241,
+        "type": "permission.asked",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "id": "per_0001",
+          "sessionID": "ses_0001",
+          "action": "edit",
+          "resources": [
+            "../../../../../../work/hello.txt"
+          ],
+          "save": [
+            "*"
+          ],
+          "metadata": {
+            "files": [
+              {
+                "file": "../../../../../../work/hello.txt",
+                "patch": "Index: ../../../../../../work/hello.txt\n===================================================================\n--- ../../../../../../work/hello.txt\n+++ ../../../../../../work/hello.txt\n@@ -0,0 +1,1 @@\n+hi\n",
+                "status": "added",
+                "additions": 1,
+                "deletions": 0
+              }
+            ]
+          },
+          "source": {
+            "type": "tool",
+            "messageID": "msg_0006",
+            "id": "call_0001"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "request"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0041",
+        "created": 1790853825348,
+        "type": "permission.replied",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "requestID": "per_0001",
+          "reply": "once"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "request"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0042",
+        "created": 1790853825350,
+        "type": "session.tool.success",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0006",
+          "id": "call_0001",
+          "content": [
+            {
+              "type": "text",
+              "text": "Created file successfully: ../../../../../../work/hello.txt"
+            }
+          ],
+          "metadata": {
+            "truncated": false
+          },
+          "executed": false
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 28,
+          "version": 2
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent-call",
+            "call": {
+              "sessionId": "ses_0001",
+              "toolCallId": "call_0001",
+              "rawOutput": {
+                "metadata": {
+                  "truncated": false
+                }
+              },
+              "status": "completed"
+            }
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "ses_0001:call_0001",
+            "status": "completed",
+            "output": "Created file successfully: ../../../../../../work/hello.txt",
+            "attachments": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0043",
+        "created": 1790853825353,
+        "type": "session.step.ended",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0006",
+          "finish": "tool-calls",
+          "rawFinish": "tool_calls",
+          "cost": 0,
+          "tokens": {
+            "input": 187,
+            "output": 74,
+            "reasoning": 0,
+            "cache": {
+              "read": 11136,
+              "write": 0
+            }
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 29,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 11468,
+                "cacheRead": 332,
+                "cacheWrite": 0,
+                "output": 197,
+                "reasoning": 120
+              },
+              "cost": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "used": 11397,
+              "size": 1048576
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0044",
+        "created": 1790853825357,
+        "type": "session.usage.updated",
+        "data": {
+          "sessionID": "ses_0001",
+          "cost": 0,
+          "tokens": {
+            "input": 11655,
+            "output": 151,
+            "reasoning": 120,
+            "cache": {
+              "read": 11468,
+              "write": 0
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 11655,
+                "cacheRead": 11468,
+                "cacheWrite": 0,
+                "output": 271,
+                "reasoning": 120
+              },
+              "cost": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "used": 11397,
+              "size": 1048576
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0045",
+        "created": 1790853827450,
+        "type": "session.step.started",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "agent": "build",
+          "model": {
+            "id": "space-bunny-free",
+            "providerID": "opencode",
+            "variant": "default"
+          },
+          "assistantMessageID": "msg_0007"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 30,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0046",
+        "created": 1790853827452,
+        "type": "session.text.started",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0007",
+          "ordinal": 0
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 31,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0047",
+        "created": 1790853827470,
+        "type": "session.text.delta",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0007",
+          "ordinal": 0,
+          "delta": "Created `hello.txt` containing `hi`."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_0007:0",
+            "text": "Created `hello.txt` containing `hi`."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0048",
+        "created": 1790853827470,
+        "type": "session.text.ended",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0007",
+          "ordinal": 0,
+          "text": "Created `hello.txt` containing `hi`."
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 32,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0049",
+        "created": 1790853827471,
+        "type": "session.step.streamed",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0007"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 33,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_0050",
+        "created": 1790853827472,
+        "type": "session.step.ended",
+        "location": {
+          "directory": "/work"
+        },
+        "data": {
+          "sessionID": "ses_0001",
+          "assistantMessageID": "msg_0007",
+          "finish": "stop",
+          "rawFinish": "stop",
+          "cost": 0,
+          "tokens": {
+            "input": 11332,
+            "output": 10,
+            "reasoning": 0,
+            "cache": {
+              "read": 128,
+              "write": 0
+            }
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 34,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 11655,
+                "cacheRead": 11468,
+                "cacheWrite": 0,
+                "output": 271,
+                "reasoning": 120
+              },
+              "cost": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "used": 11470,
+              "size": 1048576
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0051",
+        "created": 1790853827473,
+        "type": "session.usage.updated",
+        "data": {
+          "sessionID": "ses_0001",
+          "cost": 0,
+          "tokens": {
+            "input": 22987,
+            "output": 161,
+            "reasoning": 120,
+            "cache": {
+              "read": 11596,
+              "write": 0
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 22987,
+                "cacheRead": 11596,
+                "cacheWrite": 0,
+                "output": 281,
+                "reasoning": 120
+              },
+              "cost": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "used": 11470,
+              "size": 1048576
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_0052",
+        "created": 1790853827473,
+        "type": "session.execution.succeeded",
+        "data": {
+          "sessionID": "ses_0001"
+        },
+        "durable": {
+          "aggregateID": "ses_0001",
+          "seq": 35,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn"
+          }
+        }
+      ]
+    }
+  ]
+}
