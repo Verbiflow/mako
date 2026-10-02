@@ -1,334 +1,159 @@
-import { useRef, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import type { ProposedPlan } from "@mako/sessions/content"
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  HammerIcon,
-  MoreHorizontalIcon,
-  SquarePlusIcon,
-  XIcon,
-} from "lucide-react"
-import { toast } from "sonner"
+import { ChevronDownIcon, ClipboardListIcon, Maximize2Icon, SendIcon } from "lucide-react"
 import { Prose } from "./markdown"
+import { CopyPlanAction, PlanMenu } from "./plan-actions"
+import { openPlanTab, usePlanBuilding, usePlanState, type PlanState } from "./plan-state"
 import { useTranscriptSource } from "./source-context"
-import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
-import { useCopy } from "@/components/ui/use-copy"
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
-  proposedPlanFilename,
-  proposedPlanMarkdown,
-  proposedPlanTitle,
-} from "@/lib/proposed-plan"
-import { Action } from "@/components/ui/kit"
-import { downloadPlan, draftPlanReply, savePlan } from "@/state/plans"
-import {
-  buildPlan,
-  buildPlanInNewSession,
-  useLatestPlan,
-  usePlanAwaitingApproval,
-} from "@/state/plan-mode"
-import { PlanBuiltElsewhereError, usePlanBuild } from "@/state/plan-builds"
-import { acp, useAcp } from "@/state/acp"
+import { Action, Chip, IconAction } from "@/components/ui/kit"
+import { cn } from "@/lib/utils"
+import { acp } from "@/state/acp"
 
-export function ProposedPlanCard({
-  plan,
-  streaming,
-}: {
-  plan: ProposedPlan
-  streaming?: boolean
-}) {
+/** Taller plans show this much, faded, until opened in full or in a tab. */
+const CLAMP_PX = 440
+
+/**
+ * A plan the agent proposed, as the document it is: its own heading is the
+ * title, and the decision to build it sits above the composer, where the
+ * reply to it is written. Earlier revisions fold to one line.
+ */
+export function ProposedPlanCard({ plan, streaming }: { plan: ProposedPlan; streaming?: boolean }) {
   const source = useTranscriptSource()
-  const latest = useLatestPlan(source)
-  const superseded = latest !== undefined && latest !== plan.id
-  const awaiting = usePlanAwaitingApproval(source, plan)
-  const built = usePlanBuild(plan)
-  const builtHere = Boolean(built && (
-    (built.conversation && built.conversation === source.liveId) ||
-    (built.thread && built.thread === source.threadPath)))
-  const builtIn = built && !builtHere ? built.conversation : undefined
-  const canOpenBuild = useAcp((state) => builtIn !== undefined && state.conversations[builtIn] !== undefined)
-  const [building, setBuilding] = useState<"here" | "new" | null>(null)
-  // The newest plan opens as the document it is; earlier revisions stay folded.
+  const state = usePlanState(source, plan, streaming)
+  const { building, start } = usePlanBuilding(source, plan)
   const [opened, setOpened] = useState<boolean | null>(null)
-  const expanded = opened ?? !superseded
-  const [actionsOpen, setActionsOpen] = useState(false)
-  const focus = useWorkspaceFocus()
-  const [saving, setSaving] = useState(false)
-  const [saveOpen, setSaveOpen] = useState(false)
-  const [path, setPath] = useState("")
-  const pathInput = useRef<HTMLInputElement>(null)
-  const planActions = useRef<HTMLButtonElement>(null)
-  const [error, setError] = useState("")
-  const { copied, copy } = useCopy(proposedPlanMarkdown(plan))
-  const complete = plan.status === "proposed"
-  const title = proposedPlanTitle(plan.text)
-  // A turn waiting on its plan approval is still running, but its plan is complete.
-  const canDraft =
-    complete &&
-    (!streaming || awaiting) &&
-    !plan.truncated &&
-    Boolean(source.liveId || source.threadPath)
-  const start = (where: "here" | "new") => {
-    if (building) return
-    setBuilding(where)
-    void (where === "here" ? buildPlan(source, plan) : buildPlanInNewSession(source, plan))
-      .catch((failure) =>
-        failure instanceof PlanBuiltElsewhereError
-          ? toast("Already built", { description: failure.message })
-          : toast.error("The plan was not built", {
-              description: failure instanceof Error ? failure.message : String(failure),
-            })
-      )
-      .finally(() => setBuilding(null))
-  }
-  const prepare = (intent: "implement" | "revise") => {
-    try {
-      draftPlanReply(source, plan, intent)
-      window.dispatchEvent(new CustomEvent("mako:focus-composer"))
-    } catch (failure) {
-      toast.error("The reply could not be prepared", {
-        description:
-          failure instanceof Error
-            ? failure.message
-            : "Open the plan's conversation and try again.",
-      })
-    }
-  }
+  const folded = !(opened ?? !state.superseded)
   return (
-    <section
-      className="rounded-lg border border-hairline bg-card text-ui"
-      aria-label="Proposed plan"
-    >
-      <div className="flex items-start gap-2 px-3 py-3">
+    <section aria-label={`Plan: ${state.title}`} className="group/plan flex flex-col gap-1.5">
+      <PlanLead state={state} folded={folded} onFold={state.superseded ? () => setOpened(folded) : undefined} />
+      {folded ? null : (
+        <div className="relative rounded-lg border border-hairline bg-card">
+          <div
+            className={cn(
+              "absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-md bg-card p-0.5 ring-1 ring-hairline",
+              "opacity-0 transition-opacity duration-150 group-hover/plan:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100"
+            )}
+          >
+            <IconAction label="Open in a tab" size="xs" onClick={() => openPlanTab(source, plan)}>
+              <Maximize2Icon />
+            </IconAction>
+            <CopyPlanAction plan={plan} />
+            {!state.superseded && state.ready ? (
+              <IconAction
+                label={building === "new" ? "Opening…" : "Build in a new session"}
+                size="xs"
+                disabled={building !== null}
+                onClick={() => start("new")}
+              >
+                <SendIcon />
+              </IconAction>
+            ) : null}
+            <PlanMenu plan={plan} state={state} onBuild={start} building={building !== null} />
+          </div>
+          <ClampedPlan plan={plan} streaming={Boolean(streaming) && !state.complete} onOpen={() => openPlanTab(source, plan)} />
+          {plan.truncated ? (
+            <p className="border-t border-hairline px-5 py-2.5 text-label text-faint">
+              The plan exceeded the capture limit. Export includes the saved portion; ask for a shorter plan before building.
+            </p>
+          ) : null}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function PlanLead({ state, folded, onFold }: { state: PlanState; folded: boolean; onFold?: () => void }) {
+  const status = state.built ? (
+    <Chip tone="positive">{state.builtHere ? "Built" : "Built in another session"}</Chip>
+  ) : null
+  const lead = (
+    <>
+      <ClipboardListIcon className="size-3.5 shrink-0" />
+      <span className="shrink-0">{state.complete ? "Plan" : state.label}</span>
+      {state.superseded ? <span className="min-w-0 truncate text-faint">· Earlier revision · {state.title}</span> : null}
+    </>
+  )
+  return (
+    <div className="flex min-h-5 items-center gap-1.5 text-label text-muted-foreground">
+      {onFold ? (
         <button
           type="button"
-          aria-expanded={expanded}
-          className="pressable flex min-w-0 flex-1 items-start gap-2 text-left"
-          onClick={() => setOpened(!expanded)}
+          aria-expanded={!folded}
+          onClick={onFold}
+          className="pressable -mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 hover:text-foreground"
         >
-          <ChevronDownIcon
-            className={`mt-0.5 size-3.5 shrink-0 text-faint ${expanded ? "rotate-180" : ""}`}
-          />
-          <span className="min-w-0">
-            <span className="block font-medium">{title}</span>
-            <span className="mt-1 block text-label text-faint">
-              {!complete
-                ? streaming
-                  ? "Writing plan…"
-                  : "Incomplete plan"
-                : built
-                  ? builtHere ? "Built in this session" : "Built in another session"
-                  : superseded
-                    ? "Earlier plan · a newer one follows"
-                    : awaiting
-                      ? "Proposed plan · waiting for your approval"
-                      : "Proposed plan"}
-            </span>
-          </span>
+          <ChevronDownIcon className={cn("size-3.5 shrink-0 transition-transform", folded && "-rotate-90")} />
+          {lead}
         </button>
-        <Popover open={actionsOpen} onOpenChange={setActionsOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              ref={planActions}
-              aria-label={copied ? "Plan copied" : "Plan actions"}
-              className="pressable rounded p-1 text-faint hover:bg-fill-hover"
-            >
-              {copied ? (
-                <CheckIcon className="size-4" />
-              ) : (
-                <MoreHorizontalIcon className="size-4" />
-              )}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-60 p-1">
-            <button
-              type="button"
-              className="pressable block w-full rounded px-2 py-2 text-left text-ui hover:bg-fill-hover"
-              onClick={() => {
-                void copy()
-                setActionsOpen(false)
-              }}
-            >
-              {copied ? "Copied" : "Copy Markdown"}
-            </button>
-            <button
-              type="button"
-              className="pressable block w-full rounded px-2 py-2 text-left text-ui hover:bg-fill-hover"
-              onClick={() => {
-                downloadPlan(plan)
-                setActionsOpen(false)
-              }}
-            >
-              Download Markdown
-            </button>
-            <button
-              type="button"
-              disabled={!focus.cwd || !focus.ready}
-              className="pressable block w-full rounded px-2 py-2 text-left text-ui hover:bg-fill-hover disabled:opacity-40"
-              onClick={() => {
-                setPath(proposedPlanFilename(plan.text))
-                setError("")
-                setActionsOpen(false)
-                setSaveOpen(true)
-              }}
-            >
-              Save to workspace…
-            </button>
-            {superseded && (source.liveId || source.threadPath) ? (
-              <button
-                type="button"
-                disabled={!canDraft || building !== null}
-                title="Earlier revisions build only in a new session; this one keeps the newer plan"
-                className="pressable block w-full rounded px-2 py-2 text-left text-ui hover:bg-fill-hover disabled:opacity-40"
-                onClick={() => {
-                  setActionsOpen(false)
-                  start("new")
-                }}
-              >
-                Build this revision in new session
-              </button>
-            ) : null}
-          </PopoverContent>
-        </Popover>
-      </div>
-      {expanded ? (
-        <div className="border-t border-hairline px-3 py-3">
-          <Prose text={plan.text} streaming={streaming && !complete} />
-        </div>
-      ) : null}
-      {plan.truncated ? (
-        <p className="px-3 pb-3 text-label text-faint">
-          The plan exceeded the capture limit. Export includes the saved
-          portion; request a shorter plan before continuing.
-        </p>
-      ) : null}
-      {(source.liveId || source.threadPath) && !superseded ? (
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-hairline px-3 py-2">
-          {canOpenBuild && builtIn ? (
-            <button
-              type="button"
-              className="pressable mr-auto flex items-center gap-1.5 rounded px-1 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground"
-              onClick={() => acp.activate(builtIn)}
-            >
-              <CheckIcon className="size-3.5" />
-              Open build session
-            </button>
-          ) : null}
-          <Action
-            tone={built ? "outline" : "solid"}
-            disabled={!canDraft || building !== null}
-            onClick={() => start("here")}
-            title={
-              awaiting
-                ? "Approve the plan the agent is waiting on; it builds in this session"
-                : "Leave plan mode and build this plan in this session"
-            }
-          >
-            <HammerIcon />
-            {building === "here" ? "Building…" : awaiting ? "Approve and build" : built ? "Build again" : "Build"}
-          </Action>
-          <Action
-            tone={built ? undefined : "outline"}
-            disabled={!canDraft || building !== null}
-            onClick={() => start("new")}
-            title="Open a new session in this Thread with the plan attached, ready to send"
-          >
-            <SquarePlusIcon />
-            {building === "new" ? "Opening…" : "Build in new session"}
-          </Action>
-          <Action
-            disabled={!canDraft || building !== null}
-            onClick={() => prepare("revise")}
-            title="Draft a revision request in the composer to add your feedback"
-          >
-            Revise
-          </Action>
-        </div>
-      ) : null}
-      <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
-        <DialogContent
-          className="w-[min(100vw_-_32px,440px)] p-5"
-          onCloseAutoFocus={(event) => {
-            event.preventDefault()
-            planActions.current?.focus()
-          }}
-          onOpenAutoFocus={(event) => {
-            event.preventDefault()
-            pathInput.current?.focus()
-            pathInput.current?.select()
-          }}
+      ) : (
+        lead
+      )}
+      {status}
+      {state.openBuild ? (
+        <button
+          type="button"
+          onClick={() => acp.activate(state.openBuild!)}
+          className="pressable rounded px-1 text-faint underline-offset-2 hover:text-foreground hover:underline"
         >
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <DialogTitle>Save plan to workspace</DialogTitle>
-            <DialogClose asChild>
-              <button
-                type="button"
-                aria-label="Close save plan"
-                className="pressable rounded p-1 text-faint hover:bg-fill-hover"
-              >
-                <XIcon className="size-4" />
-              </button>
-            </DialogClose>
-          </div>
-          <form
-            className="flex flex-col gap-3"
-            onSubmit={(event) => {
-              event.preventDefault()
-              if (!focus.cwd || !path.trim() || saving) return
-              setSaving(true)
-              setError("")
-              void savePlan(focus.cwd, path, plan)
-                .then((saved) => {
-                  setSaveOpen(false)
-                  toast.success("Plan saved", { description: saved })
-                })
-                .catch((failure) =>
-                  setError(
-                    failure instanceof Error
-                      ? failure.message
-                      : "The plan could not be saved."
-                  )
-                )
-                .finally(() => setSaving(false))
-            }}
-          >
-            <label className="flex flex-col gap-2 text-ui">
-              New Markdown file
-              <input
-                ref={pathInput}
-                aria-label="Plan file path"
-                className="rounded-md border border-hairline bg-surface px-3 py-2 outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={path}
-                onChange={(event) => setPath(event.target.value)}
-              />
-            </label>
-            <p className="text-label break-all text-faint">In {focus.cwd}</p>
-            {error ? (
-              <p role="alert" className="text-ui text-negative">
-                {error}
-              </p>
-            ) : null}
-            <button
-              type="submit"
-              disabled={!path.trim() || saving}
-              className="pressable self-end rounded-md border border-hairline px-3 py-2 text-ui hover:bg-fill-hover disabled:opacity-40"
-            >
-              {saving ? "Saving…" : "Save plan"}
-            </button>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </section>
+          Open that session
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The plan's Markdown, clipped to `CLAMP_PX` when longer. While it is being
+ * written the clipped window follows the newest lines; once complete it
+ * shows the top, faded at the bottom.
+ */
+function ClampedPlan({ plan, streaming, onOpen }: { plan: ProposedPlan; streaming: boolean; onOpen: () => void }) {
+  const frame = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLDivElement>(null)
+  const [overflows, setOverflows] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const clamped = overflows && !expanded
+
+  useLayoutEffect(() => {
+    const node = content.current
+    if (!node) return
+    const measure = () => setOverflows(node.offsetHeight > CLAMP_PX + 48)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  useLayoutEffect(() => {
+    const node = frame.current
+    if (!node) return
+    node.scrollTop = clamped && streaming ? node.scrollHeight : 0
+  }, [clamped, streaming, plan.text])
+
+  return (
+    <>
+      <div
+        ref={frame}
+        data-clamped={clamped ? (streaming ? "tail" : "head") : undefined}
+        className="plan-frame overflow-hidden"
+        style={clamped ? { maxHeight: CLAMP_PX } : undefined}
+      >
+        <div ref={content} className="px-5 pt-4 pb-5">
+          <Prose text={plan.text} streaming={streaming} />
+        </div>
+      </div>
+      {overflows && !streaming ? (
+        <div className={cn("flex items-center justify-center gap-1 px-3 pb-2.5", clamped && "-mt-9 relative")}>
+          <Action size="xs" tone="quiet" className="bg-card" onClick={() => setExpanded(!expanded)}>
+            <ChevronDownIcon className={cn("transition-transform", expanded && "rotate-180")} />
+            {expanded ? "Show less" : "Show full plan"}
+          </Action>
+          <Action size="xs" tone="quiet" className="bg-card" onClick={onOpen}>
+            <Maximize2Icon />
+            Open in a tab
+          </Action>
+        </div>
+      ) : null}
+    </>
   )
 }

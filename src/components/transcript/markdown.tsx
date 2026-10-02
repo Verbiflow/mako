@@ -341,22 +341,25 @@ function CitationLink({ href, children }: ComponentProps<"a">) {
         {children}
       </a>
     )
+  // A link, not a button: a long path has to wrap with the sentence around
+  // it, and a button lays its text out as a centred block.
   return (
-    <button
-      type="button"
+    <a
+      href={href}
       title={target.purpose ? `${target.purpose}: ${target.path}` : target.path}
-      onClick={() =>
+      onClick={(event) => {
+        event.preventDefault()
         void viewer.open(
           target.path,
           target.line,
           source.threadPath,
           source.liveId
         )
-      }
-      className="pressable font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+      }}
+      className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
     >
       {children}
-    </button>
+    </a>
   )
 }
 
