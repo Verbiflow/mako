@@ -73,7 +73,7 @@ export class WorkspaceMoves {
   async ask(conversationId: string): Promise<string> {
     const source = this.deps.source(conversationId)
     if (!source) throw new Error("Mako isn't running this conversation, so it can't move it.")
-    if (this.moving.has(conversationId)) return "Mako is moving this Session onto its own branch now."
+    if (this.moving.has(conversationId)) return "Mako is moving this Session into this Thread's worktree now."
     let request = this.requests.get(conversationId)
     if (!request) {
       const place = await this.deps.place(conversationId, source.cwd)
@@ -92,12 +92,12 @@ export class WorkspaceMoves {
       this.requests.set(conversationId, request)
       this.announce()
     }
-    const where = request.joins ? `onto this Thread's branch, ${request.joins}` : "into a new worktree on a branch of its own"
-    const carried = request.changed ? `, with the ${request.changed === 1 ? "uncommitted file" : `${request.changed} uncommitted files`} in this folder` : ""
-    const then = `When this turn ends, Mako moves the Session ${where}${carried}, and sends you a message there to carry on. Finish this turn now: make no further edits here, and tell the user you'll continue on the branch.`
+    const where = request.joins ? `into this Thread's worktree, on ${request.joins}` : "into a new worktree for this Thread, on a branch of its own"
+    const carried = request.changed ? `, with the ${request.changed === 1 ? "uncommitted file" : `${request.changed} uncommitted files`} in this checkout` : ""
+    const then = `When this turn ends, Mako moves the Session ${where}${carried}, and sends you a message there to carry on. Finish this turn now: make no further edits here, and tell the user you'll continue in the worktree.`
     return request.state === "allowed"
       ? `Allowed: this project lets agents move without asking. ${then}`
-      : `Asked the user. Their answer is in a card above the composer; workspace_status shows it. If they allow it: ${then} If they don't, keep working here.`
+      : `Asked the user. Their answer is in a card above the composer; worktree_status shows it. If they allow it: ${then} If they don't, keep working here.`
   }
 
   answer(id: string, answer: WorkspaceMoveAnswer): void {

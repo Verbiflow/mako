@@ -6,7 +6,7 @@ import { RECIPE_PATH } from "./thread-recipe.js"
  */
 export const ENVIRONMENT_GUIDE = `# Setting up this project's recipe
 
-Mako runs many agents at once, each in its own Thread, usually on its own branch in its own checkout (a Git worktree). Your job: make every Thread able to start this project's app and pass its checks side by side with the others, with the least change to the project. You write one small recipe and save it in Mako with recipe_save. Every Thread of this project uses it from then on, on every branch, with nothing to commit or merge.
+Mako runs many agents at once, each in its own Thread, usually in the Thread's own worktree: a Git worktree on a branch of its own, beside the main checkout the user works in. Your job: make every Thread able to start this project's app and pass its checks side by side with the others, with the least change to the project. You write one small recipe and save it in Mako with recipe_save. Every Thread of this project uses it from then on, on every branch, with nothing to commit or merge.
 
 ## What each Thread already has
 
@@ -48,7 +48,7 @@ Search the code. Don't guess.
 Note which rung each fix used.
 
 1. Wrap: map Mako's values to names the app already reads, in "values", such as PORT, DATABASE_URL, or a data-folder or profile variable. For Compose, COMPOSE_PROJECT_NAME set to {thread}, and a published port read from a variable, such as "\${DB_PORT:-5432}:5432" with DB_PORT set to {port+2}.
-2. Configure: pass the app's own flags in the command, such as --port {port}.
+2. Configure: pass the app's own flags in the command, reading Mako's values the way any shell command does, such as --port "$PORT" with PORT set to {port} in values. Mako fills in placeholders only in values and ports, never in a command, and recipe_save refuses one written there.
 3. A small change to the project, only when the app can't take a port or folder from outside. Keep today's behavior as the default, so nothing changes for anyone not using Mako, for example \`port: Number(process.env.PORT) || 5173\`. Say what the change buys.
 4. Take turns: when nothing else works, set "oneAtATime": true. One copy runs on this Mac at a time, so a process may keep its fixed port; a start while another Thread has it running is refused and names that Thread. Say plainly what's shared.
 
@@ -72,26 +72,28 @@ Pass it to recipe_save as the recipe. Mako checks it against this Thread's ports
 
 The fields:
 
-- values: names the app reads. Mako sets them in every agent's shell and in every process.
-  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}. {thread} names this copy of the app, for a profile, database, branch or Compose project name: lowercase letters, digits and hyphens, at most 36 characters, so quote it where a hyphen needs quoting. Threads that share one folder share one copy, so they get the same values.
+- values: names the app reads. Mako sets them in every agent's shell and in every process, and every command reads them from there, as "$PORT".
+  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}, here and in a process's port and values only. {thread} names this app, for a profile, database, branch or Compose project name: lowercase letters, digits and hyphens, at most 36 characters, so quote it where a hyphen needs quoting. Threads that share a checkout share its app, so they get the same values.
   - PATH, HOME, SHELL, USER, TMPDIR and PWD can't be set here, because the agent's own shell needs them.
   - MAKO_THREAD_* and MAKO_CONTROL_* are Mako's own. The project's own MAKO_ names are fine.
-- processes: what runs the app, as the project's own commands.
+- processes: what runs the app, as the project's own commands. Names are lowercase letters, digits and hyphens.
+  - "cwd": a folder in the checkout to run in; the checkout's root when left out.
   - "port" is {port} or {port+N}. The process counts as running once that port answers.
   - A fixed port, such as "5432", only with "oneAtATime": true.
   - A process can set its own values, including HOME, TMPDIR or XDG_* for an app with no data-folder setting.
 - checks.quick: no running app, such as typecheck, lint and unit tests.
 - checks.full: runs against the running app, such as end-to-end tests. Mako starts the app first.
-- prepare: install in a fresh copy, and catch up after the branch moves. Each step runs again only when one of its inputs changes. Only add it if a fresh checkout can't start without it.
-  - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch. Never a clean reinstall (npm ci, or deleting what it installs first): it throws away what a new checkout was given.
+- Checks and prepare steps run in the checkout's root. For a subfolder, start the command with cd <folder> &&, and give a step's inputs and outputs from the root too.
+- prepare: install in a new worktree, and catch up after the branch moves. Each step runs again only when one of its inputs changes. Only add it if a new worktree can't start without it.
+  - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch. Never a clean reinstall (npm ci, or deleting what it installs first): it throws away what a new worktree was given.
   - inputs: the files the step reads, usually the lockfiles. A folder counts only the files Git tracks or would track there.
-  - outputs: what the step writes, as paths or patterns (* stays in one folder, ** crosses folders), such as **/node_modules. A new checkout gets them cloned from the main checkout when its inputs are the same there, which costs no disk and takes a second or two, so its first install only catches up. List only what still works in another folder. Never a Python virtual environment (.venv): it names its own folder, so a copy quietly runs the main checkout's code, and Mako refuses it; uv sync makes one from its cache in well under a second anyway. A build cache that checks itself works: with Rust's target/ cloned in, Cargo keeps the dependencies and rebuilds only the project's own crates.
-  - link: true, for package folders (outputs such as **/node_modules and nothing else). A new checkout's node_modules is then a folder of its own whose packages link to the main checkout's: about a second instead of a clone of every file, which for a large project is several seconds and hundreds of thousands of files per Thread. Workspace packages and caches such as .vite stay the checkout's own. Try it first for node_modules. Keep it if the app starts and the full check passes; some bundlers refuse packages that live outside the project, such as Next.js with Turbopack ("couldn't find the Next.js package"), and then leave link out.
-  - With link, an install must never run over the links, since it writes through them into the main checkout's packages. Mako gives the checkout its own copy before its own install step runs, and an agent calls app_own_packages before installing or changing a dependency; every agent in such a checkout is told.
-- carry: files Git ignores that a new checkout gets from the main checkout as they are, before its agent starts, such as a local settings file. Paths or patterns. Never credentials: recipe_save refuses a file that holds them by its name, such as .env, and says to list it under secrets.
-- secrets: files Git ignores that hold credentials, such as .env.local or server/.env. A new checkout gets them from the main checkout only once the user allows it in Mako, where they see the list; until then, Threads outside the main checkout start without them. Nobody reads them, you included.
+  - outputs: what the step writes, as paths or patterns (* stays in one folder, ** crosses folders), such as **/node_modules. A new worktree gets them cloned from the main checkout when its inputs are the same there, which costs no disk and takes a second or two, so its first install only catches up. List only what still works in another folder. Never a Python virtual environment (.venv): it names its own folder, so a copy quietly runs the main checkout's code, and Mako refuses it; uv sync makes one from its cache in well under a second anyway. A build cache that checks itself works: with Rust's target/ cloned in, Cargo keeps the dependencies and rebuilds only the project's own crates.
+  - link: true, for package folders (outputs such as **/node_modules and nothing else). A new worktree's node_modules is then a folder of its own whose packages link to the main checkout's: about a second instead of a clone of every file, which for a large project is several seconds and hundreds of thousands of files per Thread. The project's own packages (npm, pnpm or Yarn workspaces) and caches such as .vite stay the worktree's own. Try it first for node_modules. Keep it if the app starts and the full check passes; some bundlers refuse packages that live outside the project, such as Next.js with Turbopack ("couldn't find the Next.js package"), and then leave link out.
+  - With link, an install must never run over the links, since it writes through them into the main checkout's packages. Mako gives the worktree its own copy before its own prepare step runs, and an agent calls app_own_packages before installing or changing a dependency; every agent in such a worktree is told.
+- carry: files Git ignores that a new worktree gets from the main checkout as they are, before its agent starts, such as a local settings file. Paths or patterns. Never credentials: recipe_save refuses a file that holds them by its name, such as .env, and says to list it under secrets.
+- secrets: files Git ignores that hold credentials, such as .env.local or server/.env. A worktree gets them from the main checkout only once the user allows it in Mako, where they see the list; until then, worktrees' apps start without them. Nobody reads them, you included.
 - oneAtATime: true for an app whose fixed port, local database or Docker stack copies can't split (rung 4 above).
-- Nothing else comes from the main checkout: without carry, secrets and outputs, a new checkout has only what Git checks out.
+- Nothing else comes from the main checkout: without carry, secrets and outputs, a new worktree has only what Git checks out.
 
 Keep it small, and name the project's own scripts. Add a script to the project only when none exists. Nothing Mako-specific goes inside a command, so every command still works without Mako.
 

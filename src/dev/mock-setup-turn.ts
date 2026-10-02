@@ -25,7 +25,7 @@ const FINAL = [
   "- **Quick check:** typecheck and lint",
   "- **Full check:** `npm run test:dev-live`",
   "",
-  "Nothing in the project changed. If your team should get the same setup, I can commit the recipe as `.mako/environment.json`.",
+  "Nothing in the project changed. If your team should get the same setup, I can commit the recipe as `.mako/recipe.json`.",
 ].join("\n")
 
 const BEATS: Beat[] = [

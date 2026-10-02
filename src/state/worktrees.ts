@@ -189,7 +189,7 @@ export async function mergeWorktree(worktree: ThreadWorktree, review: Pick<Workt
   const into = review.into ?? "the project's branch"
   const confirmed = await confirmAction({
     title: `Merge into ${into}?`,
-    body: `${review.commits === 1 ? "Its commit goes" : `Its ${review.commits} commits go`} into ${into} in the project checkout now.`,
+    body: `${review.commits === 1 ? "Its commit goes" : `Its ${review.commits} commits go`} into ${into} in the main checkout now.`,
     confirm: `Merge into ${into}`,
     icon: "merge",
     subjects: [
@@ -202,7 +202,7 @@ export async function mergeWorktree(worktree: ThreadWorktree, review: Pick<Workt
   try {
     const { branch, into } = await getMako().mergeWorktree(worktree.path)
     toast(`Merged into ${into}`, {
-      description: `${branch} is in the project checkout now, so its worktree can go.`,
+      description: `${branch} is in the main checkout now, so its worktree can go.`,
       duration: ACTION_TOAST_MS,
       action: { label: "Remove worktree", onClick: () => void removeWorktree(worktree) },
     })

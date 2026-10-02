@@ -19,12 +19,12 @@ interface Deps {
 }
 
 export interface WorkspaceStatus {
-  makesChangesIn: "its own branch" | "a worktree made outside Mako" | "the project folder" | "a folder outside Git"
+  editsIn: "this Thread's worktree" | "a worktree made outside Mako" | "the main checkout" | "a folder outside Git"
   folder: string
   branch?: string
   uncommittedFiles?: number
-  outsideWorktree?: { worktree: string; project: string }
-  threadBranch?: { branch: string; worktree: string; project: string; commitsSinceBranching?: number }
+  outsideWorktree?: { folder: string; mainCheckout: string }
+  threadWorktree?: { folder: string; branch: string; mainCheckout: string; commitsSinceBranching?: number }
   move?: "asking" | "allowed" | "declined" | "moving"
 }
 
@@ -50,9 +50,9 @@ export async function moveablePlace(worktrees: Worktrees | null, conversationId:
   if (!worktrees) return { refused: "Worktrees need the Thread store, which didn't open." }
   const current = worktrees.ofConversation(conversationId)
   if (current && (await within(current.path, cwd)))
-    return { refused: `This Session already works on its own branch, ${current.branch}, in ${current.path}.` }
+    return { refused: `This Session already edits in this Thread's worktree, ${current.path}, on ${current.branch}.` }
   const linked = (await locateCheckout(cwd))?.linked
-  if (linked) return { refused: `This Session already works in a worktree of ${linked.repoRoot}, at ${linked.path}, made outside Mako.` }
+  if (linked) return { refused: `This Session already edits in a worktree made outside Mako, ${linked.path}, of the main checkout ${linked.repoRoot}.` }
   const project = await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")
   if (!project) return { refused: "This folder isn't in a Git repository, so there's no branch to move onto." }
   return current
@@ -68,7 +68,7 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
   }
   const threadWorktree = (conversationId: string) => {
     const worktree = deps.worktrees?.ofConversation(conversationId)
-    if (!worktree) throw new Error("This Thread has no branch of its own; it makes changes in the project folder.")
+    if (!worktree) throw new Error("This Thread has no worktree; it edits in the main checkout.")
     return worktree
   }
   return {
@@ -83,16 +83,16 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
         onIt ? null : locateCheckout(cwd),
       ])
       const status: WorkspaceStatus = {
-        makesChangesIn: onIt ? "its own branch" : checkout?.linked ? "a worktree made outside Mako" : project ? "the project folder" : "a folder outside Git",
+        editsIn: onIt ? "this Thread's worktree" : checkout?.linked ? "a worktree made outside Mako" : project ? "the main checkout" : "a folder outside Git",
         folder: cwd,
       }
-      if (checkout?.linked) status.outsideWorktree = { worktree: checkout.linked.path, project: checkout.linked.repoRoot }
+      if (checkout?.linked) status.outsideWorktree = { folder: checkout.linked.path, mainCheckout: checkout.linked.repoRoot }
       if (branch) status.branch = branch
       if (changed !== undefined) status.uncommittedFiles = changed
       if (worktree) {
-        status.threadBranch = { branch: worktree.branch, worktree: worktree.path, project: worktree.repoRoot }
+        status.threadWorktree = { folder: worktree.path, branch: worktree.branch, mainCheckout: worktree.repoRoot }
         const ahead = await deps.worktrees?.ahead(worktree.path).catch(() => undefined)
-        if (ahead !== undefined) status.threadBranch.commitsSinceBranching = ahead
+        if (ahead !== undefined) status.threadWorktree.commitsSinceBranching = ahead
       }
       const move = deps.moves.answerFor(conversationId)
       if (move) status.move = move
@@ -102,13 +102,13 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
     async merge(conversationId) {
       const worktree = threadWorktree(conversationId)
       const merged = await deps.worktrees!.merge(worktree.path)
-      return `Merged ${merged.branch} into ${merged.into} in ${worktree.repoRoot}. The branch and its worktree are still there.`
+      return `Merged ${merged.branch} into ${merged.into} in the main checkout, ${worktree.repoRoot}. The branch and this Thread's worktree are still there.`
     },
     async remove(conversationId) {
       const worktree = threadWorktree(conversationId)
       await deps.worktrees!.remove(worktree.path)
       deps.removed()
-      return `Removed the worktree at ${worktree.path}. Its branch, ${worktree.branch}, is kept with everything committed on it.`
+      return `Removed this Thread's worktree, ${worktree.path}. Its branch, ${worktree.branch}, is kept with everything committed on it.`
     },
   }
 }
@@ -122,7 +122,7 @@ async function reply(work: () => Promise<string>) {
 }
 
 /**
- * The workspace tools on a conversation's `mako` server. They act
+ * The worktree tools on a conversation's `mako` server. They act
  * on the calling conversation's Thread only. Mako adds no approval of its
  * own to merging or removing: the harness's permission for MCP tools
  * decides, and Mako's checks only keep the work safe.
@@ -130,37 +130,37 @@ async function reply(work: () => Promise<string>) {
 export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools, conversationId: () => string): void {
   const none = z.object({}).strict()
   server.registerTool(
-    "workspace_status",
+    "worktree_status",
     {
       description:
-        "Call when you're unsure which folder or branch your edits land in, and before moving, merging or removing. Says where this Session makes changes: the project folder itself, its Thread's own branch (a Git worktree Mako made), or a worktree made outside Mako. Returns the folder, branch, uncommitted files, the Thread's branch and its commits, and the answer to a move you asked for.",
+        "Call when you're unsure which checkout your edits land in, and before moving, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. Returns the folder with its branch and uncommitted files, this Thread's worktree with the commits on its branch, and the user's answer to a move you asked for.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => reply(async () => toolText(await tools.status(conversationId())))
   )
   server.registerTool(
-    "workspace_move",
+    "worktree_move",
     {
       description:
-        "Call when the user asks for this work on its own branch or in a worktree. Asks to go on on this Thread's own branch: a Git worktree with its own checkout, so your edits stay out of the user's project folder. Use this instead of `git worktree add`, a `--worktree` flag or a worktree tool of your own: Mako then shows the branch in the app, brings the conversation and the uncommitted changes along, and offers merging or a pull request afterwards. Returns at once. The user answers in the app, unless the project always allows it; an allowed move happens when your turn ends.",
+        "Call when the user asks for this work on its own branch or in a worktree. Asks to move this Session into this Thread's worktree, so your edits stay out of the main checkout. Use this instead of `git worktree add`, a `--worktree` flag or a worktree tool of your own: Mako then shows the branch in the app, brings the conversation and the uncommitted changes along, and offers merging or a pull request afterwards. Returns at once. The user answers in the app, unless the project always allows it; an allowed move happens when your turn ends.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     () => reply(() => tools.move(conversationId()))
   )
   server.registerTool(
-    "workspace_merge",
+    "worktree_merge",
     {
       description:
-        "Call when the user asks to merge this Thread's work. Merges this Thread's branch into the branch the project folder has out. Mako merges only when it's safe (everything on the branch committed, the project folder clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. The branch and its worktree stay.",
+        "Call when the user asks to merge this Thread's work. Merges the branch of this Thread's worktree into the branch the main checkout has out. Mako merges only when it's safe (everything on the branch committed, the main checkout clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. The branch and the worktree stay.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     () => reply(() => tools.merge(conversationId()))
   )
   server.registerTool(
-    "workspace_remove",
+    "worktree_remove",
     {
       description:
         "Call when the user asks to clean up this Thread's worktree. Removes its folder. Refused while anything runs in it or anything in it is uncommitted, so it can't remove the folder you're working in. The branch stays with everything committed on it.",

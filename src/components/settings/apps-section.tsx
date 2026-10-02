@@ -402,12 +402,12 @@ function RecipeSource({ state }: { state: ReadyRecipe }) {
   const where =
     state.source === "mako"
       ? `Saved in Mako${state.savedAt ? ` ${ago(state.savedAt)}` : ""}, for every branch${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
-      : "Committed with the project as .mako/environment.json, so it changes with the branch."
+      : "Committed with the project as .mako/recipe.json, so it changes with the branch."
   return (
     <div className="flex items-center gap-3 border-t border-hairline pt-4">
       <p className="min-w-0 flex-1 text-label leading-relaxed text-faint">
         {where}
-        {state.ignored ? " A committed .mako/environment.json is ignored while this one exists." : ""}
+        {state.ignored ? " A committed .mako/recipe.json is ignored while this one exists." : ""}
       </p>
       <Action size="xs" className="text-muted-foreground" onClick={() => void desktop.revealPath(state.file)}>
         Show the file

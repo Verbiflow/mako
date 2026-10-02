@@ -368,13 +368,13 @@ export class ThreadWorktreeService {
   }
 
   private async mergeCheck(worktree: ThreadWorktree, into: string | null, commits: number, dirty: boolean): Promise<WorktreeMergeCheck> {
-    if (!into) return { ok: false, reason: "The project checkout isn't on a branch." }
+    if (!into) return { ok: false, reason: "The main checkout isn't on a branch." }
     if (dirty) return { ok: false, reason: "Commit or discard this worktree's changes first." }
     if (commits === 0) return { ok: false, reason: `Nothing is committed here that ${into} doesn't have.` }
     const main = await git(worktree.repoRoot, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable")
-    if (main) return { ok: false, reason: `The project checkout has uncommitted changes on ${into}.` }
+    if (main) return { ok: false, reason: `The main checkout has uncommitted changes on ${into}.` }
     const busy = await this.working(worktree.repoRoot)
-    if (busy.length) return { ok: false, reason: `${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in the project checkout. Merge once ${busy.length === 1 ? "it stops" : "they stop"}.` }
+    if (busy.length) return { ok: false, reason: `${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in the main checkout. Merge once ${busy.length === 1 ? "it stops" : "they stop"}.` }
     // Merged in memory first: a conflict is found without touching either checkout. Older Git
     // can't, and then the merge itself finds it and is aborted.
     if (await mergesWithoutCheckout() && !await succeeds(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]))
@@ -511,7 +511,7 @@ export class ThreadWorktreeService {
   async moveChanges(conversationId: string): Promise<number> {
     const receipt = await this.receipt(conversationId)
     if (receipt?.state !== "ready") throw new Error("This conversation has no worktree to move changes into.")
-    const kept = (stash: string, cause?: unknown) => new Error(`The worktree couldn't take the changes, so they're kept in the project checkout's stash as "${stash}".`, { cause })
+    const kept = (stash: string, cause?: unknown) => new Error(`The worktree couldn't take the changes, so they're kept in the main checkout's stash as "${stash}".`, { cause })
     if (receipt.moved) {
       if ("stash" in receipt.moved) throw kept(receipt.moved.stash)
       return receipt.moved.files
@@ -532,7 +532,7 @@ export class ThreadWorktreeService {
           return 0
         }
         const [head, base] = await Promise.all([git(repoRoot, ["rev-parse", "HEAD"]), git(path, ["rev-parse", "HEAD"])])
-        if (head !== base) throw new Error("The project checkout moved to another commit while the worktree was made, so its changes stayed where they are.")
+        if (head !== base) throw new Error("The main checkout moved to another commit while the worktree was made, so its changes stayed where they are.")
         await this.save({ ...receipt, moving: { stash: message, files: changed } })
         await git(repoRoot, ["stash", "push", "--include-untracked", "--message", message])
         stash = await git(repoRoot, ["rev-parse", "--verify", "refs/stash"])

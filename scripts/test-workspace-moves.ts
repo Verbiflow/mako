@@ -53,7 +53,7 @@ try {
   assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, joins: "mako/thread", changed: 0 }, "a Thread with a worktree is joined and nothing moves")
   const inside = await moveablePlace(worktrees, "c", worktreePath)
   assert.ok("refused" in inside)
-  assert.match(inside.refused, /already works on its own branch, mako\/thread/)
+  assert.match(inside.refused, /already edits in this Thread's worktree, .*, on mako\/thread\.$/)
   placed = undefined
 
   // The request's life: asked, answered once or for the project, carried out when the turn ends.
@@ -74,7 +74,7 @@ try {
     failed: (_id: string, message: string) => failures.push(message),
   }
   const moves = new WorkspaceMoves(deps)
-  assert.match(await moves.ask("c"), /^Asked the user\..*uncommitted files in this folder/s)
+  assert.match(await moves.ask("c"), /^Asked the user\..*into a new worktree for this Thread, on a branch of its own, with the 2 uncommitted files in this checkout/s)
   const [request] = moves.state().requests
   assert.ok(request)
   assert.deepEqual({ ...request, id: "" }, { id: "", conversationId: "c", harness: "claude", title: "Fix the tests", project, changed: 2, state: "asking" })
@@ -157,52 +157,54 @@ try {
   assert.deepEqual([computer.getServerVersion()?.name, agent.getServerVersion()?.name], [MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER], "each server introduces itself by the name the agent app lists it under")
   assert.deepEqual((await computer.listTools()).tools.map((tool) => tool.name), ["js", "js_reset"], "browser and computer use have a server of their own")
   const listed = (await agent.listTools()).tools
-  assert.deepEqual(listed.map((tool) => tool.name), ["workspace_status", "workspace_move", "workspace_merge", "workspace_remove"])
+  assert.deepEqual(listed.map((tool) => tool.name), ["worktree_status", "worktree_move", "worktree_merge", "worktree_remove"])
   assert.match(agent.getInstructions() ?? "", /^Mako's tools for the Thread this Session belongs to\./, "the mako server says what it's for")
+  for (const word of ["main checkout", "worktree", "checkout", "app", "recipe"])
+    assert.match(agent.getInstructions() ?? "", new RegExp(`^- ${word}: `, "m"), `the instructions define "${word}", the word every tool uses`)
   // Each client numbers its own requests, so the same number on both servers is two different calls.
   const slow = computer.callTool({ name: "js", arguments: { code: "1" } })
   await delay(100)
-  const concurrent = await agent.callTool({ name: "workspace_status", arguments: {} })
+  const concurrent = await agent.callTool({ name: "worktree_status", arguments: {} })
   assert.equal(concurrent.isError, undefined, "a call on one server doesn't block the same request number on the other")
   releaseComputer()
   await slow
   await computer.close()
-  assert.match(listed.find((tool) => tool.name === "workspace_move")!.description!, /instead of `git worktree add`/)
-  assert.equal(listed.find((tool) => tool.name === "workspace_status")!.annotations?.readOnlyHint, true)
-  assert.equal(listed.find((tool) => tool.name === "workspace_remove")!.annotations?.destructiveHint, true)
+  assert.match(listed.find((tool) => tool.name === "worktree_move")!.description!, /instead of `git worktree add`/)
+  assert.equal(listed.find((tool) => tool.name === "worktree_status")!.annotations?.readOnlyHint, true)
+  assert.equal(listed.find((tool) => tool.name === "worktree_remove")!.annotations?.destructiveHint, true)
   const text = (result: Awaited<ReturnType<typeof agent.callTool>>) => {
     const [first] = z.array(z.object({ text: z.string() })).parse(result.content)
     assert.ok(first)
     return first.text
   }
 
-  const statusText = text(await agent.callTool({ name: "workspace_status", arguments: {} }))
-  assert.equal(statusText, `makesChangesIn: the project folder\nfolder: ${project}\nbranch: main\nuncommittedFiles: 2`, "workspace_status answers in plain YAML")
+  const statusText = text(await agent.callTool({ name: "worktree_status", arguments: {} }))
+  assert.equal(statusText, `editsIn: the main checkout\nfolder: ${project}\nbranch: main\nuncommittedFiles: 2`, "worktree_status answers in plain YAML")
   const status = parseYaml(statusText)
-  assert.deepEqual(status, { makesChangesIn: "the project folder", folder: project, branch: "main", uncommittedFiles: 2 })
-  const merge = await agent.callTool({ name: "workspace_merge", arguments: {} })
+  assert.deepEqual(status, { editsIn: "the main checkout", folder: project, branch: "main", uncommittedFiles: 2 })
+  const merge = await agent.callTool({ name: "worktree_merge", arguments: {} })
   assert.equal(merge.isError, true)
-  assert.match(text(merge), /has no branch of its own/)
+  assert.match(text(merge), /^This Thread has no worktree; it edits in the main checkout\.$/)
 
-  const asked = await agent.callTool({ name: "workspace_move", arguments: {} })
+  const asked = await agent.callTool({ name: "worktree_move", arguments: {} })
   assert.equal(asked.isError, undefined)
-  assert.match(text(asked), /^Asked the user/)
+  assert.match(text(asked), /^Asked the user\. .*worktree_status shows it/)
   assert.equal(moves.state().requests.find((candidate) => candidate.conversationId === "g")?.harness, "claude")
-  assert.equal(parseYaml(text(await agent.callTool({ name: "workspace_status", arguments: {} }))).move, "asking")
+  assert.equal(parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} }))).move, "asking")
 
   placed = worktree
   sources.set("g", { ...sources.get("g")!, cwd: worktreePath })
-  const onBranch = parseYaml(text(await agent.callTool({ name: "workspace_status", arguments: {} })))
-  assert.equal(onBranch.makesChangesIn, "its own branch")
-  assert.deepEqual(onBranch.threadBranch, { branch: "mako/thread", worktree: worktreePath, project, commitsSinceBranching: 0 })
-  assert.match(text(await agent.callTool({ name: "workspace_merge", arguments: {} })), /^Merged mako\/thread into main/)
-  assert.match(text(await agent.callTool({ name: "workspace_remove", arguments: {} })), /^Removed the worktree .* its branch, mako\/thread, is kept/is)
+  const onBranch = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} })))
+  assert.equal(onBranch.editsIn, "this Thread's worktree")
+  assert.deepEqual(onBranch.threadWorktree, { folder: worktreePath, branch: "mako/thread", mainCheckout: project, commitsSinceBranching: 0 })
+  assert.match(text(await agent.callTool({ name: "worktree_merge", arguments: {} })), /^Merged mako\/thread into main in the main checkout/)
+  assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), /^Removed this Thread's worktree, .* its branch, mako\/thread, is kept/is)
   assert.deepEqual(removedPaths, [worktreePath])
   assert.deepEqual(removed, [1], "windows are told to read the worktrees again")
 
   grants.revoke("binding", "g")
   await assert.rejects(agent.listTools(), { code: 401 })
-  console.log("Workspace moves: ask, allow once or for the project, move at turn end, decline, failure, closed conversations; workspace tools over HTTP MCP scoped to the calling conversation")
+  console.log("Workspace moves: ask, allow once or for the project, move at turn end, decline, failure, closed conversations; worktree tools over HTTP MCP scoped to the calling conversation")
 } finally {
   await agent.close().catch(() => {})
   grants?.close()

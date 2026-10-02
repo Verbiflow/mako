@@ -9,7 +9,7 @@ import { git } from "./worktree-git.js"
  * A recipe committed with the project, for a team that shares one through
  * Git. The one Mako keeps for the project (`recipePath`) comes first.
  */
-export const RECIPE_PATH = join(".mako", "environment.json")
+export const RECIPE_PATH = join(".mako", "recipe.json")
 
 const RECIPE_MAX_BYTES = 64 * 1024
 /** Earlier versions of a project's saved recipe kept beside it. */
@@ -195,8 +195,23 @@ export async function readRecipe(checkout: string, environment: ThreadEnvironmen
   return ready
 }
 
+/** A Mako placeholder written into a command, where nothing fills it in; a shell's own `${port}` is left alone. */
+function commandPlaceholder(command: string): string | undefined {
+  return /(?<!\$)\{(?:port(?: *\+ *\d+)?|host|url|data|thread)\}/.exec(command)?.[0]
+}
+
 /** Why this checkout and Thread can't run `recipe`, if they can't. */
 export async function recipeProblem(recipe: Recipe, checkout: string, environment: ThreadEnvironment): Promise<string | undefined> {
+  const commands: [string, string][] = [
+    ...Object.entries(recipe.processes).map(([name, spec]): [string, string] => [`processes.${name}.command`, spec.command]),
+    ...Object.entries(recipe.checks).flatMap(([tier, command]): [string, string][] => command ? [[`checks.${tier}`, command]] : []),
+    ...recipe.prepare.map((step, index): [string, string] => [`prepare.${index}.command`, step.command]),
+  ]
+  for (const [path, command] of commands) {
+    const placeholder = commandPlaceholder(command)
+    if (placeholder)
+      return `${path}: ${placeholder} isn't filled in inside a command; Mako fills in only values and ports. Name it in values, such as "PORT": "${placeholder}", and write "$PORT" in the command`
+  }
   try {
     recipeValues(recipe, environment)
     for (const [name, spec] of Object.entries(recipe.processes)) {

@@ -19,6 +19,10 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "claude", name: "ToolSearch", input: json({ query: "select:Read" }) }, expect: { kind: "tool-search", target: "select:Read" } },
   { source: { harness: "claude", name: "ExitPlanMode", input: json({ plan: "# Plan" }) }, expect: { kind: "plan-exit" } },
   { source: { harness: "claude", name: "mcp__mako__app_status", input: "{}" }, expect: { kind: "mcp", label: "App status", server: "mako", tool: "app_status" } },
+  { source: { harness: "claude", name: "mcp__mako__worktree_status", input: "{}" }, expect: { kind: "mcp", label: "Worktree status", server: "mako", tool: "worktree_status" } },
+  { source: { harness: "claude", name: "mcp__mako__workspace_status", input: "{}" }, expect: { kind: "mcp", label: "Worktree status", server: "mako", tool: "workspace_status" } },
+  { source: { harness: "claude", name: "mcp__mako__app_probe", input: "{}" }, expect: { kind: "mcp", label: "Probe app", server: "mako", tool: "app_probe" } },
+  { source: { harness: "claude", name: "mcp__mako__recipe_guide", input: "{}" }, expect: { kind: "mcp", label: "Recipe guide", server: "mako", tool: "recipe_guide" } },
   { source: { harness: "claude", name: "mcp__deepwiki__ask_wiki_question", input: json({ repoName: "a/b", question: "how?" }) }, expect: { kind: "mcp", label: "deepwiki: ask wiki question", server: "deepwiki", target: "a/b" } },
 
   // Cursor

@@ -344,8 +344,8 @@ const clashId = randomUUID()
 const clash = await worktrees.prepare(clashId, shop, "Clashing notes")
 writeFileSync(join(clash.path, "notes.md"), "worktree\n")
 writeFileSync(join(shop, "notes.md"), "checkout\n")
-await assert.rejects(worktrees.moveChanges(clashId), /kept in the project checkout's stash as "Mako: moving to mako\/clashing-notes"/)
-await assert.rejects(worktrees.moveChanges(clashId), /kept in the project checkout's stash/)
+await assert.rejects(worktrees.moveChanges(clashId), /kept in the main checkout's stash as "Mako: moving to mako\/clashing-notes"/)
+await assert.rejects(worktrees.moveChanges(clashId), /kept in the main checkout's stash/)
 assert.match(git(shop, "stash", "list"), /Mako: moving to mako\/clashing-notes/)
 git(shop, "stash", "pop", "-q")
 assert.equal(readFileSync(join(shop, "notes.md"), "utf8"), "checkout\n")
@@ -441,7 +441,7 @@ assert.equal(readFileSync(join(cut.path, "web", "draft.ts"), "utf8"), "halfway\n
 assert.equal(git(shop, "stash", "list"), "", "the stash is dropped once its changes are in the worktree")
 assert.equal(git(shop, "status", "--porcelain"), "")
 
-// Nothing moves or merges under a turn running in the project checkout.
+// Nothing moves or merges under a turn running in the main checkout.
 const quietSource = randomUUID()
 started(quietSource)
 working.set(shop, ["“Busy”"])
@@ -453,7 +453,7 @@ await worktrees.attach(mergingId)
 writeFileSync(join(mergeable.path, "feature.txt"), "done\n")
 git(mergeable.path, "add", ".")
 git(mergeable.path, "commit", "-q", "-m", "feature")
-assert.deepEqual((await worktrees.review(mergeable.path)).merge, { ok: false, reason: "“Busy” is working in the project checkout. Merge once it stops." })
+assert.deepEqual((await worktrees.review(mergeable.path)).merge, { ok: false, reason: "“Busy” is working in the main checkout. Merge once it stops." })
 working.delete(shop)
 assert.deepEqual((await worktrees.review(mergeable.path)).merge, { ok: true, into: "main" })
 
@@ -476,17 +476,17 @@ await assert.rejects(carryReport(recipe, shop), /^Error: Not saved: \.env\.venv 
 assert.deepEqual(readdirSync(venv.path).filter((name) => name.includes("mako-")), [], "nothing half-made is left in the checkout")
 for (const venvFolder of [".env.venv", ".venv"]) rmSync(join(shop, venvFolder), { recursive: true })
 assert.deepEqual(await carryReport(recipe, shop, [".env", ".env.*"]), [
-  "The user allows these credentials files, so a new checkout gets them from the main checkout before its agent starts: .env, .env.local.",
-  "npm install: node_modules, web/node_modules are cloned into a new checkout when package-lock.json is the same there.",
-  "uv sync: nothing Git ignores in the main checkout matches .venv yet; once the step has run there, new checkouts get them.",
+  "The user allows these credentials files, so a new worktree gets them from the main checkout before its agent starts: .env, .env.local.",
+  "npm install: node_modules, web/node_modules are cloned into a new worktree when package-lock.json is the same there.",
+  "uv sync: nothing Git ignores in the main checkout matches .venv yet; once the step has run there, new worktrees get them.",
 ])
 
 // Credentials: carry refuses a file named like one, and secrets reach a new checkout only once the person allows them.
 await assert.rejects(carryReport(RecipeSchema.parse({ carry: [".env.*"] }), shop), /^Error: Not saved: \.env\.\*, \.env\.local hold credentials by their names, so they go under "secrets", not "carry"/)
 await assert.rejects(carryReport(RecipeSchema.parse({ carry: ["certs/dev.pem"] }), shop), /dev\.pem holds credentials by its name/)
-assert.deepEqual(await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop), ["A new checkout gets these from the main checkout before its agent starts: dist/app.js."], "a file that isn't named like credentials carries as before")
+assert.deepEqual(await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop), ["A new worktree gets these from the main checkout before its agent starts: dist/app.js."], "a file that isn't named like credentials carries as before")
 const [waitingLine] = await carryReport(RecipeSchema.parse({ secrets: [".env", ".env.*"] }), shop, [".env"])
-assert.match(waitingLine!, /^These hold credentials: \.env, \.env\.local\. A new checkout gets them only once the user allows it in Mako .* Never ask the user to paste a value\.$/, "allowing some patterns isn't allowing the list")
+assert.match(waitingLine!, /^These hold credentials: \.env, \.env\.local\. A new worktree gets them only once the user allows it in Mako .* Never ask the user to paste a value\.$/, "allowing some patterns isn't allowing the list")
 for (const [name, held] of [[".env", true], [".env.production", true], ["web/.env.local", true], [".env.example", false], [".env.sample", false], [".npmrc", true], ["deploy/key.pem", true], ["client_secret.json", true], ["gcloud-credentials.json", true], ["config.json", false], ["README.md", false]] as const)
   assert.equal(holdsCredentials(name), held, name)
 secretsAllowed = false

@@ -234,7 +234,7 @@ export function installMockThreadApp(): void {
         recipe: {
           kind: "ready",
           source: "committed",
-          file: "/Users/you/api/.mako/environment.json",
+          file: "/Users/you/api/.mako/recipe.json",
           savedAt: minutes(60 * 24 * 9),
           earlier: 0,
           recipe: {

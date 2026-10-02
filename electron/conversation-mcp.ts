@@ -24,10 +24,15 @@ interface Scope {
 
 /** What an agent reads about the `mako` server before calling any of its tools. */
 const MAKO_INSTRUCTIONS = [
-  "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only.",
-  "workspace_*: where this Session edits (the project folder or the Thread's own worktree and branch), moving onto its own branch, merging it and removing its worktree.",
-  "app_*: this Thread's own running copy of the project's app, on its own ports, from the project's recipe. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
-  "recipe_*: the recipe every Thread of the project runs its app from. recipe_guide explains how to set one up or repair it; recipe_save replaces it. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
+  "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only. Their words:",
+  "- main checkout: the project's own folder, the one the user works in.",
+  "- worktree: a Git worktree Mako made for one Thread, on that Thread's own branch.",
+  "- checkout: either of these; this Session edits in one.",
+  "- app: the project running from a checkout on this Thread's ports. Threads in the main checkout share its app; a worktree's app is its Thread's alone.",
+  "- recipe: how every Thread of the project installs, starts and checks its app. Mako keeps one per project, for every branch.",
+  "worktree_*: which checkout this Session edits in; moving it into this Thread's worktree, merging the worktree's branch and removing the worktree.",
+  "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
+  "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save replaces it. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
 ].join("\n")
 

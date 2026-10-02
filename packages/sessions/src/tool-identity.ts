@@ -230,9 +230,9 @@ const HARNESSES: ReadonlyMap<string, Vocabulary> = new Map([
   ])],
 ])
 
-/** Mako's own `mako` server, by tool. */
+/** Mako's own `mako` server, by tool; the `workspace_` names are the worktree tools' earlier ones, in saved history. */
 const MAKO_TOOLS: ReadonlyMap<string, string> = new Map([
-  ["recipe_guide", "Setup guide"],
+  ["recipe_guide", "Recipe guide"],
   ["recipe_save", "Save recipe"],
   ["app_status", "App status"],
   ["app_start", "Start app"],
@@ -240,8 +240,14 @@ const MAKO_TOOLS: ReadonlyMap<string, string> = new Map([
   ["app_restart", "Restart app"],
   ["app_logs", "App logs"],
   ["app_check", "Check app"],
+  ["app_probe", "Probe app"],
+  ["app_own_packages", "Unlink packages"],
   ["port_holder", "Port holder"],
-  ["workspace_status", "Workspace"],
+  ["worktree_status", "Worktree status"],
+  ["worktree_move", "Move to worktree"],
+  ["worktree_merge", "Merge worktree"],
+  ["worktree_remove", "Remove worktree"],
+  ["workspace_status", "Worktree status"],
   ["workspace_move", "Move to worktree"],
   ["workspace_merge", "Merge worktree"],
   ["workspace_remove", "Remove worktree"],

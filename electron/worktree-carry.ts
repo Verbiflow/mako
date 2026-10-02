@@ -33,11 +33,11 @@ const CLONE_TREES = `function run(argv) {
   return JSON.stringify(codes)
 }`
 
-/** What a new checkout's install steps can learn from the main checkout's. */
+/** What a new worktree's install steps can learn from the main checkout's. */
 export interface CheckoutSetup {
-  /** The project's recipe, saved in Mako or committed, for what a new checkout takes from the main one. */
+  /** The project's recipe, saved in Mako or committed, for what a new worktree takes from the main one. */
   recipe(checkout: string): Promise<Recipe | undefined>
-  /** The recipe's credentials files the person allows new checkouts to have. */
+  /** The recipe's credentials files the person allows new worktrees to have. */
   grantedSecrets?(checkout: string, recipe: Recipe | undefined): Promise<string[]>
   prepared(checkout: string): Promise<Prepared>
   savePrepared(checkout: string, prepared: Prepared): Promise<void>
@@ -348,10 +348,10 @@ export async function carryReport(recipe: Recipe, repoRoot: string, granted: rea
     const entries = await matchedEntries(repoRoot, recipe.carry)
     const credentials = [...new Set([...recipe.carry, ...entries].filter(holdsCredentials))]
     if (credentials.length)
-      throw new Error(`Not saved: ${listed(credentials)} ${credentials.length === 1 ? "holds credentials by its name, so it goes" : "hold credentials by their names, so they go"} under "secrets", not "carry". The user allows secrets in Mako, and new checkouts get them only then; nobody reads them.`)
+      throw new Error(`Not saved: ${listed(credentials)} ${credentials.length === 1 ? "holds credentials by its name, so it goes" : "hold credentials by their names, so they go"} under "secrets", not "carry". The user allows secrets in Mako, and new worktrees get them only then; nobody reads them.`)
     refuse(entries)
     lines.push(entries.length
-      ? `A new checkout gets these from the main checkout before its agent starts: ${listed(entries)}.`
+      ? `A new worktree gets these from the main checkout before its agent starts: ${listed(entries)}.`
       : `carry: nothing Git ignores in the main checkout (${repoRoot}) matches ${recipe.carry.join(", ")} yet; files Git tracks come with every checkout anyway.`)
   }
   if (recipe.secrets?.length) {
@@ -361,9 +361,9 @@ export async function carryReport(recipe: Recipe, repoRoot: string, granted: rea
     if (!entries.length)
       lines.push(`secrets: nothing Git ignores in the main checkout (${repoRoot}) matches ${recipe.secrets.join(", ")} yet.`)
     else if (!waiting.length)
-      lines.push(`The user allows these credentials files, so a new checkout gets them from the main checkout before its agent starts: ${listed(entries)}.`)
+      lines.push(`The user allows these credentials files, so a new worktree gets them from the main checkout before its agent starts: ${listed(entries)}.`)
     else
-      lines.push(`These hold credentials: ${listed(entries)}. A new checkout gets them only once the user allows it in Mako (Settings, then Apps, then this project); until then, Threads other than the main checkout start without them. Tell the user, in a sentence, which files they are, what the app needs them for, and that they can allow them there. Never ask the user to paste a value.`)
+      lines.push(`These hold credentials: ${listed(entries)}. A new worktree gets them only once the user allows it in Mako (Settings, then Apps, then this project); until then, worktrees start without them. Tell the user, in a sentence, which files they are, what the app needs them for, and that they can allow them there. Never ask the user to paste a value.`)
   }
   for (const step of recipe.prepare) {
     if (!step.outputs?.length) continue
@@ -371,9 +371,9 @@ export async function carryReport(recipe: Recipe, repoRoot: string, granted: rea
     refuse(entries)
     lines.push(entries.length
       ? step.link
-        ? `${step.command}: a new checkout's ${listed(entries)} link each package to the main checkout's when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there, so it starts without installing. Prove the app runs on them with app_restart and app_check "full"; if it doesn't, leave link out.`
-        : `${step.command}: ${listed(entries)} ${entries.length === 1 ? "is" : "are"} cloned into a new checkout when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there.`
-      : `${step.command}: nothing Git ignores in the main checkout matches ${step.outputs.join(", ")} yet; once the step has run there, new checkouts get them.`)
+        ? `${step.command}: a new worktree's ${listed(entries)} link each package to the main checkout's when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there, so it starts without installing. Prove the app runs on them with app_restart and app_check "full"; if it doesn't, leave link out.`
+        : `${step.command}: ${listed(entries)} ${entries.length === 1 ? "is" : "are"} cloned into a new worktree when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there.`
+      : `${step.command}: nothing Git ignores in the main checkout matches ${step.outputs.join(", ")} yet; once the step has run there, new worktrees get them.`)
   }
   return lines
 }

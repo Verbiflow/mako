@@ -16,7 +16,7 @@ import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { environmentTools } from "../electron/environment-tools.js"
 import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { readRecipe, recipeHistory, recipePath, RecipeSchema, recipeValues, RECIPE_PATH, saveRecipe } from "../electron/thread-recipe.js"
+import { readRecipe, recipeHistory, recipePath, recipeProblem, RecipeSchema, recipeValues, RECIPE_PATH, saveRecipe } from "../electron/thread-recipe.js"
 import { ThreadStore } from "../electron/thread-store.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 
@@ -123,6 +123,10 @@ try {
   assert.deepEqual(await readRecipe(savedFolder, fixture, recipes), { kind: "none", checkout: savedFolder, saved: savedFile })
   await assert.rejects(saveRecipe(recipes, savedFolder, RecipeSchema.parse({ processes: { web: { command: "x", port: "{port+10}" } } }), fixture), /^Error: Not saved: \{port\+10\} is past this Thread's 10 ports/)
   await assert.rejects(saveRecipe(recipes, savedFolder, RecipeSchema.parse({ processes: { web: { command: "x", cwd: "server" } } }), fixture), /Not saved: processes\.web\.cwd: server doesn't exist in this checkout/, "a recipe this checkout can't run isn't saved")
+  await assert.rejects(saveRecipe(recipes, savedFolder, RecipeSchema.parse({ processes: { web: { command: "vite --port {port}", port: "{port}" } } }), fixture), /^Error: Not saved: processes\.web\.command: \{port\} isn't filled in inside a command; .*"PORT": "\{port\}", and write "\$PORT" in the command$/, "a placeholder in a command would reach the app as written")
+  await assert.rejects(saveRecipe(recipes, savedFolder, RecipeSchema.parse({ checks: { full: "curl {url}/health" } }), fixture), /Not saved: checks\.full: \{url\} isn't filled in/)
+  await assert.rejects(saveRecipe(recipes, savedFolder, RecipeSchema.parse({ prepare: [{ command: "mkdir -p {data}/db", inputs: ["package.json"] }] }), fixture), /Not saved: prepare\.0\.command: \{data\} isn't filled in/)
+  assert.equal(await recipeProblem(RecipeSchema.parse({ processes: { web: { command: "port=1; echo \"${port}\" {a,b}", port: "{port}" } } }), savedFolder, fixture), undefined, "the shell's own ${port} and brace expansion are left alone")
   assert.equal(existsSync(savedFile), false)
   const firstRecipe = RecipeSchema.parse({ processes: { web: { command: "node server.mjs", port: "{port}" } } })
   assert.deepEqual(await saveRecipe(recipes, savedFolder, firstRecipe, fixture), { file: savedFile }, "the first recipe replaces nothing")
@@ -387,7 +391,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   // A broken recipe is loud, and the running app is left as it is.
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, extra: 1 }))
   assert.match(parseYaml(await tools.status(conversation)).recipe.broken, /Unrecognized key/)
-  await assert.rejects(tools.start(conversation), /The project's recipe is broken, so nothing can start: \S+\/\.mako\/environment\.json: the file: Unrecognized key/)
+  await assert.rejects(tools.start(conversation), /The project's recipe is broken, so nothing can start: \S+\/\.mako\/recipe\.json: the file: Unrecognized key/)
   assert.equal(await portListening(toolBase), true)
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
   assert.match(await tools.stop(conversation), /Stopped (web, api|api, web)/)
@@ -538,10 +542,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   await deskTools.check(setupConversation, "quick")
   assert.equal((await desk.view(bare)).kind, "ready", "its checks passing ends the setup")
   await deskTools.guide(setupConversation)
-  assert.equal((await desk.view(bare)).kind, "setting-up", "reading the guide again, to change the recipe, sets it up again")
-  setupWorking = false
-  assert.equal((await desk.view(bare)).kind, "ready", "and its turn ending with a recipe saved ends that")
-  setupWorking = true
+  assert.equal((await desk.view(bare)).kind, "ready", "reading the guide to change a recipe that works leaves every Thread seeing the app as it is")
   // An install stopped before it finished runs again on the next start instead of reading as failed.
   const install = `echo installed >> ${installs}`
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, prepare: [{ command: install, inputs: ["package-lock.json"] }] }))
@@ -682,7 +683,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const savedNote = await saving.save(conversation, RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, carry: ["config.local.json"] }))
   assert.ok(savedNote.includes(`carry: nothing Git ignores in the main checkout (${realpathSync(project)}) matches config.local.json yet; files Git tracks come with every checkout anyway.`), "saving says what carry finds in the main checkout")
   assert.match(savedNote, /^Saved as this project's recipe in Mako, \S+project-recipes\/\S+\.json\. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that\.\nThis checkout also has/)
-  assert.match(savedNote, /also has a committed \.mako\/environment\.json; Mako's saved recipe comes first/)
+  assert.match(savedNote, /also has a committed \.mako\/recipe\.json; Mako's saved recipe comes first/)
   assert.match(savedNote, /This Thread's processes are still running as they were started; app_restart runs them with this recipe\./)
   const sharedFile = await recipePath(projectRecipes, project)
   assert.equal(await recipePath(projectRecipes, prepared.path), sharedFile, "the main checkout and its worktrees share one saved recipe")
@@ -692,7 +693,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(savedStatus.recipe.file, sharedFile)
   assert.equal(savedStatus.recipe.savedIn, undefined, "where recipe_save writes is said only when it isn't the file in use")
   assert.equal(savedStatus.recipe.contents.values.SAVED, "yes", "status shows what the recipe says, to repair from")
-  assert.match(savedStatus.recipe.ignored, /\.mako\/environment\.json: committed with the project, but the recipe saved in Mako comes first/)
+  assert.match(savedStatus.recipe.ignored, /\.mako\/recipe\.json: committed with the project, but the recipe saved in Mako comes first/)
   assert.equal(savedStatus.values.SAVED, "yes")
   assert.equal(savedStatus.credentials, undefined, "a recipe without secrets says nothing about them")
 
@@ -701,21 +702,21 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   writeFileSync(join(project, ".env"), "TOKEN=main\n")
   await assert.rejects(saving.save(conversation, RecipeSchema.parse({ ...recipe, carry: [".env"] })), /Not saved: \.env holds credentials by its name, so it goes under "secrets", not "carry"/)
   const withSecrets = RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, secrets: [".env"] })
-  assert.match(await saving.save(conversation, withSecrets), /These hold credentials: \.env\. A new checkout gets them only once the user allows it in Mako/)
+  assert.match(await saving.save(conversation, withSecrets), /These hold credentials: \.env\. A new worktree gets them only once the user allows it in Mako/)
   const settings = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, folder: deskFolder, processes, recipesRoot: projectRecipes, settleMs: settle }).desk
   const notYet = await settings.setup(prepared.cwd)
   assert.deepEqual(notYet.secrets, { patterns: [".env"], files: [".env"], allowed: false }, "Settings lists the files by name, found in the main checkout")
   assert.deepEqual(notYet.recipe.kind === "ready" && [notYet.recipe.source, notYet.recipe.file, notYet.recipe.earlier > 0], ["mako", sharedFile, true])
   assert.deepEqual(notYet.recipe.kind === "ready" && notYet.recipe.recipe.processes.map((entry) => [entry.name, entry.command, entry.port]), [["web", "node server.mjs", "{port}"], ["api", "node server.mjs", "{port+1}"]], "the recipe as written, placeholders and all")
   assert.equal((await settings.view(prepared.cwd)).kind === "ready" && (await settings.view(prepared.cwd)).credentialsWaiting, true, "the strip says credentials are waiting")
-  assert.match(parseYaml(await saving.status(conversation)).credentials, /hasn't allowed new checkouts to have them yet/)
+  assert.match(parseYaml(await saving.status(conversation)).credentials, /hasn't allowed worktrees to have them yet/)
   await saving.stop(conversation)
   assert.match(await saving.start(conversation), /web: running/)
   assert.equal(existsSync(join(prepared.path, ".env")), false, "a start before the person allows them goes without")
   const allowed = await settings.allowSecrets(prepared.cwd, true)
   assert.deepEqual(allowed.secrets && [allowed.secrets.allowed, allowed.secrets.allowedAt !== undefined], [true, true])
   assert.equal((await settings.view(prepared.cwd)).kind === "ready" && (await settings.view(prepared.cwd)).credentialsWaiting, undefined)
-  assert.match(parseYaml(await saving.status(conversation)).credentials, /^The user allows \.env, so new checkouts get them/)
+  assert.match(parseYaml(await saving.status(conversation)).credentials, /^The user allows \.env, so worktrees get them/)
   await saving.stop(conversation)
   assert.match(await saving.start(conversation), /web: running/)
   assert.equal(readFileSync(join(prepared.path, ".env"), "utf8"), "TOKEN=main\n", "a checkout made before they were allowed gets them at its next start")

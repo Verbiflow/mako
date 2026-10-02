@@ -198,7 +198,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const cwd = deps.cwd(conversationId)
     if (!cwd) throw new Error("Mako isn't running this conversation.")
     const environment = await deps.environment(conversationId, cwd)
-    if (!environment) throw new Error("This conversation isn't in a Thread yet, so it has no environment of its own.")
+    if (!environment) throw new Error("This conversation isn't in a Thread yet, so it has no app or ports of its own.")
     const checkout = await checkoutOf(cwd)
     await deps.processes.touch(environment.app, checkout)
     return { environment, checkout, read: await readRecipe(checkout, environment, deps.recipesRoot) }
@@ -431,7 +431,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const picked = runs.filter((status) => names?.length ? status.kind === "process" && names.includes(status.name) : status.kind !== "check" || up(status))
     await deps.processes.stop(environment.app, picked.map((status) => runKey(status.kind, status.name)))
     const inLine = line.delete(environment.app)
-    const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the install step" : status.name)
+    const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the prepare step" : status.name)
     const { leftovers } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
     const left = leftovers.length
       ? ` Still running, though, and likely left behind by the app: ${leftovers.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up, outlived the process that started it and works in this checkout or data folder, so no stop reaches it. Stop one yourself if it's the app's and shouldn't outlive it.`
@@ -714,11 +714,15 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     desk,
     async guide(conversationId) {
       const cwd = deps.cwd(conversationId)
-      if (cwd) {
-        const root = await projectRoot(await checkoutOf(cwd))
-        if (setups.get(root)?.conversation !== conversationId)
+      const environment = cwd ? await deps.environment(conversationId, cwd).catch(() => undefined) : undefined
+      if (cwd && environment) {
+        const checkout = await checkoutOf(cwd)
+        const root = await projectRoot(checkout)
+        // Changing a recipe that works leaves every Thread seeing its app as it is.
+        const working = (await readRecipe(checkout, environment, deps.recipesRoot).catch(() => undefined))?.kind === "ready"
+        if (!working && setups.get(root)?.conversation !== conversationId)
           setups.set(root, { conversation: conversationId, since: (deps.now ?? Date.now)(), appStarted: false })
-        stoppedSetups.delete(root)
+        if (!working) stoppedSetups.delete(root)
       }
       return ENVIRONMENT_GUIDE
     },
@@ -765,8 +769,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         checks: checks.length ? Object.fromEntries(checks) : undefined,
         credentials: secrets.length
           ? granted.length === secrets.length
-            ? `The user allows ${secrets.join(", ")}, so new checkouts get them from the main checkout. Never read them.`
-            : `${secrets.join(", ")} hold credentials, and the user hasn't allowed new checkouts to have them yet (Settings, then Apps, in Mako). A Thread outside the main checkout starts without them; say so if the app fails for want of them. Never copy or read them yourself.`
+            ? `The user allows ${secrets.join(", ")}, so worktrees get them from the main checkout. Never read them.`
+            : `${secrets.join(", ")} hold credentials, and the user hasn't allowed worktrees to have them yet (Settings, then Apps, in Mako). A worktree's app starts without them; say so if the app fails for want of them. Never copy or read them yourself.`
           : undefined,
       }
       return toolText(report)
@@ -1040,7 +1044,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
   server.registerTool(
     "app_restart",
     {
-      description: "Stop, then start, this Thread's app: after changing configuration, environment values or dependencies that a running dev server doesn't reload, or after recipe_save changed how its processes start.",
+      description: "Stop, then start, this Thread's app: after changing configuration, the recipe's values or dependencies that a running dev server doesn't reload, or after recipe_save changed how its processes start.",
       inputSchema: names,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
