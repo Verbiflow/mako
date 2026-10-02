@@ -8,7 +8,7 @@ import { RAIL_PURPOSES, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
-import type { LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
+import type { ContextBreakdown, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
@@ -1502,6 +1502,12 @@ export function installMockBridge() {
     }),
     liveAttach: async () => null,
     liveSnapshot: async (id: string) => liveSnapshots.get(id) ?? null,
+    liveContextBreakdown: async (id: string) => {
+      const session = liveSnapshots.get(id)?.session
+      return session?.harness === "claude" && session.usage?.used && session.usage.size
+        ? mockClaudeBreakdown(session.usage.used, session.usage.size)
+        : null
+    },
     liveRead: async (id: string) => {
       const data = JSON.stringify(await window.mako!.liveSnapshot(id))
       return { record: "00000000-0000-4000-8000-000000000001", offset: 0, data, total: data.length, next: null }
@@ -1581,6 +1587,9 @@ export function installMockBridge() {
       liveSnapshots.set(id, next)
       acpSessions.set(id, session)
       emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, permissions: [] } })
+      // As the host does: approving a plan builds it in this conversation.
+      if (approved && asked.implementsPlan)
+        await window.mako!.recordPlanBuild(asked.implementsPlan.plan, { at: Date.now(), conversation: id })
     },
     liveSetMode: async (id: string, modeId: string) => {
       const session = acpSessions.get(id)
@@ -1845,6 +1854,33 @@ export function installMockBridge() {
   }
 }
 
+/** What Claude's `/context` itemizes, scaled to the session's reading. */
+function mockClaudeBreakdown(used: number, size: number): ContextBreakdown {
+  const fixed = { system: 3_100, tools: 14_600, mcp: 9_800, memory: 2_400, agents: 900 }
+  const messages = Math.max(0, used - Object.values(fixed).reduce((sum, tokens) => sum + tokens, 0))
+  const buffer = Math.round(size * 0.165)
+  return {
+    used,
+    size,
+    categories: [
+      { name: "System prompt", tokens: fixed.system, kind: "used" },
+      { name: "System tools", tokens: fixed.tools, kind: "used" },
+      { name: "MCP tools", tokens: fixed.mcp, kind: "used" },
+      { name: "Custom agents", tokens: fixed.agents, kind: "used" },
+      { name: "Memory files", tokens: fixed.memory, kind: "used" },
+      { name: "Messages", tokens: messages, kind: "used" },
+      { name: "Free space", tokens: Math.max(0, size - used - buffer), kind: "free" },
+      { name: "Autocompact buffer", tokens: buffer, kind: "buffer" },
+    ],
+    items: [
+      { group: "mcp", name: "linear", tokens: 6_200 },
+      { group: "mcp", name: "github", tokens: 3_600 },
+      { group: "memory", name: "~/project/CLAUDE.md", tokens: 1_700 },
+      { group: "memory", name: "~/.claude/CLAUDE.md", tokens: 700 },
+    ],
+  }
+}
+
 const mockEffort = (current: string, values: string[]) => ({
   kind: "select" as const,
   id: "effort",
@@ -2093,8 +2129,18 @@ function mockReply(
     "",
     "## Steps",
     "1. Add the state in `src/state/` with a pure mapping and tests for each harness shape.",
-    "2. Wire the control into the composer's routing row, beside access.",
+    "2. Wire the control into the composer's routing row, beside access, and write the new value through `/Users/you/mako/src/components/composer/use-composer-settings.ts` so every target resolves it once.",
     "3. Cover the edge cases: a session that is starting, a launch-only mode, a failed start.",
+    "4. Keep the native mode in step: when the harness reports its own mode change, follow it instead of re-sending ours.",
+    "",
+    "## Files",
+    "- `src/state/composer-settings.ts`: the mapping and its target resolution",
+    "- `src/components/composer/composer-routing.tsx`: the control beside access",
+    "- `scripts/test-composer-settings.ts`: one case per harness shape",
+    "",
+    "## Risks",
+    "- A harness that only accepts the mode at launch: the control locks once the session runs, and says why.",
+    "- Two windows changing the same session: the host's value wins and both windows follow it.",
     "",
     "## Verification",
     "- `npm run lint` and `npm run typecheck`",
