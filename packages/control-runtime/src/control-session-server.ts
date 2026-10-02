@@ -18,7 +18,7 @@ import {
   type ControlTarget,
   type ElementExpectation,
 } from "@mako/control/control"
-import { ControlProgramError, spillImage, type ControlProgramOutput } from "@mako/control/program"
+import { ControlProgramError, effectText, spillImage, type ControlEffect, type ControlProgramOutput } from "@mako/control/program"
 import type { ControlSession } from "./control-session.js"
 import {
   CONTROL_SESSION_PROTOCOL,
@@ -99,7 +99,7 @@ export async function serveControlSession(
       case "exec": {
         let blocks: Awaited<ReturnType<typeof session.execute>>
         let failure: Error | undefined
-        let effects: readonly string[] = []
+        let effects: readonly ControlEffect[] = []
         try {
           blocks = await session.execute(
             { source: operation.source },
@@ -317,7 +317,7 @@ export async function serveControlSession(
               outcome,
             },
             output: partial?.length ? partial : undefined,
-            ran: error instanceof ControlProgramError && error.effects.length ? error.effects : undefined,
+            ran: error instanceof ControlProgramError && error.effects.length ? error.effects.map(effectText) : undefined,
           })
         )
       })

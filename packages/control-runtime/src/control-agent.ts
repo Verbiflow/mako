@@ -1,9 +1,12 @@
+import { controlFaultData, type ControlFaultData } from "@mako/control/control"
 import {
   ControlProgramError,
   programErrorText,
+  type ControlCellReport,
+  type ControlEffect,
   type ControlProgramOutput,
 } from "@mako/control/program"
-import type { JsonValue } from "./json.js"
+import type { JsonObject, JsonValue } from "./json.js"
 import type { ControlSession } from "./control-session.js"
 import type { SessionOperation } from "./control-session-protocol.js"
 
@@ -15,6 +18,43 @@ export type ControlAgentRequest = (
   operation: ControlAgentOperation,
   signal: AbortSignal
 ) => Promise<JsonValue>
+
+/**
+ * The `_meta` key of a js result's report, for programs that grade or audit
+ * a task. Agent clients keep `_meta` from the model, so the report costs no
+ * tokens; `structuredContent` would replace or repeat the printed text.
+ */
+export const JS_REPORT_META = "dev.mako/js"
+
+export type JsReport =
+  | ({ status: "completed" } & ControlCellReport)
+  | {
+      status: "failed"
+      /** `code` and `outcome` are absent for a plain script error. */
+      error: {
+        message: string
+        code?: string
+        outcome?: ControlFaultData["outcome"]
+      }
+      effects: ControlEffect[]
+    }
+
+export function failedJsReport(error: Error): JsReport {
+  const cause = error instanceof ControlProgramError ? error.cause : error
+  const fault = controlFaultData(cause)
+  return {
+    status: "failed",
+    error: {
+      message: cause.message,
+      ...(fault && { code: fault.code, outcome: fault.outcome }),
+    },
+    effects: error instanceof ControlProgramError ? [...error.effects] : [],
+  }
+}
+
+function reportMeta(report: JsReport): JsonObject {
+  return { [JS_REPORT_META]: report }
+}
 
 /** The same typed bridge serves embedded MCP and worker/socket hosts. */
 export function controlAgent(
@@ -32,6 +72,7 @@ export function controlAgent(
         ],
       }
     }
+    let report: ControlCellReport = { effects: [] }
     try {
       const content = await session.execute(
         { source: operation.code },
@@ -40,12 +81,16 @@ export function controlAgent(
           yield: false,
           mode: "repl",
           timeoutMs: operation.timeout_ms,
+          report: (cell) => {
+            report = cell
+          },
         }
       )
       return {
         content: content.length
           ? joinText(content)
           : [{ type: "text", text: "Completed; no value emitted." }],
+        _meta: reportMeta({ status: "completed", ...report }),
       }
     } catch (error) {
       return {
@@ -54,6 +99,11 @@ export function controlAgent(
           ...(error instanceof ControlProgramError ? error.output : []),
           { type: "text", text: programErrorText(error) },
         ]),
+        _meta: reportMeta(
+          failedJsReport(
+            error instanceof Error ? error : new Error(String(error))
+          )
+        ),
       }
     }
   }

@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { z } from "zod"
 import { createControlRuntime } from "@mako/control-runtime"
-import { createControlMcpServer } from "@mako/control-runtime/mcp"
+import { createControlMcpServer, JS_REPORT_META } from "@mako/control-runtime/mcp"
 import {
   readControlSession,
   invokeControlSession,
@@ -51,11 +51,14 @@ const output = z.object({
       }),
     ])
   ),
+  _meta: z.record(z.string(), z.unknown()).optional(),
 })
-const js = async (code: string, timeout_ms = 5000) =>
-  output.parse(
-    await client.callTool({ name: "js", arguments: { code, timeout_ms } })
-  )
+const js = async (code: string, timeout_ms = 5000) => {
+  const result = await client.callTool({ name: "js", arguments: { code, timeout_ms } })
+  assert.equal(result.structuredContent, undefined, "clients would show structuredContent instead of, or beside, the printed text")
+  return output.parse(result)
+}
+const reported = (value: z.infer<typeof output>) => value._meta?.[JS_REPORT_META]
 const text = (value: z.infer<typeof output>) =>
   value.content
     .filter((x) => x.type === "text")
@@ -79,6 +82,7 @@ try {
   assert.equal(first.content.length, 1, "clients that join blocks with nothing between them still see separate lines")
   const joined = await js("console.log('first line'); 'second line'")
   assert.deepEqual(joined.content, [{ type: "text", text: "first line\nsecond line" }])
+  assert.deepEqual(reported(joined), { status: "completed", effects: [] }, "a cell that printed text has no value in its report")
   assert.equal(fixture.calls.length, 0, "discovery does not connect")
   summary.firstCallBytes = Buffer.byteLength(JSON.stringify(first))
   const imported = await js(
@@ -118,6 +122,11 @@ try {
   assert.match(text(open), /^ *e\d+ textbox "Proof"/m, "an observation prints as an outline with short refs")
   assert.doesNotMatch(text(open), /"nodes"|\{"ref"/, "an observation prints as text, not JSON")
   assert.doesNotMatch(text(open), /Mako browser and computer use|Observation has nodes/, "action results carry no guides")
+  assert.deepEqual(
+    reported(open),
+    { status: "completed", effects: [{ call: "connectBrowser", outcome: "completed" }, { call: "open", outcome: "completed" }] },
+    "a report names the state-changing calls a cell made, not its reads"
+  )
   assert.equal(fixture.targets.size, 1)
   const named = await js(
     'let [prefix, contains, pattern] = [tab.locator({role:"textbox",name:{prefix:"pro"}}), tab.locator({role:"textbox",name:{contains:"ROO"}}), tab.locator({role:"textbox",name:/^Pr/})]; [(await prefix.read()).coverage.complete, (await tab.observe({match:{role:"textbox",name:/^Pr/}})).nodes.length, (await tab.observe({match:{role:"textbox",name:{contains:"ROO"}}})).nodes.length]'
@@ -128,11 +137,21 @@ try {
   assert.equal(missed.isError, true)
   assert.match(text(missed), /^Error target-not-found \(nothing dispatched\): No textbox is named "Proo"\. "Proo" is part of the name of textbox "Proof" \(e\d+\)\. .*name:\{contains:"Proo"\}/)
   assert.doesNotMatch(text(missed), /Before failing/, "a cell that changed nothing names no effects")
+  assert.deepEqual(reported(missed), {
+    status: "failed",
+    error: { message: text(missed).replace(/^Error target-not-found \(nothing dispatched\): /, ""), code: "target-not-found", outcome: "not-dispatched" },
+    effects: [],
+  })
   const guessed = await js('await tab.fill("e1", "x")')
   assert.equal(guessed.isError, true)
   assert.match(text(guessed), /^Error: tab\.fill is not a function\. Use setValue\(ref, text\)/)
   const own = await js('[{id:"a",n:1},{id:"b",n:2}]')
   assert.equal(text(own), '[{"id":"a","n":1},{"id":"b","n":2}]', "a program's own values print as compact JSON, as built")
+  assert.deepEqual(reported(own), { status: "completed", effects: [], value: [{ id: "a", n: 1 }, { id: "b", n: 2 }] })
+  const large = await js("Array.from({length: 6000}, (_, i) => ({i}))")
+  const spilled = z.object({ status: z.literal("completed"), effects: z.array(z.unknown()), valueArtifact: z.object({ path: z.string(), bytes: z.number(), sha256: z.string() }) }).strict().parse(reported(large))
+  assert.equal(JSON.parse(await readFile(spilled.valueArtifact.path, "utf8")).length, 6000, "a value past the inline budget is reported by its file")
+  assert.match(text(large), new RegExp(spilled.valueArtifact.sha256), "the report names the file the printed receipt names")
   const logged = await js('console.log("plain", {a:1}, (await control.tabs("fixture")).pages.length)')
   assert.equal(text(logged), 'plain {"a":1} 1')
   const listedTabs = text(await js('await control.tabs("fixture")'))
@@ -170,6 +189,7 @@ try {
   )
   assert.equal(ordinary.isError, true)
   assert.match(text(ordinary), /evidence-before-error/)
+  assert.deepEqual(reported(ordinary), { status: "failed", error: { message: "ordinary failure" }, effects: [] }, "a plain script error has no fault code")
   assert.match(text(await js("await tab.observe()")), /Proof/)
   const exact = "  日本語 🧪 é\n\t  "
   await js(`let exact=${JSON.stringify(exact)}; state.exact=exact`)
@@ -196,6 +216,10 @@ try {
   const timeout = await js("while(true) {}", 100)
   assert.equal(timeout.isError, true)
   assert.match(text(timeout), /timed-out/)
+  assert.deepEqual(
+    z.object({ error: z.object({ code: z.string(), outcome: z.string() }).loose() }).loose().parse(reported(timeout)).error,
+    { code: "timed-out", outcome: "unknown", message: "Script exceeded 0.1 seconds. Observe before retrying; script state was reset." }
+  )
   const fresh = await js("typeof tab")
   assert.match(text(fresh), /Program state was reset/)
   assert.doesNotMatch(text(fresh), /Mako browser and computer use/, "a timeout does not reprint the documentation")
@@ -338,7 +362,7 @@ try {
     assert.fail("a malformed receipt fails the cell")
   } catch (error) {
     assert.ok(error instanceof ControlProgramError, String(error))
-    assert.deepEqual(error.effects, ["setValue e1"], "reads are not named; the dispatched call is")
+    assert.deepEqual(error.effects, [{ call: "setValue e1", outcome: "completed" }], "reads are not named; the dispatched call is")
     assert.match(programErrorText(error), /\nBefore failing, this cell ran: setValue e1\. Observe before acting again; do not rerun the cell\.$/)
   }
   await evaluate('void setTimeout(() => { throw new Error("late boom") }, 20)')

@@ -73,10 +73,33 @@ export type ControlProgramOutput =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string }
 
+/** A state-changing call a cell made, such as "click e12", and whether it is
+ * known to have finished. Reads are not effects. */
+export type ControlEffect = {
+  call: string
+  outcome: "completed" | "unknown"
+}
+
+export function effectText(effect: ControlEffect): string {
+  return effect.outcome === "unknown" ? `${effect.call} (outcome unknown)` : effect.call
+}
+
+/** What a cell that finished did, beside its printed output. `value` is its
+ * JSON value when inline; one past the budget is the file in `valueArtifact`
+ * instead. A cell that printed text, or returned nothing, has neither. */
+export type ControlCellReport = {
+  effects: ControlEffect[]
+  value?: JsonValue
+  valueArtifact?: { path: string; bytes: number; sha256: string }
+}
+
 export interface ControlProgramExecution {
   yield?: boolean
   mode?: "script" | "repl"
   timeoutMs?: number
+  /** Called once, before the output resolves, when the cell finishes. A failed
+   * cell's effects are on its ControlProgramError instead. */
+  report?(cell: ControlCellReport): void
 }
 
 /** Keep already-emitted evidence when a later statement fails, times out or
@@ -84,12 +107,11 @@ export interface ControlProgramExecution {
 export class ControlProgramError extends Error {
   readonly code?: string
   readonly outcome?: ControlFaultData["outcome"]
-  /** `effects` names the cell's state-changing calls that ran before it
-   * failed; an unfinished one is suffixed " (outcome unknown)". */
+  /** The cell's state-changing calls that ran before it failed. */
   constructor(
     readonly output: ControlProgramOutput[],
     readonly cause: Error,
-    readonly effects: readonly string[] = []
+    readonly effects: readonly ControlEffect[] = []
   ) {
     super(cause.message)
     this.name = "ControlProgramError"
@@ -116,7 +138,7 @@ export function programErrorText(cause: unknown): string {
   const lines = [fault ? `Error ${fault.code} (${OUTCOME_TEXT[fault.outcome]}): ${message}` : `Error: ${message}`]
   const effects = cause instanceof ControlProgramError ? cause.effects : []
   if (effects.length)
-    lines.push(`Before failing, this cell ran: ${effects.join(", ")}. Observe before acting again; do not rerun the cell.`)
+    lines.push(`Before failing, this cell ran: ${effects.map(effectText).join(", ")}. Observe before acting again; do not rerun the cell.`)
   return lines.join("\n")
 }
 
@@ -339,7 +361,8 @@ export class ControlProgramRuntime {
       let inlineImages = 0
       let inlineImageBytes = 0
       let finished = false
-      const effects: string[] = []
+      const effects: ControlEffect[] = []
+      let returned: Pick<ControlCellReport, "value"> | Promise<Pick<ControlCellReport, "valueArtifact">> = {}
       const unfinished = new Map<number, { command: JsonObject; namespace: string }>()
       const effect = (call: { command: JsonObject; namespace: string }) => {
         try {
@@ -370,16 +393,21 @@ export class ControlProgramRuntime {
           }
           for (const call of unfinished.values()) {
             const name = effect(call)
-            if (name) effects.push(`${name} (outcome unknown)`)
+            if (name) effects.push({ call: name, outcome: "unknown" })
           }
           void Promise.all(output).then(blocks => reject(new ControlProgramError(blocks, error, effects)), reject)
-        } else Promise.all(output).then(resolve, reject)
+        } else
+          Promise.all([Promise.all(output), returned]).then(([blocks, value]) => {
+            execution.report?.({ effects, ...value })
+            resolve(blocks)
+          }, reject)
       }
       const receipt = (pending: Promise<{ artifact: true }>) =>
         pending.then((value): ControlProgramOutput => ({
           type: "text",
           text: JSON.stringify(value),
         }))
+      /** Returns the file a value past the inline budget was written to. */
       const appendText = (label: string, value: JsonValue) => {
         // An agent reads logged REPL strings as text, as console.log prints
         // them. CLI programs and results keep one JSON value per block.
@@ -390,13 +418,13 @@ export class ControlProgramRuntime {
           bytes >= INLINE_TEXT_BUDGET ||
           inlineText + bytes > INLINE_TOTAL_BUDGET
         ) {
-          output.push(
-            receipt(spillJson(artifacts, `${namespace}-${label}`, value))
-          )
-          return
+          const spilled = spillJson(artifacts, `${namespace}-${label}`, value)
+          output.push(receipt(spilled))
+          return spilled
         }
         inlineText += bytes
         output.push({ type: "text", text })
+        return undefined
       }
       const appendImage = (block: ControlProgramOutput) => {
         if (block.type === "text") {
@@ -446,7 +474,7 @@ export class ControlProgramRuntime {
                 if (finished) return
                 unfinished.delete(value.id)
                 const name = effect(value)
-                if (name) effects.push(name)
+                if (name) effects.push({ call: name, outcome: "completed" })
                 worker.postMessage({
                   kind: "reply",
                   id: value.id,
@@ -458,7 +486,7 @@ export class ControlProgramRuntime {
                 unfinished.delete(value.id)
                 const fault = controlFaultData(error)
                 const name = (fault?.outcome ?? "unknown") === "unknown" ? effect(value) : undefined
-                if (name) effects.push(`${name} (outcome unknown)`)
+                if (name) effects.push({ call: name, outcome: "unknown" })
                 worker.postMessage({
                   kind: "reply",
                   id: value.id,
@@ -491,7 +519,12 @@ export class ControlProgramRuntime {
             true
           )
         else {
-          if (value.value !== null) appendText("result", value.value)
+          if (value.value !== null) {
+            const spilled = appendText("result", value.value)
+            returned = spilled
+              ? spilled.then(({ path, bytes, sha256 }) => ({ valueArtifact: { path, bytes, sha256 } }))
+              : { value: value.value }
+          }
           finish()
         }
       }

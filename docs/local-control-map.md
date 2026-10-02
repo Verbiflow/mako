@@ -87,16 +87,21 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 ## Delivery order
 
 **October 2: candidate work from Cua, beyond the driver ([review](audits/2026-10-02/cua-borrowing/README.md)).**
-Nothing is adopted yet. Mako's driver fork pins upstream 0.28.2, ten releases
-behind 0.32.0, so it lacks capture-bound coordinate actions and visual
-perception for surfaces with no accessibility tree. Ranked candidates:
+Mako's driver fork pins upstream 0.28.2, ten releases behind 0.32.0, so it
+lacks capture-bound coordinate actions and visual perception for surfaces with
+no accessibility tree. Ranked candidates:
 1. capture-bound clicks, plus a fallback for surfaces with no tree;
 2. a repeatable browser agent benchmark with reference and do-nothing checks;
-3. disposable Lume macOS VMs for installed acceptance;
-4. Linux worker readiness, accessibility and streaming rules;
-5. machine-readable MCP results;
-6. an approval broker so agents never hold secrets;
-7. presence cursors and an input lease.
+3. Linux worker readiness, accessibility and streaming rules;
+4. machine-readable MCP results: **done in source (U28)**, as `_meta`, because
+   every client that reads `structuredContent` shows it to the model instead of,
+   or beside, the text;
+5. an approval broker so agents never hold secrets;
+6. presence cursors and user priority over input, staged in
+   [cursors-leases.md](audits/2026-10-02/cua-borrowing/cursors-leases.md).
+
+Rejected: disposable Lume macOS VMs for installed acceptance. The user judged
+a macOS VM per run too heavy for one machine.
 
 Cua Spaces, `cua-spacesd`, Keyvault and Teleport are FSL-1.1-MIT, so take
 their ideas, not their code.

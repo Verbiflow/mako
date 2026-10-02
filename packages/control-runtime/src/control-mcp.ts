@@ -16,15 +16,20 @@ const resultSchema = z.object({
       }),
     ])
   ),
+  _meta: z.record(z.string(), z.json()).optional(),
 })
-import type {
-  ControlAgentRequest,
-  ControlAgentOperation,
+import {
+  JS_REPORT_META,
+  failedJsReport,
+  type ControlAgentRequest,
+  type ControlAgentOperation,
 } from "./control-agent.js"
 export {
   controlAgent,
+  JS_REPORT_META,
   type ControlAgentRequest,
   type ControlAgentOperation,
+  type JsReport,
 } from "./control-agent.js"
 
 /** Transport adapter only. Borrows the owner's existing session through a typed
@@ -43,6 +48,13 @@ export function createControlMcpServer(
       return {
         isError: true,
         content: [{ type: "text" as const, text: programErrorText(error) }],
+        ...(operation.method === "js" && {
+          _meta: {
+            [JS_REPORT_META]: failedJsReport(
+              error instanceof Error ? error : new Error(String(error))
+            ),
+          },
+        }),
       }
     }
   }
