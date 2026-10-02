@@ -1,7 +1,7 @@
 import { cursorCanvasPreview } from "./canvas-preview.js"
-import { cursorSdkStateRoot, emitCursorSession } from "@mako/sessions"
+import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from "@mako/sessions"
 import { accountEnv } from "../../accounts.js"
-import { installHarness, lacks, notBuilt } from "../harness-definition.js"
+import { installHarness, lacks } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { cursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
@@ -10,8 +10,10 @@ import { cursorProcessProbe } from "./process-probe.js"
 import { createCursorProfileLoader } from "./profile.js"
 import { CursorSdkAuth } from "./sdk/auth.js"
 import { CursorCredentialStore, cursorCredentialPath } from "./sdk/credentials.js"
+import { cursorDecoderSource } from "./sdk/decoder-source.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
+import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../executable.js"
 import { scriptInstall } from "../update-source.js"
@@ -39,7 +41,7 @@ export const installCursor: ProviderModule = (host) => {
   installHarness(host, {
     provider: "cursor",
     live: createCursorSdkDriver({ auth, stateRoot, modelCache }),
-    decoder: notBuilt("Its SDK messages decode inside the live driver"),
+    decoder: cursorDecoderSource,
     profile: createCursorProfileLoader({
       sdkModels: async (_env, cwd) => {
         const env = await auth.childEnv()
@@ -54,7 +56,11 @@ export const installCursor: ProviderModule = (host) => {
     }),
     accounts: cursorAccountCapability(auth),
     acp: lacks("Runs on the Cursor SDK"),
-    nativeRunner: notBuilt("Mako runs Cursor through its SDK and does not start `cursor-agent` itself"),
+    nativeRunner: cursorSdkNativeRunner({
+      childEnv: () => auth.childEnv(),
+      stateRoot,
+      models: async (env) => normalizeCursorSdkModels(await modelCache(env, () => listCursorSdkModels({ env }))),
+    }),
     processProbe: cursorProcessProbe,
     mcp: cursorMcpSource,
     skills: cursorSkillSource,
