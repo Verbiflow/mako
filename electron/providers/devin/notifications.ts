@@ -37,7 +37,7 @@ const ConnectionRetry = z.object({
   isStreamRetry: z.boolean().nullish(),
 })
 const AgentStopped = z.object({ sessionId: z.string(), cause: z.string(), errorMessage: text })
-const Output = z.object({ sessionId: z.string(), message: z.string(), level: z.string().nullish() })
+const Output = z.object({ sessionId: z.string().nullish(), message: z.string(), level: z.string().nullish() })
 const Modal = z.object({ sessionId: z.string(), message: z.string(), detail: text, level: z.string().nullish() })
 const Billing = z.object({ sessionId: z.string(), title: text, body: text })
 
@@ -54,7 +54,8 @@ const FAILED = new Map<string, string | undefined>([
 
 export function devinNotification(method: string, params: JsonObject): AcpNotificationDecoding | undefined {
   if (!method.startsWith("_cognition.ai/")) return undefined
-  const sessionId = Session.safeParse(params).data?.sessionId
+  // Before the session exists Devin names it "".
+  const sessionId = Session.safeParse(params).data?.sessionId || undefined
   if (IGNORED.has(method)) return { sessionId, kind: method, notices: [] }
   switch (method) {
     case "_cognition.ai/compaction": {
