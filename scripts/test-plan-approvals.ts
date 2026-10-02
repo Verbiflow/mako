@@ -1,0 +1,78 @@
+import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { setTimeout as delay } from "node:timers/promises"
+import { ANSWERED_DIFFERENTLY, type ApprovalSubmission } from "../electron/contracts/approval-response.js"
+import type { PlanBuild } from "../electron/contracts/plan-builds.js"
+import { LiveConversations } from "../electron/live-conversations.js"
+import type { LiveSessionState } from "../electron/shared.js"
+import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+
+// Two people answer one plan approval. The host keeps the first answer, and
+// records the plan built only when that answer approved it and reached the agent.
+const root = mkdtempSync(join(tmpdir(), "mako-plan-approvals-"))
+try {
+  for (const scenario of ["approve-first", "keep-planning-first", "unconfirmed"] as const) {
+    const id = randomUUID()
+    const builds: Array<{ plan: string; build: PlanBuild; pending: boolean }> = []
+    const gate = Promise.withResolvers<void>()
+    let calls = 0
+    const submission: ApprovalSubmission | undefined = scenario === "unconfirmed" ? undefined : { kind: "submitted", source: "callback" }
+    const state: LiveSessionState = { id, harness: "claude", cwd: root, status: "running", connection: "connected", nativeRunId: "run", modes: [], currentMode: null, configOptions: [] }
+    const driver: ProviderLiveDriver = {
+      approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      provider: "claude", canResume: true, available: () => true,
+      start: async () => state,
+      prompt: async () => {}, close() {}, cancel: async () => {}, setMode: async () => {},
+      async permission(_binding, _native, _response, dispatch) {
+        dispatch.assertCurrent()
+        calls++
+        await gate.promise
+        if (submission) dispatch.report(submission)
+      },
+    }
+    const owner: LiveConversations = new LiveConversations({
+      root: join(root, scenario), appPath: root, driver: () => driver, history: async () => null, emit: () => {},
+      planBuilt: (plan, build) => builds.push({ plan, build, pending: Boolean(owner.snapshot(id)?.permissions.length) }),
+    })
+    try {
+      await owner.start("claude", root, { conversationId: id })
+      for (let i = 0; i < 100 && owner.snapshot(id)?.session.connection !== "connected"; i++) await delay(5)
+      owner.observe({ type: "live-permission", request: {
+        id: "native-request", sessionId: id, title: "Start implementing the proposed plan?", kind: "ExitPlanMode",
+        options: [{ optionId: "allow_once", name: "Approve plan", kind: "allow_once" }, { optionId: "reject_once", name: "Keep planning", kind: "reject_once" }],
+        implementsPlan: { plan: "plan-1", approve: "allow_once" },
+      } })
+      const request = owner.snapshot(id)?.permissions.at(-1)?.id
+      assert.ok(request)
+      const approve = { kind: "choice", optionId: "allow_once" } as const
+      const keep = { kind: "choice", optionId: "reject_once" } as const
+      const [first, second] = scenario === "keep-planning-first" ? [keep, approve] : [approve, keep]
+      const answering = owner.permission(id, request, first)
+      await assert.rejects(owner.permission(id, request, second), (error: Error) => error.message.includes(ANSWERED_DIFFERENTLY),
+        `${scenario}: the second person's different answer is refused, in words their window recognizes`)
+      await assert.rejects(owner.permission(id, request, first), /already saved/, `${scenario}: the same answer twice is one answer`)
+      gate.resolve()
+      if (scenario === "unconfirmed") await assert.rejects(answering, /did not confirm/)
+      else await answering
+      assert.equal(calls, 1, `${scenario}: the agent hears one answer`)
+      if (scenario === "approve-first") {
+        assert.equal(builds.length, 1, "an approval the agent took records its plan built, once")
+        assert.equal(builds[0]?.plan, "plan-1")
+        assert.equal(builds[0]?.build.conversation, id)
+        assert.ok(builds[0]?.pending, "the build is recorded before the approval leaves the snapshot, so no window sees it unbuilt and unanswered")
+        await owner.permission(id, request, approve)
+        assert.equal(builds.length, 1, "a late identical click records nothing more")
+      } else {
+        assert.deepEqual(builds, [], `${scenario}: nothing is recorded built`)
+      }
+    } finally {
+      owner.close(id)
+    }
+  }
+  console.log("Plan approvals: first answer wins across windows, the loser is told, and only a confirmed approve records the build")
+} finally {
+  rmSync(root, { recursive: true, force: true })
+}

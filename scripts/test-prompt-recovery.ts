@@ -36,6 +36,9 @@ for (const label of ["Claude Code", "Codex", "Cursor", "Grok", "Devin", "OpenCod
       "Old compaction success cannot make an unrelated auth failure retryable")
   }
 }
+const gone = describePromptRecovery({ ...request(evidence[3]), failure: "missing-folder" }, "Claude Code")
+assert.deepEqual([gone.title, gone.resendLabel], ["Folder no longer exists", null], "a missing folder says so in the headline and offers no resend that fails the same way")
+assert.match(gone.failure?.guidance ?? "", /Restore the folder/)
 assert.equal(describePromptRecovery({ ...request(evidence[2]), status: "uncertain" }).title, "Message outcome is unconfirmed")
 assert.equal(describePromptRecovery({ ...request(), status: "uncertain" }).title, "Message delivery is unconfirmed")
 console.log("PASS: shared recovery distinguishes receipt, refusal, unconfirmed and legacy attempts; preserves failure prerequisites across six harnesses and a future adapter")

@@ -47,6 +47,13 @@ try {
   journal.close()
   journal = new LiveJournal(root, snapshot.session.id)
   assert.deepEqual(journal.read()?.blocks, snapshot.blocks)
+  const usage = { used: 40_000, size: 200_000, tokens: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4, reasoning: 1 }, cost: { amount: 0.5, currency: "USD" } }
+  const metered = { ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, usage } }
+  journal.commit(metered, snapshot)
+  snapshot = metered
+  journal.close()
+  journal = new LiveJournal(root, snapshot.session.id)
+  assert.deepEqual(journal.read()?.session.usage, { used: 40_000, size: 200_000 }, "A restart reopens the conversation as full as it was, without the ended process's spend")
   const writer = new DatabaseSync(join(root, `${snapshot.session.id}.sqlite`))
   const rejected = {
     ...snapshot,

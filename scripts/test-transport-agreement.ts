@@ -28,8 +28,9 @@ import type { HarnessProfile } from "../electron/shared.ts"
  * its native runner. This test feeds each model and option value a provider
  * catalog offers through the runner and reads the built command back, so a
  * flag the CLI mangles, an option it silently drops, or an id it composes
- * wrongly fails here instead of in a user's reply. Cursor is absent because
- * it has one transport, the SDK, and nothing to agree with.
+ * wrongly fails here instead of in a user's reply. Cursor is absent: its
+ * headless runs carry the live driver's own SDK selection, read back in
+ * `test-cursor-native-runner.ts`.
  */
 
 const claudeCatalog = normalizeClaudeModels([

@@ -179,7 +179,7 @@ async function audit() {
   if (process.platform === "darwin") app.setActivationPolicy("prohibited")
   // A windowless app is an App Nap candidate: macOS coalesces its timers and
   // lowers its priority, which reads as viewer freezes. A visible Mako window is not napped.
-  const appNap = process.env.MAKO_PREVIEW_APP_NAP === "1" ? undefined : powerSaveBlocker.start("prevent-app-suspension")
+  if (process.env.MAKO_PREVIEW_APP_NAP !== "1") powerSaveBlocker.start("prevent-app-suspension")
   const durationMs = Number(process.env.MAKO_PREVIEW_SECONDS ?? 4) * 1000
   const watchdog = setTimeout(() => app.exit(2), durationMs + 90_000)
   const viewer = new BrowserWindow({

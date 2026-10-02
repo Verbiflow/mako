@@ -181,6 +181,37 @@ try {
   )
 
   console.log("Local usage scanner fixtures passed")
+
+  const grokHome = join(root, "grok-home")
+  const grokSession = join(grokHome, ".grok", "sessions", encodeURIComponent("/work/grok"), "grok-1")
+  type GrokModelUsage = { inputTokens: number; outputTokens: number; cachedReadTokens: number; cacheCreationTokens: number; costUsdTicks: number }
+  const turn = (id: string, timestamp: number, modelUsage: Record<string, GrokModelUsage>) => JSON.stringify({
+    timestamp,
+    method: "_x.ai/session/update",
+    params: { sessionId: "grok-1", update: { sessionUpdate: "turn_completed", prompt_id: id, usage: { inputTokens: 1, modelUsage } } },
+  })
+  await putJsonl(join(grokSession, "updates.jsonl"), [
+    turn("p1", 1_787_000_000, {
+      "grok-build": { inputTokens: 1_000, outputTokens: 50, cachedReadTokens: 800, cacheCreationTokens: 100, costUsdTicks: 250_000_000 },
+      "grok-fast": { inputTokens: 40, outputTokens: 10, cachedReadTokens: 0, cacheCreationTokens: 0, costUsdTicks: 10_000_000 },
+    }),
+    turn("p1", 1_787_000_000, {
+      "grok-build": { inputTokens: 1_000, outputTokens: 50, cachedReadTokens: 800, cacheCreationTokens: 100, costUsdTicks: 250_000_000 },
+    }),
+    JSON.stringify({ method: "_x.ai/session/update", params: { sessionId: "grok-1", update: { sessionUpdate: "agent_message_chunk" } } }),
+  ])
+  await putJsonl(join(grokSession, "chat_history.jsonl"), [turn("p2", 1_787_000_100, { "grok-build": { inputTokens: 9_999, outputTokens: 1 } })])
+  const grokSummary = await usageSummary(join(root, "no-mako-sessions"), grokHome)
+  const grok = grokSummary.sources?.find((source) => source.source === "Grok")
+  assert.equal(grok?.messages, 2, "one event per model per turn; a repeated turn and other files add nothing")
+  assert.equal(grok?.input, 140, "cached input is counted apart from fresh input")
+  assert.equal(grok?.cacheRead, 800)
+  assert.equal(grok?.cacheWrite, 100)
+  assert.equal(grok?.output, 60)
+  assert.ok(Math.abs((grok?.reportedCost ?? 0) - 0.026) < 1e-12, "cost ticks are ten-billionths of a dollar")
+  assert.equal(grokSummary.projects?.[0]?.cwd, "/work/grok")
+  assert.deepEqual(grokSummary.models?.map((model) => model.model).sort(), ["grok-build", "grok-fast"])
+  console.log("Grok usage: per-model turn totals, cache apart from input, cost from ticks, project from the store path")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

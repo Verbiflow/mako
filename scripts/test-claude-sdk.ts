@@ -149,6 +149,20 @@ assert.ok(steering && !steering.done)
 assert.equal(steering.value.priority, "now")
 output.send(steering.value)
 assert.deepEqual(await receipt, { kind: "accepted" })
+// Claude Code 2.1.283 reports each command's progress by Mako's uuid, before any echo.
+// A CLI newer than the SDK's types sends this kind, as JSON the driver parses.
+const lifecycle = (command: string, state: string) =>
+  output.send(JSON.parse(JSON.stringify({ type: "command_lifecycle", command_uuid: command, state, uuid: randomUUID(), session_id: "native" })))
+const queued = driver.steer("sdk-fixture", { id: "queued", expectedRunId: running.session.nativeRunId, text: "Queued", attachments: [] })
+const queuedInput = await input?.next()
+assert.ok(queuedInput && !queuedInput.done)
+lifecycle(queuedInput.value.uuid!, "queued")
+assert.deepEqual(await queued, { kind: "accepted" }, "a queued command is received")
+const dropped = driver.steer("sdk-fixture", { id: "dropped", expectedRunId: running.session.nativeRunId, text: "Dropped", attachments: [] })
+const droppedInput = await input?.next()
+assert.ok(droppedInput && !droppedInput.done)
+lifecycle(droppedInput.value.uuid!, "cancelled")
+await assert.rejects(dropped, /not confirmed steering/, "a cancelled command is no receipt")
 const missing = driver.steer("sdk-fixture", {
   id: "two",
   expectedRunId: running.session.nativeRunId,
@@ -631,8 +645,9 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
     { label: "Rate limited", detail: "You've hit your session limit · resets 5:10am", body: undefined, tone: "warning" },
     { label: "Warning", detail: "The reply hit the output token limit", body: undefined, tone: "warning" },
   ], "an API failure Claude composed is a marker, and a truncated reply says so")
-  assert.deepEqual(session()?.usage, { used: 6200, size: 1_000_000, cost: { amount: 0.25, currency: "USD" } },
-    "the context meter reads the main loop's latest request against its model's window")
+  assert.deepEqual(session()?.usage, { used: 6200, size: 1_000_000, cost: { amount: 0.25, currency: "USD" },
+    tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 } },
+    "the context meter reads the main loop's latest request against its model's window, split by where its tokens came from")
   const reports = noticeEvents.length
   result({ total_cost_usd: 0.25, modelUsage: { "claude-opus-4-8[1m]": window } })
   await delay(0)
@@ -671,7 +686,9 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
   send({ type: "conversation_reset", ...ids, new_conversation_id: resetId, trigger: "clear" })
   await delay(0)
   assert.equal(session()?.nativeId, resetId, "a cleared conversation continues under its new native id")
-  assert.equal(session()?.usage, undefined)
+  assert.deepEqual(session()?.usage, { cost: { amount: 0.25, currency: "USD" },
+    tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 } },
+  "a cleared conversation empties the context, a result without model usage erases nothing, and what was spent stays")
   noticeDriver.close("notice-fixture")
 }
 console.log("PASS: Claude limits, fallbacks, notices, mode, commands, usage and stop reasons reach the session once each")

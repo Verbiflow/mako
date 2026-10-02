@@ -9,8 +9,8 @@ import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credenti
 import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { grokImportedPermissionMode } from "../electron/providers/grok/claude-permissions.ts"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { grokPermissionPolicy } from "../electron/providers/grok/permission-policy.ts"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
@@ -86,22 +86,25 @@ assert.deepEqual(grokModes.map((mode) => [mode.id, mode.access, mode.enforcement
 ])
 assert.equal(acpLiveDriver(grokAcpSource).steer, undefined, "Grok queues a concurrent prompt behind the turn")
 assert.equal(acpLiveDriver(grokAcpSource).steering, undefined)
-const grokRoot = mkdtempSync(join(tmpdir(), "grok-access-"))
+const grokRoot = realpathSync(mkdtempSync(join(tmpdir(), "grok-access-")))
 const grokHome = join(grokRoot, "home")
 const grokRepo = join(grokRoot, "repo")
 const grokProject = join(grokRepo, "app")
 mkdirSync(join(grokRepo, ".git"), { recursive: true })
+writeFileSync(join(grokRepo, ".git", "HEAD"), "ref: refs/heads/main\n")
 mkdirSync(grokProject, { recursive: true })
-mkdirSync(grokHome)
+mkdirSync(join(grokHome, ".grok"), { recursive: true })
 const grokLaunch = { appPath: "/app", execPath: process.execPath, cwd: grokProject, env: { HOME: grokHome } }
+const grokPaths = { cwd: grokProject, home: grokHome, grokHome: join(grokHome, ".grok") }
 interface ClaudeSettings {
-  permissions?: { defaultMode: string }
+  permissions?: { defaultMode?: string; allow?: string[]; ask?: string[]; deny?: string[] }
   defaultMode?: string
 }
 const claudeSettings = (dir: string, name: string, settings: ClaudeSettings) => {
   mkdirSync(join(dir, ".claude"), { recursive: true })
   writeFileSync(join(dir, ".claude", name), JSON.stringify(settings))
 }
+const trustRepo = () => writeFileSync(join(grokHome, ".grok", "trusted_folders.toml"), `[folders."${grokRepo}"]\ntrusted = true\ndecided_at = 1789008263\n`)
 const grokFull = await grokAcpSource.launch({ ...grokLaunch, access: "full" })
 assert.deepEqual(grokFull?.args.slice(0, 3), ["--permission-mode", "bypassPermissions", "agent"])
 const grokAuto = await grokAcpSource.launch({ ...grokLaunch, access: "auto" })
@@ -114,21 +117,46 @@ claudeSettings(grokHome, "settings.json", { permissions: { defaultMode: "dontAsk
 const grokDontAsk = await grokAcpSource.launch({ ...grokLaunch, access: "ask" })
 assert.equal(grokDontAsk?.access, undefined, "dontAsk has no tier: Mako keeps Ask and says what Grok does instead")
 assert.equal(grokDontAsk?.notices?.[0]?.tone, "warning")
-assert.match(grokDontAsk?.notices?.[0]?.detail ?? "", /^~\/\.claude\/settings\.json sets permissions\.defaultMode to dontAsk, so it denies/)
+assert.equal(grokDontAsk?.notices?.[0]?.setup, true)
+assert.match(grokDontAsk?.notices?.[0]?.detail ?? "", /^~\/\.claude\/settings\.json sets permissions\.defaultMode to dontAsk, so it denies anything no rule allows/)
 assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "auto" }))?.notices, undefined, "an explicit Auto flag beats the imported mode")
 assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "full" }))?.notices, undefined, "an explicit Full flag beats the imported mode")
 claudeSettings(grokHome, "settings.local.json", { defaultMode: "bypassPermissions" })
-assert.deepEqual(grokImportedPermissionMode(grokProject, grokHome), { mode: "bypassPermissions", file: join(grokHome, ".claude", "settings.local.json") },
+assert.deepEqual(grokPermissionPolicy(grokPaths).mode, { mode: "bypassPermissions", file: join(grokHome, ".claude", "settings.local.json") },
   "the user's local settings come before the shared ones, and a top-level defaultMode counts")
 assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "ask" }))?.access, "full", "an imported bypassPermissions runs Grok at Full, so Mako reports Full")
-claudeSettings(grokRepo, "settings.json", { permissions: { defaultMode: "auto" } })
-assert.deepEqual(grokImportedPermissionMode(grokProject, grokHome), { mode: "auto", file: join(grokRepo, ".claude", "settings.json") },
-  "project settings up to the repository root come before the user's")
+
+claudeSettings(grokRepo, "settings.json", { permissions: { defaultMode: "auto", deny: ["Write"] } })
+const untrusted = grokPermissionPolicy(grokPaths)
+assert.equal(untrusted.mode?.mode, "bypassPermissions", "an untrusted project's mode is skipped, as Grok skips it")
+assert.deepEqual(untrusted.rules, [], "and so are its rules")
+assert.deepEqual(untrusted.untrusted, [join(grokRepo, ".claude", "settings.json")])
+const untrustedLaunch = await grokAcpSource.launch({ ...grokLaunch, access: "ask" })
+assert.equal(untrustedLaunch?.access, "full")
+assert.deepEqual(untrustedLaunch?.notices?.map((notice) => [notice.label, notice.setup]), [["Grok overrides Ask", true], ["Grok skips project permissions", true]],
+  "the conversation is told which project settings Grok skips")
+
+trustRepo()
+assert.deepEqual(grokPermissionPolicy(grokPaths).mode, { mode: "auto", file: join(grokRepo, ".claude", "settings.json") },
+  "in a trusted repository, project settings up to its root come before the user's")
 assert.equal((await grokAcpSource.launch({ ...grokLaunch, access: "ask" }))?.access, "auto")
 claudeSettings(grokProject, "settings.local.json", { permissions: { defaultMode: "default" } })
 const grokProjectDefault = await grokAcpSource.launch({ ...grokLaunch, access: "ask" })
 assert.equal(grokProjectDefault?.access, undefined, "the nearest project setting wins, and default is Ask")
-assert.equal(grokProjectDefault?.notices, undefined)
+assert.deepEqual(grokProjectDefault?.notices?.map((notice) => notice.label), ["Grok permission rules"], "only the project's deny rule is left to say")
+
+claudeSettings(grokHome, "settings.local.json", { permissions: { allow: ["Bash(git *)", "Edit(src/**)"] } })
+writeFileSync(join(grokHome, ".grok", "config.toml"), `[ui]\npermission_mode = "always-approve"\n\n[permission]\ndeny = ["Bash(rm -rf *)"]\nrules = [{ action = "ask", tool = "read", pattern = "secrets/**" }]\n`)
+const rules = grokPermissionPolicy(grokPaths).rules
+assert.deepEqual(rules.map((rule) => [rule.action, rule.rule]), [
+  ["deny", "Write"], ["allow", "Bash(git *)"], ["allow", "Edit(src/**)"], ["deny", "Bash(rm -rf *)"], ["ask", "read(secrets/**)"],
+], "rules merge from the project's Claude files, the user's Claude files and Grok's own config, in both of its forms")
+for (const access of ["ask", "auto", "full"] as const) {
+  const notice = (await grokAcpSource.launch({ ...grokLaunch, access }))?.notices?.find((candidate) => candidate.label === "Grok permission rules")
+  assert.equal(notice?.detail, "2 denied, 1 always ask, 2 allowed · 3 files", `the rules are said at ${access} too: deny holds at every tier`)
+  assert.equal(notice?.setup, true)
+  assert.match(notice?.body ?? "", /\*\*Denied, at every access level\*\*\n\n- `Write` · .*repo\/\.claude\/settings\.json\n- `Bash\(rm -rf \*\)` · ~\/\.grok\/config\.toml/)
+}
 rmSync(grokRoot, { recursive: true, force: true })
 const grokUnset = await grokAcpSource.launch(grokLaunch)
 assert.equal(grokUnset?.args[0], "agent", "no selection leaves the user's Grok configuration alone")

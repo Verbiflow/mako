@@ -43,11 +43,7 @@ export function decoders(): ProviderDecoderSource[] {
 export function decoderFor(harness: string): ProviderDecoderSource {
   const source = providerHost.decoders.get(harness)
   if (source) return source
-  const absent = providerHost.harnesses.get(harness)?.absent.decoder
-  const known = decoders().map((decoder) => decoder.provider).join(", ")
-  throw new Error(absent
-    ? `${harness} has no decoder yet: ${absent.reason}. Decoders: ${known}`
-    : `No harness named ${harness}. Decoders: ${known}`)
+  throw new Error(`No harness named ${harness}. Decoders: ${decoders().map((decoder) => decoder.provider).join(", ")}`)
 }
 
 /** Decoded events as fixtures hold them. */

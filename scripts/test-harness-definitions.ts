@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { existsSync, readdirSync } from "node:fs"
+import { join } from "node:path"
 import { readableHarnesses } from "@mako/sessions"
 import { createProviderHost, type ProviderHost } from "../electron/providers/host.ts"
 import {
@@ -68,12 +70,12 @@ for (const { provider, absent } of harnesses) {
 }
 
 // Every harness decodes its native messages through a declared decoder with
-// fixtures. These three still decode inside their drivers; the list only shrinks.
-assert.deepEqual(
-  harnesses.filter((harness) => harness.absent.decoder).map((harness) => harness.provider).sort(),
-  ["claude", "cursor", "opencode"],
-  "a harness gains a decoder and fixtures (scripts/fixtures/native-decoding/<harness>/) instead of joining the list without one"
-)
+// recorded sessions to replay.
+for (const harness of harnesses) {
+  assert.equal(harness.absent.decoder, undefined, `${harness.provider} decodes through a declared decoder, not inside its driver`)
+  const fixtures = join(import.meta.dirname, "fixtures", "native-decoding", harness.provider)
+  assert.ok(existsSync(fixtures) && readdirSync(fixtures).some((name) => name.endsWith(".json")), `${harness.provider} has decoding fixtures in ${fixtures}`)
+}
 
 const host = createProviderHost()
 const definition: HarnessDefinition = {

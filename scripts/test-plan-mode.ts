@@ -2,15 +2,17 @@ import assert from "node:assert/strict"
 import type { LiveSessionMode } from "../src/lib/types.ts"
 import type { ModelOption } from "@mako/sessions/settings"
 import type { ProposedPlan } from "@mako/sessions/content"
+import { PlanBuildTargetSchema, type PlanBuild, type PlanBuildClaim } from "../electron/contracts/plan-builds.ts"
 
 // The renderer state layer is React-free, but modules read `window` at load.
 const bridge: Array<[string, unknown[]]> = []
+const replies: Record<string, (...args: unknown[]) => PlanBuildClaim> = {}
 Object.assign(globalThis, {
   window: {
     mako: new Proxy({}, {
       get: (_target, name) => (...args: unknown[]) => {
         bridge.push([String(name), args])
-        return Promise.resolve(null)
+        return Promise.resolve(replies[String(name)]?.(...args) ?? null)
       },
     }),
     addEventListener() {},
@@ -152,9 +154,10 @@ bridge.length = 0
 await buildPlan({ liveId: "live" }, plan)
 assert.deepEqual(bridge[0], ["livePermission", ["live", "request", { kind: "choice", optionId: "allow_once" }]],
   "approving the waiting plan builds it; no second prompt is sent")
-assert.equal(planBuildsStore.get().builds["tool-2"]?.conversation, "live", "the card learns the approval built it here")
+assert.equal(planBuildsStore.get().builds["tool-2"], undefined,
+  "the host records the build once the agent takes the approval; a window whose answer lost records nothing")
 bridge.length = 0
-await assert.rejects(buildPlan({ liveId: "live" }, older), /waiting on its newest plan/)
+await assert.rejects(buildPlan({ liveId: "live" }, older), /earlier revision/)
 assert.deepEqual(bridge, [], "an earlier plan neither answers the current approval nor sends beside it")
 await assert.rejects(buildPlan({ liveId: "live" }, { ...plan, status: "drafting" }), /complete plan/)
 
@@ -179,12 +182,21 @@ providerStore.set({
   },
 })
 const sent: string[] = []
+let delivered = true
 acp.send = (text) => {
   sent.push(text)
-  return Promise.resolve(true)
+  return Promise.resolve(delivered)
 }
+let hostBuild: PlanBuild | undefined
+replies.claimPlanBuild = (_claim, _plan, target, seen) =>
+  (hostBuild?.at ?? null) === seen
+    ? { claimed: true, build: (hostBuild = { ...PlanBuildTargetSchema.parse(target), at: (hostBuild?.at ?? 0) + 1 }) }
+    : { claimed: false, current: hostBuild }
 rememberDraft("codex", "an unrelated thought")
+bridge.length = 0
 await buildPlan({ liveId: "codex" }, plan)
+assert.deepEqual(bridge.find(([name]) => name === "claimPlanBuild")?.[1].slice(1), ["tool-2", { conversation: "codex" }, null],
+  "Build claims the plan, as last seen, before it sends")
 assert.equal(prefsStore.get().settingsOverrides[settingsTargetKey({ kind: "live", id: "codex", harness: "codex", cwd: "/work" })]?.options?.plan, false,
   "Build leaves plan mode for the turn it sends")
 assert.equal(sent.length, 1)
@@ -193,6 +205,19 @@ assert.equal(body, "Implement the proposed plan: Ship it.")
 assert.deepEqual(plans, [plan], "the whole plan travels with the request")
 assert.equal(draftText("codex"), "an unrelated thought", "the composer's draft is untouched")
 assert.equal(planBuildsStore.get().builds["tool-2"]?.conversation, "codex", "a sent implementation request records where it went")
+
+// Two Build clicks on one plan: the one that saw an older build sends nothing.
+hostBuild = { at: 9, conversation: "elsewhere" }
+await assert.rejects(buildPlan({ liveId: "codex" }, plan), (error: Error) => error.name === "PlanBuiltElsewhereError")
+assert.equal(sent.length, 1, "a lost claim sends no second implementation")
+assert.deepEqual(planBuildsStore.get().builds["tool-2"], hostBuild, "the window learns the build that won")
+// A Build that wins but can't send gives its claim back.
+delivered = false
+bridge.length = 0
+await assert.rejects(buildPlan({ liveId: "codex" }, plan), /not sent/)
+const claimed = bridge.find(([name]) => name === "claimPlanBuild")?.[1][0]
+assert.deepEqual(bridge.find(([name]) => name === "releasePlanBuild")?.[1], [claimed], "an unsent build is released by its claim id")
+delivered = true
 
 // A sent message builds the plans it asks to implement, wherever it went; a revision builds nothing.
 const revised: ProposedPlan = { ...plan, id: "tool-3", text: "# Revise me" }

@@ -35,7 +35,7 @@ async function check() {
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
-  const { liveStart, livePrompt, liveCancel, liveClose } = await import(join(repo, "dist-electron/acp.js"))
+  const { liveStart, livePrompt, liveCancel, liveClose, liveCompact } = await import(join(repo, "dist-electron/acp.js"))
   const { advancePromptDelivery } = await import(join(repo, "dist-electron/contracts/prompt-delivery.js"))
   const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
   const hostLogFile = join(root, "host.log")
@@ -49,12 +49,17 @@ async function check() {
     available: () => true,
     providerTurns: source.providerTurns,
     decodeNotification: source.decodeNotification,
+    mcpStartup: source.mcpStartup,
     observeAgents: source.observeAgents,
+    compaction: source.compaction,
     clientCapabilities: source.clientCapabilities,
     launch: async () => ({
       command: process.execPath,
       args: [join(repo, "scripts/fixtures/acp-provider-turn-agent.mjs")],
-      configureEnvironment(env) { env.ELECTRON_RUN_AS_NODE = "1" },
+      configureEnvironment(env) {
+        env.ELECTRON_RUN_AS_NODE = "1"
+        env.FIXTURE_PROVIDER = provider
+      },
     }),
   })
   fixture("provider-turn-grok", grokAcpSource)
@@ -79,6 +84,7 @@ async function check() {
     }
     return {
       events, session, updates, until,
+      markers: (label) => updates().filter((update) => update.kind === "event" && update.label === label).map((update) => update.detail),
       opened: () => updates().filter((update) => update.kind === "provider-turn"),
       statusesSince: (seen) => events.slice(seen).flatMap((event) => event.type === "live-session" ? [event.session.status] : []),
       async prompt(text) {
@@ -87,10 +93,14 @@ async function check() {
       },
       cancel: () => liveCancel(id),
       close: () => liveClose(id),
+      compact: (actionId) => liveCompact(id, actionId),
     }
   }
 
   const grok = await conversation("provider-turn-grok")
+  assert.deepEqual(grok.markers("MCP server failed"), ["crashes · could not connect"],
+    "a server Grok reports failing before the session's id arrives is shown once the session opens")
+  console.log("PASS: Grok's MCP startup failures said while the session opens reach it")
   await grok.prompt("self-started")
   const seen = grok.events.length
   await grok.until("the self-started turn", () => grok.opened().length === 1)
@@ -118,6 +128,17 @@ async function check() {
   assert.equal(grok.opened().length, 2, "output without an announced turn opens nothing")
   assert.equal(grok.session()?.status, "ready")
   console.log("PASS: Output Grok did not announce as a new turn opens nothing")
+
+  const beforeCompact = grok.events.length
+  const actionId = randomUUID()
+  await grok.compact(actionId)
+  const settled = () => grok.events.slice(beforeCompact).find((event) => event.type === "live-action-result" && event.actionId === actionId)
+  await grok.until("the compaction to settle", () => settled() && grok.session()?.status === "ready")
+  assert.deepEqual(settled().result, { kind: "completed" }, "Grok's own compaction notice confirms the /compact Mako sent")
+  assert.deepEqual(grok.events.slice(beforeCompact).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update.detail] : []),
+    ["Manual · 23k → 9k tokens"], "a compaction Mako asked for is labelled manual")
+  assert.equal(grok.session()?.lastStop, "completed")
+  console.log("PASS: Compact on Grok sends /compact and settles on Grok's own completion notice, marked manual")
 
   const beforeNative = grok.events.length
   await grok.prompt("native-grok")
@@ -151,6 +172,10 @@ async function check() {
   await grok.close()
 
   const devin = await conversation("provider-turn-devin")
+  assert.deepEqual(devin.markers("MCP server failed"), ["missing · could not be launched", "crashes · could not connect"],
+    "lines with no session yet and Devin's second copy of each failure leave one marker per server")
+  assert.deepEqual(devin.markers("Warning"), [], "no generic warnings beside them")
+  console.log("PASS: Devin's MCP startup failures said while the session opens reach it once per server")
   await devin.prompt("devin-self-started")
   const devinSeen = devin.events.length
   await devin.until("the turn Devin starts on the finished subagent", () => devin.opened().length === 1)

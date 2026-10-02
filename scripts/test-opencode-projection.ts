@@ -304,16 +304,20 @@ try {
 {
   const mcp = new OpenCodeMcpHealth()
   const server = (name: string, status: McpServer["status"]): McpServer => ({ name, status })
-  assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "spawn docs-mcp ENOENT" }), server("ok", { status: "connected" })]),
-    [{ label: "MCP server failed", detail: "docs · spawn docs-mcp ENOENT", tone: "warning" }])
+  assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "NotFound: ChildProcess.spawn (docs-mcp )" }), server("ok", { status: "connected" })]),
+    [{ label: "MCP server failed", detail: "docs · could not be launched", body: "NotFound: ChildProcess.spawn (docs-mcp )", tone: "warning", setup: true }],
+    "OpenCode 2's reason for a command that doesn't exist reads in the shared words")
+  assert.deepEqual(new OpenCodeMcpHealth().observe([server("exits", { status: "failed", error: "MCP error -32000: Connection closed" })]),
+    [{ label: "MCP server failed", detail: "exits · could not connect", body: "MCP error -32000: Connection closed", tone: "warning", setup: true }],
+    "a server that exits in its handshake reads in the shared words, with OpenCode's own in the body")
   assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "spawn docs-mcp ENOENT again" })]), [], "a server that keeps failing is one marker")
   assert.deepEqual(mcp.observe([server("docs", { status: "pending" })]), [])
   assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "still" })]), [], "a retry that fails again is the same failure")
   assert.deepEqual(mcp.observe([server("docs", { status: "connected" }), server("drive", { status: "needs_auth" })]),
-    [{ label: "MCP server failed", detail: "drive · needs sign-in", tone: "warning" }])
+    [{ label: "MCP server failed", detail: "drive · sign-in required", tone: "warning", setup: true }])
   assert.equal(mcp.observe([server("docs", { status: "failed", error: "crashed" })]).length, 1, "failing again after recovering is a new marker")
   const [refused] = mcp.failed("big", `Invalid config\n${"x".repeat(300)}`)
-  assert.deepEqual(refused, { label: "MCP server failed", detail: "big · Invalid config", body: `Invalid config\n${"x".repeat(300)}`, tone: "warning" },
+  assert.deepEqual(refused, { label: "MCP server failed", detail: "big · Invalid config", body: `Invalid config\n${"x".repeat(300)}`, tone: "warning", setup: true },
     "a long error stays one line beside the label, whole in the body")
   assert.equal(openCodeStopped("user", true), undefined, "a turn stopped from Mako needs no marker")
   assert.deepEqual(openCodeStopped("user", false), { label: "Stopped outside Mako", detail: "another OpenCode client interrupted this turn" },
@@ -433,7 +437,7 @@ process.stdin.on("end", () => process.exit(0))
     push(event("mcp.status.changed", { server: "docs" }))
     push(event("mcp.status.changed", { server: "docs" }))
     assert.deepEqual(await until("the MCP failure", () => markers().find(marker => marker.label === "MCP server failed")),
-      { kind: "event", label: "MCP server failed", detail: "docs · spawn docs-mcp ENOENT", tone: "warning" })
+      { kind: "event", label: "MCP server failed", detail: "docs · could not be launched", body: "spawn docs-mcp ENOENT", tone: "warning", setup: true })
 
     if (driver.compaction?.kind !== "supported") throw new Error("OpenCode compaction is supported")
     const actionId = randomUUID()

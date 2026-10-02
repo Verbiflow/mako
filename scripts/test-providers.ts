@@ -10,6 +10,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  utimes,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -33,6 +34,11 @@ import {
   grokProcessProbe,
   parseGrokActiveSessions,
 } from "../electron/providers/grok/process-probe.ts"
+import {
+  devinProcessProbeFor,
+  parseDevinProcesses,
+  type DevinProcess,
+} from "../electron/providers/devin/process-probe.ts"
 import type { ProviderAccountCapability } from "../electron/providers/account-capability.ts"
 import {
   processIdentityMatches,
@@ -117,6 +123,46 @@ assert.deepEqual(
   ),
   [{ nativeId: "grok-one", status: "open" }]
 )
+assert.deepEqual(
+  parseDevinProcesses(
+    "  501 Thu Oct  1 02:30:00 2026     /Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin\n" +
+      "  502 Thu Oct  1 02:30:00 2026     /usr/bin/devinish\n" +
+      "  503 Thu Oct  1 02:31:00 2026     devin\n"
+  ),
+  [
+    { pid: 501, startedAt: Date.parse("Thu Oct 1 02:30:00 2026") },
+    { pid: 503, startedAt: Date.parse("Thu Oct 1 02:31:00 2026") },
+  ]
+)
+{
+  const locks = await mkdtemp(join(tmpdir(), "mako-devin-locks-"))
+  try {
+    const now = Date.now()
+    let running: DevinProcess[] = [{ pid: 700, startedAt: now - 60_000 }, { pid: 701, startedAt: now - 10_000 }]
+    let asked = 0
+    const probe = devinProcessProbeFor({ locks, processes: async () => (asked++, running) })
+    const lock = async (session: string, pid: number, at: number) => {
+      await writeFile(join(locks, `${session}.lock`), String(pid))
+      await utimes(join(locks, `${session}.lock`), at / 1000, at / 1000)
+    }
+    await lock("open-one", 700, now - 30_000)
+    await lock("recycled-pid", 701, now - 30_000)
+    await lock("dead-pid", 999, now - 5_000)
+    await lock("ancient", 700, now - 86_400_000)
+    const signal = new AbortController().signal
+    assert.deepEqual(await probe.probe(signal), { kind: "available", sessions: [{ nativeId: "open-one", status: "open" }] },
+      "a lock is open only when a running devin started before writing it")
+    await lock("open-one", 701, now - 1_000)
+    assert.deepEqual(await probe.probe(signal), { kind: "available", sessions: [{ nativeId: "open-one", status: "open" }] },
+      "a session another devin loads is re-read when its lock changes")
+    running = []
+    await rm(locks, { recursive: true })
+    assert.deepEqual(await probe.probe(signal), { kind: "available", sessions: [] }, "with no devin running, no lock is read")
+    assert.equal(asked, 3)
+  } finally {
+    await rm(locks, { recursive: true, force: true })
+  }
+}
 let probeAvailable = true
 let probeNeedsInput = false
 const activityProbe = {
@@ -317,12 +363,10 @@ try {
 const providers = providerHost.profiles.list().map((loader) => loader.provider)
 assert.ok(providers.length > 0)
 assert.equal(new Set(providers).size, providers.length)
-// Cursor has one transport, the SDK: no headless CLI runner and no ACP
-// source. Cursor and Grok expose provider-owned sign-in.
-assert.deepEqual(
-  providerHost.nativeRunners.list().map((runner) => runner.provider),
-  providers.filter((provider) => provider !== "cursor")
-)
+// Every harness runs headless. Cursor's runner is its SDK child in one-shot
+// mode, so it has one transport and no ACP source. Cursor and Grok expose
+// provider-owned sign-in.
+assert.deepEqual(providerHost.nativeRunners.list().map((runner) => runner.provider), providers)
 assert.equal(providerHost.liveDrivers.get("cursor")?.canResume, true)
 assert.equal(providerHost.liveDrivers.get("cursor")?.steering, "interrupt")
 assert.deepEqual(
@@ -345,11 +389,11 @@ assert.equal(providerHost.liveDrivers.get("opencode")?.canResume, true)
 assert.equal(providerHost.liveDrivers.get("opencode")?.observesNativeAgents, true)
 assert.deepEqual(
   providerHost.sessionEmitters.list().map((emitter) => emitter.provider),
-  ["claude", "codex", "cursor", "grok"]
+  ["claude", "codex", "cursor", "grok", "devin", "opencode"]
 )
 assert.deepEqual(
   providerHost.processProbes.list().map((probe) => probe.provider),
-  ["claude", "codex", "cursor", "grok", "opencode"]
+  ["claude", "codex", "cursor", "grok", "devin", "opencode"]
 )
 assert.equal(providerHost.nativeRunners.get("claude")?.fastMode, "supported")
 assert.equal(providerHost.profiles.get("claude")?.transport, "sdk")
@@ -358,7 +402,7 @@ assert.equal(providerHost.liveDrivers.get("claude")?.compaction?.kind, "supporte
 assert.equal(providerHost.liveDrivers.get("codex")?.compaction?.kind, "supported")
 assert.equal(providerHost.liveDrivers.get("devin")?.compaction?.kind, "supported")
 assert.equal(providerHost.liveDrivers.get("opencode")?.compaction?.kind, "supported")
-assert.equal(providerHost.liveDrivers.get("grok")?.compaction?.kind, "unavailable")
+assert.equal(providerHost.liveDrivers.get("grok")?.compaction?.kind, "supported")
 assert.equal(providerHost.liveDrivers.get("cursor")?.compaction?.kind, "unavailable")
 assert.deepEqual(
   providerHost.accountCapabilities

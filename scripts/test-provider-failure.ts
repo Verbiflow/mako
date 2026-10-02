@@ -44,6 +44,18 @@ const cases: [string, string][] = [
   [heldReason("Mako (dev)"), "resume-failed"],
   ["Invalid params: Unknown model config option: effort", "rejected-input"],
   ["Prompt cannot be empty", "rejected-input"],
+  ["The folder /Users/me/gone no longer exists. Open this in a folder that exists.", "missing-folder"],
+  // The startup watch's words; a cause in the stderr line it appends wins.
+  ["Claude exited with code 1 during SDK initialization", "launch-failed"],
+  ["Claude exited with code 1 during SDK initialization: Error: Invalid MCP configuration:", "launch-failed"],
+  ["Grok exited on SIGKILL before session/new", "launch-failed"],
+  ["Claude Code executable not found at /opt/claude/cli.js. Is options.pathToClaudeCodeExecutable set?", "launch-failed"],
+  ["spawn /usr/local/bin/devin ENOENT", "launch-failed"],
+  ["Claude Code process exited with code 1: Error: Settings file is invalid", "launch-failed"],
+  ["Claude exited with code 1 during SDK initialization: Invalid API key · Please run /login", "auth"],
+  ["Claude exited with code 1 during SDK initialization: No conversation found with session ID: 1f2e", "resume-failed"],
+  ["Claude produced no output for 20 s during SDK initialization (process still running)", "launch-stalled"],
+  ["Grok did not finish session/new within 120 s (its last stderr output was 31 s ago)", "launch-stalled"],
   ["Something entirely new went wrong", "unknown"],
   ["", "unknown"],
 ]
@@ -62,7 +74,7 @@ assert.equal(classifyProviderFailure("413 request too large: too many tokens").k
 
 // Only the transient kinds offer Send again.
 const retriable = new Set(PROVIDER_FAILURE_KINDS.filter((kind) => describeProviderFailure(kind).retriable))
-assert.deepEqual([...retriable].sort(), ["network", "provider-unavailable", "rate-limited", "unknown"])
+assert.deepEqual([...retriable].sort(), ["launch-stalled", "network", "provider-unavailable", "rate-limited", "unknown"])
 for (const kind of PROVIDER_FAILURE_KINDS) {
   const described = describeProviderFailure(kind, "OpenCode")
   assert.equal(described.kind, kind)

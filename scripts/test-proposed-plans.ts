@@ -149,6 +149,24 @@ const decision = await response
 assert.ok(decision)
 assert.equal(decision.behavior, "deny")
 
+async function approvePlan(planReturn?: "acceptEdits" | "plan") {
+  const asked: LiveDriverEvent[] = []
+  const approving = new ClaudePermissions("fixture", (event) => asked.push(event))
+  approving.planReturn = planReturn
+  const pending = approving.tool("ExitPlanMode", { plan: text }, { signal, requestId: "approve", toolUseID: plan.id })
+  approving.respond("approve", { kind: "choice", optionId: "allow_once" })
+  const result = await pending
+  assert.equal(result.behavior, "allow")
+  return result.behavior === "allow" ? result.updatedPermissions : undefined
+}
+assert.deepEqual(
+  await approvePlan("acceptEdits"),
+  [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
+  "approving a plan returns to the access Plan replaced; Claude's own exit is `default`, which asks before every edit"
+)
+assert.equal(await approvePlan(), undefined, "with no level remembered, Claude's own exit stands")
+assert.equal(await approvePlan("plan"), undefined)
+
 const root = await mkdtemp(join(tmpdir(), "mako-plans-"))
 const outside = await mkdtemp(join(tmpdir(), "mako-plans-outside-"))
 try {

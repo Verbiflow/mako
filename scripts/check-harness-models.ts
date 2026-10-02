@@ -366,6 +366,18 @@ function assertGenericProfile(profile: HarnessProfile): void {
       `${profile.id} configured model is not canonical`
     )
   }
+  // A valid catalog must launch as well as render. Check family defaults
+  // and encoded variants through the same resolver used by a send.
+  for (const model of profile.models) {
+    for (const identity of [model.id, ...(model.variants?.map((variant) => variant.id) ?? [])]) {
+      const resolved = resolveSessionSettings({ models: profile.models, context: "new", overrides: { model: identity } })
+      assert.deepEqual(resolved.issues, [], `${profile.id}: ${identity} must carry supported options`)
+      assert.ok(
+        resolveHarnessTuning(profile, resolved.settings)?.model,
+        `${profile.id}: ${identity} must resolve for launch`
+      )
+    }
+  }
 }
 
 function assertLiveProfile(profile: HarnessProfile): void {
@@ -392,6 +404,7 @@ function assertLiveProfile(profile: HarnessProfile): void {
   })
   assert.equal(resolved.model.kind, "known")
   assert.deepEqual(resolved.issues, [], `${profile.id} defaults must be valid`)
+  assert.ok(resolveHarnessTuning(profile, resolved.settings)?.model, `${profile.id} defaults must launch`)
   assert.equal(
     new Set(model.options.map((option) => option.id)).size,
     model.options.length

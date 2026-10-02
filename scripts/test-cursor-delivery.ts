@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
 import { CursorSdkDisconnectedError } from "../electron/providers/cursor/sdk/client.ts"
+import { cursorProfileLoaderWith } from "../electron/providers/cursor/profile.ts"
+import { resolveHarnessTuning } from "../electron/harness-models.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
 import {
   createCursorSdkDriver,
@@ -16,6 +18,7 @@ import type {
   SdkEvent,
   SdkMethod,
   SdkResult,
+  SdkModelListItem,
 } from "../electron/providers/cursor/sdk/wire.ts"
 
 type FixtureAnswers = {
@@ -270,6 +273,15 @@ try {
   // Plan is the SDK's per-send mode: a planning turn asks for it beside the
   // model, and the model the run reports back does not turn it off.
   const sent: string[] = []
+  const planModels: SdkModelListItem[] = [{
+    id: "fixture-model", displayName: "Fixture",
+    parameters: [{ id: "effort", values: [{ value: "high" }, { value: "low" }] }],
+    variants: [
+      { params: [{ id: "effort", value: "high" }], displayName: "High", isDefault: true },
+      { params: [{ id: "effort", value: "low" }], displayName: "Low" },
+    ],
+  }]
+  const planProfile = await cursorProfileLoaderWith(planModels).load({})
   let planEvent: (event: SdkEvent) => void = () => {}
   const planClient: CursorSdkLiveClient = {
     ...client,
@@ -286,7 +298,7 @@ try {
       planEvent = options.onEvent
       return planClient
     },
-    models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
+    models: async () => planModels,
   })
   const planId = randomUUID()
   await planned.start(root, { conversationId: planId, emit(event) {
@@ -294,14 +306,20 @@ try {
   } })
   assert.ok(planStates.at(-1)?.configOptions.some((option) => option.id === "plan" && option.role === "plan"),
     "every Cursor model offers plan mode")
+  const defaultTurn = dispatch()
+  await planned.prompt(planId, "ordinary turn", [], resolveHarnessTuning(planProfile, { model: "fixture-model" }), defaultTurn)
+  assert.equal(sent.at(-1), JSON.stringify({ turn: defaultTurn.attemptId, text: "ordinary turn", model: { id: "fixture-model", params: [{ id: "effort", value: "high" }] }, plan: false }))
+  planEvent({ event: "result", turn: defaultTurn.attemptId, result: { runId: "plan-run-1", status: "finished", model: { id: "fixture-model" } } })
   const planTurn = dispatch()
-  await planned.prompt(planId, "plan it", [], { options: { plan: true } }, planTurn)
-  assert.equal(sent.at(-1), JSON.stringify({ turn: planTurn.attemptId, text: "plan it", model: { id: "fixture-model" }, plan: true }))
+  await planned.prompt(planId, "plan it", [], resolveHarnessTuning(planProfile, { model: "fixture-model", options: { plan: true } }), planTurn)
+  assert.equal(sent.at(-1), JSON.stringify({ turn: planTurn.attemptId, text: "plan it", model: { id: "fixture-model", params: [{ id: "effort", value: "high" }] }, plan: true }))
   assert.equal(planStates.at(-1)?.settings?.options?.plan, true)
-  planEvent({ event: "result", turn: planTurn.attemptId, result: { runId: "plan-run-1", status: "finished", model: { id: "fixture-model" } } })
+  planEvent({ event: "result", turn: planTurn.attemptId, result: { runId: "plan-run-2", status: "finished", model: { id: "fixture-model" } } })
   assert.equal(planStates.at(-1)?.settings?.options?.plan, true, "the run's reported model keeps the plan choice")
   assert.ok(planStates.at(-1)?.configOptions.some((option) => option.id === "plan" && option.kind === "boolean" && option.current === true))
-  await planned.prompt(planId, "build it", [], { options: { plan: false } }, dispatch())
+  const buildTurn = dispatch()
+  await planned.prompt(planId, "build it", [], resolveHarnessTuning(planProfile, { model: "fixture-model[effort=low]", options: { plan: false } }), buildTurn)
+  assert.equal(sent.at(-1), JSON.stringify({ turn: buildTurn.attemptId, text: "build it", model: { id: "fixture-model", params: [{ id: "effort", value: "low" }] }, plan: false }))
   assert.ok(sent.at(-1)?.endsWith('"plan":false}'), "building sends Agent again")
   assert.equal(planStates.at(-1)?.settings?.options?.plan, false)
   await planned.close(planId)

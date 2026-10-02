@@ -6,6 +6,7 @@ import { z } from "zod"
 import { installHostLog } from "../electron/host-log.ts"
 import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "../electron/native-capture.ts"
 import { flushUnknown, nativeUnknownPath, retainUnknown, unknownKinds } from "../electron/native-unknown.ts"
+import { providerHost } from "../electron/providers/index.ts"
 import { decoderFor, decodeSession, readRecording } from "./native-decoding.ts"
 
 /**
@@ -78,7 +79,7 @@ const log = installHostLog(join(root, "host.log"))
   console.log("PASS: an opt-in capture records a conversation and replays through its decoder")
 }
 
-assert.throws(() => decoderFor("claude"), /claude has no decoder yet: .+\. Decoders: codex/, "a harness without a decoder says why")
-assert.throws(() => decoderFor("nope"), /No harness named nope/)
+for (const { provider } of providerHost.harnesses.list()) assert.equal(decoderFor(provider).provider, provider)
+assert.throws(() => decoderFor("nope"), /No harness named nope\. Decoders: .*claude.*opencode/)
 await rm(root, { recursive: true, force: true })
 console.log("PASS: native records")

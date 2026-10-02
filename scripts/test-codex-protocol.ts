@@ -470,10 +470,10 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
   assert.deepEqual(markers, [
     { label: "Warning", detail: "Heads up: long threads can be less accurate.", tone: "warning" },
     { label: "Warning", detail: "Automatic approval review denied (risk: high, authorization: low): writes outside the project", tone: "warning" },
-    { label: "Warning", detail: "Unknown key `foo`", body: "Remove it from config.toml", tone: "warning" },
-    { label: "Warning", detail: "`--full-auto` is deprecated", tone: "warning" },
+    { label: "Warning", detail: "Unknown key `foo`", body: "Remove it from config.toml", tone: "warning", setup: true },
+    { label: "Warning", detail: "`--full-auto` is deprecated", tone: "warning", setup: true },
     { label: "Model changed", detail: "gpt-5.5 → gpt-5.4 · cybersecurity safety check" },
-    { label: "MCP server failed", detail: "linear · sign-in required", tone: "warning" },
+    { label: "MCP server failed", detail: "linear · sign-in required", tone: "warning", setup: true },
     { label: "Review mode started", detail: "current changes" },
     { label: "Review mode ended", body: "No issues found.\n\nThe change is correct." },
   ], "each notice is marked once, in Mako's words")
@@ -502,8 +502,8 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
   context.protocol.compacted = (compaction, id) => compacted.push([compaction, id])
   usage(9_000, 400_000)
   notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "contextCompaction", id: "auto-2" } })
-  assert.deepEqual(compacted, [[{ tokensBefore: 120_000 }, "auto-2"]],
-    "the marker counts from where compaction started, not Codex's post-compaction estimate, and is named by Codex's item")
+  assert.deepEqual(compacted, [[{ tokensBefore: 120_000, tokensAfter: 9_000 }, "auto-2"]],
+    "the marker counts from where compaction started to Codex's estimate after it, and is named by Codex's item")
 
   notify("error", { threadId: "thread-1", turnId: "notice-turn", willRetry: true, error: {
     message: "Selected model is at capacity.", codexErrorInfo: "serverOverloaded", additionalDetails: null,

@@ -5,7 +5,9 @@ import { mock } from "node:test"
 import type { JsonObject } from "../electron/codex-app-json.ts"
 import { reduceLiveUpdates, type LiveUpdate } from "../electron/contracts/live-content.ts"
 import { createLiveEngine, type EngineLive } from "../electron/live-engine.ts"
+import { mcpServerFailedEvent } from "@mako/sessions/events"
 import { ClaudeProjection, claudeRetracted } from "../electron/providers/claude/sdk-projection.ts"
+import { ClaudeNotices } from "../electron/providers/claude/sdk-notices.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
 
 function session() {
@@ -181,4 +183,70 @@ try {
   assert.deepEqual(streamed.withdraw(notice), [], "the turn-end notice finds nothing left to withdraw")
   assert.deepEqual(streamed.withdraw(message("uuid-plain", "msg-plain", "Hi")), [], "an ordinary reply withdraws nothing")
   console.log("PASS: A refused reply that only streamed leaves the transcript when Claude falls back")
+}
+
+{
+  const failed = mcpServerFailedEvent("axiom", "sign-in required")
+  const configWarning: LiveUpdate = { kind: "event", label: "Warning", detail: "Codex is ignoring 2 settings", tone: "warning", setup: true }
+  const rerouted: LiveUpdate = { kind: "event", id: "reroute", label: "Model changed", detail: "a → b" }
+  // A session start reports setup; a wake after hibernation starts another and reports it again.
+  const start = (): LiveUpdate[] => [{ kind: "event", id: "first-start", ...failed }, configWarning]
+  let blocks = reduceLiveUpdates([], [{ kind: "user", text: "one" }, ...start(), rerouted])
+  blocks = reduceLiveUpdates(blocks, [{ kind: "user", text: "two" }, { kind: "event", id: "woken", ...failed }, configWarning, rerouted])
+  blocks = reduceLiveUpdates(blocks, [{ kind: "user", text: "three" }, { ...configWarning, body: "worded again" }])
+  const events = blocks.flatMap((block) => block.type === "event" ? [`${block.label}: ${block.detail}${block.setup ? " (setup)" : ""}`] : [])
+  assert.deepEqual(events, [
+    "MCP server failed: axiom · sign-in required (setup)",
+    "Warning: Codex is ignoring 2 settings (setup)",
+    "Model changed: a → b",
+    "Model changed: a → b",
+  ], "a conversation keeps one of each setup notice across turns and session starts; a turn's own marker repeats per turn")
+  blocks = reduceLiveUpdates(blocks, [{ kind: "event", ...mcpServerFailedEvent("axiom", "connection refused") }])
+  assert.equal(blocks.filter((block) => block.type === "event" && block.setup).length, 3, "the same server failing for another reason is a new notice")
+  console.log("PASS: Setup notices are kept once per conversation, however many session starts report them")
+}
+
+{
+  // Each harness's own words for a server that did not start, as they arrive.
+  const said: Array<[string, string]> = [
+    ["MCP startup failed: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client] error", "could not connect"],
+    ["handshake failed: connection closed: initialize response", "could not connect"],
+    ["MCP error -32000: Connection closed", "could not connect"],
+    ["connection closed: initialize response", "could not connect"],
+    ["could not connect", "could not connect"],
+    ["NotFound: ChildProcess.spawn (docs-mcp )", "could not be launched"],
+    ["spawn docs-mcp ENOENT", "could not be launched"],
+    ["cannot find binary path", "could not be launched"],
+    ["startup timeout", "timed out"],
+    ["needs_auth", "sign-in required"],
+    ["sign-in required", "sign-in required"],
+    ["setup_required", "setup required"],
+    ["Invalid config", "Invalid config"],
+  ]
+  for (const [reason, words] of said) {
+    const marker = mcpServerFailedEvent("docs", reason)
+    assert.equal(marker.detail, `docs · ${words}`, reason)
+    assert.equal(marker.body, words === reason ? undefined : reason, "the harness's own words stay in the body")
+  }
+  console.log("PASS: A server that did not start reads in the same words on every harness, its harness's own in the body")
+}
+
+{
+  const notices = new ClaudeNotices()
+  const init = (status: string): SDKMessage => ({
+    type: "system", subtype: "init", apiKeySource: "none", claude_code_version: "2.0.0", cwd: "/tmp", tools: [],
+    mcp_servers: [{ name: "linear", status }, { name: "docs", status: "connected" }, { name: "drive", status: "needs-auth" }],
+    plugin_errors: [{ plugin: "shipit", type: "load", message: "manifest missing" }],
+    model: "claude-opus-5", permissionMode: "default", slash_commands: [], output_style: "default", skills: [], plugins: [],
+    uuid: randomUUID(), session_id: "fixture",
+  })
+  const markers = (message: SDKMessage) => (notices.decode(message) ?? []).flatMap((notice) => notice.kind === "event" ? [notice.event] : [])
+  assert.deepEqual(markers(init("failed")).map((marker) => [marker.label, marker.detail, marker.setup]), [
+    ["MCP server failed", "linear · could not connect", true],
+    ["MCP server failed", "drive · sign-in required", true],
+    ["shipit plugin didn't load", "manifest missing", true],
+  ], "Claude's init reports servers and plugins that did not start as setup notices")
+  assert.deepEqual(markers(init("failed")), [], "the next turn's init repeats nothing")
+  assert.deepEqual(markers(init("pending")), [], "a server still starting is not a failure")
+  console.log("PASS: Claude's MCP servers and plugins that did not start are setup notices, once per session")
 }

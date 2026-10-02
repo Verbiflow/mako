@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { createClaudeSdkDriver } from "../electron/providers/claude/sdk-driver.ts"
 import { installHostLog } from "../electron/host-log.ts"
+import { classifyStartFailure } from "../electron/contracts/provider-failure.ts"
 
 // Exercise the real SDK handshake and driver's spawn boundary without sending
 // a model prompt. Progress continues beyond the old fixed 20-second deadline.
@@ -42,7 +43,12 @@ try {
   const failedId = randomUUID()
   const failedAt = performance.now()
   try {
-    await assert.rejects(driver.start(root, { conversationId: failedId, emit() {} }), /exit/i)
+    await assert.rejects(driver.start(root, { conversationId: failedId, emit() {} }), (error: Error) => {
+      assert.match(error.message, /exit/i)
+      assert.match(error.message, /private-startup-payload/, "the person sees what Claude said; only the durable log omits it")
+      assert.equal(classifyStartFailure(error.message, false), "launch-failed")
+      return true
+    })
     assert.ok(performance.now() - failedAt < 5_000, "process exit must fail before the silence deadline")
   } finally {
     await driver.close(failedId)

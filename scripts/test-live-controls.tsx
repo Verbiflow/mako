@@ -1,4 +1,4 @@
-import type { TranscriptEvent } from "@mako/sessions/events"
+import { mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { ProposedPlanCard } from "../src/components/transcript/proposed-plan"
 import { CompactionControl } from "../src/components/composer/compaction-control"
 import { Exchange } from "../src/components/transcript/exchange"
@@ -35,7 +35,9 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { LiveActionStatus } from "../src/components/viewer/live-action-status"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
-import { AccessModeList, ContextReading, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
+import { AccessModeList, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
+import { ContextMeter, UsageDetails } from "../src/components/composer/context-meter"
+import { TooltipProvider } from "../src/components/ui/tooltip"
 import { threadsStore } from "../src/state/threads"
 import { TransferStatus } from "../src/components/viewer/transfer-status"
 import { ConversationRelations } from "../src/components/viewer/conversation-relations"
@@ -301,34 +303,39 @@ const proposal = {
   status: "proposed" as const,
 }
 const planCard = renderToStaticMarkup(
-  <TranscriptSourceContext value={{ liveId: id }}>
-    <ProposedPlanCard plan={proposal} />
-  </TranscriptSourceContext>
+  <TooltipProvider>
+    <TranscriptSourceContext value={{ liveId: id }}>
+      <ProposedPlanCard plan={proposal} />
+    </TranscriptSourceContext>
+  </TooltipProvider>
 )
 assert.match(planCard, /Route recovery/)
-assert.match(planCard, />Build<\/button>/)
-assert.match(planCard, /Build in new session/)
-assert.match(planCard, /Revise/)
-assert.match(planCard, /aria-expanded="true"/, "the newest plan opens as the document it is")
+assert.match(planCard, /aria-label="Open in a tab"/)
+assert.match(planCard, /aria-label="Copy as Markdown"/)
+assert.match(planCard, /aria-label="Build in a new session"/)
+assert.doesNotMatch(planCard, />Build<\/button>/, "Build and Revise live in the composer's decision bar, not on the card")
 assert.doesNotMatch(planCard, /Built in/)
 recordPlanBuild(proposal, { conversation: id })
 const builtHere = renderToStaticMarkup(
-  <TranscriptSourceContext value={{ liveId: id }}>
-    <ProposedPlanCard plan={proposal} />
-  </TranscriptSourceContext>
+  <TooltipProvider>
+    <TranscriptSourceContext value={{ liveId: id }}>
+      <ProposedPlanCard plan={proposal} />
+    </TranscriptSourceContext>
+  </TooltipProvider>
 )
-assert.match(builtHere, /Built in this session/)
-assert.match(builtHere, /Build again/, "a built plan can still be built, as a quieter choice")
-assert.doesNotMatch(builtHere, /Open build session/, "a plan built here links nowhere")
-assert.equal(builtHere.match(/Built in this session/g)?.length, 1, "the status says it once")
+assert.match(builtHere, />Built</, "a plan built here says so once, beside its title")
+assert.equal(builtHere.match(/>Built</g)?.length, 1)
+assert.doesNotMatch(builtHere, /Open that session/, "a plan built here links nowhere")
 recordPlanBuild(proposal, { conversation: "another-session" })
 const builtElsewhere = renderToStaticMarkup(
-  <TranscriptSourceContext value={{ liveId: id }}>
-    <ProposedPlanCard plan={proposal} />
-  </TranscriptSourceContext>
+  <TooltipProvider>
+    <TranscriptSourceContext value={{ liveId: id }}>
+      <ProposedPlanCard plan={proposal} />
+    </TranscriptSourceContext>
+  </TooltipProvider>
 )
 assert.match(builtElsewhere, /Built in another session/)
-assert.doesNotMatch(builtElsewhere, /Open build session/, "a session that is gone is not offered")
+assert.doesNotMatch(builtElsewhere, /Open that session/, "a session that is gone is not offered")
 planBuildsStore.set({ builds: {} })
 rememberDraft(id, "Also preserve accessibility.")
 draftPlanReply({ liveId: id }, proposal, "implement")
@@ -591,15 +598,20 @@ assert.deepEqual(agentActivity({...activityBase,blocks:[],native:{kind:"retrying
   {kind:"working",label:"Retrying",detail:"attempt 2 of 10 · Overloaded (529)",since:0,retryAt:9})
 assert.equal(agentActivity({...activityBase,blocks:[],native:{kind:"retrying",since:0}}).detail,undefined)
 assert.deepEqual(agentActivity({...activityBase,blocks:[],native:{kind:"waiting",since:3,label:"Reviewing the approval"}}),{kind:"working",label:"Reviewing the approval",since:3})
-const markerExchange = (note: TranscriptEvent) => renderToStaticMarkup(<Exchange exchange={{id:"marker",prompt:{id:"marker",role:"user",blocks:[{type:"text",text:"Go"}]},response:[],
-  system:[{after:0,message:{id:"note",role:"system",blocks:[{type:"text",text:note.label}],note}}]}} />)
+const markerExchange = (...notes: TranscriptEvent[]) => renderToStaticMarkup(<Exchange exchange={{id:"marker",prompt:{id:"marker",role:"user",blocks:[{type:"text",text:"Go"}]},response:[],
+  system:notes.map((note,index) => ({after:0,message:{id:`note-${index}`,role:"system",blocks:[{type:"text",text:note.label}],note}}))}} />)
 const compactedMarkup = markerExchange({label:"Context compacted",detail:"Automatic · 182k → 24k tokens",body:"## Kept\nThe plan"})
-assert.match(compactedMarkup, /Context compacted<\/span><span> · Automatic · 182k → 24k tokens/, "the marker reads its label and detail on the hairline")
+assert.match(compactedMarkup, /Context compacted<\/span><span class="[^"]*">Automatic · 182k → 24k tokens/, "the marker reads its label and detail on one line")
 assert.match(compactedMarkup, /<button[^>]*aria-expanded="false"/, "a marker with a body opens onto it")
 assert.doesNotMatch(compactedMarkup, /The plan/, "the body stays unmounted until it is opened")
 const failedMarkup = markerExchange({label:"Turn failed",detail:"Server overloaded",tone:"error"})
-assert.match(failedMarkup, /class="text-negative">Turn failed/, "a failure reads in its tone")
+assert.match(failedMarkup, /class="[^"]*text-negative">Turn failed/, "a failure reads in its tone")
 assert.doesNotMatch(failedMarkup, /aria-expanded/, "a marker without a body is not a control")
+const setupMarkup = markerExchange(mcpServerFailedEvent("linear", "could not connect"), mcpServerFailedEvent("drive", "sign-in required"),
+  {label:"Model changed",detail:"gpt-5 → gpt-5-mini"})
+assert.match(setupMarkup, /2 MCP servers didn&#x27;t start<\/span><span class="[^"]*">linear, drive</, "setup notices that arrive together read as one line naming the servers")
+assert.equal(setupMarkup.match(/aria-expanded/g)?.length, 1, "the setup line opens onto each server; the turn marker beside it stays its own line")
+assert.doesNotMatch(setupMarkup, /could not connect/, "each server's reason stays unmounted until the line is opened")
 const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[],current:false,pinned:false,latest:"",order:"",priority:1,running:0,active:1,needsInput:0,failed:0,unread:0}
 const folderMarkup = renderToStaticMarkup(<FolderActivity folder={activeFolder} />)
 assert.match(folderMarkup, /1 running/)
@@ -644,13 +656,34 @@ publish()
 // provider's numbers only — nothing is shown until it reports.
 conversation.session = {
   ...conversation.session,
-  usage: { used: 164_000, size: 200_000, cost: { amount: 0.42, currency: "USD" } },
+  usage: {
+    used: 164_000,
+    size: 200_000,
+    tokens: { input: 1_200, cacheRead: 410_000, cacheWrite: 38_000, output: 9_400, reasoning: 2_100 },
+    cost: { amount: 0.42, currency: "USD" },
+  },
 }
 publish()
 const readingMarkup = renderToStaticMarkup(
-  <ContextReading usage={conversation.session.usage!} />
+  <UsageDetails usage={conversation.session.usage!} harness="claude" conversationId={conversation.session.id} />
 )
 assert.match(readingMarkup, /164k of 200k tokens/)
-assert.match(readingMarkup, /82% of the window/)
-assert.match(readingMarkup, /\$0\.42 so far/)
+assert.match(readingMarkup, />82%</)
+assert.match(readingMarkup, /Cache read.*410k/)
+assert.match(readingMarkup, /Output.*2\.1k reasoning.*9\.4k/)
+assert.match(readingMarkup, /Total.*459k/)
+assert.match(readingMarkup, /\$0\.42/)
+const meterMarkup = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
+assert.match(meterMarkup, /aria-label="Context 82% full"/)
+// Compacted since the reading: the number is kept and said to be stale until the next reply.
+const staleMarkup = renderToStaticMarkup(
+  <UsageDetails usage={{ ...conversation.session.usage!, compacted: true }} harness="claude" conversationId={conversation.session.id} />
+)
+assert.match(staleMarkup, /before compacting\. The next reply updates this\./)
+// A harness that reports spend but no fill (Cursor) shows the tokens and says what is missing.
+const spendOnly = renderToStaticMarkup(
+  <UsageDetails usage={{ tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } }} harness="cursor" conversationId={conversation.session.id} />
+)
+assert.match(spendOnly, /Cursor reports the tokens each turn spends, not how full the context is\./)
+assert.doesNotMatch(spendOnly, /Cache write/)
 console.log("Activity feedback: contextual recovery, distinct main states, tuned inline project/thread orbs, idle cleanup, and explicit external-running labels verified")

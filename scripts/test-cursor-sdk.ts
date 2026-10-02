@@ -682,6 +682,8 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     assert.ok(failure?.startsWith("Turn failed | Provider returned error: x") && failure.includes(`| ${long} |`), "a long reason is clipped beside the label and whole in the body")
     assert.deepEqual(await turn([], { status: "error", error: { message: "RST_STREAM", code: "unavailable" } }), [],
       "a dropped connection is Mako's to continue, not the conversation's failure")
+    assert.deepEqual(await turn([], { status: "error", error: { message: "Agent turn stopped after repeated resume attempts made no progress" } }), [],
+      "the SDK giving up its own resumes is a dropped connection too")
   } finally {
     await driver.close(id)
     rmSync(root, { recursive: true, force: true })

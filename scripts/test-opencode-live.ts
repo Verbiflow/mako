@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
+import { CONTEXT_COMPACTED } from "@mako/sessions/events"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
 import { accessModeId } from "../electron/contracts/access.ts"
 import type { LiveDriverEvent, LivePermissionRequest, LiveSessionState, LiveUpdate } from "../electron/shared.ts"
@@ -206,13 +207,17 @@ try {
   report.cases.push("cancel: interrupt stops a running shell call; the turn ends cancelled")
 
   const actionId = randomUUID()
+  const compactFrom = ask.events.length
   assert.equal(driver.compaction?.kind, "supported")
   if (driver.compaction?.kind === "supported") await driver.compaction.start(ask.id, actionId)
   const compacted = await until("compaction to settle", () => ask.events.find(event => event.type === "live-action-result" && event.actionId === actionId))
   assert.ok(compacted.type === "live-action-result")
   assert.deepEqual(compacted.result, { kind: "completed" })
   assert.equal(ask.state().lastStop, "completed")
-  report.cases.push("compaction: native compact with a client id settles its action from the execution events")
+  const markers = ask.events.slice(compactFrom).flatMap(event => event.type === "live-updates" ? event.updates : event.type === "live-update" ? [event.update] : [])
+    .filter(update => update.kind === "event" && update.label === CONTEXT_COMPACTED)
+  assert.equal(markers.length, 1, "the compaction is marked once, through the decoder")
+  report.cases.push("compaction: native compact with a client id settles its action from the execution events, marked once")
 
   const nativeId = ask.state().nativeId!
   const nativePath = ask.state().nativePath!

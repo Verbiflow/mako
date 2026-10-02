@@ -29,8 +29,9 @@ assert.deepEqual(grok({ sessionUpdate: "auto_compact_started", tokens_used: 4038
   kind: `${GROK}/auto_compact_started`,
   notices: [{ kind: "activity", activity: { kind: "compacting" } }],
   state: undefined,
+  usage: [{ kind: "context", used: 403803, size: 500000 }],
   id: "e",
-}, "Grok's event id names the event, so a replay of it is drawn once")
+}, "Grok's event id names the event, so a replay of it is drawn once; its reading moves the meter")
 assert.equal(grokNotification(GROK, { sessionId: "grok-session", update: { sessionUpdate: "auto_compact_started" } })?.id, undefined)
 assert.deepEqual(notices({ sessionUpdate: "auto_compact_completed", tokens_before: 403803, tokens_after: 21289, elapsed_ms: 94952, summary_preview: null }), [
   { kind: "activity", activity: null },
@@ -233,3 +234,66 @@ const untitled = new AcpDecoder(devinAcpSource).permission({ sessionId: "s", too
 assert.equal(untitled.request.title, "The agent wants to use a tool")
 assert.equal(untitled.request.implementsPlan, undefined, "a permission for no plan builds none")
 console.log("PASS: vendor requests answer each choice the provider's way; unknown and malformed requests are refused")
+
+{
+  // Recorded from grok 1.0.44 with a working server, one that exits in its handshake and one that cannot be launched.
+  const startup = grokAcpSource.mcpStartup!()
+  const said = (method: string, params: JsonObject) => {
+    const decoding = startup.decode(method, params)
+    return decoding?.notices?.flatMap((notice) => notice.kind === "event" ? [[notice.event.label, notice.event.detail, notice.event.setup]] : [])
+  }
+  const sessionId = "01a0f6d4"
+  assert.deepEqual(said("_x.ai/mcp/servers_updated", { mcpServers: [
+    { name: "okserver", source: "local", type: "stdio" }, { name: "missing", source: "local", type: "stdio" }, { name: "crashes", source: "local", type: "stdio" },
+  ] }), [])
+  assert.deepEqual(said("_x.ai/mcp/init_progress", { total: 3, connected: 2, sessionId }), [])
+  assert.deepEqual(said("_x.ai/mcp_initialized", { sessionId, mcpToolCount: 1, elapsedMs: 36 }), [])
+  assert.deepEqual(said("_x.ai/mcp/server_status", { sessionId, name: "crashes", source: "local", status: "unavailable", reason: "handshake_failed",
+    detail: "MCP server 'crashes' handshake failed: connection closed: initialize response", tools: null }),
+  [["MCP server failed", "crashes · could not connect", true]], "in the shared words, without Grok repeating the name")
+  assert.deepEqual(said("_x.ai/mcp/server_status", { sessionId, name: "okserver", source: "local", status: "ready", reason: "initialized", tools: null }), [])
+  assert.deepEqual(said("_x.ai/mcp/server_status", { sessionId, name: "later", status: "auth_required", reason: "auth_required" }),
+    [["MCP server failed", "later · sign-in required", true]], "a status without Grok's own detail reads its reason")
+  assert.deepEqual(said("_x.ai/mcp/server_status", { sessionId, name: "slow", status: "unavailable", reason: "startup_timeout" }),
+    [["MCP server failed", "slow · timed out", true]])
+  const completed = { sessionId, update: { sessionUpdate: "response_completed" } }
+  assert.deepEqual(said("_x.ai/session_notification", completed), [["MCP server failed", "missing · could not be launched", true]],
+    "a server that never reported is named when the first response completes")
+  assert.equal(startup.decode("_x.ai/session_notification", completed), undefined, "and only then: later responses are the ordinary decoder's")
+  assert.equal(startup.decode("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "retry_state" } }), undefined)
+  assert.deepEqual(said("_x.ai/mcp/server_status", { sessionId, name: "crashes", status: "unavailable", reason: "handshake_failed" }), [],
+    "a server reported again keeps its one marker")
+  console.log("PASS: Grok's MCP startup names each server that did not start, once, as a setup notice")
+}
+
+{
+  // Recorded from devin 3000.10.23 with the same three servers; lines before the session exists carry no id.
+  const startup = devinAcpSource.mcpStartup!()
+  const output = "_cognition.ai/output"
+  const line = (channel: string, level: string, message: string, sessionId: string | null = null) => ({ sessionId, channel, level, message })
+  const said = (params: JsonObject) => {
+    const decoding = startup.decode(output, params)
+    return decoding && { sessionId: decoding.sessionId, notices: decoding.notices?.flatMap((notice) => notice.kind === "event" ? [[notice.event.label, notice.event.detail, notice.event.setup]] : []) }
+  }
+  assert.deepEqual(said(line("MCP: missing", "info", "Connecting to MCP server 'missing'", "")), { sessionId: undefined, notices: [] },
+    "a server connecting is quiet")
+  assert.deepEqual(said(line("MCP: missing", "warn", "MCP server 'missing' connection failed: cannot find binary path")),
+    { sessionId: undefined, notices: [["MCP server failed", "missing · could not be launched", true]] }, "in the words the other harnesses use")
+  assert.deepEqual(said(line("MCP", "warn", "Failed to connect to MCP server 'missing' for description: cannot find binary path")),
+    { sessionId: undefined, notices: [] }, "Devin's second copy on the shared channel draws nothing")
+  assert.deepEqual(said(line("MCP", "warn", "Failed to connect to MCP server 'crashes' for description: connection closed: initialize response", "d1")),
+    { sessionId: "d1", notices: [["MCP server failed", "crashes · could not connect", true]] }, "whichever copy comes first names it")
+  assert.deepEqual(said(line("MCP: crashes", "warn", "MCP server 'crashes' connection failed: connection closed: initialize response", "d1")),
+    { sessionId: "d1", notices: [] })
+  assert.deepEqual(said(line("MCP: okserver", "info", "MCP server 'okserver' connected successfully", "d1")), { sessionId: "d1", notices: [] })
+  assert.deepEqual(said(line("MCP: linear", "warn", "Interactive OAuth failed for 'linear': browser closed", "d1"))?.notices,
+    [["MCP server failed", "linear · sign-in failed: browser closed", true]])
+  assert.equal(startup.decode(output, line("MCP: ynab", "warn", "MCP operation failed on cached service for 'ynab', retrying with fresh connection: reset", "d1")), undefined,
+    "a retry is not a failed start; the ordinary decoder's warning stands")
+  assert.equal(startup.decode(output, line("Agent", "warn", "something else", "d1")), undefined, "other channels are the ordinary decoder's")
+  assert.equal(startup.decode("_cognition.ai/compaction", { sessionId: "d1", status: "started" }), undefined)
+  assert.deepEqual(devinNotification(output, line("Agent", "warn", "before the session")).sessionId, undefined)
+  assert.deepEqual(devinNotification(output, line("Agent", "warn", "before the session", "")).sessionId, undefined, "an empty id names no session")
+  assert.ok(devinNotification(output, line("Agent", "warn", "before the session")).notices?.length, "a line before the session exists is still read")
+  console.log("PASS: Devin's MCP startup names each server that did not start, once, from either copy of its failure")
+}

@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { acpForThread, acpStore } from "../src/state/acp-state.ts"
 import { applyLiveSnapshot, applyLiveBatch, hydrateLiveSummaries } from "../src/state/live-recovery.ts"
-import { canonicalThreadRefs, selectAcpPresence } from "../src/state/acp-presence.ts"
+import { canonicalThreadRefs, selectAcpPresence, selectSessionOwners } from "../src/state/acp-presence.ts"
 import { threadStatus } from "../src/state/thread-status.ts"
 import { threadsStore } from "../src/state/thread-store.ts"
 import type { LiveSnapshot, ThreadRef } from "../electron/shared.ts"
@@ -51,6 +51,16 @@ assert.equal(acpForThread(acpStore.get(),alias)?.key,id,"A closed native process
 acpStore.set({activeKey:null,conversations:{}})
 hydrateLiveSummaries([{...snapshot,session:{...snapshot.session,status:"closed"},hasSessionQuestions:true}])
 assert.equal(acpForThread(acpStore.get(),alias)?.key,id,"The lightweight restart summary must permit question hydration from the history row")
+const grok: ThreadRef = { harness: "grok", nativeId: "grok-1", path: "/grok/session/updates.jsonl" }
+const codex: ThreadRef = { harness: "codex", nativeId: "codex-1", path: "/codex/rollout-codex-1.jsonl" }
+acpStore.set({ activeKey: null, conversations: {} })
+hydrateLiveSummaries([{
+  session: { ...snapshot.session, harness: "codex", nativeId: codex.nativeId, status: "closed", title: "Remember the codeword" },
+  threadPath: codex.path, nativePaths: [grok.path, original.path, codex.path],
+  revision: 1, createdAt: 1, hasSessionQuestions: false,
+}])
+assert.deepEqual(selectAcpPresence(acpStore.get()), [], "A closed conversation is not a live row")
+assert.deepEqual(canonicalThreadRefs([grok, original, { ...codex, title: "Remember this codeword for later: …" }], selectSessionOwners(acpStore.get()), []), [{ ...codex, title: "Remember the codeword" }], "A closed conversation that moved across harnesses is still one row, its current session under its own name")
 const root = await mkdtemp(join(tmpdir(), "mako-identity-"))
 const owner = new LiveConversations({
   root, appPath: root, driver: () => undefined, emit: () => {},
@@ -65,4 +75,4 @@ try {
   owner.stop()
   await rm(root, { recursive: true, force: true })
 }
-console.log("Session identity: account aliases, provider isolation, completed activity, one rail row, binding changes, and host capture verified")
+console.log("Session identity: account aliases, provider isolation, completed activity, one rail row (closed moves included), binding changes, and host capture verified")

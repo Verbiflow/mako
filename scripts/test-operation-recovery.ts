@@ -10,6 +10,9 @@ const request: LiveRequest = { id, status: "queued", text: "Check the change", a
 for (const provider of ["Claude Code", "Codex", "Cursor", "Grok", "Devin", "OpenCode", "Future agent"]) {
   const transfer: ContextTransfer = { input: { id, provider, text: request.text, attachments: [] }, createdAt: 1, state: { kind: "accepted", bindingId: id, manifest } }
   assert.match(describeTransferRecovery(transfer, provider, request).guidance, /waiting to be sent/)
+  const gone = describeTransferRecovery({ ...transfer, state: { kind: "failed", failure: "missing-folder", error: "gone" } }, provider)
+  assert.deepEqual([gone.title, gone.retryLabel], ["This thread's folder no longer exists", undefined])
+  assert.doesNotMatch(gone.guidance, /switch|repeat work/, "nothing started, so nothing to switch again or repeat")
   assert.match(describeTransferRecovery(transfer, provider).guidance, /Delivery is unconfirmed/)
   assert.match(describeTransferRecovery(transfer, provider, { ...request, id: "unrelated", status: "completed" }).guidance, /Delivery is unconfirmed/)
   const received: LiveRequest = { ...request, status: "failed", nativeDelivery: { attemptId: id, bindingId: id, ownerEpoch: "epoch", evidence: { kind: "accepted", source: "native-echo" } } }
