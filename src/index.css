@@ -1157,6 +1157,10 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   margin-top: 0.75em;
 }
 
+.mako-prose > :first-child {
+  margin-top: 0;
+}
+
 .mako-prose h1,
 .mako-prose h2,
 .mako-prose h3,
@@ -1224,6 +1228,17 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   padding: 0.08em 0.34em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* A clipped plan fades out where it is cut: at the bottom, or at the top while the window follows the writing. */
+/* Clear by the bottom 40px, where the expand and open actions overlay it. */
+.plan-frame[data-clamped="head"] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 150px), transparent calc(100% - 40px));
+}
+.plan-frame[data-clamped="tail"] {
+  mask-image: linear-gradient(to top, #000 calc(100% - 96px), transparent);
 }
 
 /*
