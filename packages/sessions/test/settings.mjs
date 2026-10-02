@@ -142,6 +142,30 @@ console.log("Cursor SDK catalog: one Auto row")
 // Plan is Cursor's per-send conversation mode: every model offers it, it is never a model parameter,
 // and the settings a run reports keep the mode Mako sent.
 const { cursorSdkSelection, cursorSdkReportedSettings } = await import("../dist/index.js")
+// Launch validation must match only the parameters encoded by a variant.
+// Plan is a separate conversation mode, including its default false value.
+const opusVariant = opus.variants[0]
+assert.deepEqual(resolveModelLaunch(sdk.models, fresh.settings), { model: opusVariant.id, options: { plan: false } })
+assert.deepEqual(resolveModelLaunch(sdk.models, { model: opus.id }), { model: opusVariant.id, options: { plan: false } })
+for (const plan of [false, true]) {
+  for (const model of [opus.id, opusVariant.id]) {
+    const launch = resolveModelLaunch(sdk.models, { model, options: { plan } })
+    assert.deepEqual(launch, { model: opusVariant.id, options: { plan } })
+    const wire = cursorSdkSelection(launch, sdk.models)
+    assert.deepEqual(wire, { selection: { id: opus.id, params: [
+      { id: "context", value: "1m" }, { id: "effort", value: "high" }, { id: "fast", value: "false" },
+    ] }, dropped: [] })
+    assert.equal(cursorSdkReportedSettings(wire.selection, sdk.models, plan).options.plan, plan)
+  }
+  assert.throws(() => resolveModelLaunch(sdk.models, { model: opus.id, options: { effort: "low", plan } }), /not available together/, "unavailable model parameter combinations still fail")
+}
+const independent = [{ ...family[0], options: [...family[0].options,
+  { kind: "boolean", id: "sessionFlag", label: "Session flag", current: false },
+] }]
+assert.deepEqual(resolveModelLaunch(independent, { model: "family" }), { model: "high-fast", options: { sessionFlag: false } })
+assert.deepEqual(resolveModelLaunch(independent, { model: "low-standard", options: { sessionFlag: true } }), { model: "low-standard", options: { sessionFlag: true } })
+assert.throws(() => resolveModelLaunch(independent, { model: "family", options: { fast: false } }), /not available together/)
+assert.throws(() => resolveModelLaunch(independent, { model: "family", options: { sessionFlag: "invalid" } }), /not supported/)
 assert.ok(autos.models.every(m => m.options.some(o => o.id === "plan" && o.role === "plan")), "every model, the folded Auto included, can plan")
 const planned = cursorSdkSelection({ model: "grok-4.7", options: { effort: "high", plan: true } }, sdk.models)
 assert.deepEqual(planned, { selection: { id: "grok-4.7", params: [{ id: "reasoning_effort", value: "high" }] }, dropped: [] })
@@ -149,3 +173,23 @@ assert.deepEqual(cursorSdkReportedSettings(planned.selection, sdk.models, true),
 assert.deepEqual(cursorSdkReportedSettings({ id: "grok-4.7" }, sdk.models), { model: "grok-4.7" })
 assert.deepEqual(cursorSdkReportedSettings({ id: "grok-4.7" }, sdk.models, "yes"), { model: "grok-4.7" }, "only a boolean is a plan choice")
 console.log("Cursor SDK plan: a per-send mode on every model, never a model parameter, kept in reported settings")
+
+const { normalizeDevinModels } = await import("../dist/model-catalog.js")
+const devin = normalizeDevinModels({ families: [
+  { slug: "adaptive", family_label: "Adaptive", variants: [{ model_uid: "adaptive", label: "Adaptive" }] },
+  { slug: "standard-only", family_label: "Standard only", variants: [{ model_uid: "standard-high", label: "High" }] },
+  { slug: "tiered", family_label: "Tiered", variants: [
+    { model_uid: "tiered-high", label: "High" }, { model_uid: "tiered-high-priority", label: "High Fast" },
+  ] },
+] })
+for (const model of devin.models) {
+  for (const identity of [model.id, ...model.variants.map(v => v.id)]) {
+    const choice = resolveSessionSettings({ models: devin.models, context: "new", overrides: { model: identity } })
+    assert.deepEqual(choice.issues, [], `${identity} must not carry options its model lacks`)
+    assert.ok(resolveModelLaunch(devin.models, choice.settings).model)
+  }
+}
+assert.deepEqual(devin.models[0].variants[0].values, {})
+assert.deepEqual(devin.models[1].variants[0].values, { effort: "high" })
+assert.deepEqual(devin.models[2].variants.map(v => v.values.fast), [false, true], "families with speed variants keep explicit standard and fast values")
+console.log("Devin variants: Adaptive and standard-only models carry no unsupported speed option")

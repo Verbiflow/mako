@@ -63,6 +63,12 @@ try {
   assert.equal(text.includes('[truncated]'),false)
   console.log(`PASS ${name} complete large tool input/output sidecars`)
  }
+ for (const [name,emit,root_] of [['claude',emitClaudeSession,'projects'],['codex',emitCodexSession,'sessions']]) {
+  const store=join(root,`account-${name}`)
+  const emitted=await emit(thread,{home:join(root,`account-home-${name}`),cwd:root,store})
+  assert.ok(emitted.path.startsWith(join(store,root_)),`${name} writes into the account's own store`)
+  console.log(`PASS ${name} emits into a moved config root`)
+ }
  const content={type:'image',data:Buffer.from('test').toString('base64'),mimeType:'image/png'}
  const devin=join(root,'devin');await mkdir(join(devin,'acp-events'),{recursive:true});const dpath=join(devin,'acp-events','session.ndjson')
  await writeFile(dpath,JSON.stringify({notification:{sessionUpdate:'user_message_chunk',content}})+'\n')

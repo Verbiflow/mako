@@ -310,7 +310,7 @@ try {
   assert.deepEqual(assistants[2], {
     kind: "assistant",
     at: "2026-01-01T00:00:08.000Z",
-    usage: { input: 120, output: 30, cacheRead: 80, cacheWrite: 10, costUsd: 0.25 },
+    usage: { input: 30, output: 30, cacheRead: 80, cacheWrite: 10, costUsd: 0.025 },
     blocks: [{ type: "text", text: "finished" }],
   })
   assert.deepEqual(

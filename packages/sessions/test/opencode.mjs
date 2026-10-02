@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite"
 
 import { SessionCatalog } from "../dist/catalog.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
+import { OPENCODE_IMPORTED_MODEL } from "../dist/emit.js"
 
 // A caller-supplied home isolates fixtures from the user's native configuration.
 const configuredHome = join(tmpdir(), "opencode-configured-root-test")
@@ -926,6 +927,17 @@ try {
     assert.equal(freshRef?.nativeId, "ses_fresh")
     assert.equal(freshRef.title, "Plan the billing migration")
     console.log("OpenCode 2 store without v1 tables lists its sessions")
+
+    fresh.exec("INSERT INTO session_v2 VALUES ('ses_imported', 'global', NULL, '/work', 'Imported', NULL, 3000, 3000, NULL)")
+    fresh.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      "msg_imported", "ses_imported", "assistant", 1, 3000, 3000,
+      json({ agent: "build", model: OPENCODE_IMPORTED_MODEL, content: [{ type: "text", text: "Imported answer." }], finish: "stop", time: { created: 3000, completed: 3000 } })
+    )
+    const imported = await freshProvider.read(`${join(freshRoot, "opencode.db")}#v2:ses_imported`)
+    assert.equal(imported.ref.model, undefined, "Mako's import marker is not a model the session continues on")
+    assert.equal(imported.ref.settings?.model, undefined)
+    assert.equal(imported.entries[0].model, undefined)
+    console.log("OpenCode sessions Mako imported show no model until OpenCode answers")
   } finally { fresh.close() }
 
   console.log("OpenCode provider tests clean: V1, V2, projected sessions, roots, metadata, tools, reasoning, usage, interruption, compaction, isolation, and follower diffs verified.")
