@@ -95,13 +95,56 @@ export interface LiveSessionCommand {
 }
 
 /**
- * The provider's own context reading, only when it reports exact numbers:
- * tokens in context out of the window size, and cumulative session cost.
+ * Tokens by kind, the same meaning for every harness: `input` is what the
+ * model read fresh, with cache reads and writes counted apart from it;
+ * `output` is everything it wrote, `reasoning` included. Each harness's
+ * reader converts its own convention (OpenAI-style counts include cached
+ * input; OpenCode counts reasoning outside output) before anything is added.
+ */
+export interface TokenCounts {
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  /** The part of `output` spent reasoning, when the harness says. */
+  reasoning?: number
+}
+
+/**
+ * What a session has used, from the harness's own numbers only. Every part
+ * is optional because harnesses report different parts: Cursor reports
+ * tokens per turn but nothing about how full the context is.
  */
 export interface LiveSessionUsage {
+  /** Tokens in the model's context at its last call; set with `size`. */
+  used?: number
+  /** The window `used` is measured against. */
+  size?: number
+  /**
+   * The context was compacted after `used` was read. A harness that reports
+   * the size after compaction replaces `used` and leaves this unset.
+   */
+  compacted?: boolean
+  /** Tokens spent since this live session started, by kind. */
+  tokens?: TokenCounts
+  /** Spend since this live session started, as the harness reports it. */
+  cost?: { amount: number; currency: string }
+}
+
+/** One part of what fills the context, from a harness that itemizes it (Claude). */
+export interface ContextCategory {
+  name: string
+  tokens: number
+  /** `free` is unused window; `buffer` is held back for compaction; `deferred` is listed but not in the window. */
+  kind: "used" | "free" | "buffer" | "deferred"
+}
+
+export interface ContextBreakdown {
   used: number
   size: number
-  cost?: { amount: number; currency: string }
+  categories: ContextCategory[]
+  /** The largest single items inside the categories, such as one MCP server's tools or one memory file. */
+  items: { group: "mcp" | "memory" | "agents" | "skills"; name: string; tokens: number }[]
 }
 
 export interface LiveSessionState {

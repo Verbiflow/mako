@@ -20,6 +20,13 @@ export const TransferInputSchema = z.object({
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
+  /**
+   * How a destination that opens a new session receives the history: written
+   * into its own store and resumed (`native`), or read from a transcript bundle
+   * on its first turn (`transcript`, the default). A destination that resumes
+   * its own earlier session takes only what it missed, always as transcript.
+   */
+  carry: z.enum(["native", "transcript"]).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 export const ProviderBindingSchema = z.object({
@@ -80,7 +87,12 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("accepted"),
     bindingId: z.string().uuid(),
+    /** The history as a transcript bundle; sent with the request unless `carried` is `native`. */
     manifest: ContextManifestSchema,
+    /** Absent on transfers accepted before native carry existed, which all went as transcript. */
+    carried: z.enum(["native", "transcript"]).optional(),
+    /** Why a requested native carry went as transcript instead. */
+    fallback: z.string().optional(),
   }),
   z.object({
     kind: z.literal("failed"),

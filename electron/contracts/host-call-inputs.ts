@@ -217,6 +217,7 @@ export const hostCallInputs = {
   "mako:live-child-cancel": z.tuple([z.string(), z.string()]),
   "mako:live-clear-queue": z.tuple([z.string()]),
   "mako:live-close": z.tuple([z.string()]),
+  "mako:live-context-breakdown": z.tuple([z.string()]),
   "mako:live-continue": z.tuple([
     z.string(),
     z.string(),
@@ -460,6 +461,7 @@ export const hostCallInputs = {
         })
         .optional(),
       modeId: z.string().optional(),
+      carry: z.union([z.literal("native"), z.literal("transcript")]).optional(),
     }),
   ]),
   "mako:mcp-discover": z.tuple([]),

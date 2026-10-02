@@ -31,7 +31,11 @@ export function describePromptRecovery(
               ? "Could not reopen this session"
               : request.failure === "missing-folder"
                 ? "Folder no longer exists"
-                : "Message could not be completed"
+                : request.failure === "launch-failed"
+                  ? "Agent could not start"
+                  : request.failure === "launch-stalled"
+                    ? "Agent stopped responding while starting"
+                    : "Message could not be completed"
   const canResend = request.status === "failed"
     && ((failure?.retriable ?? true) || (request.failure === "context-exhausted" && compacted))
   return {

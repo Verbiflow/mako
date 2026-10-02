@@ -32,6 +32,10 @@ export const PROVIDER_FAILURE_KINDS = [
   "rejected-input",
   /** The thread's folder is gone, so no provider can start in it. */
   "missing-folder",
+  /** The agent's program would not start: missing, too old, or it quit on its own settings. */
+  "launch-failed",
+  /** The agent's program went quiet before it was ready; the same start often works. */
+  "launch-stalled",
   "unknown",
 ] as const
 export type ProviderFailureKind = (typeof PROVIDER_FAILURE_KINDS)[number]
@@ -101,7 +105,17 @@ const rules: Rule[] = [
   {
     kind: "resume-failed",
     match:
-      /session (?:not found|could not be|cannot be|is no longer|was not)|could not be resumed|cannot be resumed|resume(?:d|s)? (?:failed|refused)|failed to (?:resume|reopen|load the session)|(?:thread|conversation) (?:not found|is unavailable)|unknown session|saved binding|session store|held by|has this session open|session is live in/i,
+      /session (?:not found|could not be|cannot be|is no longer|was not)|no (?:conversation|session) found|could not be resumed|cannot be resumed|resume(?:d|s)? (?:failed|refused)|failed to (?:resume|reopen|load the session)|(?:thread|conversation) (?:not found|is unavailable)|unknown session|saved binding|session store|held by|has this session open|session is live in/i,
+  },
+  {
+    // The startup watch's own words, after any cause its stderr named above.
+    kind: "launch-failed",
+    match:
+      /\bexited (?:with code -?\d+ |on SIG[A-Z]+ )?(?:during|before) |process exited with code|\bENOENT\b|\bEACCES\b|executable not found|failed to spawn|spawn \S+ E[A-Z]+|requires Node(?:\.js)?|invalid MCP config|MCP config(?:uration)? file|invalid settings|settings file/i,
+  },
+  {
+    kind: "launch-stalled",
+    match: /produced no output for .* during |did not finish .+ within \d/i,
   },
   {
     kind: "rejected-input",
@@ -203,6 +217,20 @@ export function describeProviderFailure(
         retriable: false,
         title: "This thread's folder no longer exists",
         guidance: `${providerLabel} can't start in a folder that's gone. Restore the folder, or copy the message to a thread in a folder that exists.`,
+      }
+    case "launch-failed":
+      return {
+        kind,
+        retriable: false,
+        title: `${providerLabel} could not start`,
+        guidance: `What it said is below. Check ${providerLabel} under Settings → Agents, and any settings or MCP configuration it reads, then send the message again.`,
+      }
+    case "launch-stalled":
+      return {
+        kind,
+        retriable: true,
+        title: `${providerLabel} stopped responding while starting`,
+        guidance: "It went quiet before it was ready, which usually means an MCP server or a large session held it up. Your message is saved; send it again, and if this repeats check its MCP servers.",
       }
     case "unknown":
       return {
