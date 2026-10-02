@@ -1,10 +1,11 @@
 import { execFile, spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
-import { mkdir, open, readdir, readFile, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
+import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
+import { inside, workingDirectories } from "./app-probe.js"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 
 const run = promisify(execFile)
@@ -171,6 +172,8 @@ export class ThreadProcesses {
           refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, app) })
           continue
         }
+        if (spec.kind === "process" && !Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length))
+          await writeFile(join(this.folder(app), "up"), String(this.now()), { mode: 0o600 })
         await this.spawn(app, spec, async (record) => {
           runs[key] = record
           await this.save(app, runs)
@@ -235,7 +238,7 @@ export class ThreadProcesses {
         if (!runningSince.has(key)) runningSince.set(key, (status.startedAt ?? now) < now - LONG_UP_MS ? now - steadyMs : now)
         return now - (runningSince.get(key) ?? now) < steadyMs
       })
-      const waiting = unsteady || statuses.some((status) => status.state.kind === "starting" || (status.kind === "check" && status.state.kind === "running"))
+      const waiting = unsteady || statuses.some((status) => status.state.kind === "starting" || (status.kind !== "process" && status.state.kind === "running"))
       if (!waiting || now >= deadline) return statuses
       await sleep(250)
     }
@@ -274,6 +277,41 @@ export class ThreadProcesses {
     } finally {
       await handle.close()
     }
+  }
+
+  /**
+   * An app's processes now, for the probe: those in its runs' trees, and
+   * those that look left behind by them, which no stop ends: started since
+   * the app came up, outliving their parent, and working in one of
+   * `folders`, with whatever they started. An agent's shell there still
+   * has its parent. `since` is when the app's processes last came up from
+   * none running.
+   */
+  async footprint(app: AppKey, folders: string[]): Promise<{ pids: number[]; leftovers: { pid: number; command: string }[]; since?: number; records: string }> {
+    const runs = await this.runs(app)
+    const rows = await processTable()
+    const pids = new Set(Object.values(runs).flatMap((record) => members(rows, record).map((row) => row.pid)))
+    const up = Number.parseInt(await readFile(join(this.folder(app), "up"), "utf8").catch(() => ""), 10)
+    const since = Number.isFinite(up) ? up : undefined
+    const leftovers: { pid: number; command: string }[] = []
+    if (since !== undefined) {
+      // ps gives start times to the second.
+      const later = rows.filter((row) => row.startedMs >= Math.floor(since / 1000) * 1000 && !pids.has(row.pid) && row.pid !== process.pid)
+      const orphans = later.filter((row) => row.ppid === 1)
+      const cwds = await workingDirectories(orphans.map((row) => row.pid))
+      const roots = await Promise.all(folders.map((folder) => realpath(folder).catch(() => folder)))
+      const found = new Set(orphans.filter((row) => roots.some((root) => inside(cwds.get(row.pid), root))).map((row) => row.pid))
+      for (let grew = found.size > 0; grew;) {
+        grew = false
+        for (const row of later)
+          if (!found.has(row.pid) && found.has(row.ppid)) {
+            found.add(row.pid)
+            grew = true
+          }
+      }
+      leftovers.push(...[...found].map((pid) => ({ pid, command: commandOf(rows, pid) })))
+    }
+    return { pids: [...pids], leftovers, records: this.dependencies.root, ...(since === undefined ? {} : { since }) }
   }
 
   /** Who listens on a port: one of an app's runs, or a process Mako didn't start. */
@@ -394,11 +432,17 @@ export class ThreadProcesses {
   async describeHolder(port: number, app?: AppKey): Promise<string> {
     const owner = await this.portOwner(port).catch(() => undefined)
     if (!owner) return `Port ${port} is taken, and Mako couldn't see by what.`
+    if (owner.app && owner.run) return `Port ${port} belongs to ${this.ownerName(owner, app)}.`
+    return `Port ${port} is held by ${this.ownerName(owner, app)}. If you started it, stop it and try again; otherwise leave it alone and tell the user.`
+  }
+
+  /** Who a port's owner is, in a few words, as seen from `app`. */
+  ownerName(owner: PortOwner, app?: AppKey): string {
     if (owner.app && owner.run) {
       const whose = owner.app === app ? "this Thread" : `the app of ${this.dependencies.whose?.(owner.app) || owner.app}`
-      return `Port ${port} belongs to ${whose}: its ${owner.run.kind} ${owner.run.name} (pid ${owner.pid}).`
+      return `${whose}: its ${owner.run.kind} ${owner.run.name} (pid ${owner.pid})`
     }
-    return `Port ${port} is held by pid ${owner.pid} (${owner.command}), which Mako didn't start. If you started it, stop it and try again; otherwise leave it alone and tell the user.`
+    return `pid ${owner.pid} (${owner.command}), which Mako didn't start`
   }
 
   private async state(app: AppKey, key: string, record: Run, rows: Row[]): Promise<RunState> {

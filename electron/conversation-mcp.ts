@@ -26,7 +26,7 @@ interface Scope {
 const MAKO_INSTRUCTIONS = [
   "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only.",
   "workspace_*: where this Session edits (the project folder or the Thread's own worktree and branch), moving onto its own branch, merging it and removing its worktree.",
-  "app_*: this Thread's own running copy of the project's app, on its own ports, from the project's recipe. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status and app_logs still read the app; if app_start is refused, the user can press Run app.",
+  "app_*: this Thread's own running copy of the project's app, on its own ports, from the project's recipe. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
   "recipe_*: the recipe every Thread of the project runs its app from. recipe_guide explains how to set one up or repair it; recipe_save replaces it. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
 ].join("\n")

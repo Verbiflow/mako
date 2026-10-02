@@ -1,5 +1,8 @@
 import { readdir, stat } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { capped, changedSince, socketsOf, systemPortsFrom, writingOf } from "./app-probe.js"
 import { z } from "zod"
 import { childProcessEnv } from "./accounts-common.js"
 import { applyControlEnvironment } from "./control-launch.js"
@@ -38,6 +41,7 @@ const EVICT_QUIET_MS = 15 * 60 * 1000
 const PREPARE_KEY = runKey("prepare", "checkout")
 /** How often a start waiting in line looks at memory again. */
 const LINE_MS = 5_000
+const INSTALL_POLL_MS = 1_000
 
 interface Deps {
   cwd(conversationId: string): string | undefined
@@ -66,6 +70,8 @@ export interface EnvironmentTools {
   stop(conversationId: string, names?: string[]): Promise<string>
   restart(conversationId: string, names?: string[]): Promise<string>
   logs(conversationId: string, target: { process: string } | { check: CheckTier }, lines: number): Promise<string>
+  /** What the Thread's app touches outside its checkout and ports, for finding what two copies would fight over. */
+  probe(conversationId: string): Promise<string>
   check(conversationId: string, tier: CheckTier): Promise<string>
   port(conversationId: string, port: number): Promise<string>
   save(conversationId: string, recipe: Recipe): Promise<string>
@@ -121,6 +127,8 @@ interface InLine {
 interface Unprepared {
   message: string
   shown: boolean
+  /** The install is still running, rather than failed or refused. */
+  installing?: true
 }
 
 interface Setup {
@@ -161,6 +169,26 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       })
     }, deps.lineMs ?? LINE_MS)
     lineTimer.unref?.()
+  }
+  /** Starts that found their checkout's install still running, by app: each goes ahead once its install has ended. */
+  const afterInstall = new Map<AppKey, () => Promise<StartOutcome>>()
+  let installTimer: ReturnType<typeof setTimeout> | undefined
+  const followInstalls = () => {
+    if (installTimer || !afterInstall.size) return
+    installTimer = setTimeout(() => {
+      void (async () => {
+        for (const [app, again] of [...afterInstall]) {
+          const install = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")
+          if (install?.state.kind === "running" || install?.state.kind === "starting") continue
+          afterInstall.delete(app)
+          await again().catch(() => undefined)
+        }
+      })().finally(() => {
+        installTimer = undefined
+        followInstalls()
+      })
+    }, INSTALL_POLL_MS)
+    installTimer.unref?.()
   }
   /**
    * Projects an agent is setting up, by main checkout: the conversation that
@@ -235,7 +263,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const settled = async (): Promise<Unprepared | undefined> => {
       const status = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")
       const record = await deps.processes.prepared(checkout)
-      if (status?.state.kind === "running") return { shown: true, message: `Preparing this checkout (${status.command}); it keeps going. Call again to wait for it, or app_logs with process "prepare" to watch it.` }
+      if (status?.state.kind === "running") return { shown: true, installing: true, message: `Preparing this checkout (${status.command}); it keeps going. Call again to wait for it, or app_logs with process "prepare" to watch it.` }
       if (!record.pending) return undefined
       if (!status) {
         // Stopped before it finished, and its run forgotten: it runs again now.
@@ -330,6 +358,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (idle.length) {
       await bringSecrets(current)
       const preparing = await prepare(current)
+      if (preparing?.installing) {
+        afterInstall.set(app, again)
+        followInstalls()
+        const { command } = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")!
+        return { kind: "blocked", shown: true, message: `Preparing this checkout (${command}); the app starts by itself once it's done, and app_status shows when. app_logs with process "prepare" watches it.` }
+      }
       if (preparing) return { kind: "blocked", ...preparing }
       const room = anyway ? { notes: [] } : await makeRoom(app)
       if (room.refused) {
@@ -379,16 +413,56 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     return startText(current, await startIn(current, names, again(conversationId, names)))
   }
   /** Stops the named processes, or the whole app with its install step and any check under way; finished checks keep their results. */
-  const stopIn = async ({ environment, read }: Context & { read?: Read }, names?: string[]) => {
+  const stopIn = async ({ environment, checkout, read }: Context & { read?: Read }, names?: string[]) => {
     if (names?.length && read?.kind === "ready") chosen(read.recipe, names)
+    afterInstall.delete(environment.app)
     const runs = await deps.processes.status(environment.app)
     const up = (status: RunStatus) => status.state.kind === "running" || status.state.kind === "starting"
     const picked = runs.filter((status) => names?.length ? status.kind === "process" && names.includes(status.name) : status.kind !== "check" || up(status))
     await deps.processes.stop(environment.app, picked.map((status) => runKey(status.kind, status.name)))
     const inLine = line.delete(environment.app)
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the install step" : status.name)
-    if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.`
-    return inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running."
+    const { leftovers } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
+    const left = leftovers.length
+      ? ` Still running, though, and likely left behind by the app: ${leftovers.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up, outlived the process that started it and works in this checkout or data folder, so no stop reaches it. Stop one yourself if it's the app's and shouldn't outlive it.`
+      : ""
+    if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.${left}`
+    return (inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running.") + left
+  }
+  const probe = async ({ environment, checkout }: Context) => {
+    const { pids, leftovers, since, records } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
+    const [sockets, writing, changed, picked] = await Promise.all([
+      socketsOf(pids),
+      writingOf(pids, [checkout, environment.dataDir, records]),
+      since === undefined ? Promise.resolve(undefined) : changedSince(since, [checkout, environment.dataDir, records, await projectRoot(checkout), join(homedir(), ".mako")]),
+      systemPortsFrom(),
+    ])
+    const last = environment.port + environment.ports - 1
+    const ours = (port: number) => (port >= environment.port && port <= last) || port >= picked
+    const local = [...new Set(sockets.connected.filter((entry) => entry.local).map((entry) => entry.port))]
+      .filter((port) => !sockets.listening.some((entry) => entry.port === port))
+    const owners = await Promise.all(local.map(async (port) => {
+      const owner = await deps.processes.portOwner(port).catch(() => undefined)
+      return { port, owner: owner ? deps.processes.ownerName(owner, environment.app) : "nothing listening now" }
+    }))
+    const outside = [...new Set(sockets.connected.filter((entry) => !entry.local).map((entry) => `${entry.host}:${entry.port}`))]
+    const report = {
+      running: pids.length > 0,
+      since: since === undefined ? undefined : new Date(since).toISOString(),
+      listening: sockets.listening.map((entry) => ({ port: entry.port, pid: entry.pid, ...(ours(entry.port) ? {} : { note: `outside this Thread's ports ${environment.port}-${last}; a second copy would fight over it` }) })),
+      connectsTo: owners,
+      connectsOutside: capped(outside),
+      writing: capped(writing.map((entry) => entry.path)),
+      leftovers,
+      changedFolders: changed && capped(changed),
+      notes: [
+        "connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it.",
+        "writing is files the app holds open for writing outside this checkout and this Thread's data folder; two copies writing one file is a conflict.",
+        "leftovers look left behind by the app: each started since it came up, outlived the process that started it and works in this checkout or data folder, so stopping the app doesn't end it.",
+        "changedFolders is where apps keep state, with something in it changed since the app came up; other apps on this Mac write there too, so look for names of this project or its tools.",
+      ],
+    }
+    return JSON.stringify(report, null, 2)
   }
   const stop = async (conversationId: string, names?: string[]) => stopIn(await context(conversationId), names)
   const checkIn = async (current: Context & { recipe: Recipe }, tier: CheckTier, again: () => Promise<StartOutcome>): Promise<string> => {
@@ -690,6 +764,9 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       await deps.processes.stop(current.environment.app, picked.map((name) => runKey("process", name)))
       return startText(current, await startIn(current, picked, again(conversationId, picked)))
     },
+    async probe(conversationId) {
+      return probe(await context(conversationId))
+    },
     async logs(conversationId, target, lines) {
       const { environment } = await context(conversationId)
       const key = "check" in target ? runKey("check", target.check) : target.process === "prepare" ? PREPARE_KEY : runKey("process", target.process)
@@ -975,6 +1052,16 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ process, check, lines }) => reply(() => tools.logs(conversationId(), process === undefined ? { check: check! } : { process }, lines))
+  )
+  server.registerTool(
+    "app_probe",
+    {
+      description:
+        "Call while setting up the recipe, or when two Threads' copies of the app seem to fight, to see what this Thread's app touches outside its own checkout and ports: the ports it listens on, which local services it connects to and who runs them, outside hosts it connects to, files it holds open for writing elsewhere, processes it left behind that a stop won't end, and folders where apps keep state that changed since it came up. Call with the app running, and again after app_stop to see what it left behind.",
+      inputSchema: z.object({}).strict(),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    () => reply(() => tools.probe(conversationId()))
   )
   server.registerTool(
     "app_check",

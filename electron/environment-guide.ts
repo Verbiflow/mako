@@ -102,11 +102,12 @@ Never run the app with & or nohup in your own shell. Use the tools, so it stays 
 1. Call app_status: the recipe is ready, and the values resolved as you meant. If it has carry or outputs, saving it said what each found in the main checkout; check that's what you meant.
 2. Call app_start: every process is running on its port. If one isn't, call app_logs, fix the cause, and try again.
 3. Fetch the app at MAKO_THREAD_URL, or at 127.0.0.1 on its port, from your shell (curl, or the project's own test script), and check that it's this copy answering, such as the page title or a health endpoint. Don't drive a browser or the desktop for this.
-4. Show it keeps out of the way:
-   - With port_holder, the project's usual port (3000, 5173, ...) isn't held by your copy.
-   - Nothing was written to the usual data folder or profile.
+4. Show it keeps out of the way, with app_probe while it runs:
+   - listening: every port is inside this Thread's block; one with a note is a fixed port a second copy would fight over.
+   - connectsTo: each local service it uses, with who runs it. A service another Thread's copy uses too is shared, so the copy needs its own database, namespace or prefix there (section 6).
+   - writing and changedFolders: nothing of the project's in the usual data folder or profile, such as ~/Library/Application Support/<app>. Other apps write to these folders too; look for this project's names.
 5. Call app_check "quick", then app_check "full" if the recipe has one.
-6. Call app_stop. Afterwards, nothing of this Thread's is still listening.
+6. Call app_stop, then app_probe again: nothing is listening, and leftovers is empty. A leftover is a process the app left behind, such as a daemon it started, which the next copy would find.
 
 ## 6. Outside services
 
