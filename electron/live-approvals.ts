@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { approvalAnswerDigest } from "./providers/approval-evidence.js"
 import { isDeepStrictEqual } from "node:util"
-import { ApprovalSubmissionSchema, NativeApprovalDecisionSchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity, type ApprovalEndSource, type ApprovalOrigin, type ApprovalResponse, type ApprovalSubmission } from "./contracts/approval-response.js"
+import { ANSWERED_DIFFERENTLY, ApprovalSubmissionSchema, NativeApprovalDecisionSchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity, type ApprovalEndSource, type ApprovalOrigin, type ApprovalResponse, type ApprovalSubmission } from "./contracts/approval-response.js"
 import type { LivePermissionRequest, LivePermissionResponse } from "./contracts/providers-acp.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { ConversationControl } from "./contracts/conversation-control.js"
@@ -159,7 +159,7 @@ export class LiveApprovals {
     const control = this.host.control(resident)
     const existing = control.approvalResponses?.find(item => item.id === requestId)
     if (existing) {
-      if (existing.digest !== digest) throw new Error("This approval already has a different saved answer")
+      if (existing.digest !== digest) throw new Error(`This approval ${ANSWERED_DIFFERENTLY}`)
       if (existing.nativeDecision || existing.state.kind === "submitted" || existing.state.kind === "not-submitted") return
       throw new Error("This approval answer was already saved. Delivery is unconfirmed; it will not be sent again.")
     }
@@ -206,6 +206,9 @@ export class LiveApprovals {
     const latest = this.host.control(resident).approvalResponses?.find(item => item.id === receipt.id)
     const settled = { ...receipt, ended: latest?.ended, state }
     if (latest?.nativeDecision) settled.nativeDecision = latest.nativeDecision
+    // Recorded before the approval leaves the snapshot, so no window sees it unanswered and unbuilt.
+    if (state.kind === "submitted" && request.implementsPlan && response.kind === "choice" && response.optionId === request.implementsPlan.approve)
+      this.host.dependencies.planBuilt?.(request.implementsPlan.plan, { at: Date.now(), conversation: id })
     this.save(resident, settled)
     if (state.kind === "uncertain" && !latest?.nativeDecision) throw new Error(state.reason)
   }

@@ -2,6 +2,7 @@ import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "./contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
+import { realpath } from "node:fs/promises"
 import { join } from "node:path"
 import { TransferInputSchema, resumable } from "./contracts/conversation-control.js"
 import type {
@@ -16,8 +17,8 @@ import { classifyStartFailure } from "./contracts/provider-failure.js"
 import type { LiveSnapshot } from "./shared.js"
 import { hostLog } from "./host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
-import { prepareLiveContext } from "./live-context.js"
-import { errorMessage } from "./live-runtime.js"
+import { capturedThread, prepareLiveContext } from "./live-context.js"
+import { bindingPath, errorMessage } from "./live-runtime.js"
 import type {
   LiveAccess,
   Resident,
@@ -174,6 +175,38 @@ export class LiveTransfers {
     this.host.flush(resident)
   }
 
+  /**
+   * The whole conversation written into the destination's own session store,
+   * for a destination that opens a new session. Any harness with a session
+   * emitter and a driver that resumes gets this; the rest go as transcript.
+   */
+  private async importSession(
+    source: LiveSnapshot,
+    provider: string,
+    canResume: boolean
+  ): Promise<{ sessionId: string; path: string } | { fallback: string }> {
+    if (!canResume || !this.host.dependencies.emitSession)
+      return { fallback: "This agent cannot resume an imported session." }
+    const thread = capturedThread(source, 0, true)
+    try {
+      const emitted = await this.host.dependencies.emitSession(provider, {
+        ...thread,
+        ref: { ...thread.ref, cwd: source.session.cwd },
+      })
+      if (!emitted) return { fallback: "This agent has no session import." }
+      // An account's store can reach the shared one through a symlink; the
+      // session index knows the file by its real path.
+      return { sessionId: emitted.sessionId, path: await realpath(emitted.path) }
+    } catch (error) {
+      hostLog("transfer", "session import failed", {
+        conversation: source.session.id,
+        harness: provider,
+        error: errorMessage({ error }),
+      })
+      return { fallback: `Writing its session failed: ${errorMessage({ error })}` }
+    }
+  }
+
   private async perform(
     resident: Resident,
     transfer: ContextTransfer
@@ -278,6 +311,12 @@ export class LiveTransfers {
       if (resident.generation !== generation) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
       if (!driver) throw new Error("The destination provider was removed")
+      const carry = transfer.input.carry === "native" && !prior && !reconnect && !target && !nativeFork
+        ? await this.importSession(source, transfer.input.provider, driver.canResume)
+        : undefined
+      if (resident.generation !== generation) return
+      let imported = carry && "sessionId" in carry ? carry : undefined
+      let fallback = carry && "fallback" in carry ? carry.fallback : undefined
       const bindingId = prior?.id ?? randomUUID()
       const modeId = reconnect
         ? transfer.input.modeId ??
@@ -316,14 +355,23 @@ export class LiveTransfers {
           this.host.dependencies.memory?.hold(transfer.input.provider, prior.nativeId, source.session.id)
           held = prior.nativeId
         }
-        const session = await driver.start(source.session.cwd, {
+        const conversationTools = await this.host.dependencies.tools?.(
+          bindingId,
+          source.session.id
+        )
+        const threadEnvironment = await this.host.dependencies.threadEnvironment?.(
+          source.session.id,
+          source.session.title,
+          source.session.cwd
+        )
+        const open = (resume?: { nativeId?: string; path?: string }) => driver.start(source.session.cwd, {
           emit: this.host.driverEvents(resident, bindingId),
           mcpSnapshot: this.host.dependencies.mcpSnapshot
             ? () => this.host.dependencies.mcpSnapshot!(source.session.cwd)
             : undefined,
           conversationId: bindingId,
-          resume: prior?.nativeId,
-          threadPath: prior?.path,
+          resume: resume?.nativeId,
+          threadPath: resume?.path,
           observedAgents: prior?.nativeId && !nativeFork
             ? source.nativeAgents?.agents.filter((agent) => agent.bindingId === prior.id && agent.provider === prior.provider)
             : undefined,
@@ -331,19 +379,31 @@ export class LiveTransfers {
             ? knownApprovalOccurrences(source.control, prior.id)
             : undefined,
           fork: nativeFork,
-          conversationTools: await this.host.dependencies.tools?.(
-            bindingId,
-            source.session.id
-          ),
-          threadEnvironment: await this.host.dependencies.threadEnvironment?.(
-            source.session.id,
-            source.session.title,
-            source.session.cwd
-          ),
+          conversationTools,
+          threadEnvironment,
           title: source.session.title,
           tuning,
           modeId,
         })
+        let session: Awaited<ReturnType<typeof open>>
+        if (imported) {
+          try {
+            session = await open({ nativeId: imported.sessionId, path: imported.path })
+            if (session.nativeId !== imported.sessionId) {
+              await driver.close(bindingId)
+              throw new Error("it opened a different session")
+            }
+          } catch (error) {
+            fallback = `It did not resume the imported session: ${errorMessage({ error })}`
+            hostLog("transfer", "native carry fell back to transcript", {
+              conversation: source.session.id,
+              harness: transfer.input.provider,
+              error: errorMessage({ error }),
+            })
+            imported = undefined
+            session = await open()
+          }
+        } else session = await open(prior && { nativeId: prior.nativeId, path: prior.path })
         prepared = { driver, session }
         if (prior?.nativeId && session.nativeId !== prior.nativeId)
           throw new Error("The provider returned a different session while resuming. The saved conversation was not replaced.")
@@ -411,8 +471,9 @@ export class LiveTransfers {
           latestBindings.find((candidate) => candidate.id === prior.id)) ?? {
           id: bindingId,
           provider: transfer.input.provider,
-          coveredBlocks: 0,
+          coveredBlocks: imported ? source.blocks.length : 0,
           includesBase: false,
+          path: imported?.path ?? bindingPath(this.host.dependencies, prepared.session, prepared.session.nativePath),
         }),
         nativeId: prepared.session.nativeId,
         tuning: appliedTuning,
@@ -436,7 +497,13 @@ export class LiveTransfers {
       }
       const accepted: ContextTransfer = {
         ...transfer,
-        state: { kind: "accepted", bindingId, manifest },
+        state: {
+          kind: "accepted",
+          bindingId,
+          manifest,
+          carried: imported ? "native" : "transcript",
+          fallback,
+        },
       }
       const previous = resident.snapshot
       const nextSnapshot: LiveSnapshot = {
@@ -461,7 +528,7 @@ export class LiveTransfers {
             displayText: transfer.input.displayText ?? transfer.input.text,
             attachments: transfer.input.attachments,
             context:
-              manifest.includesBase || manifest.toBlock > manifest.fromBlock
+              !imported && (manifest.includesBase || manifest.toBlock > manifest.fromBlock)
                 ? [manifest]
                 : [],
             status: "queued",
@@ -552,6 +619,11 @@ export class LiveTransfers {
       held = null
       activated = true
       this.host.flush(resident)
+      if (fallback) this.host.dependencies.emit({
+        type: "notice",
+        level: "info",
+        message: `Session import did not work, so the conversation went as a transcript instead. ${fallback}`,
+      })
       if (moved) {
         hostLog("transfer", "reconnected past checkpoint", {
           conversation: source.session.id,

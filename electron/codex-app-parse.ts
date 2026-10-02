@@ -6,6 +6,8 @@ import {
 } from "./providers/codex/agents.js"
 import { attachmentFromCodexContent } from "./providers/codex/content.js"
 import { z } from "zod"
+import type { TokenCounts } from "./contracts/providers-acp.js"
+import { fromInclusiveCounts } from "./session-usage.js"
 import {
   booleanValue,
   isJsonObject,
@@ -123,6 +125,8 @@ type TokenUsageNotification = {
   used: number
   /** The model's context window, when Codex knows it. */
   size?: number
+  /** The thread's running total, by kind, when Codex itemizes it. */
+  total?: TokenCounts
 }
 
 type WarningNotification = {
@@ -219,8 +223,19 @@ export type ProtocolNotification =
   | SummaryPartNotification
   | InvalidNotification
 
+const count = z.number().nonnegative()
+/** Codex 0.159's `TokenUsageBreakdown`: input includes cached input, and output includes reasoning. */
+const BreakdownSchema = z.object({
+  totalTokens: count,
+  inputTokens: count,
+  cachedInputTokens: count,
+  cacheWriteInputTokens: count.optional(),
+  outputTokens: count,
+  reasoningOutputTokens: count,
+})
 const TokenUsageSchema = z.object({
-  last: z.object({ totalTokens: z.number().nonnegative() }),
+  last: z.object({ totalTokens: count }),
+  total: BreakdownSchema.optional().catch(undefined),
   modelContextWindow: z.number().positive().nullish(),
 })
 const ConfigNoticeSchema = z.object({ summary: z.string().min(1), details: z.string().nullish() })
@@ -357,8 +372,16 @@ export function parseNotification(
     case "thread/tokenUsage/updated": {
       const usage = TokenUsageSchema.safeParse(params.tokenUsage)
       if (threadId === undefined || !usage.success) return null
-      const { last, modelContextWindow } = usage.data
-      return { method, threadId, used: last.totalTokens, size: modelContextWindow ?? undefined }
+      const { last, total, modelContextWindow } = usage.data
+      const parsed: TokenUsageNotification = { method, threadId, used: last.totalTokens, size: modelContextWindow ?? undefined }
+      if (total) parsed.total = fromInclusiveCounts({
+        input: total.inputTokens,
+        cacheRead: total.cachedInputTokens,
+        cacheWrite: total.cacheWriteInputTokens,
+        output: total.outputTokens,
+        reasoning: total.reasoningOutputTokens,
+      })
+      return parsed
     }
     case "warning":
     case "guardianWarning": {

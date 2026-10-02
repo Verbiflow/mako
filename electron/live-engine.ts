@@ -12,7 +12,7 @@ import type {
 } from "./shared.js"
 import { compactionEvent, type Compaction, type TranscriptEvent } from "@mako/sessions/events"
 import type { JsonValue } from "./codex-app-json.js"
-import type { DecodedSink } from "./contracts/native-decoding.js"
+import { decodedNotices, type DecodedSink } from "./contracts/native-decoding.js"
 import { retainUnknown, type UnknownReason } from "./native-unknown.js"
 
 /** What a live engine's per-session record must carry to share the runtime. */
@@ -178,12 +178,10 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
     event,
     observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined, source?: string): void {
       if (!notices) return unhandledEvent(live, kind)
-      let markers = 0
-      const id = () => source && (markers++ === 0 ? source : `${source}:${markers}`)
-      for (const notice of notices) {
-        if (notice.kind === "activity") activity(live, notice.activity)
-        else if (notice.kind === "compacted") compacted(live, notice.compaction, id())
-        else event(live, notice.event, id())
+      for (const item of decodedNotices(notices, source)) {
+        if (item.kind === "activity") activity(live, item.activity)
+        else if (item.kind === "compacted") compacted(live, item.compaction, item.source)
+        else if (item.kind === "marker") event(live, item.marker, item.source)
       }
     },
     unhandled: unhandledEvent,

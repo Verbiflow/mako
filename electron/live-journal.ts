@@ -38,6 +38,15 @@ export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
 const LegacyHostModeSchema = z.object({ enforcement: z.literal("host") })
 
 
+const TokenCountsSchema = z.object({
+  input: z.number(),
+  cacheRead: z.number(),
+  cacheWrite: z.number(),
+  output: z.number(),
+  reasoning: z.number().optional(),
+})
+const CostSchema = z.object({ amount: z.number(), currency: z.string() })
+
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
   nativeDelivery: PromptDeliverySchema.optional(),
@@ -89,6 +98,19 @@ export const LiveRequestSchema = z.object({
     })
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
+  /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
+  usageFrom: z.object({
+    tokens: TokenCountsSchema.optional(),
+    cost: CostSchema.optional(),
+  }).optional(),
+  /** What answering this request spent, for harnesses whose own store keeps no usage. */
+  spend: z.object({
+    provider: z.string(),
+    model: z.string().optional(),
+    at: z.number(),
+    tokens: TokenCountsSchema.optional(),
+    cost: z.number().nonnegative().optional(),
+  }).optional(),
   continues: z
     .object({
       requestId: z.string(),
@@ -127,6 +149,13 @@ const MetadataSchema = z.object({
     settings: SessionSettingsSchema.optional(),
     lastStop: z.string().optional(),
     error: z.string().optional(),
+    // How full the context is belongs to the conversation and reopens with
+    // it; what was spent belonged to the process that ended.
+    usage: z.object({
+      used: z.number().optional(),
+      size: z.number().optional(),
+      compacted: z.boolean().optional(),
+    }).optional(),
   }),
   revision: z.number().int().nonnegative(),
   threadPath: z.string().optional(),

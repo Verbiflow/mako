@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs"
 import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -89,15 +89,17 @@ type OpenCodeRow = z.infer<typeof OpenCodeRowSchema>
 
 export async function usageSummary(
   sessionsRoot: string,
-  homeRoot = homedir()
+  homeRoot = homedir(),
+  conversationsRoot?: string
 ): Promise<UsageSummary> {
-  const [builtIn, claude, codex] = await Promise.all([
+  const [builtIn, claude, codex, grok] = await Promise.all([
     discover([sessionsRoot]),
     discover([
       join(homeRoot, ".claude", "projects"),
       join(homeRoot, ".claude", "transcripts"),
     ]),
     discover([join(homeRoot, ".codex", "sessions")]),
+    discover([join(homeRoot, ".grok", "sessions")], GROK_UPDATES),
   ])
   const events = new Map<string, UsageEvent>()
   const sessions = new Set<string>()
@@ -105,16 +107,18 @@ export async function usageSummary(
   await scanBuiltIn(builtIn.files, events, sessions)
   await scanClaude(claude.files, events, sessions)
   await scanCodex(codex.files, events, sessions)
+  await scanGrok(grok.files, events, sessions)
   const openCodeTruncated = await scanOpenCode(homeRoot, events, sessions)
+  const recordedTruncated = conversationsRoot ? await scanRecorded(conversationsRoot, events, sessions) : false
 
   return aggregate(
     events.values(),
     sessions.size,
-    builtIn.truncated || claude.truncated || codex.truncated || openCodeTruncated
+    builtIn.truncated || claude.truncated || codex.truncated || grok.truncated || openCodeTruncated || recordedTruncated
   )
 }
 
-async function discover(roots: string[]): Promise<ScanResult> {
+async function discover(roots: string[], name?: string): Promise<ScanResult> {
   const state: DiscoveryState = {
     entries: 0,
     truncated: false,
@@ -122,6 +126,7 @@ async function discover(roots: string[]): Promise<ScanResult> {
     aliases: new Set(),
   }
   for (const root of roots) await walkJsonl(root, state)
+  if (name) state.files = state.files.filter((file) => basename(file.path) === name)
   state.files.sort(
     (left, right) => right.mtimeMs - left.mtimeMs || right.path.localeCompare(left.path)
   )
@@ -255,6 +260,158 @@ async function scanCodex(
     if (read) sessions.add(`Codex:${context.session}`)
     if ((index + 1) % 8 === 0) await yieldToMain()
   }
+}
+
+/** Grok writes each session's live transcript here; its siblings repeat it or hold no usage. */
+const GROK_UPDATES = "updates.jsonl"
+/** Grok's own unit: `costUsdTicks` are ten-billionths of a dollar. */
+const GROK_TICKS_PER_USD = 1e10
+
+async function scanGrok(
+  files: FileCandidate[],
+  events: Map<string, UsageEvent>,
+  sessions: Set<string>
+): Promise<void> {
+  for (const [index, file] of files.entries()) {
+    // sessions/<url-encoded cwd>/<session id>/updates.jsonl
+    const cwd = decodedDirectory(basename(dirname(dirname(file.path))))
+    const read = await readLines(file, (line) => {
+      if (!line.includes('"turn_completed"')) return
+      for (const event of parseGrokTurn(line, cwd, file.mtimeMs)) mergeEvent(events, event)
+    })
+    if (read) sessions.add(`Grok:${basename(dirname(file.path))}`)
+    if ((index + 1) % 8 === 0) await yieldToMain()
+  }
+}
+
+function decodedDirectory(name: string): string {
+  try {
+    const decoded = decodeURIComponent(name)
+    return decoded.startsWith("/") ? decoded : "unknown"
+  } catch {
+    return "unknown"
+  }
+}
+
+/** One event per model a turn used; Grok counts cached input inside `inputTokens`. */
+function parseGrokTurn(line: string, cwd: string, fallbackTime: number): UsageEvent[] {
+  const root = parseObject(line)
+  const params = objectValue(root?.params)
+  const update = objectValue(params?.update)
+  const usage = objectValue(update?.usage)
+  if (!root || !params || !update || !usage || stringValue(update.sessionUpdate) !== "turn_completed") return []
+  const session = stringValue(params.sessionId) ?? "unknown"
+  const turn = stringValue(update.prompt_id) ?? fingerprint(String(root.timestamp), session, grokCounts(usage))
+  const seconds = numberValue(root.timestamp)
+  const timestamp = seconds !== undefined && seconds > 0
+    ? new Date(seconds < 10_000_000_000 ? seconds * 1000 : seconds).toISOString()
+    : new Date(fallbackTime).toISOString()
+  const perModel = Object.entries(objectValue(usage.modelUsage) ?? {})
+    .flatMap(([model, value]) => {
+      const counts = objectValue(value)
+      return counts ? [[model, counts] as const] : []
+    })
+  return (perModel.length ? perModel : [["unknown", usage] as const]).flatMap(([model, counts]) => {
+    const tokens = grokCounts(counts)
+    const ticks = numberValue(counts.costUsdTicks)
+    if (tokenTotal(tokens) === 0 && !ticks) return []
+    const event: UsageEvent = {
+      ...tokens,
+      key: `Grok:${session}:${turn}:${model}`,
+      source: "Grok",
+      session,
+      timestamp,
+      model,
+      cwd,
+    }
+    if (ticks !== undefined && ticks >= 0) event.reportedCost = ticks / GROK_TICKS_PER_USD
+    return [event]
+  })
+}
+
+function grokCounts(usage: JsonObject): UsageTokenCounts {
+  const cacheRead = tokenValue(usage.cachedReadTokens)
+  const cacheWrite = tokenValue(usage.cacheCreationTokens)
+  return {
+    input: Math.max(0, tokenValue(usage.inputTokens) - cacheRead - cacheWrite),
+    output: tokenValue(usage.outputTokens),
+    cacheRead,
+    cacheWrite,
+  }
+}
+
+/**
+ * Harnesses whose own stores keep no token counts: Cursor's SDK store and
+ * Devin's CLI database. What Mako measured while running them is the record.
+ */
+const RECORDED_BY_MAKO = new Map([["cursor", "Cursor"], ["devin", "Devin"]])
+
+/** A journal row: one JSON document in `value`. */
+const JournalRowSchema = z.object({ value: z.string() })
+
+const RecordedSpendSchema = z.object({
+  id: z.string(),
+  spend: z.object({
+    provider: z.string(),
+    model: z.string().optional(),
+    at: z.number(),
+    tokens: z.object({ input: z.number(), cacheRead: z.number(), cacheWrite: z.number(), output: z.number() }).optional(),
+    cost: z.number().optional(),
+  }),
+})
+
+async function scanRecorded(
+  root: string,
+  events: Map<string, UsageEvent>,
+  sessions: Set<string>
+): Promise<boolean> {
+  let names: string[]
+  try {
+    names = (await readdir(root)).filter((name) => name.endsWith(".sqlite"))
+  } catch {
+    return false
+  }
+  const truncated = names.length > MAX_FILES_PER_SOURCE
+  for (const [index, name] of names.slice(0, MAX_FILES_PER_SOURCE).entries()) {
+    let db: DatabaseSync | undefined
+    try {
+      db = new DatabaseSync(join(root, name), { readOnly: true })
+      const rows = db.prepare(`SELECT value FROM requests WHERE value LIKE '%"spend"%'`).all()
+      if (!rows.length) continue
+      const metadata = JournalRowSchema.safeParse(db.prepare("SELECT value FROM metadata WHERE id=1").get()).data
+      const cwd = (metadata && stringValue(objectValue(parseObject(metadata.value)?.session)?.cwd)) ?? "unknown"
+      const conversation = basename(name, ".sqlite")
+      for (const row of rows) {
+        const value = JournalRowSchema.safeParse(row).data?.value
+        if (value === undefined) continue
+        const parsed = RecordedSpendSchema.safeParse(parseObject(value))
+        const source = parsed.success ? RECORDED_BY_MAKO.get(parsed.data.spend.provider) : undefined
+        if (!parsed.success || !source) continue
+        const { spend } = parsed.data
+        const event: UsageEvent = {
+          input: spend.tokens?.input ?? 0,
+          output: spend.tokens?.output ?? 0,
+          cacheRead: spend.tokens?.cacheRead ?? 0,
+          cacheWrite: spend.tokens?.cacheWrite ?? 0,
+          key: `${source}:${conversation}:${parsed.data.id}`,
+          source,
+          session: conversation,
+          timestamp: new Date(spend.at).toISOString(),
+          model: spend.model ?? "unknown",
+          cwd,
+        }
+        if (spend.cost !== undefined && spend.cost >= 0) event.reportedCost = spend.cost
+        sessions.add(`${source}:${conversation}`)
+        mergeEvent(events, event)
+      }
+    } catch {
+      continue
+    } finally {
+      db?.close()
+    }
+    if ((index + 1) % 16 === 0) await yieldToMain()
+  }
+  return truncated
 }
 
 async function scanOpenCode(

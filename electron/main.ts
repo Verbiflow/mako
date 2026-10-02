@@ -1238,7 +1238,7 @@ function bindIpc() {
   handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace)))
 
   handle("mako:usage", () =>
-    usageSummary(join(homedir(), ".mako", "sessions"), homedir())
+    usageSummary(join(homedir(), ".mako", "sessions"), homedir(), join(app.getPath("userData"), "conversations"))
   )
 
   /* Cross-harness threads: every agent's sessions on this machine. */
@@ -1818,6 +1818,9 @@ function bindIpc() {
   handle("mako:live-snapshot", (_event, id: string) =>
     liveConversations.refreshedSnapshot(id)
   )
+  handle("mako:live-context-breakdown", (_event, id: string) =>
+    liveConversations.contextBreakdown(id)
+  )
   handle("mako:live-read", (_event, id: string, input: LiveHistoryRead) =>
     liveHistory.read(id, LiveHistoryReadSchema.parse(input), () => liveConversations.refreshedSnapshot(id))
   )
@@ -2130,6 +2133,10 @@ app.whenReady().then(async () => {
   })
   powerMonitor.on("resume", emitTerminalWake)
   powerMonitor.on("unlock-screen", emitTerminalWake)
+  const planBuilds = new PlanBuilds({
+    file: join(app.getPath("userData"), "plan-builds.json"),
+    announce: (builds) => emit({ type: "plan-builds", builds }),
+  })
   liveConversations = new LiveConversations({
     memory: sessionMemory ?? undefined,
     threads: threadStore ?? undefined,
@@ -2146,6 +2153,10 @@ app.whenReady().then(async () => {
         : nativeCheckpoint(path)
     },
     nativePath: nativePathForSession,
+    emitSession: async (provider, thread) => {
+      const emitter = providerHost.sessionEmitters.get(provider)
+      return emitter ? emitter.emit(thread) : null
+    },
     resumeVerdict: async (binding) => {
       // The catalog knows which records their harness keeps closed; the
       // binding's path may predate a move, such as Codex archiving its rollout.
@@ -2200,6 +2211,11 @@ app.whenReady().then(async () => {
     driver: (provider) => providerHost.liveDrivers.get(provider),
     history: pageThread,
     emit,
+    planBuilt: (planId, build) => {
+      try { planBuilds.record(planId, build) } catch (error) {
+        hostWarn("plans", "a built plan could not be recorded", { error: error instanceof Error ? error.message : String(error) })
+      }
+    },
   })
   await liveConversations.recoverRewinds().catch((error) =>
     emit({
@@ -2305,10 +2321,7 @@ app.whenReady().then(async () => {
   installThreadWorktreesIpc(threadWorktrees)
   installChatFoldersIpc()
   installWorkspaceMovesIpc(moves)
-  installPlanBuildsIpc(new PlanBuilds({
-    file: join(app.getPath("userData"), "plan-builds.json"),
-    announce: (builds) => emit({ type: "plan-builds", builds }),
-  }))
+  installPlanBuildsIpc(planBuilds)
   installTranscriptDocumentIpc({ snapshot: (id) => liveConversations.snapshot(id), openThread })
   const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>
     hostWarn("threads", "spare worktrees could not be tidied", { error: error instanceof Error ? error.message : String(error) }))

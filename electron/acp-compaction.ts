@@ -71,6 +71,11 @@ export class AcpCompaction {
     if (result) this.finish(result)
   }
 
+  /** The harness's own compaction notice, decoded like any other, settles it too. */
+  confirm(result: LiveActionResult): void {
+    this.finish(result)
+  }
+
   private uncertain(reason: string): void {
     if (this.finished || this.reportedUncertain) return
     this.reportedUncertain = true

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { NativeQuestionSchema, NativeQuestionAnswerSchema, NativeQuestionHistorySchema, type NativeQuestionAnswer, type NativeQuestion } from "./contracts/live-questions.js"
 import type { LivePermissionResponse } from "./contracts/providers-acp.js"
+import { ANSWERED_DIFFERENTLY } from "./contracts/approval-response.js"
 import type { LiveAction, LiveActionInput } from "./contracts/live-actions.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { ProviderBinding } from "./contracts/conversation-control.js"
@@ -156,7 +157,7 @@ export class LiveQuestions {
     const transfer = control.transfers.find(item => item.input.id === question.id)
     const previousText = request?.text ?? (action?.input.kind !== "compact" ? action?.input.text : undefined) ?? transfer?.input.text
     if (previousText !== undefined) {
-      if (previousText !== text) throw new Error("This question already has a different saved answer")
+      if (previousText !== text) throw new Error(`This question ${ANSWERED_DIFFERENTLY}`)
       if (action?.state.kind === "not-accepted" && !request && !transfer && remaining.questions.length && canContinue())
         this.delivery.continue(id, question.bindingId, question.id, text, displayText)
       return true

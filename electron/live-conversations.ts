@@ -28,7 +28,7 @@ import type { LiveActionInput } from "./contracts/live-actions.js"
 import type { RewindInput } from "./contracts/workspace-snapshots.js"
 import { LiveChildren } from "./live-children.js"
 import { LiveMoves, snapshotFacts } from "./live-moves.js"
-import { errorMessage } from "./live-runtime.js"
+import { bindingPath, errorMessage } from "./live-runtime.js"
 import type {
   LiveAccess,
   Dependencies,
@@ -73,7 +73,8 @@ import type { InterruptionReason, TurnContinuation } from "./contracts/live-conv
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, TurnSteps } from "./interrupted-turn.js"
 import { controlNote } from "./control-launch.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
-import { CONNECTION_LOST_STOP } from "./contracts/providers-acp.js"
+import { carriedUsage, spendBetween } from "./session-usage.js"
+import { CONNECTION_LOST_STOP, type ContextBreakdown } from "./contracts/providers-acp.js"
 import {
   AUTO_CONTINUE_DELAY_MS,
   autoContinueCandidate,
@@ -488,6 +489,14 @@ export class LiveConversations {
       }
     }
     return null
+  }
+
+  /** The connected session's context by category; `null` when its harness does not itemize it or nothing is connected. */
+  async contextBreakdown(id: string): Promise<ContextBreakdown | null> {
+    const resident = this.load(id)
+    const bindingId = resident && this.control(resident).activeBindingId
+    if (!resident?.driver?.contextBreakdown || !bindingId || resident.snapshot.session.connection !== "connected") return null
+    return resident.driver.contextBreakdown(bindingId)
   }
 
   snapshot(id: string): LiveSnapshot | null {
@@ -1530,6 +1539,7 @@ export class LiveConversations {
         session: {
           ...event.session,
           title: event.session.title ?? resident.snapshot.session.title,
+          usage: carriedUsage(resident.snapshot.session, event.session),
         },
         nativeActivity: event.session.status === "running" ? resident.snapshot.nativeActivity : undefined,
       }
@@ -1618,9 +1628,10 @@ export class LiveConversations {
       this.approvals.end(resident, bindingId, event)
     } else if (event.type === "live-permission") {
       this.approvals.observe(resident, event.request)
-    } else if (!replaying) {
-      const updates =
-        event.type === "live-update" ? [event.update] : event.updates
+    } else {
+      // A setup notice said while opening is about this launch, not replayed history.
+      const updates = (event.type === "live-update" ? [event.update] : event.updates)
+        .filter((update) => !replaying || (update.kind === "event" && update.setup === true))
       const dispatching = resident.snapshot.requests.some(
         (request) => request.status === "dispatching"
       )
@@ -2297,10 +2308,7 @@ export class LiveConversations {
 
   private updateBinding(resident: Resident, session: LiveSessionState): void {
     const control = this.control(resident)
-    const path =
-      session.nativePath ??
-      resident.snapshot.threadPath ??
-      this.dependencies.nativePath?.(session)
+    const path = bindingPath(this.dependencies, session, session.nativePath ?? resident.snapshot.threadPath)
     resident.snapshot = {
       ...resident.snapshot,
       threadPath: path,
@@ -3057,9 +3065,11 @@ export class LiveConversations {
     const nativeDelivery: PromptDelivery = { attemptId, bindingId, ownerEpoch: this.epoch, evidence: { kind: "prepared" } }
     const ownerGeneration = this.moves.generation(resident)
     if (ownerGeneration !== undefined) nativeDelivery.ownerGeneration = ownerGeneration
+    const usage = resident.snapshot.session.usage
     const current = {
       ...request,
       nativeDelivery,
+      usageFrom: usage?.tokens || usage?.cost ? { ...(usage.tokens && { tokens: usage.tokens }), ...(usage.cost && { cost: usage.cost }) } : undefined,
       status: "dispatching" as const,
       context: [
         ...(request.context ?? []),
@@ -3566,6 +3576,9 @@ function settleRequest(request: LiveRequest, session: LiveSessionState, ended: b
     settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error).kind
   } else if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
+  const spend = spendBetween(request.usageFrom, session.usage)
+  if (spend.tokens || spend.cost !== undefined)
+    settled.spend = { provider: session.harness, model: session.settings?.model, at: Date.now(), ...spend }
   return settled
 }
 

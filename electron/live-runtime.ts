@@ -8,7 +8,7 @@ import type {
   LiveDriverEvent,
   McpRegistrySnapshot,
 } from "./shared.js"
-import type { ThreadPage } from "@mako/sessions"
+import type { EmitResult, Thread, ThreadPage } from "@mako/sessions"
 import type {
   ProviderBinding,
   ResumeVerdict,
@@ -26,6 +26,7 @@ import type { Actor } from "./contracts/thread-identity.js"
 import type { ThreadEnvironment } from "./contracts/thread-environments.js"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
+import type { PlanBuild } from "./contracts/plan-builds.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
   session: LiveSessionState
@@ -97,8 +98,12 @@ export interface Dependencies {
   /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   driver(provider: string): ProviderLiveDriver | undefined
+  /** Writes a conversation into the provider's own session store; null when it has no writer. */
+  emitSession?(provider: string, thread: Thread): Promise<EmitResult | null>
   history(path: string, before?: number): Promise<ThreadPage | null>
   emit(event: HostEvent): void
+  /** A plan approval was answered with its approve choice and the agent confirmed it; see `PlanBuild`. */
+  planBuilt?(planId: string, build: PlanBuild): void
   /**
    * The per-user ledger of settings, access mode and live holds per native
    * session. Written from every flush that changes what a connected session
@@ -146,6 +151,15 @@ export interface LiveAccess {
 
 export interface FailureBoundary {
   error: unknown
+}
+
+/**
+ * The path a binding records for a session: the catalog's when it lists that
+ * session, the reported one otherwise. A driver can name its file through an
+ * account's store, a symlink to the one the catalog lists.
+ */
+export function bindingPath(dependencies: Pick<Dependencies, "nativePath">, session: LiveSessionState, reported: string | undefined): string | undefined {
+  return dependencies.nativePath?.({ ...session, nativePath: reported }) ?? reported
 }
 
 const RpcErrorSchema = z

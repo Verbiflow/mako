@@ -88,11 +88,13 @@ interface ContextInput {
   includesBase: boolean
 }
 
-export async function prepareLiveContext(
-  input: ContextInput
-): Promise<ContextManifest> {
-  const { snapshot, root, fromBlock, includesBase } = input
-  const thread: Thread = {
+/** The conversation from `fromBlock` on as one thread, with the imported base first when asked. */
+export function capturedThread(
+  snapshot: LiveSnapshot,
+  fromBlock: number,
+  includesBase: boolean
+): Thread {
+  return {
     ref: snapshot.base?.ref ?? {
       path: snapshot.threadPath ?? snapshot.session.id,
       nativeId: snapshot.session.nativeId ?? snapshot.session.id,
@@ -105,6 +107,13 @@ export async function prepareLiveContext(
       ...liveEntries(snapshot.blocks.slice(includesBase ? Math.max(fromBlock, snapshot.baseCoveredBlocks ?? 0) : fromBlock)),
     ],
   }
+}
+
+export async function prepareLiveContext(
+  input: ContextInput
+): Promise<ContextManifest> {
+  const { snapshot, root, fromBlock, includesBase } = input
+  const thread = capturedThread(snapshot, fromBlock, includesBase)
   const retained = await persistThreadAttachments(
     thread,
     join(root, "attachments")

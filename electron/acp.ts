@@ -9,6 +9,8 @@ import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderStartOptions, type
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction } from "./acp-compaction.js"
+import { COMPACTION_FAILED, CONTEXT_COMPACTED } from "@mako/sessions/events"
+import type { NativeNotice } from "./contracts/native-activity.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
@@ -74,6 +76,7 @@ import { deliverDecoded } from "./contracts/native-decoding.js"
 import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
 import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpTuning } from "./providers/acp-source.js"
+import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import type { JsonObject } from "./codex-app-json.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
@@ -103,6 +106,7 @@ interface LegacySessionModelRequest {
 interface Live {
   agents?: AcpAgentObserver
   compaction?: AcpCompaction
+  usage: SessionUsage
   id: string
   harness: string
   cwd: string
@@ -315,6 +319,7 @@ async function startAcp(
       configOptions: [],
     },
     pendingPermissions: new Map(),
+    usage: new SessionUsage(),
     settling: [],
     startup: new AbortController(),
     promptCapabilities: {},
@@ -356,7 +361,8 @@ async function startAcp(
       code,
       signal,
       status: live.state.status,
-      stderr: stderrDetail(stderr),
+      // Durable logs carry no native output; a failure says it on the session.
+      stderrBytes: stderr.length,
     })
     engine.release(live)
     if (live.state.status === "closed") return
@@ -430,15 +436,11 @@ async function startAcp(
       }
       if (params.update.sessionUpdate === "usage_update") {
         const reading = params.update
-        update(live, {
-          usage: {
-            used: reading.used,
-            size: reading.size,
-            cost: reading.cost
-              ? { amount: reading.cost.amount, currency: reading.cost.currency }
-              : undefined,
-          },
-        })
+        const extra = source?.usageUpdate ? source.usageUpdate(UsageMetaSchema.safeParse(reading._meta).data) : []
+        if (extra === null) return
+        const observations: UsageObservation[] = [{ kind: "context", used: reading.used, size: reading.size }, ...extra]
+        if (reading.cost) observations.push({ kind: "cost", amount: reading.cost.amount, currency: reading.cost.currency })
+        observeUsage(observations)
         return
       }
       if (params.update.sessionUpdate === "available_commands_update") {
@@ -467,16 +469,40 @@ async function startAcp(
       const report = background?.extension?.(method, params)
       reportBackground(report)
       const observed = observeProviderTurn(method, params)
-      const decoded = source?.decodeNotification?.(method, params)
+      const startup = mcpStartup?.decode(method, params)
+      const native = startup ?? source?.decodeNotification?.(method, params)
+      const decoded = native && (startup || native.connectionWide) ? { ...native, sessionId: native.sessionId ?? live.sessionId ?? undefined } : native
       if (decoded) applyNotification(decoded)
       else if (!observed && !report) engine.unhandled(live, method)
     },
   }
-  /** A notification for another session is not this conversation's; an unknown one is logged either way. */
-  function applyNotification({ sessionId, kind, notices, state, id: source }: AcpNotificationDecoding): void {
-    if (notices && (!live.sessionId || sessionId !== live.sessionId)) return
-    engine.observe(live, kind, notices, source)
+  /**
+   * A notification for another session is not this conversation's; an unknown one is logged either way.
+   * Notices said while the session is still opening (MCP servers failing to start) wait for its id.
+   */
+  function applyNotification(decoded: AcpNotificationDecoding): void {
+    const { sessionId, kind, notices, state, id: source } = decoded
+    if ((notices?.length || decoded.usage?.length) && !live.sessionId) {
+      opening.push(decoded)
+      return
+    }
+    if (notices && sessionId !== live.sessionId) return
+    const marked = live.compaction ? notices?.map(asManualCompaction) : notices
+    engine.observe(live, kind, marked, source)
     if (notices && state) update(live, state)
+    const compacted = notices?.flatMap((notice) => notice.kind === "compacted" ? [{ kind: "compacted" as const, after: notice.compaction?.tokensAfter }] : []) ?? []
+    if (notices && (decoded.usage?.length || compacted.length)) observeUsage([...compacted, ...decoded.usage ?? []])
+    if (live.compaction && notices) {
+      const failed = notices.find((notice) => notice.kind === "event" && notice.event.label === COMPACTION_FAILED)
+      if (failed?.kind === "event") live.compaction.confirm({ kind: "failed", reason: failed.event.detail ?? "Compaction failed" })
+      else if (compacted.length || decoded.usage?.some((observation) => observation.kind === "compacted"))
+        live.compaction.confirm({ kind: "completed" })
+    }
+  }
+  /** Spend reported before the session opened is history `session/load` replays, already counted when it happened. */
+  function observeUsage(observations: UsageObservation[]): void {
+    const usage = live.usage.observe(...live.sessionId ? observations : observations.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent"))
+    if (usage) update(live, { usage })
   }
   /**
    * An update the SDK would have dropped. The provider's decoder reads a kind
@@ -491,6 +517,8 @@ async function startAcp(
   function lossyUpdate({ kind, paths }: LossySessionUpdate): void {
     for (const path of paths) engine.unhandled(live, `session/update/${kind}/lost/${path}`)
   }
+  const mcpStartup = source?.mcpStartup?.()
+  const opening: AcpNotificationDecoding[] = []
   const background = source?.observeBackground?.()
   live.background = background
   const providerTurns = source?.providerTurns?.()
@@ -591,6 +619,9 @@ async function startAcp(
           ),
     })
     live.sessionId = session.sessionId
+    for (const decoded of opening.splice(0))
+      if ((decoded.sessionId ?? session.sessionId) === session.sessionId)
+        applyNotification({ ...decoded, sessionId: session.sessionId, usage: decoded.usage?.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") })
     live.agents = await trace.step("observation", () => source?.observeAgents?.({
       nativeId: session.sessionId, cwd: workingDir, env, observedAgents: options.observedAgents,
       publish: (agent) => {
@@ -700,6 +731,8 @@ function loadSessionRequest(
   return request
 }
 
+/** A `usage_update`'s `_meta`, as the harness's own reader takes it. */
+const UsageMetaSchema = z.record(z.string(), z.json())
 const LegacyAcpModelsSchema = z.object({ models: z.object({ currentModelId: z.string() }).nullish() })
 
 function legacyAcpModel(response: NewSessionResponse | LoadSessionResponse): string | undefined {
@@ -1032,4 +1065,14 @@ function update(live: Live, patch: Partial<LiveSessionState>): void {
   }
   engine.patch(live, patch)
   if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
+}
+
+/**
+ * A compaction that ends while one Mako asked for is pending is that one:
+ * harnesses that report both kinds through their automatic notifications
+ * (Grok) would otherwise label it automatic.
+ */
+function asManualCompaction(notice: NativeNotice): NativeNotice {
+  if (notice.kind !== "event" || notice.event.label !== CONTEXT_COMPACTED || !notice.event.detail?.startsWith("Automatic")) return notice
+  return { ...notice, event: { ...notice.event, detail: notice.event.detail.replace(/^Automatic/, "Manual") } }
 }

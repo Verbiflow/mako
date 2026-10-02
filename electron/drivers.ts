@@ -222,8 +222,7 @@ async function launch(
 ): Promise<ThreadRunState> {
   const cwd = workingDir && existsSync(workingDir) ? workingDir : homedir()
   // The selected account decides who pays for this run, and what the
-  // command line may name: the model list Cursor's CLI accepts is the
-  // account's own.
+  // command line may name: Cursor's model list is the account's own.
   assertLifecycleAdmission()
   preparingRuns.set(key, { id: `preparing:${key}`, token: key, title: "Starting a native agent", provider: harness, cwd, status: "finishing", stoppable: false })
   let env: NodeJS.ProcessEnv
