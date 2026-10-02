@@ -25,7 +25,11 @@ export const installCodex: ProviderModule = (host) => installHarness(host, {
   skills: codexSkillSource,
   sessionEmitter: {
     provider: "codex",
-    emit: (thread) => emitCodexSession(thread, {}),
+    // Loaded on use: `accounts` reaches the provider registry this module is part of.
+    emit: async (thread) => {
+      const { accountEnv } = await import("../../accounts.js")
+      return emitCodexSession(thread, { store: (await accountEnv("codex", process.env)).CODEX_HOME || undefined })
+    },
   },
   connection: lacks("Signs in through `codex login`"),
   // No self-updater: the npm CLI upgrades through npm or Homebrew, the

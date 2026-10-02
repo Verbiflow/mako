@@ -8,7 +8,7 @@ import {
   codexWarningEvent,
   firstLine,
 } from "@mako/sessions/codex-presentation"
-import { event, type TranscriptEvent } from "@mako/sessions/events"
+import { event, mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { boundedText, type JsonObject, type JsonRpcId, type JsonValue } from "../../codex-app-json.js"
 import {
   parseNotification,
@@ -22,6 +22,7 @@ import { decoded, type Decoded } from "../../contracts/native-decoding.js"
 import type { NativeActivityObservation } from "../../contracts/native-activity.js"
 import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
 import type { LiveSessionState } from "../../contracts/providers-acp.js"
+import { SessionUsage, type UsageObservation } from "../../session-usage.js"
 import type { CodexAgentItem } from "./agents.js"
 import { codexAnsweredQuestions, codexAsyncQuestion } from "./questions.js"
 import { codexUpdatedWindows } from "./rate-limits.js"
@@ -199,6 +200,7 @@ export class CodexDecoder {
   private waiting: string | undefined
   /** Context tokens when the running compaction started. */
   private compactingFrom: number | undefined
+  private readonly meter = new SessionUsage()
 
   private readonly view: CodexDecoderView
 
@@ -307,23 +309,29 @@ export class CodexDecoder {
         out.push(decoded.effect({ type: "server-request-resolved", requestId: notification.requestId }))
         return
       case "thread/tokenUsage/updated": {
-        const { used, size } = notification
-        const current = this.view.state.usage
-        if (size === undefined || (current?.used === used && current.size === size)) return
-        out.push(decoded.state({ usage: { used, size } }))
+        const { used, size, total } = notification
+        const observations: UsageObservation[] = [{ kind: "context", used, size }]
+        if (total) observations.push({ kind: "total", tokens: total })
+        const usage = this.meter.observe(...observations)
+        if (usage) out.push(decoded.state({ usage }))
         return
       }
       case "warning":
-      case "guardianWarning":
+      case "guardianWarning": {
         // Codex's own UI leaves approvals out; denials and failures stay.
         if (notification.method === "guardianWarning" &&
           notification.message.startsWith("Automatic approval review approved ("))
           return
-        this.notice(out, notification.method, codexWarningEvent(notification.message))
+        // Outside a turn, Codex warns about what it loaded: its config, hooks,
+        // skills. It repeats `configWarning` here in other words.
+        const marker = codexWarningEvent(notification.message)
+        if (this.currentTurnId === null && notification.method === "warning") marker.setup = true
+        this.notice(out, notification.method, marker)
         return
+      }
       case "configWarning":
       case "deprecationNotice":
-        this.notice(out, notification.method, codexWarningEvent(notification.summary, notification.details))
+        this.notice(out, notification.method, { ...codexWarningEvent(notification.summary, notification.details), setup: true })
         return
       case "autoApprovalReview/strictReviewRequired":
         this.notice(out, notification.method, codexWarningEvent("This request needs extra safety checks, so some tool calls may take longer."))
@@ -338,12 +346,7 @@ export class CodexDecoder {
         const failure = notification.failureReason
         const reason = notification.error ??
           (failure ? MCP_FAILURES.get(failure) ?? words(failure) : undefined)
-        const line = reason ? firstLine(reason) : undefined
-        this.notice(out, notification.method, {
-          ...event("MCP server failed", line ? `${notification.name} · ${line}` : notification.name,
-            reason === line ? undefined : reason),
-          tone: "warning",
-        })
+        this.notice(out, notification.method, mcpServerFailedEvent(notification.name, reason))
         return
       }
       case "model/safetyBuffering/updated":
@@ -394,14 +397,16 @@ export class CodexDecoder {
     )
   }
 
-  /** A marker shown once per session, however often Codex repeats it. */
   /**
    * A notice Codex sends without an id of its own. Its marker is named by
    * the method and what it says, so the row traces back to its kind and the
    * same notice sent again is drawn once.
    */
   private notice(out: CodexDecoded[], method: string, marker: TranscriptEvent): void {
-    const key = `${marker.label}\u0000${marker.detail ?? ""}\u0000${marker.body ?? ""}`
+    // A setup notice is one fact however Codex words its body.
+    const key = marker.setup
+      ? `setup\u0000${marker.label}\u0000${marker.detail ?? ""}`
+      : `${marker.label}\u0000${marker.detail ?? ""}\u0000${marker.body ?? ""}`
     if (this.notices.has(key)) return
     if (this.notices.size >= MAX_NOTICES) this.notices.delete(this.notices.values().next().value!)
     this.notices.add(key)
@@ -565,10 +570,11 @@ export class CodexDecoder {
         if (completed) {
           // Codex reports the compacted estimate before this item completes.
           const tokensBefore = this.compactingFrom
+          const tokensAfter = this.meter.current?.used
           this.compactingFrom = undefined
-          out.push(decoded.compacted(tokensBefore ? { tokensBefore } : undefined, item.id))
+          out.push(decoded.compacted(tokensBefore ? { tokensBefore, ...tokensAfter !== undefined && tokensAfter < tokensBefore && { tokensAfter } } : undefined, item.id))
         } else {
-          this.compactingFrom = this.view.state.usage?.used
+          this.compactingFrom = this.meter.current?.used
           out.push(decoded.activity({ kind: "compacting" }))
         }
         return
