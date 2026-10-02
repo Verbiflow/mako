@@ -8,6 +8,60 @@
   "steps": [
     {
       "message": {
+        "method": "configWarning",
+        "params": {
+          "summary": "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings.",
+          "details": "unknown keys: foo, bar",
+          "path": "/tmp/config.toml"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings.",
+            "body": "unknown keys: foo, bar",
+            "tone": "warning",
+            "setup": true
+          },
+          "source": "configWarning:8d152d91"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "warning",
+        "params": {
+          "threadId": null,
+          "message": "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings.\n  unknown keys: foo, bar"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "warning",
+        "params": {
+          "threadId": null,
+          "message": "loading hooks from both ~/.codex/hooks.json and ~/.codex/config.toml; prefer one"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Warning",
+            "detail": "loading hooks from both ~/.codex/hooks.json and ~/.codex/config.toml; prefer one",
+            "tone": "warning",
+            "setup": true
+          },
+          "source": "warning:48ee6b79"
+        }
+      ]
+    },
+    {
+      "message": {
         "method": "turn/started",
         "params": {
           "threadId": "thread-1",
@@ -110,9 +164,10 @@
             "label": "Warning",
             "detail": "Unknown key `foo`",
             "body": "Remove it from config.toml",
-            "tone": "warning"
+            "tone": "warning",
+            "setup": true
           },
-          "source": "configWarning:b2d10309"
+          "source": "configWarning:e8be866b"
         }
       ]
     },
@@ -130,9 +185,10 @@
           "marker": {
             "label": "Warning",
             "detail": "`--full-auto` is deprecated",
-            "tone": "warning"
+            "tone": "warning",
+            "setup": true
           },
-          "source": "deprecationNotice:e9d027e7"
+          "source": "deprecationNotice:5e0176fc"
         }
       ]
     },
@@ -188,9 +244,10 @@
           "marker": {
             "label": "MCP server failed",
             "detail": "linear · sign-in required",
-            "tone": "warning"
+            "tone": "warning",
+            "setup": true
           },
-          "source": "mcpServer/startupStatus/updated:3ed86755"
+          "source": "mcpServer/startupStatus/updated:b794577e"
         }
       ]
     },

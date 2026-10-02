@@ -136,7 +136,8 @@
         {
           "kind": "compacted",
           "compaction": {
-            "tokensBefore": 120000
+            "tokensBefore": 120000,
+            "tokensAfter": 9000
           },
           "source": "auto"
         }
