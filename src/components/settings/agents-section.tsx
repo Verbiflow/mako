@@ -43,7 +43,7 @@ export function AgentsSection() {
       <div className="mt-5 border-t border-hairline pt-4">
         <SettingRow
           title="Moving conversations"
-          description="Transcript replay gives the next agent a deterministic newest-first bundle with reasoning, tool calls, and complete captured outputs. Session import writes a lossy copy into the target store."
+          description="How the next agent gets the conversation when you move it. Transcript replay hands it a newest-first bundle with reasoning, tool calls and full outputs to read on its first turn. Session import writes the conversation into the agent's own sessions so it resumes as its own history, without reasoning, and with long tool outputs saved to files. If an import fails, Mako sends the transcript."
         >
           <Segmented<"native" | "transcript">
             value={conversionMode}

@@ -162,14 +162,12 @@ function runsSummary(recipe: RecipeView): string {
 
 function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
   const [setup, setSetup] = useState<ProjectAppSetup | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [failure, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const error = threadAppDriver()?.setup ? failure : "This Mako can't run apps."
   const read = useCallback(() => {
     const driver = threadAppDriver()
-    if (!driver?.setup) {
-      setError("This Mako can't run apps.")
-      return
-    }
+    if (!driver?.setup) return
     void driver.setup(root).then(
       (next) => { setSetup(next); setError(null) },
       (reason) => setError(reason instanceof Error ? reason.message : String(reason)),
