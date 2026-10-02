@@ -1,0 +1,644 @@
+{
+  "harness": "cursor",
+  "source": "Cursor through @cursor/sdk 1.0.31 in Mako's SDK child, captured through Mako with MAKO_NATIVE_CAPTURE=cursor, 2026-10-01; ids renumbered and paths replaced",
+  "about": "A plan-mode turn: Cursor drafts createPlan's arguments as they stream, proposes the plan and ends; the next turn implements it with edit, says so, and ends.",
+  "session": {
+    "settings": {
+      "model": "auto-smart",
+      "options": {
+        "plan": true
+      }
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 0,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "status",
+          "status": "RUNNING"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 1,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "tool_call",
+          "call_id": "toolu-1",
+          "name": "createPlan",
+          "status": "running",
+          "args": {
+            "plan": ""
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-1",
+            "title": "Create plan",
+            "name": "createPlan",
+            "status": "running",
+            "input": "{\n  \"plan\": \"\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 2,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "tool_call",
+          "call_id": "toolu-1",
+          "name": "createPlan",
+          "status": "running",
+          "args": {
+            "plan": ""
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 3,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "tool_call",
+          "call_id": "toolu-1",
+          "name": "createPlan",
+          "status": "running",
+          "args": {
+            "plan": "# C"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "title": "Create plan",
+            "input": "{\n  \"plan\": \"# C\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "toolu-1",
+            "text": "# C",
+            "status": "drafting",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 4,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "tool_call",
+          "call_id": "toolu-1",
+          "name": "createPlan",
+          "status": "running",
+          "args": {
+            "plan": "# Create hello.txt\n\n## Step\n\nWrite `hello.txt` at the workspace root (`/work/hello.txt`) with the content:\n\n```text\nhi\n```\n"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "title": "Create plan",
+            "input": "{\n  \"plan\": \"# Create hello.txt\\n\\n## Step\\n\\nWrite `hello.txt` at the workspace root (`/work/hello.txt`) with the content:\\n\\n```text\\nhi\\n```\\n\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "toolu-1",
+            "text": "# Create hello.txt\n\n## Step\n\nWrite `hello.txt` at the workspace root (`/work/hello.txt`) with the content:\n\n```text\nhi\n```\n",
+            "status": "drafting",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 5,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "tool_call",
+          "call_id": "toolu-1",
+          "name": "createPlan",
+          "status": "running",
+          "args": {
+            "plan": "# Create hello.txt\n\n## Step\n\nWrite `hello.txt` at the workspace root (`/work/hello.txt`) with the content:\n\n```text\nhi\n```\n"
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 6,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "tool_call",
+          "call_id": "toolu-1",
+          "name": "createPlan",
+          "status": "completed",
+          "args": {
+            "plan": "# Create hello.txt\n\n## Step\n\nWrite `hello.txt` at the workspace root (`/work/hello.txt`) with the content:\n\n```text\nhi\n```\n"
+          },
+          "result": {
+            "status": "success",
+            "value": {}
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "status": "completed",
+            "output": "{}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "toolu-1",
+            "text": "# Create hello.txt\n\n## Step\n\nWrite `hello.txt` at the workspace root (`/work/hello.txt`) with the content:\n\n```text\nhi\n```\n",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "uuid-1",
+        "delta": {
+          "type": "turn-ended"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 7,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "usage",
+          "usage": {
+            "inputTokens": 21221,
+            "outputTokens": 286,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 21217
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 4,
+                "cacheRead": 0,
+                "cacheWrite": 21217,
+                "output": 286
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-1",
+        "seq": 8,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-1",
+          "type": "status",
+          "status": "FINISHED"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "uuid-1",
+        "result": {
+          "runId": "run-1",
+          "status": "finished",
+          "model": {
+            "id": "auto-smart"
+          },
+          "durationMs": 13782,
+          "usage": {
+            "inputTokens": 21221,
+            "outputTokens": 286,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 21217
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 0,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "status",
+          "status": "RUNNING"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 1,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "tool_call",
+          "call_id": "toolu-2",
+          "name": "edit",
+          "status": "running",
+          "args": {
+            "path": "/work/hello.txt"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-2",
+            "title": "Edit hello.txt",
+            "name": "edit",
+            "status": "running",
+            "input": "{\n  \"path\": \"/work/hello.txt\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 2,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "tool_call",
+          "call_id": "toolu-2",
+          "name": "edit",
+          "status": "running",
+          "args": {
+            "path": "/work/hello.txt"
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 3,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "tool_call",
+          "call_id": "toolu-2",
+          "name": "edit",
+          "status": "completed",
+          "args": {
+            "path": "/work/hello.txt"
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "linesAdded": 1,
+              "linesRemoved": 0,
+              "diffString": "--- /dev/null\n+++ b//work/hello.txt\n@@ -1,0 +1 @@\n+hi"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-2",
+            "status": "completed",
+            "output": "--- /dev/null\n+++ b//work/hello.txt\n@@ -1,0 +1 @@\n+hi"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "uuid-3",
+        "delta": {
+          "type": "text-delta",
+          "text": "I created `hello.txt"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "uuid-3:text:0",
+            "text": "I created `hello.txt"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 4,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "I created `hello.txt"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "uuid-3",
+        "delta": {
+          "type": "text-delta",
+          "text": "` in the current folder, and"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "uuid-3:text:0",
+            "text": "` in the current folder, and"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 5,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "` in the current folder, and"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "uuid-3",
+        "delta": {
+          "type": "text-delta",
+          "text": " it contains the word `hi"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "uuid-3:text:0",
+            "text": " it contains the word `hi"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 6,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " it contains the word `hi"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "uuid-3",
+        "delta": {
+          "type": "text-delta",
+          "text": "`."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "uuid-3:text:0",
+            "text": "`."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 7,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "`."
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "uuid-3",
+        "delta": {
+          "type": "turn-ended"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 8,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "usage",
+          "usage": {
+            "inputTokens": 40901,
+            "outputTokens": 155,
+            "cacheReadTokens": 20348,
+            "cacheWriteTokens": 20547
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 10,
+                "cacheRead": 20348,
+                "cacheWrite": 41764,
+                "output": 441
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "uuid-3",
+        "seq": 9,
+        "message": {
+          "agent_id": "uuid-2",
+          "run_id": "run-2",
+          "type": "status",
+          "status": "FINISHED"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "uuid-3",
+        "result": {
+          "runId": "run-2",
+          "status": "finished",
+          "model": {
+            "id": "auto-smart"
+          },
+          "durationMs": 7332,
+          "usage": {
+            "inputTokens": 40901,
+            "outputTokens": 155,
+            "cacheReadTokens": 20348,
+            "cacheWriteTokens": 20547
+          }
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

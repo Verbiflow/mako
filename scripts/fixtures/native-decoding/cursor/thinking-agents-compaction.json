@@ -1,0 +1,430 @@
+{
+  "harness": "cursor",
+  "source": "Written from the child's wire schemas (electron/providers/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, following the cases scripts/test-cursor-sdk.ts drives; not captured, because a short real turn produced none of these",
+  "about": "A turn that reports its model, thinks, starts a subagent that finishes, runs a shell whose output streams, compacts with the summary after the completion, meets an update kind the child does not know, and fails with the shell still running. The next turn compacts and ends before any summary arrives, which is still marked.",
+  "session": {
+    "settings": {
+      "model": "auto-smart"
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 0,
+        "message": {
+          "type": "system",
+          "subtype": "init",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "model": {
+            "id": "auto-smart"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "settings": {
+              "model": "auto-smart"
+            },
+            "configOptions": []
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "Checking the parser"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "turn-1:thinking:0",
+            "text": "Checking the parser"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 1,
+        "message": {
+          "type": "thinking",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "text": "Checking the parser"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 2,
+        "message": {
+          "type": "thinking",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "text": "",
+          "thinking_duration_ms": 900
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 3,
+        "message": {
+          "type": "tool_call",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "call_id": "call-1",
+          "name": "task",
+          "status": "running",
+          "args": {
+            "agentId": "subagent-1",
+            "description": "Read the parser",
+            "subagentType": {
+              "kind": "explore"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call-1",
+            "title": "Read the parser",
+            "name": "task",
+            "status": "running",
+            "input": "{\n  \"agentId\": \"subagent-1\",\n  \"description\": \"Read the parser\",\n  \"subagentType\": {\n    \"kind\": \"explore\"\n  }\n}"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent",
+            "agent": {
+              "nativeId": "subagent-1",
+              "parentNativeId": "agent-1",
+              "nativeRunId": "call-1",
+              "toolId": "call-1",
+              "title": "Read the parser",
+              "model": "(undefined)",
+              "role": "explore",
+              "state": {
+                "kind": "working"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 4,
+        "message": {
+          "type": "tool_call",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "call_id": "call-1",
+          "name": "task",
+          "status": "completed",
+          "args": {
+            "agentId": "subagent-1",
+            "description": "Read the parser",
+            "subagentType": {
+              "kind": "explore"
+            }
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "agentId": "subagent-1",
+              "isBackground": false
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call-1",
+            "status": "completed",
+            "output": "{\n  \"agentId\": \"subagent-1\",\n  \"isBackground\": false\n}"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agent",
+            "agent": {
+              "nativeId": "subagent-1",
+              "parentNativeId": "agent-1",
+              "nativeRunId": "call-1",
+              "toolId": "call-1",
+              "title": "Read the parser",
+              "model": "(undefined)",
+              "role": "explore",
+              "state": {
+                "kind": "completed"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 5,
+        "message": {
+          "type": "tool_call",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "call_id": "call-2",
+          "name": "shell",
+          "status": "running",
+          "args": {
+            "command": "npm test"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call-2",
+            "title": "npm test",
+            "name": "shell",
+            "status": "running",
+            "input": "{\n  \"command\": \"npm test\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "shell-output",
+          "text": "PASS parser\n"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call-2",
+            "output": "PASS parser\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "summary-started"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "compacting"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "summary-completed"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": null
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 6,
+        "message": {
+          "type": "task",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "text": "Kept: the parser plan and the failing test."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "compacted",
+          "compaction": {
+            "summary": "Kept: the parser plan and the failing test."
+          },
+          "source": "turn-1:6"
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "unhandled",
+          "kind": "futureUpdate"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "futureUpdate",
+          "reason": "unknown",
+          "raw": {
+            "type": "unhandled",
+            "kind": "futureUpdate"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "turn-1",
+        "seq": 7,
+        "message": {
+          "type": "request",
+          "agent_id": "agent-1",
+          "run_id": "run-1",
+          "request_id": "request-1"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "log",
+        "level": "info",
+        "message": "run finished"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "turn-1",
+        "result": {
+          "runId": "run-1",
+          "status": "error",
+          "error": {
+            "message": "Network error",
+            "code": "unavailable"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call-2",
+            "status": "failed",
+            "output": "This call was still running when its turn ended.",
+            "unfinished": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-2",
+        "delta": {
+          "type": "summary-started"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": {
+            "kind": "compacting"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-2",
+        "delta": {
+          "type": "summary-completed"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "activity",
+          "activity": null
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "turn-2",
+        "result": {
+          "runId": "run-2",
+          "status": "finished"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "compacted"
+        }
+      ]
+    }
+  ]
+}
