@@ -4,7 +4,8 @@ import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { GrokAgents } from "./agents.js"
-import { grokAskOverride } from "./claude-permissions.js"
+import { grokLaunchPolicy, grokPermissionPolicy } from "./permission-policy.js"
+import { grokMcpStartup } from "./mcp-startup.js"
 import { grokNotification } from "./notifications.js"
 import { grokPlans, grokRequests } from "./plans.js"
 import { grokToolName } from "./tool-name.js"
@@ -130,7 +131,10 @@ export const grokAcpSource: ProviderAcpSource = {
     await observer.ready
     return observer
   },
-  compaction: { kind: "unavailable", reason: "Grok's ACP connection does not provide verified compaction. Start a new thread and carry over what matters." },
+  // Grok 1.0.44 answers /compact with `auto_compact_completed` (or
+  // `_failed`) before its turn ends, the notices it sends for its own
+  // compactions; the host settles the action from those.
+  compaction: { kind: "supported", command: "/compact", completion: { kind: "notification", observe: () => () => undefined } },
   backgroundStop: { kind: "ends-on-stop", how: "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Stop's session/cancel ends a subagent's work with no turn running too, checked on grok 1.0.41. Closing sends session/close too." },
   observeBackground: () => ({
     extension(method, params) {
@@ -180,6 +184,7 @@ export const grokAcpSource: ProviderAcpSource = {
     },
   }),
   decodeNotification: grokNotification,
+  mcpStartup: grokMcpStartup,
   plans: grokPlans,
   requests: grokRequests,
   toolName: grokToolName,
@@ -196,7 +201,12 @@ export const grokAcpSource: ProviderAcpSource = {
   available: () => resolveExecutable("grok") !== null,
   async launch(options) {
     const permissionMode = options.access ? grokPermissionMode(options.access) : undefined
-    const override = options.access === "ask" ? grokAskOverride(options.cwd, options.env?.HOME || homedir()) : undefined
+    const home = options.env?.HOME || homedir()
+    const policy = grokLaunchPolicy(
+      grokPermissionPolicy({ cwd: options.cwd, home, grokHome: options.env?.GROK_HOME || join(home, ".grok") }),
+      options.access,
+      home
+    )
     const args = [
       ...(permissionMode ? ["--permission-mode", permissionMode] : []),
       "agent",
@@ -212,10 +222,8 @@ export const grokAcpSource: ProviderAcpSource = {
         env.GROK_DISABLE_AUTOUPDATER = "1"
       },
     }
-    if (override) {
-      launch.notices = [override.notice]
-      if (override.access) launch.access = override.access
-    }
+    if (policy.notices.length) launch.notices = policy.notices
+    if (policy.access) launch.access = policy.access
     return launch
   },
 }

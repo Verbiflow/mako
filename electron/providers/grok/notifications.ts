@@ -4,6 +4,7 @@ import { grokUpdateMarker } from "@mako/sessions"
 import { objectValue, type JsonObject } from "../../codex-app-json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
 import type { AcpNotificationDecoding } from "../acp-source.js"
+import { grokModelWindow, grokUsage } from "./usage.js"
 
 type Retrying = Extract<NativeActivityObservation, { kind: "retrying" }>
 
@@ -86,6 +87,11 @@ export function grokNotification(method: string, params: JsonObject): AcpNotific
   if (WORKSPACE_METHODS.has(method)) return { kind: method, notices: [] }
   // The snapshot that announces a turn Grok starts itself; the provider-turn observer reads it.
   if (method === "_x.ai/task_completed") return { sessionId: Session.safeParse(params).data?.sessionId, kind: method, notices: [] }
+  // The model list, sent when the session opens and when its model changes, names the window.
+  if (method === "_x.ai/models/update") {
+    const size = grokModelWindow(params)
+    return { kind: method, connectionWide: true, notices: [], ...size && { usage: [{ kind: "window", size }] } }
+  }
   if (!SESSION_METHODS.has(method)) return undefined
   const envelope = Envelope.safeParse(params)
   const update = objectValue(params["update"])
@@ -94,8 +100,16 @@ export function grokNotification(method: string, params: JsonObject): AcpNotific
   const { sessionUpdate } = envelope.data.update
   const kind = `${method}/${sessionUpdate}`
   const decoded = grokSessionUpdate(sessionUpdate, update)
+  const usage = grokUsage(sessionUpdate, update)
   const id = envelope.data._meta?.eventId
-  return { sessionId, kind: decoded.kind ? `${kind}/${decoded.kind}` : kind, notices: decoded.notices, state: decoded.state, ...id && { id } }
+  return {
+    sessionId,
+    kind: decoded.kind ? `${kind}/${decoded.kind}` : kind,
+    notices: decoded.notices ?? (usage ? [] : undefined),
+    state: decoded.state,
+    ...usage && { usage },
+    ...id && { id },
+  }
 }
 
 interface DecodedUpdate {
