@@ -86,6 +86,21 @@ retain reproducible scripts and package provenance. A missing artifact is not a 
 
 ## Delivery order
 
+**October 2: candidate work from Cua, beyond the driver ([review](audits/2026-10-02/cua-borrowing/README.md)).**
+Nothing is adopted yet. Mako's driver fork pins upstream 0.28.2, ten releases
+behind 0.32.0, so it lacks capture-bound coordinate actions and visual
+perception for surfaces with no accessibility tree. Ranked candidates:
+1. capture-bound clicks, plus a fallback for surfaces with no tree;
+2. a repeatable browser agent benchmark with reference and do-nothing checks;
+3. disposable Lume macOS VMs for installed acceptance;
+4. Linux worker readiness, accessibility and streaming rules;
+5. machine-readable MCP results;
+6. an approval broker so agents never hold secrets;
+7. presence cursors and an input lease.
+
+Cua Spaces, `cua-spacesd`, Keyvault and Teleport are FSL-1.1-MIT, so take
+their ideas, not their code.
+
 **September 30: the usage-audit fixes ([U01–U11](local-control-agent-issues.md#september-30-usage-audit)) are in source, not installed.**
 They come from reading every SDK call agents made through Mako. The changes:
 - page verbs, so pages need no raw CDP: `waitFor`, `evaluate`, `inspect`, `hover`, `drag` (including HTML5 drag and drop) and `scrollIntoView`;
