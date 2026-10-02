@@ -1,0 +1,2189 @@
+{
+  "harness": "claude",
+  "source": "Claude Code 2.1.283 through the Agent SDK 0.3.283, captured through Mako with MAKO_NATIVE_CAPTURE=claude, 2026-10-01; ids renumbered, paths, server names, init's tools and commands, limits and cost replaced, and tool-input deltas after the sixth dropped",
+  "about": "One plan-mode turn: the prompt is queued, init reports one server that failed and one that needs sign-in, Claude thinks, streams an ExitPlanMode plan, the approval switches it to default mode, it writes the file and answers. The result reports context usage.",
+  "session": {
+    "settings": {
+      "model": null
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "uuid-1",
+        "state": "queued",
+        "uuid": "uuid-2",
+        "session_id": "uuid-3"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "uuid-1",
+        "state": "started",
+        "uuid": "uuid-4",
+        "session_id": "uuid-3"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "init",
+        "cwd": "/work",
+        "session_id": "uuid-3",
+        "uuid": "uuid-5",
+        "model": "claude-fable-5-1",
+        "permissionMode": "plan",
+        "apiKeySource": "none",
+        "claude_code_version": "2.1.283",
+        "output_style": "default",
+        "tools": [
+          "Read",
+          "Write",
+          "Edit",
+          "Bash",
+          "ExitPlanMode"
+        ],
+        "mcp_servers": [
+          {
+            "name": "files",
+            "status": "failed"
+          },
+          {
+            "name": "search",
+            "status": "needs-auth"
+          }
+        ],
+        "slash_commands": [
+          "compact",
+          "review",
+          "context"
+        ],
+        "terminal_slash_commands": [
+          "context"
+        ],
+        "agents": [],
+        "skills": [],
+        "plugins": []
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "MCP server failed",
+            "detail": "files · could not connect",
+            "tone": "warning",
+            "setup": true
+          },
+          "source": "uuid-5"
+        },
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "MCP server failed",
+            "detail": "search · sign-in required",
+            "tone": "warning",
+            "setup": true
+          },
+          "source": "uuid-5:2"
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "nativeId": "uuid-3",
+            "currentMode": "plan",
+            "commands": [
+              {
+                "name": "compact"
+              },
+              {
+                "name": "review"
+              }
+            ],
+            "settings": {
+              "model": "claude-fable-5-1",
+              "options": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "uuid-3",
+        "uuid": "uuid-6"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+          "status": "allowed",
+          "rateLimitType": "five_hour",
+          "utilization": 0.25,
+          "resetsAt": 1790000000
+        },
+        "uuid": "uuid-7",
+        "session_id": "uuid-3"
+      },
+      "decoded": [
+        {
+          "kind": "usage",
+          "windows": [
+            {
+              "usedPercent": 25,
+              "windowMinutes": 300,
+              "resetsAt": 1790000000000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "model": "claude-fable-5-1",
+            "id": "msg-1",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "container": null,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 2,
+              "cache_creation_input_tokens": 15311,
+              "cache_read_input_tokens": 12091,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 15311
+              },
+              "output_tokens": 8,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "input_transformations": [],
+            "diagnostics": null,
+            "context_management": null
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-8",
+        "ttft_ms": 652,
+        "thinking_display": "updates",
+        "user_message_uuid": "uuid-1",
+        "user_message_uuids": [
+          "uuid-1"
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": "",
+            "signature": ""
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-9",
+        "thinking_display": "updates"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "thinking_tokens",
+        "estimated_tokens": 50,
+        "estimated_tokens_delta": 50,
+        "session_id": "uuid-3",
+        "uuid": "uuid-10",
+        "user_message_uuid": "uuid-1"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "thinking_delta",
+            "thinking": "",
+            "estimated_tokens": 50
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-11",
+        "thinking_display": "updates"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg-1:0",
+            "text": ""
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "thinking_delta",
+            "thinking": "",
+            "estimated_tokens": null
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-12",
+        "thinking_display": "updates"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg-1:0",
+            "text": ""
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "thinking_tokens",
+        "estimated_tokens": 197,
+        "estimated_tokens_delta": 147,
+        "session_id": "uuid-3",
+        "uuid": "uuid-13",
+        "user_message_uuid": "uuid-1"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "signature_delta",
+            "signature": ""
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-14"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg-1",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "",
+              "signature": ""
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 15311,
+            "cache_read_input_tokens": 12091,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 15311
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-15",
+        "timestamp": "2026-10-01T10:39:38.322Z",
+        "request_id": "req-1",
+        "user_message_uuid": "uuid-1",
+        "user_message_uuids": [
+          "uuid-1"
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "msg-1:0",
+            "text": "",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-16"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "tool_use",
+            "id": "toolu-1",
+            "name": "Write",
+            "input": {},
+            "caller": {
+              "type": "direct"
+            }
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-17"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-1",
+            "title": "Write",
+            "name": "Write",
+            "status": "running"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": ""
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-18"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "input": ""
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "hello-txt-in-"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-19"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "input": "hello-txt-in-"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "whimsical-holler"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-20"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "input": "hello-txt-in-whimsical-holler"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "ith.md"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-21"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "input": "hello-txt-in-whimsical-hollerith.md"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\", \"content\": \"#"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-22"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "input": "hello-txt-in-whimsical-hollerith.md\", \"content\": \"#"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": " Plan: create hello."
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-23"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "input": "hello-txt-in-whimsical-hollerith.md\", \"content\": \"# Plan: create hello."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg-1",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu-1",
+              "name": "Write",
+              "input": {
+                "file_path": "/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md",
+                "content": "# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 15311,
+            "cache_read_input_tokens": 12091,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 15311
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-24",
+        "timestamp": "2026-10-01T10:39:39.955Z",
+        "request_id": "req-1",
+        "wire_tool_inputs": {
+          "toolu_01THR62PVBo9JsReWYGUbCMd": {
+            "file_path": "/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md",
+            "content": "# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-1",
+            "title": "Write",
+            "name": "Write",
+            "status": "running",
+            "input": "{\"file_path\":\"/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md\",\"content\":\"# Plan: create hello.txt\\n\\n## Context\\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\\n\\n## Step\\n1. Write `/work/hello.txt` with the content `hi`.\\n\\n## Verification\\nRead the file back and confirm its content is `hi`.\\n\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-25"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "tool_use",
+            "id": "toolu-2",
+            "name": "ToolSearch",
+            "input": {},
+            "caller": {
+              "type": "direct"
+            }
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-26"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-2",
+            "title": "ToolSearch",
+            "name": "ToolSearch",
+            "status": "running"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "toolu-1",
+              "type": "tool_result",
+              "content": "File created successfully at: /home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md (file state is current in your context — no need to Read it back)"
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-27",
+        "timestamp": "2026-10-01T10:39:39.965Z",
+        "tool_use_result": {
+          "type": "create",
+          "filePath": "/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md",
+          "content": "# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n",
+          "structuredPatch": [],
+          "originalFile": null,
+          "userModified": false
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-1",
+            "status": "completed",
+            "output": "File created successfully at: /home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md (file state is current in your context — no need to Read it back)",
+            "attachments": []
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg-1",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu-2",
+              "name": "ToolSearch",
+              "input": {
+                "query": "select:ExitPlanMode",
+                "max_results": 1
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 15311,
+            "cache_read_input_tokens": 12091,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 15311
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-28",
+        "timestamp": "2026-10-01T10:39:40.367Z",
+        "request_id": "req-1",
+        "wire_tool_inputs": {
+          "toolu_01AL9CuYTcYvE3QQvTAzfo2y": {
+            "query": "select:ExitPlanMode",
+            "max_results": 1
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-2",
+            "title": "ToolSearch",
+            "name": "ToolSearch",
+            "status": "running",
+            "input": "{\"query\":\"select:ExitPlanMode\",\"max_results\":1}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 2
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-29"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu-2",
+              "content": [
+                {
+                  "type": "tool_reference",
+                  "tool_name": "ExitPlanMode"
+                }
+              ]
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-30",
+        "timestamp": "2026-10-01T10:39:40.370Z",
+        "tool_use_result": {
+          "matches": [
+            "ExitPlanMode"
+          ],
+          "query": "select:ExitPlanMode",
+          "total_deferred_tools": 62
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-2",
+            "status": "completed",
+            "output": "",
+            "attachments": []
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null,
+            "stop_details": null,
+            "container": null,
+            "safeguard_results": [
+              {
+                "type": "dangerous_tool_use",
+                "status": {
+                  "type": "available",
+                  "tool_uses": {
+                    "toolu_01THR62PVBo9JsReWYGUbCMd": {
+                      "type": "skipped"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 15311,
+            "cache_read_input_tokens": 12091,
+            "output_tokens": 422,
+            "output_tokens_details": {
+              "thinking_tokens": 71
+            },
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 422,
+                "cache_read_input_tokens": 12091,
+                "cache_creation_input_tokens": 15311,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 15311
+                },
+                "type": "message"
+              }
+            ]
+          },
+          "context_management": {
+            "applied_edits": []
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-31"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-32"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+          "status": "allowed",
+          "rateLimitType": "five_hour",
+          "utilization": 0.25,
+          "resetsAt": 1790000000
+        },
+        "uuid": "uuid-33",
+        "session_id": "uuid-3"
+      },
+      "decoded": [
+        {
+          "kind": "usage",
+          "windows": [
+            {
+              "usedPercent": 25,
+              "windowMinutes": 300,
+              "resetsAt": 1790000000000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "uuid-3",
+        "uuid": "uuid-34"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "model": "claude-fable-5-1",
+            "id": "msg-2",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "container": null,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 2,
+              "cache_creation_input_tokens": 4638,
+              "cache_read_input_tokens": 27402,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 4638
+              },
+              "output_tokens": 24,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "input_transformations": [],
+            "diagnostics": null,
+            "context_management": null
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-35",
+        "ttft_ms": 760,
+        "thinking_display": "updates"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "toolu-3",
+            "name": "ExitPlanMode",
+            "input": {},
+            "caller": {
+              "type": "direct"
+            }
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-36"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-3",
+            "title": "ExitPlanMode",
+            "name": "ExitPlanMode",
+            "status": "running"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg-2",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu-3",
+              "name": "ExitPlanMode",
+              "input": {
+                "plan": "# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n",
+                "planFilePath": "/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 4638,
+            "cache_read_input_tokens": 27402,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 4638
+            },
+            "output_tokens": 24,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-37",
+        "timestamp": "2026-10-01T10:39:41.186Z",
+        "request_id": "req-2",
+        "wire_tool_inputs": {
+          "toolu_01W8w5QcHqc9Q9pcefpgFRa2": {}
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-3",
+            "title": "ExitPlanMode",
+            "name": "ExitPlanMode",
+            "status": "running",
+            "input": "{\"plan\":\"# Plan: create hello.txt\\n\\n## Context\\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\\n\\n## Step\\n1. Write `/work/hello.txt` with the content `hi`.\\n\\n## Verification\\nRead the file back and confirm its content is `hi`.\\n\",\"planFilePath\":\"/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md\"}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "toolu-3",
+            "text": "# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-38"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null,
+            "stop_details": null,
+            "container": null,
+            "safeguard_results": [
+              {
+                "type": "dangerous_tool_use",
+                "status": {
+                  "type": "available",
+                  "tool_uses": {}
+                }
+              }
+            ]
+          },
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 4638,
+            "cache_read_input_tokens": 27402,
+            "output_tokens": 31,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 31,
+                "cache_read_input_tokens": 27402,
+                "cache_creation_input_tokens": 4638,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 4638
+                },
+                "type": "message"
+              }
+            ]
+          },
+          "context_management": {
+            "applied_edits": []
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-39"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-40"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": null,
+        "permissionMode": "default",
+        "uuid": "uuid-41",
+        "session_id": "uuid-3"
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "default"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "content": "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\nYour plan has been saved to: /home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md\nYou can refer back to it if needed during implementation.\n\n## Approved Plan:\n# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n",
+              "tool_use_id": "toolu-3"
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-42",
+        "timestamp": "2026-10-01T10:39:41.296Z",
+        "tool_use_result": {
+          "plan": "# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n",
+          "isAgent": false,
+          "filePath": "/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-3",
+            "status": "completed",
+            "output": "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\nYour plan has been saved to: /home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md\nYou can refer back to it if needed during implementation.\n\n## Approved Plan:\n# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n",
+            "attachments": []
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "uuid-3",
+        "uuid": "uuid-43"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "model": "claude-fable-5-1",
+            "id": "msg-3",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "container": null,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 2,
+              "cache_creation_input_tokens": 438,
+              "cache_read_input_tokens": 32040,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 438
+              },
+              "output_tokens": 16,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "input_transformations": [],
+            "diagnostics": null,
+            "context_management": null
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-44",
+        "ttft_ms": 917,
+        "thinking_display": "updates"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "toolu-4",
+            "name": "Write",
+            "input": {},
+            "caller": {
+              "type": "direct"
+            }
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-45"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-4",
+            "title": "Write",
+            "name": "Write",
+            "status": "running"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg-3",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu-4",
+              "name": "Write",
+              "input": {
+                "file_path": "/work/hello.txt",
+                "content": "hi\n"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 438,
+            "cache_read_input_tokens": 32040,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 438
+            },
+            "output_tokens": 16,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-46",
+        "timestamp": "2026-10-01T10:39:42.966Z",
+        "request_id": "req-3",
+        "wire_tool_inputs": {
+          "toolu_01Q5JwF1EAm5pRfnQzbSBScJ": {
+            "file_path": "/work/hello.txt",
+            "content": "hi\n"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu-4",
+            "title": "Write",
+            "name": "Write",
+            "status": "running",
+            "input": "{\"file_path\":\"/work/hello.txt\",\"content\":\"hi\\n\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-47"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null,
+            "stop_details": null,
+            "container": null,
+            "safeguard_results": []
+          },
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 438,
+            "cache_read_input_tokens": 32040,
+            "output_tokens": 129,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 129,
+                "cache_read_input_tokens": 32040,
+                "cache_creation_input_tokens": 438,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 438
+                },
+                "type": "message"
+              }
+            ]
+          },
+          "context_management": {
+            "applied_edits": []
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-48"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-49"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "toolu-4",
+              "type": "tool_result",
+              "content": "File created successfully at: /work/hello.txt (file state is current in your context — no need to Read it back)"
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-50",
+        "timestamp": "2026-10-01T10:39:43.075Z",
+        "tool_use_result": {
+          "type": "create",
+          "filePath": "/work/hello.txt",
+          "content": "hi\n",
+          "structuredPatch": [],
+          "originalFile": null,
+          "userModified": false
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu-4",
+            "status": "completed",
+            "output": "File created successfully at: /work/hello.txt (file state is current in your context — no need to Read it back)",
+            "attachments": []
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "uuid-3",
+        "uuid": "uuid-51"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "model": "claude-fable-5-1",
+            "id": "msg-4",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "container": null,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 2,
+              "cache_creation_input_tokens": 241,
+              "cache_read_input_tokens": 32478,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 241
+              },
+              "output_tokens": 92,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "input_transformations": [],
+            "diagnostics": null,
+            "context_management": null
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-52",
+        "ttft_ms": 1477,
+        "thinking_display": "updates"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-53"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "Created `hello.txt`"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-54"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "Created `hello.txt`"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": " in the current folder containing `"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-55"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": " in the current folder containing `"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "hi` (with a trail"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-56"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "hi` (with a trail"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "ing newline).\n\nUn"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-57"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "ing newline).\n\nUn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "related to this"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-58"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "related to this"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": " task:"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-59"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": " task:"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": " the search conn"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-60"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": " the search conn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "ector needs authoriz"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-61"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "ector needs authoriz"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "ing in your claude.ai"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-62"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "ing in your claude.ai"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": " connector settings, and the `"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-63"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": " connector settings, and the `"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "files` MCP server fail"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-64"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "files` MCP server fail"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "ed to connect ("
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-65"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "ed to connect ("
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "ECONNREFUS"
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-66"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "ECONNREFUS"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "ED)."
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-67"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "ED)."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg-4",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Created `hello.txt` in the current folder containing `hi` (with a trailing newline).\n\nUnrelated to this task: the search connector needs authorizing in your claude.ai connector settings, and the `files` MCP server failed to connect (ECONNREFUSED)."
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 241,
+            "cache_read_input_tokens": 32478,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 241
+            },
+            "output_tokens": 92,
+            "service_tier": "standard",
+            "inference_geo": "not_available"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "uuid-3",
+        "uuid": "uuid-68",
+        "timestamp": "2026-10-01T10:39:44.560Z",
+        "request_id": "req-4"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg-4:0",
+            "text": "Created `hello.txt` in the current folder containing `hi` (with a trailing newline).\n\nUnrelated to this task: the search connector needs authorizing in your claude.ai connector settings, and the `files` MCP server failed to connect (ECONNREFUSED).",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-69"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "stop_details": null,
+            "container": null,
+            "safeguard_results": []
+          },
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 241,
+            "cache_read_input_tokens": 32478,
+            "output_tokens": 92,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 92,
+                "cache_read_input_tokens": 32478,
+                "cache_creation_input_tokens": 241,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 241
+                },
+                "type": "message"
+              }
+            ]
+          },
+          "context_management": {
+            "applied_edits": []
+          }
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-70"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "uuid-3",
+        "parent_tool_use_id": null,
+        "uuid": "uuid-71"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "duration_api_ms": 8000,
+        "stop_reason": "end_turn",
+        "session_id": "uuid-3",
+        "total_cost_usd": 0.05,
+        "usage": {
+          "input_tokens": 8,
+          "cache_creation_input_tokens": 20628,
+          "cache_read_input_tokens": 104011,
+          "output_tokens": 674,
+          "output_tokens_details": {
+            "thinking_tokens": 71
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 20628,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 92,
+              "cache_read_input_tokens": 32478,
+              "cache_creation_input_tokens": 241,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 241
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-haiku-4-5-20251001": {
+            "inputTokens": 926,
+            "outputTokens": 13,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+            "costUSD": 0.000991,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-haiku-4-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          },
+          "claude-fable-5-1": {
+            "inputTokens": 8,
+            "outputTokens": 674,
+            "cacheReadInputTokens": 104011,
+            "cacheCreationInputTokens": 20628,
+            "webSearchRequests": 0,
+            "costUSD": 0.47234275,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 128000,
+            "thinkingTokens": 71,
+            "canonicalModel": "claude-fable-5-1",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 5,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "Created `hello.txt` in the current folder containing `hi` (with a trailing newline).\n\nUnrelated to this task: the search connector needs authorizing in your claude.ai connector settings, and the `files` MCP server failed to connect (ECONNREFUSED).",
+        "ttft_ms": 1584,
+        "type": "result",
+        "duration_ms": 9000,
+        "uuid": "uuid-72",
+        "ttft_stream_ms": 694,
+        "time_to_request_ms": 42,
+        "first_content_frame_ms": 694,
+        "user_message_uuid": "uuid-1",
+        "user_message_uuids": [
+          "uuid-1"
+        ],
+        "request_sent_wall_ms": 1790851176780,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 934,
+                "cacheRead": 104011,
+                "cacheWrite": 20628,
+                "output": 687,
+                "reasoning": 71
+              },
+              "used": 32813,
+              "size": 1000000,
+              "cost": {
+                "amount": 0.05,
+                "currency": "USD"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "uuid-1",
+        "state": "completed",
+        "uuid": "uuid-73",
+        "session_id": "uuid-3"
+      },
+      "decoded": []
+    }
+  ]
+}
