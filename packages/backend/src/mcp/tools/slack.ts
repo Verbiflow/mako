@@ -9,7 +9,7 @@ import {
   sendSlackMessage,
   slackIdentity,
 } from "../../integrations/slack/client"
-import { textResult } from "../result"
+import { yamlResult } from "../result"
 
 const CursorSchema = z.string().max(512).optional()
 const LimitSchema = z.number().int().min(1).max(100).default(50)
@@ -29,7 +29,7 @@ export function registerSlackTools(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async () => textResult(JSON.stringify(await slackIdentity(), null, 2))
+    async () => yamlResult(withoutOk(await slackIdentity()))
   )
 
   server.registerTool(
@@ -50,9 +50,7 @@ export function registerSlackTools(server: McpServer): void {
       },
     },
     async ({ cursor, limit }) =>
-      textResult(
-        JSON.stringify(await listSlackChannels({ cursor, limit }), null, 2)
-      )
+      yamlResult(channelsPage(await listSlackChannels({ cursor, limit })))
   )
 
   server.registerTool(
@@ -74,13 +72,7 @@ export function registerSlackTools(server: McpServer): void {
       },
     },
     async ({ channel, cursor, limit }) =>
-      textResult(
-        JSON.stringify(
-          await readSlackMessages({ channel, cursor, limit }),
-          null,
-          2
-        )
-      )
+      yamlResult(messagesPage(await readSlackMessages({ channel, cursor, limit })))
   )
 
   server.registerTool(
@@ -103,12 +95,8 @@ export function registerSlackTools(server: McpServer): void {
       },
     },
     async ({ channel, cursor, limit, threadTs }) =>
-      textResult(
-        JSON.stringify(
-          await readSlackThread({ channel, cursor, limit, threadTs }),
-          null,
-          2
-        )
+      yamlResult(
+        messagesPage(await readSlackThread({ channel, cursor, limit, threadTs }))
       )
   )
 
@@ -132,17 +120,55 @@ export function registerSlackTools(server: McpServer): void {
       },
     },
     async ({ channel, idempotencyKey, text, threadTs }) =>
-      textResult(
-        JSON.stringify(
+      yamlResult(
+        withoutOk(
           await sendSlackMessage({
             channel,
             idempotencyKey,
             text,
             threadTs,
-          }),
-          null,
-          2
+          })
         )
       )
   )
+}
+
+type Page = {
+  ok: true
+  has_more?: boolean
+  response_metadata?: { next_cursor: string }
+}
+
+/** Slack's `ok: true` says nothing once a call has succeeded; failures throw. */
+function withoutOk<Reply extends { ok: true }>({ ok: _ok, ...rest }: Reply) {
+  return rest
+}
+
+/** The cursor for the next page, when there is one; Slack sends an empty one at the end. */
+function withNextPage<Listing extends object>(
+  listing: Listing,
+  { has_more, response_metadata }: Page
+): Listing & { has_more?: true; next_cursor?: string } {
+  const page: Listing & { has_more?: true; next_cursor?: string } = listing
+  if (has_more) page.has_more = true
+  if (response_metadata?.next_cursor)
+    page.next_cursor = response_metadata.next_cursor
+  return page
+}
+
+function channelsPage(page: Awaited<ReturnType<typeof listSlackChannels>>) {
+  const channels = page.channels.map(({ purpose, topic, ...rest }) => {
+    const channel: typeof rest & { purpose?: string; topic?: string } = rest
+    if (purpose?.value) channel.purpose = purpose.value
+    if (topic?.value) channel.topic = topic.value
+    return channel
+  })
+  return withNextPage({ channels }, page)
+}
+
+function messagesPage(page: Awaited<ReturnType<typeof readSlackMessages>>) {
+  const messages = page.messages.map(({ type, ...message }) =>
+    type === "message" ? message : { type, ...message }
+  )
+  return withNextPage({ messages }, page)
 }

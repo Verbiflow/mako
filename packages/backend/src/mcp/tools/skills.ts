@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { listSkills, readSkill } from "../../skills/catalog"
-import { textResult } from "../result"
+import { textResult, yamlResult } from "../result"
 
 export function registerSkillTools(server: McpServer): void {
   server.registerTool(
@@ -18,7 +18,7 @@ export function registerSkillTools(server: McpServer): void {
         openWorldHint: false,
       },
     },
-    () => textResult(JSON.stringify(listSkills(), null, 2))
+    () => yamlResult(listSkills())
   )
   server.registerTool(
     "mako_read_skill",

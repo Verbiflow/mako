@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { readOptionalServerEnv } from "../../config/env"
 import { integrationCatalog } from "../../integrations/catalog"
-import { textResult } from "../result"
+import { yamlResult } from "../result"
 
 export function registerIntegrationsTool(server: McpServer): void {
   server.registerTool(
@@ -21,14 +21,10 @@ export function registerIntegrationsTool(server: McpServer): void {
     },
     () => {
       const environment = readOptionalServerEnv()
-      return textResult(
-        JSON.stringify(
-          integrationCatalog({
-            slackConnected: Boolean(environment.SLACK_CONNECTOR),
-          }),
-          null,
-          2
-        )
+      return yamlResult(
+        integrationCatalog({
+          slackConnected: Boolean(environment.SLACK_CONNECTOR),
+        })
       )
     }
   )

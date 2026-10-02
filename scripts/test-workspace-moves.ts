@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import type { ThreadWorktree } from "../electron/contracts/thread-worktrees.js"
 import type { WorkspaceMoves as WorkspaceMovesState } from "../electron/contracts/workspace-moves.js"
@@ -175,7 +176,9 @@ try {
     return first.text
   }
 
-  const status = JSON.parse(text(await agent.callTool({ name: "workspace_status", arguments: {} })))
+  const statusText = text(await agent.callTool({ name: "workspace_status", arguments: {} }))
+  assert.equal(statusText, `makesChangesIn: the project folder\nfolder: ${project}\nbranch: main\nuncommittedFiles: 2`, "workspace_status answers in plain YAML")
+  const status = parseYaml(statusText)
   assert.deepEqual(status, { makesChangesIn: "the project folder", folder: project, branch: "main", uncommittedFiles: 2 })
   const merge = await agent.callTool({ name: "workspace_merge", arguments: {} })
   assert.equal(merge.isError, true)
@@ -185,11 +188,11 @@ try {
   assert.equal(asked.isError, undefined)
   assert.match(text(asked), /^Asked the user/)
   assert.equal(moves.state().requests.find((candidate) => candidate.conversationId === "g")?.harness, "claude")
-  assert.equal(JSON.parse(text(await agent.callTool({ name: "workspace_status", arguments: {} }))).move, "asking")
+  assert.equal(parseYaml(text(await agent.callTool({ name: "workspace_status", arguments: {} }))).move, "asking")
 
   placed = worktree
   sources.set("g", { ...sources.get("g")!, cwd: worktreePath })
-  const onBranch = JSON.parse(text(await agent.callTool({ name: "workspace_status", arguments: {} })))
+  const onBranch = parseYaml(text(await agent.callTool({ name: "workspace_status", arguments: {} })))
   assert.equal(onBranch.makesChangesIn, "its own branch")
   assert.deepEqual(onBranch.threadBranch, { branch: "mako/thread", worktree: worktreePath, project, commitsSinceBranching: 0 })
   assert.match(text(await agent.callTool({ name: "workspace_merge", arguments: {} })), /^Merged mako\/thread into main/)

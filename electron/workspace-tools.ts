@@ -4,6 +4,7 @@ import { isAbsolute, relative } from "node:path"
 import { z } from "zod"
 import { locateCheckout } from "./checkout-heads.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
+import { toolText } from "./tool-text.js"
 import type { WorkspaceMoves } from "./workspace-moves.js"
 import { git } from "./worktree-git.js"
 
@@ -136,7 +137,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    () => reply(async () => JSON.stringify(await tools.status(conversationId()), null, 2))
+    () => reply(async () => toolText(await tools.status(conversationId())))
   )
   server.registerTool(
     "workspace_move",

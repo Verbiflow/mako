@@ -104,7 +104,7 @@ try {
   assert.equal(readFileSync(join(main, "node_modules", "left-pad", "index.js"), "utf8"), "module.exports = 'left-pad'\n", "a change in the copy stays out of the main checkout")
   assert.equal(readFileSync(join(modules, "@scope", "ui", "index.js"), "utf8"), "module.exports = 'fix ui'\n")
   assert.match(await inFix.ownPackages("c1"), /its own already/)
-  assert.match(await inFix.status("c1"), /"packages": "This checkout's own/)
+  assert.match(await inFix.status("c1"), /\npackages: This checkout's own/)
 
   // A changed lockfile: Mako makes the folder the checkout's own before its install step runs.
   const bump = worktree("bump", "bump ui")

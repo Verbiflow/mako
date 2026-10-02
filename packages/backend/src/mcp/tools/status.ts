@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { readOptionalServerEnv } from "../../config/env"
 import { backendStatus } from "../../status"
-import { textResult } from "../result"
+import { yamlResult } from "../result"
 
 export function registerStatusTool(server: McpServer): void {
   server.registerTool(
@@ -19,6 +19,6 @@ export function registerStatusTool(server: McpServer): void {
         openWorldHint: false,
       },
     },
-    () => textResult(JSON.stringify(backendStatus(readOptionalServerEnv()), null, 2))
+    () => yamlResult(backendStatus(readOptionalServerEnv()))
   )
 }

@@ -14,6 +14,7 @@ import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
 import { carryFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
+import { listed, toolText, when } from "./tool-text.js"
 import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
   checkoutOf,
@@ -113,13 +114,6 @@ interface Context {
 }
 
 type Read = Awaited<ReturnType<typeof readRecipe>>
-
-interface RoomReport {
-  memory: MemoryPressure
-  appsRunningOnThisMac: number
-  /** Set while this app's start waits for memory. */
-  waitingInLine?: string
-}
 
 interface InLine {
   since: number
@@ -340,11 +334,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
     const { done } = await deps.processes.prepared(checkout)
-    return Promise.all(recipe.prepare.map(async (step) => ({
-      command: step.command,
-      inputs: step.inputs,
-      state: done[step.command] === (await inputsDigest(checkout, step.inputs)) ? "up to date" : "runs before the next start or check",
-    })))
+    return Object.fromEntries(await Promise.all(recipe.prepare.map(async (step) =>
+      [step.command, done[step.command] === (await inputsDigest(checkout, step.inputs)) ? "up to date" : "runs before the next start or check"] as const)))
   }
   /** Other checkouts of this project with the app's processes up: a recipe that runs one copy at a time waits for them. */
   const copiesElsewhere = async (current: Context): Promise<AppKey[]> => {
@@ -465,23 +456,26 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return { port, owner: owner ? deps.processes.ownerName(owner, environment.app) : "nothing listening now" }
     }))
     const outside = [...new Set(sockets.connected.filter((entry) => !entry.local).map((entry) => `${entry.host}:${entry.port}`))]
+    const writes = writing.map((entry) => entry.path)
+    const notes = [
+      owners.length ? "connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it." : undefined,
+      writes.length ? "writing is files the app holds open for writing outside this checkout and this Thread's data folder; two copies writing one file is a conflict." : undefined,
+      leftovers.length ? "leftovers, by pid, look left behind by the app: each started since it came up, outlived the process that started it and works in this checkout or data folder, so stopping the app doesn't end it." : undefined,
+      changed?.length ? "changedFolders is where apps keep state, with something in it changed since the app came up; other apps on this Mac write there too, so look for names of this project or its tools." : undefined,
+    ].filter(Boolean)
     const report = {
       running: pids.length > 0,
-      since: since === undefined ? undefined : new Date(since).toISOString(),
-      listening: sockets.listening.map((entry) => ({ port: entry.port, pid: entry.pid, ...(ours(entry.port) ? {} : { note: `outside this Thread's ports ${environment.port}-${last}; a second copy would fight over it` }) })),
-      connectsTo: owners,
-      connectsOutside: capped(outside),
-      writing: capped(writing.map((entry) => entry.path)),
-      leftovers,
-      changedFolders: changed && capped(changed),
-      notes: [
-        "connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it.",
-        "writing is files the app holds open for writing outside this checkout and this Thread's data folder; two copies writing one file is a conflict.",
-        "leftovers look left behind by the app: each started since it came up, outlived the process that started it and works in this checkout or data folder, so stopping the app doesn't end it.",
-        "changedFolders is where apps keep state, with something in it changed since the app came up; other apps on this Mac write there too, so look for names of this project or its tools.",
-      ],
+      upSince: since === undefined ? undefined : when(since, (deps.now ?? Date.now)()),
+      listening: Object.fromEntries(sockets.listening.map((entry) =>
+        [entry.port, ours(entry.port) ? `pid ${entry.pid}` : `pid ${entry.pid}; outside this Thread's ports ${environment.port}-${last}, so a second copy would fight over it`])),
+      connectsTo: Object.fromEntries(owners.map(({ port, owner }) => [port, owner])),
+      connectsOutside: listed(capped(outside)),
+      writing: listed(capped(writes)),
+      leftovers: Object.fromEntries(leftovers.map((entry) => [entry.pid, entry.command])),
+      changedFolders: changed && listed(capped(changed)),
+      notes: notes.length ? notes : undefined,
     }
-    return JSON.stringify(report, null, 2)
+    return toolText(report)
   }
   const stop = async (conversationId: string, names?: string[]) => stopIn(await context(conversationId), names)
   const checkIn = async (current: Context & { recipe: Recipe }, tier: CheckTier, again: () => Promise<StartOutcome>): Promise<string> => {
@@ -630,11 +624,13 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (outcome.kind === "elsewhere") return { problems: [`Only one copy of this app runs at a time, and ${outcome.whose} has it.`] }
     return { problems: outcome.refused.map((entry) => `${entry.name} didn't start: ${entry.reason}`) }
   }
-  const roomReport = async (app: AppKey): Promise<RoomReport> => {
-    const report: RoomReport = { memory: await pressure(), appsRunningOnThisMac: (await deps.processes.active()).length }
+  const roomReport = async (app: AppKey): Promise<string> => {
+    const running = (await deps.processes.active()).length
     const queued = line.get(app)
-    if (queued) report.waitingInLine = `since ${minutes((deps.now ?? Date.now)() - queued.since)} ago; it starts by itself once there's room`
-    return report
+    return [
+      `memory ${await pressure()}; ${running} app${running === 1 ? "" : "s"} running on this Mac`,
+      queued ? `waiting in line for memory since ${minutes((deps.now ?? Date.now)() - queued.since)} ago; it starts by itself once there's room` : undefined,
+    ].filter(Boolean).join("; ")
   }
   const setupView = async (cwd: string): Promise<{ view: ProjectAppSetup; read: Read; checkout: string }> => {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
@@ -738,43 +734,42 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const granted = secrets.length && deps.recipesRoot && read.kind === "ready"
         ? grantedSecrets(read.recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
         : []
+      const now = (deps.now ?? Date.now)()
+      const recipeProcesses = read.kind === "ready" ? read.recipe.processes : {}
+      const checks = (["quick", "full"] as const).flatMap((tier) => {
+        const command = read.kind === "ready" ? read.recipe.checks[tier] : undefined
+        const status = runs.find((entry) => entry.kind === "check" && entry.name === tier)
+        return command || status ? [[tier, checkLine(command, status, now)] as const] : []
+      })
       const report = {
-        thread: {
-          app: `http://${environment.host}:${environment.port}`,
-          ports: `${environment.port}-${environment.port + environment.ports - 1}`,
-          dataFolder: environment.dataDir,
-        },
+        app: `http://${environment.host}:${environment.port}`,
+        ports: `${environment.port}-${environment.port + environment.ports - 1}`,
+        dataFolder: environment.dataDir,
         recipe: recipeSummary(read),
-        values,
+        values: Object.keys(values).length ? values : undefined,
         yourShell: launched === undefined
           ? "Mako didn't start this agent process with this Thread's values."
-          : shellMatches ? "has these values" : `has older values (${JSON.stringify(shellValues)}): the recipe changed after this agent started. The processes above use the new ones; a new Session gets them too.`,
-        processes: [
+          : shellMatches ? "has these values"
+          : `has ${Object.keys(shellValues).length ? `older values (${Object.entries(shellValues).map(([name, value]) => `${name}=${value}`).join(", ")})` : "none of these values"}: the recipe changed after this agent started. Mako's processes use the new ones; a new Session gets them too.`,
+        processes: Object.fromEntries([
           ...processNames.map((name) => {
             const status = runs.find((entry) => entry.kind === "process" && entry.name === name)
-            const spec = read.kind === "ready" ? read.recipe.processes[name] : undefined
-            const port = spec && processPort(spec, environment)
-            return summary(name, spec?.command ?? "", port, status)
+            return [name, processLine(processPort(recipeProcesses[name]!, environment), status, now)]
           }),
           ...runs.filter((entry) => entry.kind === "process" && !processNames.includes(entry.name))
-            .map((entry) => ({ ...summary(entry.name, entry.command, entry.port, entry), note: "no longer in the recipe; app_stop with its name stops it" })),
-        ],
+            .map((entry) => [entry.name, `${processLine(entry.port, entry, now)}; no longer in the recipe (it ran ${entry.command}), and app_stop with its name stops it`]),
+        ]),
         prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(read.recipe, checkout) : undefined,
         packages: await packagesSummary(read, checkout),
         room: await roomReport(environment.app),
-        checks: (["quick", "full"] as const).flatMap((tier) => {
-          const command = read.kind === "ready" ? read.recipe.checks[tier] : undefined
-          const status = runs.find((entry) => entry.kind === "check" && entry.name === tier)
-          return command || status ? [checkSummary(tier, command, status)] : []
-        }),
+        checks: checks.length ? Object.fromEntries(checks) : undefined,
         credentials: secrets.length
           ? granted.length === secrets.length
             ? `The user allows ${secrets.join(", ")}, so new checkouts get them from the main checkout. Never read them.`
             : `${secrets.join(", ")} hold credentials, and the user hasn't allowed new checkouts to have them yet (Settings, then Apps, in Mako). A Thread outside the main checkout starts without them; say so if the app fails for want of them. Never copy or read them yourself.`
           : undefined,
-        planning: "In plan mode your agent app may refuse app_start and app_check. Don't work around that: say what you'd run, and the user can press Run app at the top right of this Thread.",
       }
-      return JSON.stringify(report, null, 2)
+      return toolText(report)
     },
     start,
     stop,
@@ -884,28 +879,25 @@ function checkView(tier: CheckTier, command: string, status: RunStatus | undefin
 }
 
 interface RecipeSummary {
-  state: string
+  /** Set only for a recipe that can't be used, with why. */
+  broken?: string
   /** The file in use, or the one that's broken. */
-  from?: string
-  /** Where Mako keeps this project's recipe; recipe_save writes it. */
+  file?: string
+  /** Where recipe_save writes, when that isn't the file in use. */
   savedIn?: string
   ignored?: string
-  problem?: string
   contents?: Recipe
 }
 
-function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSummary {
-  const summary: RecipeSummary = { state: "ready" }
-  if (read.kind !== "none" && read.from) summary.from = read.from
-  if (read.saved) summary.savedIn = read.saved
+function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSummary | string {
+  if (read.kind === "none") return "none: agents run things themselves on this Thread's ports; recipe_guide says how to set one up"
+  const summary: RecipeSummary = {}
+  if (read.kind === "invalid") summary.broken = read.message
+  if (read.from) summary.file = read.from
+  if (read.saved && read.saved !== read.from) summary.savedIn = read.saved
   if (read.kind === "ready") {
     if (read.ignored) summary.ignored = `${read.ignored}: committed with the project, but the recipe saved in Mako comes first`
     summary.contents = read.recipe
-  }
-  if (read.kind === "none") summary.state = "none: agents run things themselves on this Thread's ports; recipe_guide says how to set one up"
-  if (read.kind === "invalid") {
-    summary.state = "broken"
-    summary.problem = read.message
   }
   return summary
 }
@@ -964,42 +956,23 @@ function describe(status: RunStatus | undefined): string {
   return "stopped"
 }
 
-interface ProcessSummary {
-  name: string
-  command: string
-  port?: number
-  state: string
-  pid?: number
-  startedAt?: string
-  memory?: string
-  log?: string
-  note?: string
+/** A process in one line: its state and port, then for a run Mako knows of, its pid, start, memory and log. */
+function processLine(port: number | undefined, status: RunStatus | undefined, now: number): string {
+  const up = status?.state.kind === "running" || status?.state.kind === "starting"
+  const parts = [describe(status) + (port !== undefined && !(up && status?.port !== undefined) ? ` (port ${port})` : "")]
+  if (!status) return parts[0]!
+  if (up && status.pid) parts.push(`pid ${status.pid}`)
+  if (status.startedAt) parts.push(`started ${when(status.startedAt, now)}`)
+  if (status.state.kind === "exited") parts.push(`ended ${when(status.state.at, now)}`)
+  if (status.memoryBytes) parts.push(bytes(status.memoryBytes))
+  parts.push(`log ${status.log}`)
+  return parts.join("; ")
 }
 
-function summary(name: string, command: string, port: number | undefined, status: RunStatus | undefined): ProcessSummary {
-  const entry: ProcessSummary = { name, command, state: describe(status) }
-  if (port !== undefined) entry.port = port
-  if (!status) return entry
-  if (status.pid && (status.state.kind === "running" || status.state.kind === "starting")) entry.pid = status.pid
-  if (status.startedAt) entry.startedAt = new Date(status.startedAt).toISOString()
-  if (status.memoryBytes) entry.memory = bytes(status.memoryBytes)
-  entry.log = status.log
-  return entry
-}
-
-interface CheckSummary {
-  tier: CheckTier
-  command?: string
-  result: string
-  finishedAt?: string
-}
-
-function checkSummary(tier: CheckTier, command: string | undefined, status: RunStatus | undefined): CheckSummary {
-  const entry: CheckSummary = { tier, result: checkResult(status) }
-  const shown = command ?? status?.command
-  if (shown) entry.command = shown
-  if (status?.state.kind === "exited") entry.finishedAt = new Date(status.state.at).toISOString()
-  return entry
+/** A check's last result in one line, with its command when the recipe's is different or gone. */
+function checkLine(command: string | undefined, status: RunStatus | undefined, now: number): string {
+  const result = checkResult(status) + (status?.state.kind === "exited" ? ` ${when(status.state.at, now)}` : "")
+  return status && status.command !== command ? `${result}; ran ${status.command}` : result
 }
 
 function checkResult(status: RunStatus | undefined): string {

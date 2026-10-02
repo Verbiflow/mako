@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
 import { parseSlackWebhookBody } from "@chat-adapter/slack/webhook"
+import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { readOptionalServerEnv } from "../src/config/env"
 import { integrationCatalog } from "../src/integrations/catalog"
@@ -167,6 +168,19 @@ assert.match(JSON.stringify(resources), /mako:\/\/skills\/mako-operations/)
 const skill = await readSkill("mako-operations")
 assert.match(skill, /Mako operations/)
 assert.equal(listSkills().length, 1)
+
+async function toolYaml(name: string, args: Record<string, string | number>) {
+  const result = z
+    .object({ content: z.tuple([z.object({ type: z.literal("text"), text: z.string() })]) })
+    .parse(await jsonRpc(await makoMcpHandler(mcpRequest("tools/call", { name, arguments: args }))))
+  assert.doesNotMatch(result.content[0].text, /^\s*[{[]/, `${name} answers in YAML, not JSON`)
+  return parseYaml(result.content[0].text)
+}
+
+assert.deepEqual(
+  await toolYaml("mako_list_integrations", {}),
+  integrationCatalog({ slackConnected: Boolean(readOptionalServerEnv().SLACK_CONNECTOR) })
+)
 
 const connected = integrationCatalog({ slackConnected: true })
 assert.equal(connected[0]?.status.kind, "connected")
@@ -512,6 +526,16 @@ globalThis.fetch = async (input, init) => {
     })
   if (url === "https://slack.com/api/files.completeUploadExternal")
     return Response.json({ ok: true })
+  if (url === "https://slack.com/api/conversations.history")
+    return Response.json({
+      ok: true,
+      messages: [
+        { type: "message", user: "UTEST", text: "Ship it: today\nor not", ts: "345.678", thread_ts: "345.678", reply_count: 2 },
+        { type: "other", bot_id: "BTEST", text: "", ts: "345.600" },
+      ],
+      has_more: true,
+      response_metadata: { next_cursor: "bmV4dA==" },
+    })
   return Response.json({
     ok: true,
     team: "Test Team",
@@ -525,6 +549,21 @@ try {
   const identity = await slackIdentity()
   assert.equal(identity.team_id, "TTEST")
   assert.equal(directSlackApiCalled, true)
+  assert.deepEqual(await toolYaml("mako_slack_status", {}), {
+    team: "Test Team",
+    team_id: "TTEST",
+    user: "mako-test",
+    user_id: "UTESTBOT",
+    bot_id: "BTEST",
+  })
+  assert.deepEqual(await toolYaml("mako_slack_read_messages", { channel: "CTEST", limit: 2 }), {
+    messages: [
+      { user: "UTEST", text: "Ship it: today\nor not", ts: "345.678", thread_ts: "345.678", reply_count: 2 },
+      { type: "other", bot_id: "BTEST", text: "", ts: "345.600" },
+    ],
+    has_more: true,
+    next_cursor: "bmV4dA==",
+  })
   assert.equal(await postSlackControls({ channel: "CTEST" }), "123.456")
   assert.equal(directSlackControlsCalled, true)
   await setSlackAgentStatus({
