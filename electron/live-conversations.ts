@@ -3172,16 +3172,13 @@ export class LiveConversations {
       .prompt(resident, current, () =>
         driver.prompt(
           this.control(resident).activeBindingId,
-          current.context.reduce(
-            (text, manifest) => contextPrompt(manifest, text),
-            [
-              controlNote([
-                ...(this.dependencies.controlInstructions?.(this.control(resident).activeBindingId, resident.snapshot.session.id) ?? []),
-                ...(told ? [told.account] : []),
-              ]),
-              request.text,
-            ].filter(Boolean).join("\n\n")
-          ),
+          [
+            controlNote([
+              ...(this.dependencies.controlInstructions?.(this.control(resident).activeBindingId, resident.snapshot.session.id) ?? []),
+              ...(told ? [told.account] : []),
+            ]),
+            current.context.reduce((text, manifest) => contextPrompt(manifest, text), request.text),
+          ].filter(Boolean).join("\n\n"),
           request.attachments,
           request.tuning,
           { operationId: request.id, attemptId, report }

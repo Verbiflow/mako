@@ -5,7 +5,7 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { userTextFrom, withoutControlEnvelope } from "../packages/sessions/src/format.ts"
+import { userTextFrom, withoutMakoFraming } from "../packages/sessions/src/format.ts"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, realpathSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
@@ -153,7 +153,7 @@ function processEnvironment(): void {
   const note = launchInstructions(undefined, environment)
   assert.ok(note?.includes("ports 20010-20019"))
   const prompt = `${note}\n\nMake the login page remember me`
-  assert.equal(withoutControlEnvelope(prompt), "Make the login page remember me", "history readers strip the note like Local Control's")
+  assert.equal(withoutMakoFraming(prompt), "Make the login page remember me", "history readers strip the note like Local Control's")
   assert.equal(userTextFrom(prompt), "Make the login page remember me")
   assert.equal(launchInstructions(undefined, undefined), undefined, "no note when there is nothing to say")
 }

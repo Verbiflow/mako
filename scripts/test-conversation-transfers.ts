@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
+import { agentTitleFrom, userTextFrom, withContext, withoutMakoFraming } from "@mako/sessions"
 import { SessionMemory } from "../electron/session-memory.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import type {
@@ -124,11 +125,13 @@ const drivers = new Map(
   ])
 )
 let recordComparison: "same" | "moved" | "unknown" = "same"
+let instructions: string[] = []
 function createOwner() {
   return new LiveConversations({
     root,
     appPath: root,
     driver: (provider) => drivers.get(provider),
+    controlInstructions: () => instructions,
     history: async () => {
       throw new Error(
         "Transfers must use captured history, not lagging native files"
@@ -179,9 +182,11 @@ try {
     size: 3,
     data: "YWJj",
   })
+  instructions = ["Browser and computer use: fixture"]
   owner.transfer(id, request)
   owner.transfer(id, request)
   await until(() => sent.length === 2)
+  instructions = []
   assert.equal(
     opened.length,
     2,
@@ -204,7 +209,20 @@ try {
     readFileSync(beta.attachments[0]!.path!).toString("base64"),
     request.attachments[0]?.data
   )
-  assert.match(beta.text, /Current request:\nReview the implementation/)
+  assert.match(beta.text, /^<mako-local-control>\nBrowser and computer use: fixture\n<\/mako-local-control>\n\nRead the conversation context at /,
+    "Mako's control note leads, so a history that stores the prompt shows it as Mako's")
+  assert.match(beta.text, /Current request:\nReview the implementation$/)
+  assert.equal(withoutMakoFraming(beta.text), "Review the implementation", "the stored prompt reads back as what the user asked")
+  const envelope = "<mako-local-control>\nBrowser and computer use: fixture\n</mako-local-control>\n\n"
+  const earlierOrder = withContext("/bundle/transcript.md", ["Earlier native history is not present in this capture"], `${envelope}Review the implementation`)
+  assert.equal(withoutMakoFraming(earlierOrder), "Review the implementation", "forks sent with the note inside the wrapper read back the same")
+  assert.equal(withoutMakoFraming(withContext("/outer.md", [], withContext("/inner.md", [], "Nested"))), "Nested")
+  assert.equal(userTextFrom(earlierOrder), "Review the implementation", "titles come from the request, not the wrapper")
+  assert.equal(withoutMakoFraming("Read the conversation context at /x.md and its referenced artifacts before answering.\nno request line"),
+    "Read the conversation context at /x.md and its referenced artifacts before answering.\nno request line", "an unfinished wrapper is the user's text")
+  assert.equal(agentTitleFrom("<mako-local-control> Browser and computer use: Use the mako-computer js tool for"), undefined,
+    "a titler's prefix of Mako's note is not a title")
+  assert.equal(agentTitleFrom("<mako-local-control> note </mako-local-control> Fix the parser"), "Fix the parser")
   const firstTransfer = owner.snapshot(id)?.control?.transfers[0]
   assert.equal(firstTransfer?.state.kind, "accepted")
   if (firstTransfer?.state.kind !== "accepted")

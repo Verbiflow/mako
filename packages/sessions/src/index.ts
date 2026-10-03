@@ -12,6 +12,8 @@ export {
   titleFrom,
   threadIdentity,
   userTextFrom,
+  withContext,
+  withoutMakoFraming,
   clip,
   entryChars,
   trimToolOutput,
