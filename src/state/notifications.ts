@@ -70,6 +70,16 @@ export interface NotificationItem {
   body: string
   at: number
   seen: boolean
+  /** The Mako Thread the subject's Session belongs to; its Sessions count once. */
+  thread?: string
+  /** The Thread's other Sessions still working when this landed, by agent name. */
+  alongside?: readonly string[]
+}
+
+/** A subject's place in a Mako Thread, read when its outcome lands. */
+export interface NotificationSiblings {
+  thread: string
+  working: readonly string[]
 }
 
 export interface NotificationsState {
@@ -112,11 +122,16 @@ export const notificationsStore = createStore<NotificationsState>({
 })
 export const useNotifications = createHook(notificationsStore)
 
-/** Distinct threads with something unseen — what the badge counts. */
+/**
+ * Distinct threads with something unseen — what the badge counts. Two
+ * Sessions of one Mako Thread finishing are one Thread with news.
+ */
 export function unseenSubjects(items: readonly NotificationItem[]): string[] {
   const subjects: string[] = []
-  for (const item of items)
-    if (!item.seen && !subjects.includes(item.subject.id)) subjects.push(item.subject.id)
+  for (const item of items) {
+    const id = item.thread ? `mako-thread:${item.thread}` : item.subject.id
+    if (!item.seen && !subjects.includes(id)) subjects.push(id)
+  }
   return subjects
 }
 
@@ -194,6 +209,8 @@ export interface NotificationEnvironment {
   open(subject: NotificationSubject): void
   /** Previews and side windows observe; only the desk announces. */
   announces(): boolean
+  /** The subject's Mako Thread and its other Sessions still working. */
+  siblings?(target: NotificationTarget): NotificationSiblings | undefined
 }
 
 let environment: NotificationEnvironment | null = null
@@ -233,6 +250,7 @@ export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null 
   const body =
     (outcome.detail ? excerpt(outcome.detail) : "") ||
     notificationFallbackBody(outcome.kind)
+  const siblings = env?.siblings?.(outcome.subject.target)
   const item: NotificationItem = {
     id,
     kind: outcome.kind,
@@ -241,6 +259,8 @@ export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null 
     at: env?.now() ?? Date.now(),
     seen: decision.seen,
   }
+  if (siblings) item.thread = siblings.thread
+  if (siblings?.working.length) item.alongside = siblings.working
   // One item per thread and kind on the unseen list; an older unseen item of
   // the same kind is superseded, not stacked.
   const kept = state.items.filter(
@@ -294,7 +314,7 @@ function flushBanners() {
         id: item.id,
         subject: item.subject.id,
         title: item.subject.title,
-        subtitle: [notificationHeadline(item.kind, item.subject.agent), item.subject.workspace]
+        subtitle: [headline(item), item.subject.workspace]
           .filter(Boolean)
           .join(" · "),
         body: item.body,
@@ -428,6 +448,7 @@ type AcpReader = () => { activeKey: string | null; conversations: Record<string,
 let acpStateReader: AcpReader | null = null
 let threadsReader: (() => string | null) | null = null
 let tabsReader: (() => string | null) | null = null
+let siblingsReader: ((target: NotificationTarget) => NotificationSiblings | undefined) | null = null
 
 /**
  * Tell the centre how to read what is on screen. Kept as readers rather than
@@ -439,14 +460,16 @@ export function bindStageReaders(readers: {
   acp: AcpReader
   viewingPath: () => string | null
   activeTab: () => string | null
+  siblings?: (target: NotificationTarget) => NotificationSiblings | undefined
 }): void {
   acpStateReader = readers.acp
   threadsReader = readers.viewingPath
   tabsReader = readers.activeTab
+  siblingsReader = readers.siblings ?? null
 }
 
 function headline(item: NotificationItem): string {
-  return notificationHeadline(item.kind, item.subject.agent)
+  return notificationHeadline(item.kind, item.subject.agent, item.alongside)
 }
 
 /**
@@ -510,6 +533,7 @@ export function deskNotificationEnvironment(options: {
     },
     open: options.open,
     announces: () => options.announces,
+    siblings: (target) => siblingsReader?.(target),
   }
 }
 

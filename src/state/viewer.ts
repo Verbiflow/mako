@@ -1,5 +1,7 @@
+import { filePreviewFormat } from "../../electron/contracts/file-preview"
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { anchorLine } from "@/lib/file-citations"
 import { acpStore } from "@/state/acp-state"
 import type { ProposedPlan } from "@mako/sessions/content"
 import type { FileContents, GitDiff } from "@/lib/types"
@@ -264,7 +266,8 @@ export const viewer = {
     path: string,
     line?: number,
     threadPath?: string,
-    liveId?: string
+    liveId?: string,
+    anchor?: string
   ) {
     if (!hasBridge()) return
     const document = placeDocument(
@@ -303,7 +306,12 @@ export const viewer = {
           : await getMako().readFile(path)
       if (!requestIsCurrent(document.id, mine)) return
       const patch: Partial<ViewerDocument> = {file, loading: false}
-      if (!document.file && file.artifactPreview && line === undefined) patch.renderMode = "preview"
+      // A `path#section` link resolves its heading to a line once the file is
+      // read, so both source and preview scroll to it.
+      const anchored =
+        anchor && line === undefined ? anchorLine(file.contents, anchor) : undefined
+      if (anchored !== undefined) patch.line = anchored
+      if (!document.file && file.artifactPreview && line === undefined && anchored === undefined) patch.renderMode = "preview"
       // A request that named a file without its directory is answered by the
       // file the host found. Take its path, or the tab's header, its refresh,
       // its `@` mention and Open in your editor would all keep naming
@@ -670,7 +678,7 @@ export const viewer = {
 }
 
 function hasRichPreview(path: string) {
-  return /\.(?:csv|md|markdown|mdx|tsv)$/i.test(path)
+  return filePreviewFormat(path) !== undefined
 }
 
 export function viewerFileUrl(url: string): string {

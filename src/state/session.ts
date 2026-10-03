@@ -1096,15 +1096,24 @@ export const actions = {
   ): Promise<boolean> {
     try {
       if (attachments.length) {
-        const payload = promptClipboard(text, attachments)
-        if (plainText !== undefined) payload.text = plainText
+        let payload: ReturnType<typeof promptClipboard> | undefined
         try {
-          await navigator.clipboard.write([new ClipboardItem({
-            "text/plain": new Blob([payload.text], { type: "text/plain" }),
-            "text/html": new Blob([payload.html], { type: "text/html" }),
-          })])
+          payload = promptClipboard(text, attachments)
         } catch {
-          await getMako().copy(payload.text)
+          // Imported inline media may have no reusable local file. Its words
+          // must remain copyable even when rich attachment metadata cannot be.
+          await getMako().copy(plainText ?? text)
+        }
+        if (payload) {
+          if (plainText !== undefined) payload.text = plainText
+          try {
+            await navigator.clipboard.write([new ClipboardItem({
+              "text/plain": new Blob([payload.text], { type: "text/plain" }),
+              "text/html": new Blob([payload.html], { type: "text/html" }),
+            })])
+          } catch {
+            await getMako().copy(payload.text)
+          }
         }
       } else await getMako().copy(text)
       toast.dismiss("clipboard-error")

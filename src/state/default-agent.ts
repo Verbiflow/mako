@@ -1,11 +1,8 @@
-import type { HarnessProfile, ThreadRef } from "@/lib/types"
+import type { HarnessDescriptor, HarnessProfile, ThreadRef } from "@/lib/types"
 import { acpStore, activeAcp } from "@/state/acp-state"
 import { prefsStore } from "@/state/prefs"
 import { providerStore } from "@/state/providers"
 import { threadsStore } from "@/state/thread-store"
-
-/** The order a first run tries agents in when this Mac has no history with any of them. */
-const FIRST_RUN_ORDER = ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 
 /** Signed in, or still being asked: a slow start never skips an agent. */
 export function isSignedIn(profile: HarnessProfile | undefined): boolean {
@@ -17,14 +14,19 @@ export function isSignedIn(profile: HarnessProfile | undefined): boolean {
  * signed-in agent this Mac used most recently, read from every agent's own
  * history; with no history, the first signed-in one.
  */
-export function firstRunAgent(profiles: Record<string, HarnessProfile>, threads: readonly ThreadRef[]): string | undefined {
+export function firstRunAgent(profiles: Record<string, HarnessProfile>, threads: readonly ThreadRef[], descriptors: readonly HarnessDescriptor[] = threadsStore.get().descriptors): string | undefined {
   let recent: ThreadRef | undefined
   for (const ref of threads) {
     if (!isSignedIn(profiles[ref.harness])) continue
     if (!recent || (ref.updatedAt ?? "") > (recent.updatedAt ?? "")) recent = ref
   }
   if (recent) return recent.harness
-  return [...FIRST_RUN_ORDER, ...Object.keys(profiles)].find((harness) => isSignedIn(profiles[harness]))
+  // Profiles may arrive before identity metadata. Do not pick an arbitrary
+  // first-run default while the declared preference order is still loading.
+  if (descriptors.some((entry) => !entry.presentation)) return undefined
+  return [...descriptors]
+    .sort((left, right) => (left.presentation?.firstRunPriority ?? Infinity) - (right.presentation?.firstRunPriority ?? Infinity))
+    .find(({ provider }) => isSignedIn(profiles[provider]))?.provider
 }
 
 /**

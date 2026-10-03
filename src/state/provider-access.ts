@@ -31,8 +31,8 @@ export function savedProviderMode(
 }
 
 /**
- * The mode a fresh session runs under when nothing was chosen, as the host
- * declared it — the level the picker reports before a session exists.
+ * The declared factory default, used when explicitly leaving plan mode.
+ * Native configuration may override it; it is not an observed effective mode.
  */
 export function providerDefaultMode(
   state: Pick<ThreadsState, "descriptors">,

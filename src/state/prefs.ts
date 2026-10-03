@@ -84,6 +84,8 @@ export interface Prefs {
   providerSettings: Record<string, SettingsPreference>
   /** Pending selections scoped to a workspace draft or a single conversation. */
   settingsOverrides: Record<string, SessionSettings>
+  /** Explicit option edits per model and conversation; new drafts also remember harness defaults. */
+  modelSettings: Record<string, SessionSettings>
   keybindings: PreferenceStringMap
   terminalFontSize: number
   terminalFontFamily: string
@@ -154,6 +156,7 @@ const defaults: Prefs = {
   agentHarnessFilter: [],
   providerSettings: {},
   settingsOverrides: {},
+  modelSettings: {},
   keybindings: {},
   terminalFontSize: 12,
   terminalFontFamily: "",
@@ -386,6 +389,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     steerOnEnter: readBoolean(value.steerOnEnter, defaults.steerOnEnter),
     providerSettings: readProviderSettings(value.providerSettings, value.composerTuning),
     settingsOverrides: readSettingsOverrides(value.settingsOverrides),
+    modelSettings: Object.fromEntries(Object.entries(readSettingsOverrides(value.modelSettings)).slice(-256)),
     keybindings: readStringRecord(value.keybindings),
     terminalFontSize: Math.min(24, Math.max(10, readNumber(value.terminalFontSize, defaults.terminalFontSize))),
     terminalFontFamily: (readOptionalString(value.terminalFontFamily) ?? "").slice(0, 200),
@@ -446,7 +450,7 @@ globalThis.window?.addEventListener?.("storage", (event) => {
     const next = parsePrefs(value)
     if (!next) return
     receiving = true
-    prefsStore.set({ providerModes: next.providerModes, providerSettings: next.providerSettings, settingsOverrides: next.settingsOverrides, dismissedRecoveryRequests: next.dismissedRecoveryRequests })
+    prefsStore.set({ providerModes: next.providerModes, providerSettings: next.providerSettings, settingsOverrides: next.settingsOverrides, modelSettings: next.modelSettings, dismissedRecoveryRequests: next.dismissedRecoveryRequests })
   } catch {
     return
   } finally {

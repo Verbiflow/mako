@@ -50,6 +50,7 @@ export function useSetupAgent(): SetupAgent | undefined {
   const providerSettings = usePrefs((state) => state.providerSettings)
   const picked = usePrefs((state) => state.composerHarness)
   const history = useThreads((state) => state.threads)
+  useThreads((state) => state.descriptors)
   return setupAgent(profiles, providerSettings, picked, history)
 }
 

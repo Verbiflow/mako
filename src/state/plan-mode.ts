@@ -164,7 +164,7 @@ function planContext(sources: PlanSources): PlanContext {
     modes: live ? (conversation?.modes ?? []) : sources.providerModes,
     currentMode: live
       ? (conversation?.currentMode ?? null)
-      : phase === "thread" ? (sources.threadMode ?? sources.saved ?? sources.defaulted) : (sources.saved ?? sources.defaulted),
+      : phase === "thread" ? (sources.threadMode ?? sources.saved) : sources.saved,
     chosen: phase === "new" ? sources.pending : phase === "starting" ? sources.launched : undefined,
   }
   return { ...inputs, target, conversation: conversation?.key, saved: sources.saved, defaulted: sources.defaulted, control: planControl(inputs) }

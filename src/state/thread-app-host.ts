@@ -17,6 +17,7 @@ const EXPECT_MS = 6_000
 
 interface Watched {
   count: number
+  look: number
   timer?: ReturnType<typeof setTimeout>
   /** Set by an action: the phase it leaves, the one it leads to, and until when to wait for the host. */
   expected?: { from: AppPhase[]; to: AppPhase; until: number }
@@ -35,16 +36,21 @@ export function installHostThreadApp(): void {
   }
 
   const refresh = async (cwd: string) => {
+    const entry = watched.get(cwd)
+    if (!entry) return
+    const look = ++entry.look
+    clearTimeout(entry.timer)
+    const current = () => watched.get(cwd) === entry && entry.look === look
     let view: ThreadAppView | undefined
     try {
       view = await mako.threadApp(cwd)
     } catch {
-      if (watched.has(cwd)) putThreadApp(cwd, undefined)
+      if (!current()) return
+      putThreadApp(cwd, undefined)
       schedule(cwd, UNAVAILABLE_MS)
       return
     }
-    const entry = watched.get(cwd)
-    if (!entry) return
+    if (!current()) return
     const expected = entry.expected
     if (expected && view.kind === "ready") {
       if (Date.now() < expected.until && expected.from.includes(view.phase)) view = { ...view, phase: expected.to }
@@ -58,6 +64,7 @@ export function installHostThreadApp(): void {
   const act = (cwd: string, to: AppPhase | undefined, run: () => Promise<AppActionOutcome | void>) => {
     const entry = watched.get(cwd)
     const view = threadAppStore.get().byCwd[cwd]
+    if (entry) entry.look += 1
     if (entry && to && view?.kind === "ready") {
       entry.expected = { from: [view.phase, ...(view.phase === "crashed" ? (["stopped"] as const) : [])], to, until: Date.now() + EXPECT_MS }
       putThreadApp(cwd, { ...view, phase: to })
@@ -71,6 +78,7 @@ export function installHostThreadApp(): void {
       .catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
       .finally(() => {
         const settled = watched.get(cwd)
+        if (settled !== entry) return
         if (settled) settled.expected = undefined
         void refresh(cwd)
       })
@@ -139,7 +147,7 @@ export function installHostThreadApp(): void {
       const entry = watched.get(cwd)
       if (entry) entry.count += 1
       else {
-        watched.set(cwd, { count: 1 })
+        watched.set(cwd, { count: 1, look: 0 })
         threadAppStore.set({ followed: [...watched.keys()] })
         void refresh(cwd)
       }

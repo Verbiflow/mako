@@ -325,10 +325,41 @@ export async function settingsForSend(
   return resolved.settings
 }
 
+const MODEL_MEMORY_LIMIT = 256
+
+function modelMemoryIdentity(target: ComposerTarget, identity: string): string {
+  const models = providerStore.get().contexts[providerProfileKey(target.harness, target.cwd)]?.models ?? []
+  const model = modelByIdentity(models, identity)
+  // Variants carry different option values and must keep separate memories.
+  return model?.variants?.some((variant) => variant.id === identity) ? identity : model?.id ?? identity
+}
+
+function modelMemoryKey(target: ComposerTarget, model: string): string {
+  return JSON.stringify([settingsTargetKey(target), model])
+}
+
+function modelDefaultKey(harness: string, model: string): string {
+  return JSON.stringify([harness, model])
+}
+
+function rememberModelSettings(target: ComposerTarget, settings: SessionSettings): void {
+  if (!settings.model || !settings.options || !Object.keys(settings.options).length) return
+  const identity = modelMemoryIdentity(target, settings.model)
+  const memory = { ...prefsStore.get().modelSettings }
+  const keys = [modelMemoryKey(target, identity)]
+  if (target.kind === "new") keys.push(modelDefaultKey(target.harness, identity))
+  for (const key of keys) {
+    delete memory[key]
+    memory[key] = { model: identity, options: settings.options }
+  }
+  setPref("modelSettings", Object.fromEntries(Object.entries(memory).slice(-MODEL_MEMORY_LIMIT)))
+}
+
 function saveOverrides(
   target: ComposerTarget,
   settings: SessionSettings
 ): void {
+  rememberModelSettings(target, settings)
   setPref("settingsOverrides", {
     ...prefsStore.get().settingsOverrides,
     [settingsTargetKey(target)]: settings,
@@ -345,7 +376,17 @@ export function chooseComposerModel(
   target: ComposerTarget,
   model: string
 ): void {
-  saveOverrides(target, { model })
+  const preference = prefsStore.get().providerSettings[target.harness]
+  const previous = prefsStore.get().settingsOverrides[settingsTargetKey(target)] ??
+    (target.kind === "new" && preference?.source === "saved" ? preference.settings : undefined)
+  if (previous) rememberModelSettings(target, previous)
+  const memory = prefsStore.get().modelSettings
+  const identity = modelMemoryIdentity(target, model)
+  const remembered = memory[modelMemoryKey(target, identity)] ??
+    (target.kind === "new" ? memory[modelDefaultKey(target.harness, identity)] : undefined)
+  // Only explicit choices are restored. Provider defaults and native observations
+  // remain the resolver's responsibility; incompatible edits remain visible as issues.
+  saveOverrides(target, { ...remembered, model })
 }
 
 export function chooseComposerOption(
@@ -422,6 +463,7 @@ export function saveHarnessDefaults(
   harness: string,
   settings: SessionSettings
 ): void {
+  rememberModelSettings({ kind: "new", harness, cwd: "" }, settings)
   setPref("providerSettings", {
     ...prefsStore.get().providerSettings,
     [harness]: { source: "saved", settings },
@@ -444,6 +486,12 @@ function isNewTargetKey(key: string, harness: string): boolean {
 }
 
 export function resetComposerSettings(target: ComposerTarget): void {
+  const scope = JSON.stringify([settingsTargetKey(target)]).slice(0, -1) + ","
+  const harnessScope = JSON.stringify([target.harness]).slice(0, -1) + ","
+  const memory = Object.fromEntries(Object.entries(prefsStore.get().modelSettings).filter(([key]) => {
+    return !key.startsWith(scope) && !(target.kind === "new" && key.startsWith(harnessScope))
+  }))
+  setPref("modelSettings", memory)
   const overrides = { ...prefsStore.get().settingsOverrides }
   delete overrides[settingsTargetKey(target)]
   setPref("settingsOverrides", overrides)

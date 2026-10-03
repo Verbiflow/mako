@@ -1,7 +1,8 @@
+import type { FileContents } from "@/lib/types"
 import { getMako } from "@/lib/bridge"
 
 /** Read through the owning conversation, without opening or changing a workbench tab. */
-export async function readTranscriptMedia({
+export async function readTranscriptFile({
   path,
   threadPath,
   liveId,
@@ -9,17 +10,18 @@ export async function readTranscriptMedia({
   path: string
   threadPath?: string
   liveId?: string
-}): Promise<{ url: string; mimeType: string }> {
+}): Promise<FileContents> {
   const bridge = getMako()
   const file = liveId
     ? await bridge.readLiveFile(liveId, path)
     : threadPath
       ? await bridge.readThreadFile(threadPath, path)
       : await bridge.readFile(path)
-  if (!file.previewUrl || !file.mimeType)
-    throw new Error("This file has no media preview")
-  return {
-    url: bridge.resolveFileUrl(file.previewUrl),
-    mimeType: file.mimeType,
-  }
+  return file.previewUrl ? { ...file, previewUrl: bridge.resolveFileUrl(file.previewUrl) } : file
+}
+
+export async function readTranscriptMedia(input: { path: string; threadPath?: string; liveId?: string }): Promise<{ url: string; mimeType: string }> {
+  const file = await readTranscriptFile(input)
+  if (!file.previewUrl || !file.mimeType) throw new Error("This file has no media preview")
+  return { url: file.previewUrl, mimeType: file.mimeType }
 }

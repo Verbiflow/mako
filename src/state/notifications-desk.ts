@@ -13,6 +13,7 @@ import {
 } from "@/state/notifications"
 import { tabsStore } from "@/state/tabs"
 import { threadsStore } from "@/state/thread-store"
+import { threadSiblings } from "@/state/thread-siblings"
 
 /**
  * Wire the attention centre to this window: what is on screen, whether the
@@ -50,6 +51,7 @@ export function bindNotifications(options: {
     acp: () => acpStore.get(),
     viewingPath: () => threadsStore.get().viewing?.ref.path ?? null,
     activeTab: () => tabsStore.get().activeId || null,
+    siblings: threadSiblings,
   })
   const uninstall = installNotificationEnvironment(
     deskNotificationEnvironment({

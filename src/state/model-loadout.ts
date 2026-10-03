@@ -4,6 +4,9 @@ import {
   currentSettingsTarget,
 } from "@/state/composer-settings"
 import { prefsStore, setPref } from "@/state/prefs"
+import { modelByIdentity } from "@mako/sessions/settings"
+import type { HarnessProfile } from "@/lib/types"
+import { providerProfileKey, providerStore, providers } from "@/state/providers"
 
 /** The five models a chord away: provider and id, in pick order. */
 export interface LoadoutEntry {
@@ -12,6 +15,30 @@ export interface LoadoutEntry {
 }
 
 export const LOADOUT_LIMIT = 5
+
+export function loadoutAvailability(entry: LoadoutEntry, profile?: HarnessProfile) {
+  if (!profile || profile.pending)
+    return { kind: "loading" as const, label: entry.model, reason: "Checking model availability…" }
+  const model = modelByIdentity(profile.models, entry.model)
+  const label = model?.label ?? entry.model
+  if (!profile.available || profile.configurationError)
+    return { kind: "unavailable" as const, label, reason: profile.configurationError ?? profile.error ?? "This agent is not available." }
+  if (!model)
+    return { kind: "unavailable" as const, label, reason: "This saved model is no longer available. Choose another model or remove it from your loadout." }
+  // A native variant is a valid saved choice; retain its tuning identity.
+  return { kind: "ready" as const, label, model: entry.model }
+}
+
+/** Menu and shortcut both recheck the current workspace before changing intent. */
+export function availableLoadoutModel(entry: LoadoutEntry, cwd: string): string | undefined {
+  const state = providerStore.get()
+  const profile = state.contexts[providerProfileKey(entry.harness, cwd)] ?? state.profiles[entry.harness]
+  const availability = loadoutAvailability(entry, profile)
+  if (availability.kind === "ready") return availability.model
+  if (availability.kind === "loading") void providers.load(entry.harness, false, cwd).catch(() => {})
+  toast(availability.label, { description: availability.reason })
+  return undefined
+}
 
 function save(entries: LoadoutEntry[]) {
   setPref("modelLoadout", entries.slice(0, LOADOUT_LIMIT))
@@ -65,9 +92,11 @@ export function applyLoadoutEntry(index: number) {
   const entry = prefsStore.get().modelLoadout[index]
   if (!entry) return
   const target = currentSettingsTarget()
+  const model = availableLoadoutModel(entry, target.cwd)
+  if (!model) return
   if (entry.harness === target.harness) {
-    chooseComposerModel(target, entry.model)
-    toast(`Model: ${entry.model}`)
+    chooseComposerModel(target, model)
+    toast(`Model: ${model}`)
     return
   }
   if (target.kind !== "new") {
@@ -79,7 +108,7 @@ export function applyLoadoutEntry(index: number) {
   setPref("composerHarness", entry.harness)
   chooseComposerModel(
     { kind: "new", harness: entry.harness, cwd: target.cwd },
-    entry.model
+    model
   )
   toast(`Model: ${entry.model}`)
 }
