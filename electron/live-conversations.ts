@@ -2117,13 +2117,18 @@ export class LiveConversations {
       const next = source.blocks.findIndex(
         (block, index) => index > start && isTurnStart(block)
       )
-      if (start < (source.baseCoveredBlocks ?? 0))
+      const covered = source.baseCoveredBlocks ?? 0
+      // The native history read after a checkpoint replaced the blocks it
+      // covers. It ends where they end, so it still ends at this answer when
+      // no later turn began before that point; an earlier answer is named by
+      // its native message instead.
+      if (start < covered && (command.point.kind === "before-run" || (next >= 0 && next < covered)))
         throw new Error("The transcript was refreshed. Choose the answer again from its current history.")
       entries = [
         ...entries,
         ...liveEntries(
           source.blocks.slice(
-            source.baseCoveredBlocks ?? 0,
+            covered,
             command.point.kind === "before-run"
               ? start
               : next < 0

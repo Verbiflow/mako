@@ -97,4 +97,64 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
   }
 }
 
+// A live Session whose turns a checkpoint covered: the native history read
+// afterwards replaced those blocks. A fork after the last covered answer still
+// starts from it; an earlier one is named by its native message.
+{
+  const { LiveJournal } = await import("../electron/live-journal.js")
+  const root = await mkdtemp(join(tmpdir(), "mako-anchor-covered-"))
+  const id = randomUUID()
+  const r1 = randomUUID()
+  const r2 = randomUUID()
+  const path = "/store/live.jsonl"
+  const ref: ThreadRef = { harness: "claude", nativeId: "native-live", path, revision: "r2", bytes: 200, updatedAt: 2 }
+  const entries: ThreadEntry[] = [
+    { kind: "user", id: "u1", text: "first" }, { kind: "assistant", id: "a1", blocks: [{ type: "text", text: "one" }] },
+    { kind: "user", id: "u2", text: "second" }, { kind: "assistant", id: "a2", blocks: [{ type: "text", text: "two" }] },
+  ]
+  const journal = new LiveJournal(root, id)
+  journal.commit({
+    session: { id, harness: "claude", cwd: root, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [] },
+    revision: 0, createdAt: 1, base: null, permissions: [],
+    requests: [
+      { id: r1, text: "first", attachments: [], status: "completed" },
+      { id: r2, text: "second", attachments: [], status: "completed" },
+    ],
+    blocks: [
+      { type: "user", requestId: r1, text: "first" }, { type: "text", id: "t1", text: "one" },
+      { type: "user", requestId: r2, text: "second" }, { type: "text", id: "t2", text: "two" },
+    ],
+    control: { activeBindingId: id, bindings: [{ id, provider: "claude", nativeId: "native-live", path, includesBase: true, coveredBlocks: 4 }], transfers: [], actions: [], children: [], merges: [] },
+  })
+  journal.close()
+  const owner = new LiveConversations({
+    root, appPath: root, driver: () => undefined, emit: () => {},
+    history: async () => ({ ref, entries, start: 0, total: entries.length, hasEarlier: false, checkpoint: 2 }),
+  })
+  try {
+    assert.equal((await owner.refreshedSnapshot(id))?.baseCoveredBlocks, 4)
+    const last = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r2 } })
+    assert.deepEqual(last.base?.entries.map((entry) => entry.id), ["u1", "a1", "u2", "a2"], "the last covered answer forks from the native history that ends at it")
+    const moved = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r2 }, thread: "parent", move: true }, join(root, "worktree"))
+    assert.equal(moved.session.cwd, join(root, "worktree"), "Continue in a worktree takes the same answer into its own folder")
+    assert.deepEqual(moved.base?.entries.map((entry) => entry.id), ["u1", "a1", "u2", "a2"])
+    assert.throws(
+      () => owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r1 } }),
+      /refreshed/,
+      "an earlier covered answer has no live position left"
+    )
+    assert.throws(
+      () => owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } }),
+      /refreshed/,
+      "the history has no edge before a covered prompt"
+    )
+    const revision = JSON.stringify([ref.revision, ref.bytes, ref.updatedAt])
+    const earlier = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "native", index: 1, revision, anchor: { index: 1, id: "a1" } } })
+    assert.deepEqual(earlier.base?.entries.map((entry) => entry.id), ["u1", "a1"], "the panel names an earlier covered answer by its native message")
+  } finally {
+    owner.stop()
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
 console.log("Message anchors: id, timestamp and positional resolution across moved stores, and the host fork that lands on the named answer passed")

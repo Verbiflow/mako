@@ -10,6 +10,7 @@ import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
 import { acp, useAcp } from "@/state/acp"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
+import { acpStore } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
 import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useMemo, useState } from "react"
@@ -901,24 +902,28 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       ? requestId
       : null
   })
-  if (liveRequestId)
+  // A catalogued thread's answer carries its provider anchor; the fork names
+  // that, not a position, so a store that moves under the reader still forks
+  // at this answer.
+  const anchor = last?.anchor
+  const fromNative = useAcp((state) =>
+    Boolean(anchor && !exchange.prompt?.requestId && scopedLiveAcp(state, scope)?.base)
+  )
+  const liveAnswer = liveRequestId ?? (!viewing && fromNative ? anchor : undefined)
+  if (liveAnswer)
     return (
       <>
         <button
           type="button"
           title="Fork after this answer into a new tab in this Thread. Option-click forks into a new Thread."
-          onClick={(event) => void acp.fork(liveRequestId, event.altKey ? "new" : "parent")}
+          onClick={(event) => void acp.fork(liveAnswer, event.altKey ? "new" : "parent", scopedLiveAcp(acpStore.get(), scope))}
           className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
         >
           <GitForkIcon className="size-3" /> Fork
         </button>
-        <RewindButton requestId={liveRequestId} />
+        {liveRequestId ? <RewindButton requestId={liveRequestId} /> : null}
       </>
     )
-  // A catalogued thread's answer carries its provider anchor; the fork names
-  // that, not a position, so a store that moves under the reader still forks
-  // at this answer.
-  const anchor = last?.anchor
   if (!viewing && nativeEntry) {
     return (
       <button

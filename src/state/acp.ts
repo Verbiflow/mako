@@ -23,6 +23,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import type {
   ContextBreakdown,
   ContinuationResolution,
+  MessageAnchor,
   PromptAttachment,
   ThreadRef,
   TransferInput,
@@ -475,15 +476,29 @@ export const acp = {
     }
   },
 
-  /** A fork joins this conversation's Thread as a tab unless `thread` is `new`. */
-  async fork(requestId: string, thread: "parent" | "new" = "parent"): Promise<boolean> {
-    const current = activeLiveAcp(acpStore.get())
+  /**
+   * A fork joins this conversation's Thread as a tab unless `thread` is `new`.
+   * An answer still in the live record is named by its request; one the panel
+   * shows from native history, read after a checkpoint, by its message.
+   */
+  async fork(
+    answer: string | MessageAnchor,
+    thread: "parent" | "new" = "parent",
+    current = activeLiveAcp(acpStore.get())
+  ): Promise<boolean> {
     if (!current || !hasBridge()) return false
+    const base = current.base
+    const point = typeof answer === "string"
+      ? { kind: "run" as const, requestId: answer }
+      : base
+        ? { kind: "native" as const, index: answer.index, revision: JSON.stringify([base.ref.revision, base.ref.bytes, base.ref.updatedAt]), anchor: answer }
+        : undefined
+    if (!point) return false
     try {
       const snapshot = await getMako().liveFork(current.key, {
         id: crypto.randomUUID(),
         provider: current.harness,
-        point: { kind: "run", requestId },
+        point,
         thread,
       })
       applyLiveSnapshot(snapshot)
