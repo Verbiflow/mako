@@ -253,6 +253,15 @@ assert.ok(!concise.includes("`Edit`"), "concise hides tool lines")
 const full = formatTranscript(copyEntries, "full")
 assert.ok(full.includes("- `Edit` — src/app.ts"), "full names the tool and its paths")
 assert.ok(!full.includes("blocks elided"))
+const interleaved = formatTranscript([
+  { kind: "user", id: "u1", text: "Wait, then answer" },
+  { kind: "assistant", id: "a1", blocks: [
+    { type: "text", text: "I'll wait first." },
+    { type: "tool", name: "run_terminal_command", input: "{}" },
+    { type: "text", text: "DONE" },
+  ] },
+], "full")
+assert.ok(interleaved.indexOf("`run_terminal_command`") < interleaved.indexOf("DONE"), "a reply after a tool reads after it")
 const steered = formatTranscript([
   { kind: "user", id: "u1", text: "first" },
   { kind: "user", id: "u2", steeringFor: "u1", text: "also this" },

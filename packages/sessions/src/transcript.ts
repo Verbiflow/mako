@@ -785,21 +785,20 @@ export function formatTranscript(
         )
       continue
     }
-    const texts: string[] = []
-    const tools: string[] = []
+    const parts: string[] = []
     let elided = 0
     for (const block of entry.blocks) {
       if (block.type === "text") {
-        texts.push(block.text)
+        if (block.text) parts.push(block.text)
         continue
       }
       if (block.type === "tool" && depth === "full") {
-        tools.push(toolLine(block))
+        parts.push(toolLine(block))
         continue
       }
       elided += 1
     }
-    const body = [texts.join("\n\n"), ...tools].filter(Boolean).join("\n\n")
+    const body = parts.join("\n\n")
     const tail =
       elided > 0 ? `[${elided} block${elided === 1 ? "" : "s"} elided]` : ""
     if (!body && !tail) continue
