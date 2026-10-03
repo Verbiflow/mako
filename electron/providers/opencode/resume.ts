@@ -1,6 +1,6 @@
 import { Worker } from "node:worker_threads"
 import { z } from "zod"
-import { resumeVerdict } from "../../native-continuation.js"
+import { inspectNativeSession } from "../../native-continuation.js"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
 import { openCodeProcessProbe } from "./process-probe.js"
 import { openCodeRecordLocator, type OpenCodeResumeRecord } from "./resume-store.js"
@@ -46,6 +46,6 @@ export async function openCodeCheckpoint(path: string): Promise<string | undefin
   return record.kind === "available" ? record.checkpoint : undefined
 }
 
-export function openCodeResumeVerdict(binding: ProviderBinding) {
-  return resumeVerdict(binding, openCodeProcessProbe, readOpenCodeRecord)
+export function inspectOpenCodeSession(binding: ProviderBinding) {
+  return inspectNativeSession(binding, openCodeProcessProbe, readOpenCodeRecord)
 }

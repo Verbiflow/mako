@@ -46,7 +46,7 @@ import { OpenCodeDecoder, openCodeCatalogChange, type OpenCodeEffect } from "./d
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
-import { openCodeCheckpoint, openCodeResumeVerdict } from "./resume.js"
+import { openCodeCheckpoint, inspectOpenCodeSession } from "./resume.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
 
@@ -634,7 +634,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     },
     canResume: true,
     checkpoint: openCodeCheckpoint,
-    resumeVerdict: openCodeResumeVerdict,
+    inspectNativeSession: inspectOpenCodeSession,
     modes: openCodeModes,
     defaultMode: OPENCODE_DEFAULT_MODE,
     available: () => openCodeExecutable() !== null,
