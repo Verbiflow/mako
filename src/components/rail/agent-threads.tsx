@@ -949,7 +949,7 @@ function HarnessFilter({
  */
 /** `ROW_ACTIONS` for a folder header, whose group is `group/folder`. */
 const FOLDER_ACTIONS =
-  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-within/folder:pointer-events-auto group-focus-within/folder:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-visible/folder:pointer-events-auto group-focus-visible/folder:opacity-100 group-has-[:focus-visible]/folder:pointer-events-auto group-has-[:focus-visible]/folder:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
 /** A project's own actions, from right-click on its header or its `…`. */
 function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHide }: {
@@ -1069,13 +1069,13 @@ function FolderSection({
             pointer, so the row carries one leading mark instead of two. */}
         <span className="relative flex size-3.5 shrink-0 items-center justify-center text-faint">
           {closed ? (
-            <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
+            <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 group-has-[:focus-visible]/folder:opacity-0" />
           ) : (
-            <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-within/folder:opacity-0" />
+            <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 group-has-[:focus-visible]/folder:opacity-0" />
           )}
           <ChevronRightIcon
             className={cn(
-              "absolute size-3.5 opacity-0 transition-[opacity,transform] duration-200 ease-out group-hover/folder:opacity-100 group-focus-within/folder:opacity-100",
+              "absolute size-3.5 opacity-0 transition-[opacity,transform] duration-200 ease-out group-hover/folder:opacity-100 group-focus-visible/folder:opacity-100 group-has-[:focus-visible]/folder:opacity-100",
               !closed && "rotate-90"
             )}
           />

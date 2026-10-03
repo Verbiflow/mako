@@ -104,12 +104,19 @@ const Detach = memo(function Detach({ path }: { path: string }) {
   )
 })
 
+/** A rail row's box and paint: hover, an open menu, and the one lit row (`data-active`). */
+export const ROW_SURFACE =
+  "group relative isolate flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
+
 /** Where a row's controls float while its mark asks for you, so hovering the row doesn't cover it. */
 export const ROW_ACTIONS_BESIDE_MARK = "right-6"
 
-/** A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open. */
+/**
+ * A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open.
+ * `z-[1]` keeps them over the row's status mark, whose translucent parts paint as their own layers.
+ */
 export const ROW_ACTIONS =
-  "pointer-events-none absolute inset-y-0 right-0 flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+  "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
 /** How many Sessions a folded row stands for. */
 export function SessionCount({ count }: { count: number }) {
@@ -288,11 +295,7 @@ export const ThreadRow = memo(function ThreadRow({
         data-flip-key={ref.path}
         data-conversation-id={target.kind === "live" ? target.id : undefined}
         data-thread-indent={indent || undefined}
-        className={cn(
-          "group relative flex h-7 w-full items-center gap-2 rounded-md pr-1 text-left",
-          indent ? "pl-2" : "pl-1.5",
-          "transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
-        )}
+        className={cn(ROW_SURFACE, indent ? "pl-2" : "pl-1.5")}
       >
         {/* Where this conversation has lived: earlier harnesses dimmed and
             tucked behind, the current one in front. One mark when it has
