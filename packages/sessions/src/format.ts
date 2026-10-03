@@ -365,7 +365,7 @@ export function userTextFrom(text: string | undefined): string | undefined {
   }
   if (/^#{1,6}\s*files?\s+mentioned\s+by\s+the\s+user\s*:?$/i.test(first))
     return undefined
-  if (/^\[(?:image|attachment|file)(?:\s+#?\d+)?\]$/i.test(first)) {
+  if (/^(?:\[(?:image|attachment|file)(?:\s+#?\d+)?\]\s*)+$/i.test(first)) {
     const request = lines
       .slice(firstAt + 1)
       .join("\n")

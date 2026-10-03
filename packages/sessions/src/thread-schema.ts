@@ -1,5 +1,6 @@
 import { SessionSettingsSchema } from "./settings.js"
 import { z } from "zod"
+import { NativeEventSourceSchema } from "./events.js"
 import {
   AttachmentContentSchema,
   ToolDetailSchema,
@@ -61,6 +62,7 @@ export const ThreadEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     ...identity,
     kind: z.literal("event"),
+    source: NativeEventSourceSchema.optional(),
     label: z.string(),
     detail: z.string().optional(),
     /** Long text the reader opens on demand (`TranscriptEvent.body`). */
@@ -102,7 +104,9 @@ export const ThreadRefSchema = z.object({
   parentNativeId: z.string().optional(),
   liveResume: z.boolean().optional(),
   workspaceMissing: z.boolean().optional(),
-  worktrees: z.array(z.object({ path: z.string(), repoRoot: z.string() })).optional(),
+  worktrees: z
+    .array(z.object({ path: z.string(), repoRoot: z.string() }))
+    .optional(),
   accessMode: z.string().optional(),
   heldBy: z.string().optional(),
   ownedElsewhere: z.boolean().optional(),

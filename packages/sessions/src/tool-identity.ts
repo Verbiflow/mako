@@ -308,6 +308,28 @@ function firstLine(text: string | undefined): string | undefined {
   return text?.split("\n").map((line) => line.trim()).find(Boolean)
 }
 
+const SHELL_WRAPPER = /^(?:\/usr\/bin\/env\s+)?(?:\/(?:usr\/)?(?:local\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+([\s\S]+)$/
+
+/**
+ * The command inside `/bin/zsh -lc '…'`, which is how Codex records every
+ * command it runs. Only a wrapper whose quoting closes exactly at the end is
+ * opened; anything else is shown as recorded.
+ */
+function bareCommand(command: string): string {
+  const rest = SHELL_WRAPPER.exec(command.trim())?.[1]
+  if (!rest) return command
+  const quote = rest[0]
+  if (quote === "'") {
+    const inner = /^'((?:[^']|'\\'')*)'$/.exec(rest)?.[1]
+    return inner === undefined ? command : inner.replaceAll("'\\''", "'")
+  }
+  if (quote === '"') {
+    const inner = /^"((?:[^"\\]|\\.)*)"$/.exec(rest)?.[1]
+    return inner === undefined ? command : inner.replace(/\\(["\\$`])/g, "$1")
+  }
+  return rest
+}
+
 /** `run_terminal_command` → "Run terminal command", `askQuestion` → "Ask question". */
 export function humanToolName(name: string): string {
   const words = name
@@ -430,7 +452,7 @@ function fill(identity: ToolIdentity, kind: ToolKind, args: JsonRecord | undefin
   const query = field(args, "query", keys)
   const url = field(args, "url", keys)
   if (path) identity.path = path
-  if (command) identity.command = command
+  if (command) identity.command = bareCommand(command)
   if (pattern) identity.pattern = pattern
   if (query) identity.query = query
   if (url) identity.url = url
