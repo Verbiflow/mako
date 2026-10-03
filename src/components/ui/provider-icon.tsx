@@ -1,3 +1,5 @@
+import { useThreads } from "@/state/thread-store"
+import type { HarnessIconId } from "../../../electron/contracts/harness-presentation"
 import { useId, type SVGProps } from "react"
 import { SiOpencode } from "react-icons/si"
 import { cn } from "@/lib/utils"
@@ -143,14 +145,14 @@ const MARKS = {
  * Codex's prompt-in-a-cloud, Claude Code's glyph, Cursor's cube, Grok's
  * slashed ring.
  */
-const HARNESS_MARKS = {
-  codex: { mark: Codex, tint: "currentColor" },
-  claude: { mark: ClaudeCode, tint: "#D97757" },
-  cursor: { mark: Cursor, tint: "currentColor" },
-  grok: { mark: Grok, tint: "currentColor" },
-  devin: { mark: Devin, tint: "#4E8DF6" },
-  opencode: { mark: OpenCode, tint: "currentColor" },
-}
+const HARNESS_ASSETS = {
+  "codex-cloud": Codex,
+  "claude-code": ClaudeCode,
+  "cursor-cube": Cursor,
+  "grok-ring": Grok,
+  "devin-mark": Devin,
+  "opencode-mark": OpenCode,
+} satisfies Record<HarnessIconId, Mark>
 
 /** A harness's mark, sized by the caller. Falls back to initials. */
 export function HarnessIcon({
@@ -162,8 +164,8 @@ export function HarnessIcon({
   className?: string
   tinted?: boolean
 }) {
-  const key = harness.toLowerCase()
-  const found = Object.entries(HARNESS_MARKS).find(([id]) => id === key)?.[1]
+  const presentation = useThreads((state) => state.descriptors.find((entry) => entry.provider === harness)?.presentation)
+  const found = presentation ? HARNESS_ASSETS[presentation.icon.id] : undefined
   if (!found) {
     return (
       <span
@@ -178,11 +180,11 @@ export function HarnessIcon({
       </span>
     )
   }
-  const Mark = found.mark
+  const Mark = found
   return (
     <Mark
       className={cn("shrink-0", className)}
-      style={tinted && found.tint !== "currentColor" ? { color: found.tint } : undefined}
+      style={tinted && presentation?.icon.tint !== "currentColor" ? { color: presentation?.icon.tint } : undefined}
       aria-hidden
     />
   )

@@ -38,17 +38,19 @@ const sizes = {
 
 function DialogContent({
   className,
+  overlayClassName,
   size = "md",
   children,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   size?: keyof typeof sizes
+  overlayClassName?: string
 }) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
         data-slot="dialog-overlay"
-        className="fixed inset-0 z-40 bg-shell/60 backdrop-blur-[2px] duration-200 ease-(--ease-out) data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 data-closed:duration-120 data-closed:ease-(--ease-swift)"
+        className={cn("fixed inset-0 z-40 bg-shell/60 backdrop-blur-[2px] duration-200 ease-(--ease-out) data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 data-closed:duration-120 data-closed:ease-(--ease-swift)", overlayClassName)}
       />
       <DialogPrimitive.Content
         data-slot="dialog-content"
