@@ -296,7 +296,7 @@ export const SdkOpenParamsSchema = z.object({
   name: z.string().optional(),
   model: SdkModelSelectionSchema.optional(),
   mcpServers: z.record(z.string(), SdkMcpServerSchema).optional(),
-  /** Force HTTP/1.1 with SSE for the agent stream instead of HTTP/2. */
+  /** HTTP/1.1 with SSE for the agent stream; the child's default. `false` uses the SDK's HTTP/2. */
   http1: z.boolean().optional(),
   /**
    * With `create: false`: the `cursor-agent` store this agent continues. The

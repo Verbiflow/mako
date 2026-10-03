@@ -11,6 +11,7 @@ import {
   cursorStoreOrigin,
   normalizeCursorSdkModels,
 } from "@mako/sessions"
+import { appendPromptAttachments } from "@mako/sessions/prompt-attachments"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import { mcpServerFailedEvent, messageEvent, TURN_FAILED } from "@mako/sessions/events"
 import { CURSOR_PLAN_OPTION } from "@mako/sessions"
@@ -19,6 +20,7 @@ import { hostLog, hostWarn } from "../../../host-log.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
 import {
   CONNECTION_LOST_STOP,
+  RETRIES_EXHAUSTED_STOP,
   type LivePermissionResponse,
   type LiveSessionState,
   type PromptAttachment,
@@ -86,13 +88,16 @@ interface Live {
 
 /** The SDK's own error codes for a dropped or exhausted connection. */
 const CONNECTION_CODES = new Set(["unavailable", "canceled", "cancelled", "deadline_exceeded", "aborted"])
-/**
- * The last alternative is the SDK giving up its own resumes (1.0.31): the
- * connection broke repeatedly and each resume saved no checkpoint. It has no
- * code, and the SDK's advice is to retry from the last saved state.
- */
 const CONNECTION_MESSAGE =
-  /RetriableError|http\/2|HTTP\/2|RST_STREAM|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|stream closed|network error|fetch failed|resume attempts made no progress/i
+  /RetriableError|http\/2|HTTP\/2|RST_STREAM|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|stream closed|network error|fetch failed/i
+
+/**
+ * SDK 1.0.31's words when its own retry loop gives up; neither carries a
+ * code. Each attempt it made already re-ran the turn (without a checkpoint,
+ * the whole message), so continuing it repeats that work once more and, in
+ * practice, ends on the same error.
+ */
+const RETRIES_EXHAUSTED_MESSAGE = /^Connection failed repeatedly$|resume attempts made no progress/i
 
 /** The SDK's `unauthenticated` code, or its wording, on a run's error. */
 export function authenticationFailure(error: { message: string; code?: string } | undefined): boolean {
@@ -104,8 +109,14 @@ export function authenticationFailure(error: { message: string; code?: string } 
 /** A run that ended on the SDK's own connection dropping, not on the model or the tools. */
 export function connectionLost(result: SdkRunResult): boolean {
   if (result.status !== "error" || !result.error) return false
+  if (retriesExhausted(result)) return false
   if (result.error.code && CONNECTION_CODES.has(result.error.code.toLowerCase())) return true
   return CONNECTION_MESSAGE.test(result.error.message)
+}
+
+/** A run the SDK's retry loop gave up on after re-running it. */
+export function retriesExhausted(result: SdkRunResult): boolean {
+  return result.status === "error" && !!result.error && RETRIES_EXHAUSTED_MESSAGE.test(result.error.message)
 }
 
 type Engine = LiveEngineApi<Live>
@@ -118,11 +129,11 @@ function promptImages(attachments: readonly PromptAttachment[]): SdkImage[] {
   return images
 }
 
-/** Files the SDK cannot take as content are named in the prompt, the way a person would. */
+/** Files outside the SDK image transport retain typed metadata in native history. */
 function promptText(text: string, attachments: readonly PromptAttachment[]): string {
   const files = attachments.filter((attachment) => attachment.path && !(attachment.data && attachment.mimeType.startsWith("image/")))
   if (files.length === 0) return text
-  return `${text}\n\nAttached files:\n${files.map((file) => `- ${file.path}`).join("\n")}`
+  return appendPromptAttachments(text, files.map((file) => ({ name: file.name, mimeType: file.mimeType, path: file.path! })))
 }
 
 async function mcpServers(options: ProviderStartOptions): Promise<Record<string, SdkMcpServer>> {
@@ -241,7 +252,7 @@ function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
       if (!lost) engine.event(live, messageEvent(TURN_FAILED, message, "error"))
       Object.assign(patch, {
         status: "failed",
-        lastStop: lost ? CONNECTION_LOST_STOP : "failed",
+        lastStop: lost ? CONNECTION_LOST_STOP : retriesExhausted(result) ? RETRIES_EXHAUSTED_STOP : "failed",
         error: message.slice(0, 2000),
       })
       break

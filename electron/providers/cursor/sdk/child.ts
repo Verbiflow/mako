@@ -271,7 +271,11 @@ async function importLegacyStore(
 async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   if (agent) throw new ConfigurationError("This child already has an agent open")
   const store = await SqliteLocalAgentStore.open({ workspaceRef: params.cwd, stateRoot: params.stateRoot })
-  Cursor.configure({ local: { store, useHttp1ForAgent: params.http1 ?? null } })
+  // HTTP/1.1 unless asked otherwise. Over HTTP/2 (SDK 1.0.31), a large
+  // conversation's stream closes ("Premature close") right after the turn
+  // ends and before its checkpoint arrives, so the SDK re-runs the whole
+  // message until it gives up; over HTTP/1.1 the same turn finishes once.
+  Cursor.configure({ local: { store, useHttp1ForAgent: params.http1 ?? true } })
   let agentId = params.agentId
   let imported = false
   try {
