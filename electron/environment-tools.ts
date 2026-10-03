@@ -857,18 +857,21 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     return root
   }
-  const roomApp = async (entry: AppOverview, state: AppMark["state"], look: MemoryLook | undefined, overview: AppOverview[]): Promise<RoomApp> => {
+  const roomApp = async (entry: AppOverview, state: AppMark["state"], look: MemoryLook | undefined): Promise<RoomApp> => {
     const room: RoomApp = { app: entry.app, kind: entry.app.startsWith("folder-") ? "folder" : "thread", state, runs: [] }
     let checkout = entry.checkout
+    let owner: AppKey | undefined = room.kind === "thread" ? entry.app : undefined
     if (checkout && isSpareCheckout(checkout)) {
       room.kind = "spare"
       // A spare a Thread took mid-install leaves a link where it was, to the Thread's checkout.
-      if ((await lstat(checkout).catch(() => undefined))?.isSymbolicLink()) checkout = await readlink(checkout).catch(() => checkout)
+      if ((await lstat(checkout).catch(() => undefined))?.isSymbolicLink()) {
+        checkout = await readlink(checkout).catch(() => checkout)
+        if (checkout && deps.folder) owner = (await deps.folder(checkout, false).catch(() => undefined))?.app
+      }
     }
     if (checkout) room.checkout = checkout
     const root = entry.project ?? (checkout ? await rootOf(checkout) : undefined)
     if (root) room.project = { root, name: basename(root) }
-    const owner = room.kind === "thread" ? entry.app : overview.find((other) => other.app !== entry.app && other.checkout === checkout && !other.app.startsWith("folder-"))?.app
     const thread = owner ? deps.owner?.(owner) : undefined
     if (thread) room.thread = thread
     const up = entry.runs.filter((run) => run.state.kind === "running" || run.state.kind === "starting")
@@ -1140,10 +1143,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       for (const entry of overview) {
         listed.add(entry.app)
         const state = markState(entry.runs) ?? (line.has(entry.app) ? "waiting" : undefined)
-        if (state) apps.push(await roomApp(entry, state, look, overview))
+        if (state) apps.push(await roomApp(entry, state, look))
       }
       for (const app of line.keys()) {
-        if (!listed.has(app)) apps.push(await roomApp({ app, checkout: deps.processes.checkoutOf(app), usedAt: 0, runs: [] }, "waiting", look, overview))
+        if (!listed.has(app)) apps.push(await roomApp({ app, checkout: deps.processes.checkoutOf(app), usedAt: 0, runs: [] }, "waiting", look))
       }
       const roots = new Map(apps.flatMap((entry) => entry.project ? [[entry.project.root, entry.project.name] as const] : []))
       const fits = await Promise.all([...roots].map(async ([root, name]): Promise<RoomFit> => {

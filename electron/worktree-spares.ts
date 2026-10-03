@@ -50,11 +50,15 @@ const SpareSchema = z.object({
 })
 export type Spare = z.infer<typeof SpareSchema>
 
-/** Ready spares in the order a claim takes them: installed first, then ones that need none or have one under way. */
-function claimOrder(spare: Spare): number {
+/**
+ * Ready spares in the order a claim takes them: installed or needing none,
+ * then one installing, then one whose install hasn't started (`waiting`),
+ * then one whose install ended without passing.
+ */
+function claimOrder(spare: Spare, waiting: boolean): number {
   if (spare.install?.state === "passed") return 0
-  if (!spare.install) return 1
-  return spare.install.state === "running" ? 2 : 3
+  if (!spare.install) return waiting ? 2 : 0
+  return spare.install.state === "running" ? 1 : 3
 }
 
 async function isLink(path: string): Promise<boolean> {
@@ -129,7 +133,7 @@ export class WorktreeSpares {
   /** Take a ready spare of `repoRoot`, or none. Only one caller anywhere gets a given spare. */
   async claim(repoRoot: string): Promise<Spare | undefined> {
     const ready = (await this.list()).filter((spare) => spare.repoRoot === repoRoot && spare.state === "ready")
-      .sort((a, b) => claimOrder(a) - claimOrder(b) || a.createdAt - b.createdAt)
+      .sort((a, b) => claimOrder(a, this.queued.has(a.id)) - claimOrder(b, this.queued.has(b.id)) || a.createdAt - b.createdAt)
     for (const spare of ready) {
       const taken = await this.holding(spare.id, () => rename(this.file(spare.id), this.file(spare.id, "claimed")).then(() => true, () => false))
       if (!taken) continue
