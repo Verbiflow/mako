@@ -1204,7 +1204,9 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .contain-turn[data-preserve-height],
 .contain-turn[data-preserve-height] [data-estimated-paragraph],
 .contain-turn[data-settling],
-.contain-turn[data-settling] [data-estimated-paragraph] {
+.contain-turn[data-settling] [data-estimated-paragraph],
+[data-virtual-transcript] .contain-turn,
+[data-virtual-transcript] [data-estimated-paragraph] {
   content-visibility: visible;
 }
 
