@@ -10,6 +10,7 @@ import { runtimeInfo, RuntimeDisconnectedError } from "./runtime-connection.js"
 import { lstat, mkdir, rm, stat, unlink } from "node:fs/promises"
 import { existsSync, realpathSync, rmSync } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
+import { restrictNativeStores } from "@mako/sessions/read-only-sqlite"
 import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
 import { imageSize } from "image-size"
@@ -318,6 +319,7 @@ else if (instanceProfile)
 const fixtureDesk = process.env.MAKO_FIXTURE_DESK === "1"
 if (fixtureDesk) {
   enforceFixtureDesk()
+  restrictNativeStores()
   if (!/(^|-)fixture-/.test(basename(app.getPath("userData")))) {
     process.stderr.write("A fixture desk host needs a fixture profile of its own\n")
     app.exit(78)
@@ -350,7 +352,7 @@ function openSessionMemory(): SessionMemory | null {
         dataRoot: app.getPath("userData"), executable: process.execPath,
         args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), profile: instanceProfile,
       },
-    })
+    }, { readOnly: fixtureDesk })
     memory.startHeartbeat()
     return memory
   } catch (error) {
@@ -362,9 +364,9 @@ installSessionMemory(sessionMemory)
 /**
  * Per-user like the ledger: which Session and Thread every journal and
  * native session belongs to, so every host names a conversation alike. A
- * fixture root keeps its own store.
+ * fixture root keeps its own store; a fixture desk only reads the user's.
  */
-const { store: threadStore, problem: threadStoreProblem } = openThreadStore(threadStorePath({ dataRoot: app.getPath("userData"), appData: app.getPath("appData") }))
+const { store: threadStore, problem: threadStoreProblem } = openThreadStore(threadStorePath({ dataRoot: app.getPath("userData"), appData: app.getPath("appData") }), { readOnly: fixtureDesk })
 if (threadStoreProblem) hostWarn("threads", "Thread store problem", { problem: threadStoreProblem })
 installThreadStore(threadStore)
 const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event) => emit(event)) : () => {}
@@ -396,7 +398,7 @@ const threadProcesses = threadStore
   : null
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
-setInterval(() => {
+if (!fixtureDesk) setInterval(() => {
   void threadProcesses?.stopIdle(THREAD_APP_IDLE_MS).then((stopped) => {
     if (stopped.length) hostLog("threads", "stopped apps unused for six hours", { threads: stopped.join(", ") })
   }, (error) => hostWarn("threads", "idle apps couldn't be stopped", { error: error instanceof Error ? error.message : String(error) }))
@@ -2452,7 +2454,7 @@ app.whenReady().then(async () => {
   if (!webOnly) await createWindow()
   installUpdates(emit)
   trace("updates ready")
-  installThreads(emit)
+  installThreads(emit, { readOnly: fixtureDesk })
   trace("catalog starting")
   bindDrivers(emit, {
     assessResume: (ref) => assessResume({

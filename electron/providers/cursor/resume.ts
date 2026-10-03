@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto"
 import { join } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import type { DatabaseSync } from "node:sqlite"
 import { cursorSdkAgentIdForDirectory, cursorSdkIndexPath, readCursorSdkAgent } from "@mako/sessions"
+import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 
 /**
@@ -49,7 +50,7 @@ function digest(parts: readonly (string | number | null)[]): string {
 export function cursorLegacyCheckpoint(path: string, id: string): string | undefined {
   let db: DatabaseSync | undefined
   try {
-    db = new DatabaseSync(path, { readOnly: true })
+    db = openNativeStore(path)
     const row = MetaRowSchema.safeParse(db.prepare("SELECT value FROM meta WHERE key = '0'").get())
     if (!row.success) return undefined
     const meta = MetaSchema.safeParse(JSON.parse(row.data.value))
@@ -79,7 +80,7 @@ export function cursorSdkCheckpoint(stateRoot: string, directoryName: string): s
   if (!record?.rootId) return undefined
   let db: DatabaseSync | undefined
   try {
-    db = new DatabaseSync(join(stateRoot, "agents", directoryName, "store.db"), { readOnly: true })
+    db = openNativeStore(join(stateRoot, "agents", directoryName, "store.db"))
     return digest([agentId, record.rootId, blobCount(db)])
   } catch {
     return undefined

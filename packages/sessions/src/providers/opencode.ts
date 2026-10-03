@@ -2,6 +2,7 @@ import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "..
 import { stat } from "node:fs/promises"
 import { OPENCODE_IMPORTED_MODEL } from "../emit.js"
 import { removeSessionRows } from "../sqlite-removal.js"
+import { openNativeStore } from "../read-only-sqlite.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { openCodeDatabasePaths } from "./opencode-location.js"
@@ -82,8 +83,8 @@ let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
 async function openDatabase(path: string): Promise<DatabaseSync | null> {
   if (sqliteOpen === undefined) {
     try {
-      const sqlite = await import("node:sqlite")
-      sqliteOpen = (file) => new sqlite.DatabaseSync(file, { readOnly: true })
+      await import("node:sqlite")
+      sqliteOpen = (file) => openNativeStore(file)
     } catch {
       sqliteOpen = null
     }

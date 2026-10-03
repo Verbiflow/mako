@@ -5,6 +5,7 @@ import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
+import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
 import {
   SessionSettingsSchema,
   type SessionSettings,
@@ -100,6 +101,12 @@ export interface SessionMemoryOptions {
   /** Whether a host's runtime socket is there to connect to, without connecting. */
   listening?: (socket: string) => boolean
   identityCurrent?: (pid: number, startedAt: number, signal: AbortSignal) => Promise<boolean>
+  /**
+   * Only read the ledger other hosts keep: nothing is created or migrated,
+   * this host registers no runtime and keeps no heartbeat, stale holds stay
+   * for their owners to clear, and every write throws `ReadOnlyStoreError`.
+   */
+  readOnly?: boolean
 }
 
 export const HOLD_STALE_MS = 3 * 60_000
@@ -145,7 +152,9 @@ function processAlive(pid: number): boolean {
 
 export class SessionMemory {
   readonly path: string
-  private readonly db: DatabaseSync
+  /** Null when the ledger is only read. */
+  private readonly writable: DatabaseSync | null
+  private readonly reader: ReadOnlyConnection | null
   private readonly host: SessionMemoryHost
   private readonly now: () => number
   private readonly alive: (pid: number) => boolean
@@ -164,8 +173,21 @@ export class SessionMemory {
     this.alive = options.alive ?? processAlive
     this.listening = options.listening ?? existsSync
     this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: 1_500 }))
+    if (options.readOnly) {
+      this.writable = null
+      this.reader = new ReadOnlyConnection(path, { timeout: 1000 })
+      try {
+        if (!this.reader.database.prepare("SELECT version FROM session_memory_migrations WHERE version = 2").get())
+          throw new Error("Mako's session ledger predates this build; it is read once a current host has opened it")
+      } catch (error) {
+        this.reader.close()
+        throw error
+      }
+      return
+    }
+    this.reader = null
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-    this.db = new DatabaseSync(path)
+    this.writable = new DatabaseSync(path)
     try {
       this.db.exec("PRAGMA busy_timeout=5000")
       enableSharedWal(this.db, 5000)
@@ -230,9 +252,21 @@ export class SessionMemory {
     }
   }
 
+  /** Reads; a reader's snapshot is reopened first once another host has written. */
+  private get db(): DatabaseSync {
+    if (!this.reader) return this.writer
+    this.reader.refresh()
+    return this.reader.database
+  }
+
+  private get writer(): DatabaseSync {
+    if (!this.writable) throw new ReadOnlyStoreError("Mako's session ledger")
+    return this.writable
+  }
+
   /** Keep this host's holds fresh for as long as it runs. */
   startHeartbeat(intervalMs = HOLD_HEARTBEAT_MS): void {
-    if (this.timer) return
+    if (this.timer || !this.writable) return
     this.timer = setInterval(() => {
       this.heartbeat()
       void this.reconcileHolds()
@@ -242,7 +276,7 @@ export class SessionMemory {
 
   /** Check stale process generations off the send path; probe failure keeps ownership. */
   async reconcileHolds(): Promise<void> {
-    if (this.verifying || this.lifecycle.signal.aborted) return
+    if (this.verifying || this.lifecycle.signal.aborted || !this.writable) return
     this.verifying = true
     try {
       const rows = z.array(HoldRowSchema.extend({ provider: z.string(), native_id: z.string() })).parse(
@@ -251,7 +285,7 @@ export class SessionMemory {
       await Promise.all(rows.map(async (row) => {
         const current = await this.identityCurrent(row.host_pid, row.host_started_at, this.lifecycle.signal).catch(() => undefined)
         if (current !== false || this.lifecycle.signal.aborted) return
-        this.db.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ? AND heartbeat_at = ?")
+        this.writer.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ? AND heartbeat_at = ?")
           .run(row.provider, row.native_id, row.host_pid, row.host_started_at, row.heartbeat_at)
         this.annotations.delete(`${row.provider}\n${row.native_id}`)
       }))
@@ -297,7 +331,7 @@ export class SessionMemory {
       (previous.modeId ?? null) === (modeId ?? null)
     )
       return
-    this.db
+    this.writer
       .prepare(
         `INSERT INTO memory (provider, native_id, settings, mode_id, updated_at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (provider, native_id) DO UPDATE SET settings = excluded.settings, mode_id = excluded.mode_id, updated_at = excluded.updated_at`
@@ -331,7 +365,7 @@ export class SessionMemory {
     if (!row) return null
     if (this.ownHold(row)) return null
     if (this.holdLive(row)) return this.describe(row)
-    this.db.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?").run(provider, nativeId, row.host_pid, row.host_started_at)
+    this.writable?.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?").run(provider, nativeId, row.host_pid, row.host_started_at)
     return null
   }
 
@@ -342,7 +376,7 @@ export class SessionMemory {
    */
   hold(provider: string, nativeId: string, conversationId: string): void {
     const at = this.now()
-    this.db.exec("BEGIN IMMEDIATE")
+    this.writer.exec("BEGIN IMMEDIATE")
     try {
       const row = this.readHold(provider, nativeId)
       if (
@@ -352,14 +386,14 @@ export class SessionMemory {
       )
         throw new SessionHeldError(this.describe(row))
       const since = row && this.ownHold(row) ? row.since : at
-      this.db
+      this.writer
         .prepare(
           `INSERT INTO holds (provider, native_id, host_pid, host_started_at, host_label, conversation_id, since, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (provider, native_id) DO UPDATE SET host_pid = excluded.host_pid, host_started_at = excluded.host_started_at, host_label = excluded.host_label, conversation_id = excluded.conversation_id, since = excluded.since, heartbeat_at = excluded.heartbeat_at`
         )
         .run(provider, nativeId, this.host.pid, this.host.startedAt, this.host.label, conversationId, since, at)
       if (this.host.socket)
-        this.db.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
+        this.writer.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
           ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
           .run(conversationId, provider, nativeId, this.host.socket, at)
       this.db.exec("COMMIT")
@@ -378,11 +412,11 @@ export class SessionMemory {
   release(provider: string, nativeId: string, conversationId?: string): void {
     this.annotations.delete(`${provider}\n${nativeId}`)
     if (conversationId === undefined)
-      this.db
+      this.writer
         .prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?")
         .run(provider, nativeId, this.host.pid, this.host.startedAt)
     else
-      this.db
+      this.writer
         .prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ? AND conversation_id = ?")
         .run(provider, nativeId, this.host.pid, this.host.startedAt, conversationId)
   }
@@ -396,14 +430,14 @@ export class SessionMemory {
 
   /** An older host can be reached through its existing private runtime socket. */
   rememberRoute(route: ConversationRoute, expected: SessionHold): boolean {
-    this.db.exec("BEGIN IMMEDIATE")
+    this.writer.exec("BEGIN IMMEDIATE")
     try {
       const hold = this.heldBy(route.provider, route.nativeId)
       if (!hold || hold.conversationId !== route.conversationId || hold.hostPid !== expected.hostPid || hold.since !== expected.since) {
         this.db.exec("ROLLBACK")
         return false
       }
-      this.db.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
+      this.writer.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
         .run(route.conversationId, route.provider, route.nativeId, route.socket, this.now())
       this.db.exec("COMMIT")
@@ -417,7 +451,7 @@ export class SessionMemory {
   /** Journal location survives hibernation and host restart; a route grants no write ownership. */
   rememberJournal(conversationId: string, socket = this.host.socket): void {
     if (!socket) return
-    this.db.prepare(`INSERT INTO conversation_journals (conversation_id, socket) VALUES (?, ?)
+    this.writer.prepare(`INSERT INTO conversation_journals (conversation_id, socket) VALUES (?, ?)
       ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket`).run(conversationId, socket)
   }
 
@@ -457,10 +491,10 @@ export class SessionMemory {
 
   /** Reconstruct aliases from journal metadata without reading transcript blocks. */
   rememberBindings(conversationId: string, bindings: ReadonlyArray<{ provider: string; nativeId?: string }>, at: number): void {
-    this.db.exec("BEGIN IMMEDIATE")
+    this.writer.exec("BEGIN IMMEDIATE")
     try {
       this.rememberJournal(conversationId)
-      const insert = this.db.prepare(`INSERT INTO conversation_bindings VALUES (?, ?, ?, ?)
+      const insert = this.writer.prepare(`INSERT INTO conversation_bindings VALUES (?, ?, ?, ?)
         ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)`)
       for (const binding of bindings) {
         if (binding.nativeId) insert.run(binding.provider, binding.nativeId, conversationId, at)
@@ -472,12 +506,13 @@ export class SessionMemory {
   /** Every hold this host has: what `stop()` lets go of. */
   releaseAll(): void {
     this.annotations.clear()
-    this.db.prepare("DELETE FROM holds WHERE host_pid = ? AND host_started_at = ?").run(this.host.pid, this.host.startedAt)
+    this.writer.prepare("DELETE FROM holds WHERE host_pid = ? AND host_started_at = ?").run(this.host.pid, this.host.startedAt)
   }
 
   heartbeat(at = this.now()): void {
+    if (!this.writable) return
     try {
-      this.db.prepare("UPDATE holds SET heartbeat_at = ? WHERE host_pid = ? AND host_started_at = ?").run(at, this.host.pid, this.host.startedAt)
+      this.writer.prepare("UPDATE holds SET heartbeat_at = ? WHERE host_pid = ? AND host_started_at = ?").run(at, this.host.pid, this.host.startedAt)
     } catch (error) {
       hostWarn("memory", "heartbeat failed", { error: error instanceof Error ? error.message : String(error) })
     }
@@ -530,7 +565,8 @@ export class SessionMemory {
     this.lifecycle.abort()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
-    this.db.close()
+    if (this.reader) this.reader.close()
+    else this.writer.close()
   }
 
   private readHold(provider: string, nativeId: string): z.infer<typeof HoldRowSchema> | null {

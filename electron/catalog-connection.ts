@@ -8,8 +8,11 @@ import { daemonIsForeign } from "./daemon-vintage.js"
 import { ON_DEMAND_CATALOG_NODE_ARGS } from "./daemon-command.js"
 import { headlessNodeExecutable } from "./headless-node.js"
 
-/** Join a compatible on-demand reader. Its own claim arbitrates simultaneous starts. */
-export async function connectOnDemandCatalog(signal: AbortSignal): Promise<DaemonClient | null> {
+/**
+ * Join a compatible on-demand reader, starting one unless `start` is false.
+ * Its own claim arbitrates simultaneous starts.
+ */
+export async function connectOnDemandCatalog(signal: AbortSignal, { start = true }: { start?: boolean } = {}): Promise<DaemonClient | null> {
   const identity = await defaultCatalogIdentity(join(homedir(), ".mako", "archive"))
   signal.throwIfAborted()
   const { socket } = onDemandCatalogPaths(identity)
@@ -24,7 +27,7 @@ export async function connectOnDemandCatalog(signal: AbortSignal): Promise<Daemo
     return client
   }
   const existing = await connect()
-  if (existing) return existing
+  if (existing || !start) return existing
   signal.throwIfAborted()
   const child = spawn(headlessNodeExecutable(), [...ON_DEMAND_CATALOG_NODE_ARGS, daemonScript(), "--on-demand"], {
     detached: true,

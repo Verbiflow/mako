@@ -28,6 +28,7 @@ import { access, mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Thread, ThreadEntry } from "./format.js"
+import { refuseNativeWrite } from "./read-only-sqlite.js"
 
 export interface EmitResult {
   sessionId: string
@@ -146,6 +147,7 @@ export async function emitClaudeSession(
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
+  refuseNativeWrite("Claude's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const sessionId = randomUUID()
@@ -193,6 +195,7 @@ export async function emitCodexSession(
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
+  refuseNativeWrite("Codex's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const sessionId = randomUUID()
@@ -277,6 +280,7 @@ export async function emitGrokSession(
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
+  refuseNativeWrite("Grok's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const sessionId = randomUUID()
@@ -351,6 +355,7 @@ export async function emitDevinSession(
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
+  refuseNativeWrite("Devin's session store")
   const sqlite = await import("node:sqlite").catch(() => {
     throw new Error(
       "Writing Devin sessions needs Node's built-in SQLite (Node 22.5+)"
@@ -484,6 +489,7 @@ export async function openCodeImport(
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<OpenCodeImport> {
+  refuseNativeWrite("OpenCode's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const messages = await flatten(
@@ -541,6 +547,7 @@ export async function emitCursorSession(
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
+  refuseNativeWrite("Cursor's chats")
   const sqlite = await import("node:sqlite").catch(() => {
     throw new Error(
       "Writing Cursor sessions needs Node's built-in SQLite (Node 22.5+)"

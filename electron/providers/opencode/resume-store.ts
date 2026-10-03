@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { isAbsolute } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import type { DatabaseSync } from "node:sqlite"
+import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import type { NativeResumeRecord } from "../../native-continuation.js"
 
 export type OpenCodeResumeRecord =
@@ -27,7 +28,7 @@ export function readOpenCodeResumeRecord(path: string, nativeId: string): OpenCo
     return { kind: "unavailable", reason: "The saved OpenCode source does not match its native session ID." }
   let db: DatabaseSync | undefined
   try {
-    db = new DatabaseSync(target.database, { readOnly: true })
+    db = openNativeStore(target.database)
     db.exec("PRAGMA busy_timeout=100; BEGIN")
     const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
     const sessionTable = target.v2 ? "session_v2" : "session"

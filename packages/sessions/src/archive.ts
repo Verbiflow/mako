@@ -1,6 +1,7 @@
 import { persistThreadAttachments } from "./attachment-storage.js"
 /** Durable normalized history. Metadata and content commit in the same SQLite row. */
 import { createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import { mkdir, readdir, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -8,6 +9,7 @@ import { z } from "zod"
 import { DatabaseSync } from "node:sqlite"
 import { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
 import { SessionSettingsSchema } from "./settings.js"
+import { ReadOnlyConnection, ReadOnlyStoreError } from "./read-only-sqlite.js"
 import type { Thread, ThreadRef } from "./format.js"
 
 const ArchiveIndexRow = z.object({ ref: z.string() })
@@ -60,9 +62,20 @@ export interface EvictionPolicy {
 /** Keeps every copy. The default until a retention schedule is designed. */
 export const keepEverything: EvictionPolicy = { select: () => [] }
 
+export interface SessionArchiveOptions {
+  /**
+   * Read the copies other hosts keep without writing: nothing is created or
+   * migrated, `note` captures nothing, and `forget` throws
+   * `ReadOnlyStoreError`.
+   */
+  readOnly?: boolean
+}
+
 export class SessionArchive {
   private root: string
   private eviction: EvictionPolicy
+  private readonly readOnly: boolean
+  private reader: ReadOnlyConnection | null = null
   private database: DatabaseSync | null = null
   private index = new Map<string, ThreadRef>()
   private dataVersion = -1
@@ -74,9 +87,10 @@ export class SessionArchive {
   private queue: Promise<void> = Promise.resolve()
   private stopping: Promise<void> | null = null
 
-  constructor(root: string, eviction: EvictionPolicy = keepEverything) {
+  constructor(root: string, eviction: EvictionPolicy = keepEverything, options: SessionArchiveOptions = {}) {
     this.root = root
     this.eviction = eviction
+    this.readOnly = options.readOnly ?? false
   }
 
   /** Forget the copies the eviction policy selects; returns how many went. */
@@ -98,6 +112,17 @@ export class SessionArchive {
   }
 
   private async initialize(): Promise<void> {
+    if (this.readOnly) {
+      this.database = this.openReader()
+      try {
+        this.refreshIndex()
+        if (existsSync(this.root)) await this.indexLegacyCopies()
+      } catch (error) {
+        this.closeDatabase()
+        throw error
+      }
+      return
+    }
     await mkdir(this.root, { recursive: true })
     const database = new DatabaseSync(join(this.root, "archive.sqlite"))
     try {
@@ -166,31 +191,61 @@ export class SessionArchive {
       }
       this.database = database
       this.refreshIndex()
-      // Existing archives remain readable. Upgrade each lazily on its next capture.
-      const dirs = await readdir(this.root, { withFileTypes: true })
-      for (const dir of dirs) {
-        if (!dir.isDirectory()) continue
-        try {
-          const ref = ArchivedThreadRefSchema.parse(
-            JSON.parse(
-              await readFile(join(this.root, dir.name, "ref.json"), "utf8")
-            )
-          )
-          if (
-            ref.path &&
-            !this.index.has(ref.path) &&
-            !this.captureState(ref.path)?.deleted
-          )
-            this.index.set(ref.path, { ...ref, locked: false, archived: true })
-        } catch {
-          // Incomplete legacy directories have no committed history to expose.
-        }
-      }
+      await this.indexLegacyCopies()
     } catch (error) {
       if (this.database === database) this.database = null
       database.close()
       throw error
     }
+  }
+
+  /** The database another host keeps, or null while none this build can read exists. */
+  private openReader(): DatabaseSync | null {
+    const path = join(this.root, "archive.sqlite")
+    if (!existsSync(path)) return null
+    const reader = new ReadOnlyConnection(path, { timeout: 5000 })
+    try {
+      if (!readableArchive(reader.database)) {
+        reader.close()
+        console.warn("Session archive skipped: no host of this build has opened it yet")
+        return null
+      }
+    } catch (error) {
+      reader.close()
+      throw error
+    }
+    this.reader = reader
+    return reader.database
+  }
+
+  /** Existing archives remain readable. Upgrade each lazily on its next capture. */
+  private async indexLegacyCopies(): Promise<void> {
+    const dirs = await readdir(this.root, { withFileTypes: true })
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue
+      try {
+        const ref = ArchivedThreadRefSchema.parse(
+          JSON.parse(
+            await readFile(join(this.root, dir.name, "ref.json"), "utf8")
+          )
+        )
+        if (
+          ref.path &&
+          !this.index.has(ref.path) &&
+          !this.captureState(ref.path)?.deleted
+        )
+          this.index.set(ref.path, { ...ref, locked: false, archived: true })
+      } catch {
+        // Incomplete legacy directories have no committed history to expose.
+      }
+    }
+  }
+
+  private closeDatabase(): void {
+    if (this.reader) this.reader.close()
+    else this.database?.close()
+    this.reader = null
+    this.database = null
   }
 
   orphans(livePaths: ReadonlySet<string>): ThreadRef[] {
@@ -210,7 +265,7 @@ export class SessionArchive {
   }
 
   note(ref: ThreadRef, read: () => Promise<Thread | null>): void {
-    if (this.stopping || this.deleted.has(ref.path)) return
+    if (this.readOnly || this.stopping || this.deleted.has(ref.path)) return
     const state = this.captureState(ref.path)
     if (state?.deleted || (state?.revision === revisionOf(ref) || state?.observedRevision === revisionOf(ref))) {
       this.cancel(ref.path)
@@ -279,6 +334,7 @@ export class SessionArchive {
   }
 
   async forget(path: string): Promise<void> {
+    if (this.readOnly) throw new ReadOnlyStoreError("The session archive")
     this.deleted.add(path)
     this.cancel(path)
     await this.load()
@@ -306,10 +362,7 @@ export class SessionArchive {
   }
 
   stop(): Promise<void> {
-    this.stopping ??= this.flush().finally(() => {
-      this.database?.close()
-      this.database = null
-    })
+    this.stopping ??= this.flush().finally(() => this.closeDatabase())
     return this.stopping
   }
 
@@ -426,6 +479,10 @@ export class SessionArchive {
 
   /** PRAGMA data_version changes only for commits from another connection. */
   private refreshIndex(): void {
+    if (this.reader?.refresh()) {
+      this.database = this.reader.database
+      this.dataVersion = -1
+    }
     const database = this.database
     if (!database) return
     const version = z
@@ -480,6 +537,19 @@ function revisionOf(ref: ThreadRef): string {
       Object.entries(source).sort(([a], [b]) => a.localeCompare(b))
     )
   )
+}
+
+/** Whether a read-only connection finds the schema this build's queries need; a writer of this build creates it. */
+function readableArchive(database: DatabaseSync): boolean {
+  const version = z
+    .object({ user_version: z.number() })
+    .parse(database.prepare("PRAGMA user_version").get()).user_version
+  if (version > 1)
+    throw new Error("Update Mako to open this session archive format")
+  const found = database
+    .prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('archive_captures', 'archive_observations', 'sessions_capture_revision')")
+    .get()
+  return version === 1 && z.object({ count: z.number() }).parse(found).count === 3
 }
 
 /** A concurrent journal-mode change can return SQLITE_BUSY before busy_timeout.

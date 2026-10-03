@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite"
+import { openNativeStoreForWriting } from "./read-only-sqlite.js"
 
 /**
  * Delete one session's rows from a SQLite store that several apps may hold
@@ -14,7 +15,7 @@ export async function removeSessionRows(
 ): Promise<boolean> {
   const sqlite = await import("node:sqlite").catch(() => null)
   if (!sqlite) return false
-  const database: DatabaseSync = new sqlite.DatabaseSync(file)
+  const database: DatabaseSync = openNativeStoreForWriting(file)
   try {
     database.exec("PRAGMA busy_timeout = 3000")
     const tables = database

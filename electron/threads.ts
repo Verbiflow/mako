@@ -117,6 +117,8 @@ export function installSessionMemory(memory: SessionMemory | null): void {
 
 let threadStore: ThreadStore | null = null
 let placementFailed = false
+/** A fixture desk's catalog writes neither the archive nor any harness's store. */
+let catalogReadOnly = false
 const CATALOG_ACTOR: Actor = { kind: "service", name: "catalog" }
 
 /** The per-user Thread store every served ref is placed through. */
@@ -409,8 +411,9 @@ function stopProcessMonitor(): void {
  * window is open, which is the entire point of having one. On macOS the
  * LaunchAgent owns startup; other platforms use one detached fallback.
  */
-export function installThreads(send: (event: HostEvent) => void): void {
+export function installThreads(send: (event: HostEvent) => void, options: { readOnly?: boolean } = {}): void {
   if (catalogLifetime) stopThreads()
+  catalogReadOnly = options.readOnly ?? false
   catalogLifetime = new AbortController()
   const signal = catalogLifetime.signal
   sendEvent = send
@@ -655,6 +658,7 @@ async function runCatalogWorker(signal: AbortSignal): Promise<boolean> {
     // Same archive the daemon uses — whichever process runs the catalog,
     // the durable copy lands in one place.
     archivePath: join(homedir(), ".mako", "archive"),
+    readOnly: catalogReadOnly,
   }
   const compiled = new URL("./catalog-worker.js", import.meta.url)
   const worker = new Worker(compiled, {
@@ -820,7 +824,8 @@ async function runLocalCatalog(signal: AbortSignal): Promise<void> {
   signal.throwIfAborted()
   if (catalog || daemon) return
   try {
-    const client = await connectOnDemandCatalog(signal)
+    // A reader this host started would capture into the archive on its behalf.
+    const client = await connectOnDemandCatalog(signal, { start: !catalogReadOnly })
     if (client && await adoptClient(client, "shared", signal)) {
       hostLog("threads", "shared catalog connected", { pid: client.stats.pid })
       client.onClose(() => {
@@ -848,6 +853,7 @@ async function runInProcessCatalog(signal: AbortSignal): Promise<void> {
   const source = defaultCatalog({
     cachePath: join(app.getPath("userData"), "threads-catalog.json"),
     archivePath: join(homedir(), ".mako", "archive"),
+    readOnly: catalogReadOnly,
   })
   const stop = () => void source.stop()
   signal.addEventListener("abort", stop, { once: true })
@@ -1114,6 +1120,7 @@ async function openThreadViaDaemon(path: string): Promise<Thread | null> {
 async function openThreadDirect(path: string): Promise<Thread | null> {
   const direct = defaultCatalog({
     archivePath: join(homedir(), ".mako", "archive"),
+    readOnly: catalogReadOnly,
   })
   try {
     return await direct.open(path, false)

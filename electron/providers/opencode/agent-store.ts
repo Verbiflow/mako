@@ -1,4 +1,5 @@
-import { DatabaseSync } from "node:sqlite"
+import type { DatabaseSync } from "node:sqlite"
+import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import type { NativeAgentObservation } from "../../contracts/native-agents.js"
 
@@ -11,7 +12,7 @@ export function readOpenCodeAgents(paths: readonly string[], parent: string): Na
   for (const path of paths) {
     let db: DatabaseSync | undefined
     try {
-      db = new DatabaseSync(path, { readOnly: true })
+      db = openNativeStore(path)
       db.exec("PRAGMA busy_timeout=100; BEGIN")
       if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='session_v2'").get()) continue
       if (!db.prepare("SELECT 1 FROM session_v2 WHERE id=?").get(parent)) continue

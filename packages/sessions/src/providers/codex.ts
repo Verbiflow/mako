@@ -45,6 +45,7 @@ import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { stat, rm } from "node:fs/promises"
 import type { SQLOutputValue } from "node:sqlite"
+import { openNativeStore, openNativeStoreForWriting, refuseNativeWrite } from "../read-only-sqlite.js"
 import {
   clip,
   titleFrom,
@@ -667,9 +668,7 @@ export class CodexProvider implements SessionProvider {
     const load = (async () => {
       const sqlite = await import("node:sqlite").catch(() => null)
       if (!sqlite) return undefined
-      const database = new sqlite.DatabaseSync(this.metadataPath, {
-        readOnly: true,
-      })
+      const database = openNativeStore(this.metadataPath)
       try {
         const row = database
           .prepare(
@@ -739,7 +738,7 @@ export class CodexProvider implements SessionProvider {
     const sqlite = existsSync(this.metadataPath) ? await import("node:sqlite").catch(() => null) : null
     if (!sqlite) return names
     try {
-      const database = new sqlite.DatabaseSync(this.metadataPath, { readOnly: true })
+      const database = openNativeStore(this.metadataPath)
       try {
         for (const row of database.prepare("SELECT id, name FROM threads WHERE name IS NOT NULL AND name != ''").all()) {
           const id = sqliteText(row.id)
@@ -912,13 +911,14 @@ export class CodexProvider implements SessionProvider {
       /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i
     )?.[0]
     if (!id) return false
+    refuseNativeWrite("Codex's sessions")
     const files = (await this.rollouts()).filter(
       (candidate) => basename(candidate).includes(id)
     )
     for (const file of files) await rm(file, { force: true })
     const sqlite = await import("node:sqlite").catch(() => null)
     if (sqlite && existsSync(this.metadataPath)) {
-      const database = new sqlite.DatabaseSync(this.metadataPath)
+      const database = openNativeStoreForWriting(this.metadataPath)
       try {
         database.prepare("DELETE FROM threads WHERE id = ?").run(id)
       } finally {

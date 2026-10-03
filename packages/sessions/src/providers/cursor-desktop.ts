@@ -22,6 +22,7 @@ import { type AttachmentContent, attachmentFromUrl } from "../content.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import { todoDetails } from "../tool-plan.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
+import { openNativeStore } from "../read-only-sqlite.js"
 import type { NativeFile, SessionFollower, SessionUpdate } from "./types.js"
 
 const MAX_RECORD = 16 * 1024 * 1024
@@ -105,8 +106,8 @@ function parseJson<T>(
 
 async function openDatabase(path: string): Promise<DatabaseSync | null> {
   try {
-    const { DatabaseSync } = await import("node:sqlite")
-    return new DatabaseSync(path, { readOnly: true, timeout: READ_BUSY_TIMEOUT_MS })
+    await import("node:sqlite")
+    return openNativeStore(path, { timeout: READ_BUSY_TIMEOUT_MS })
   } catch {
     return null
   }

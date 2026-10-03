@@ -46,6 +46,7 @@ import {
   type SessionUpdate,
 } from "./providers/types.js"
 import { SessionArchive, type EvictionPolicy } from "./archive.js"
+import { ReadOnlyStoreError } from "./read-only-sqlite.js"
 import { watchRoot, type RootWatch } from "./root-watch.js"
 
 export type CatalogEvent =
@@ -325,15 +326,17 @@ export class SessionCatalog {
   private threadCache = new Map<string, HeldThread>()
 
   private archive: SessionArchive | null = null
+  private readonly readOnly: boolean
 
   constructor(
     providers: SessionProvider[],
-    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy } = {}
+    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean } = {}
   ) {
     this.providers = providers
     this.cachePath = options.cachePath
+    this.readOnly = options.readOnly ?? false
     if (options.archivePath)
-      this.archive = new SessionArchive(options.archivePath, options.eviction)
+      this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
   }
 
   /** Run the archive's eviction policy; 0 without an archive. */
@@ -862,6 +865,7 @@ export class SessionCatalog {
    * catalog. Refuses a path no provider owns or one it cannot remove.
    */
   async remove(path: string): Promise<boolean> {
+    if (this.readOnly) throw new ReadOnlyStoreError("The session catalog")
     const provider = this.ownerOf(path)
     if (!provider?.remove) return false
     if (!(await provider.remove(path))) return false
