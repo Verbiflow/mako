@@ -18,7 +18,8 @@ const run = promisify(execFile)
  */
 const STOP_GRACE_MS = 15_000
 const POLL_MS = 100
-const READY_POLL_MS = 500
+/** Between tries of a readiness command: closely while a start is usually done, then less often for one that never comes up. */
+const readyWait = (elapsedMs: number) => (elapsedMs < 30_000 ? 500 : elapsedMs < 300_000 ? 2_000 : 10_000)
 /** One try of a readiness command that hangs is stopped after this. */
 const READY_TRY_MS = 10_000
 const LOCK_WAIT_MS = 30_000
@@ -86,7 +87,7 @@ export interface RunSpec {
   cwd: string
   env: NodeJS.ProcessEnv
   port?: number
-  /** Run in `cwd` with `env` every `READY_POLL_MS` while it starts; it's running once this exits 0. */
+  /** Run in `cwd` with `env` while it starts (`readyWait`); it's running once this exits 0. */
   ready?: string
 }
 
@@ -239,7 +240,8 @@ export class ThreadProcesses {
 
   /** Waits until every named run is up or over, or until `timeoutMs`; whichever comes first. */
   async settle(app: AppKey, keys: string[], timeoutMs: number, steadyMs = STEADY_MS): Promise<RunStatus[]> {
-    const deadline = this.now() + timeoutMs
+    const began = this.now()
+    const deadline = began + timeoutMs
     const runningSince = new Map<string, number>()
     for (;;) {
       const now = this.now()
@@ -256,7 +258,8 @@ export class ThreadProcesses {
       })
       const waiting = unsteady || statuses.some((status) => status.state.kind === "starting" || (status.kind !== "process" && status.state.kind === "running"))
       if (!waiting || now >= deadline) return statuses
-      await sleep(250)
+      // Each look reads the whole process table, so a long check is looked at less often.
+      await sleep(Math.min(deadline - now, now - began < 10_000 ? 250 : now - began < 60_000 ? 1_000 : 2_000))
     }
   }
 
@@ -535,7 +538,7 @@ export class ThreadProcesses {
 
   /**
    * Runs a process's readiness command until it passes, then marks it ready
-   * for every host; gives up once the process is gone. Only the host that
+   * for every host; gives up once the process is gone or another run took its place. Only the host that
    * started it knows its environment, so a start cut short by that host
    * ending stays "starting" until the app is restarted.
    */
@@ -548,7 +551,9 @@ export class ThreadProcesses {
         return false
       }
     }
-    while (alive()) {
+    const began = this.now()
+    const ours = async () => alive() && (await this.runs(app))[key]?.pid === pid
+    while (await ours()) {
       const passed = await new Promise<boolean>((done) => {
         const child = spawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: "ignore", detached: true })
         const timer = setTimeout(() => {
@@ -568,11 +573,10 @@ export class ThreadProcesses {
         })
       })
       if (passed) {
-        const runs = await this.runs(app)
-        if (runs[key]?.pid === pid) await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
+        if (await ours()) await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
         return
       }
-      await sleep(READY_POLL_MS)
+      await sleep(readyWait(this.now() - began))
     }
   }
 

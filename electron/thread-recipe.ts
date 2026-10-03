@@ -572,6 +572,10 @@ export async function pinRunning(file: string, app: AppKey, version: number): Pr
   await writeAtomic(appFile(recipeVersions(file), "running", app), `${JSON.stringify({ version })}\n`)
 }
 
+export async function unpinRunning(file: string, app: AppKey): Promise<void> {
+  await rm(appFile(recipeVersions(file), "running", app), { force: true })
+}
+
 /** How many versions a project has kept. */
 export async function versionCount(file: string): Promise<number> {
   return (await versionNumbers(file)).length

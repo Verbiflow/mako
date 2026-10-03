@@ -39,6 +39,7 @@ import {
   runningVersion,
   saveDraft,
   StaleDraftError,
+  unpinRunning,
   versionCount,
   type CheckTier,
   type Recipe,
@@ -264,7 +265,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const read = await readRecipe(checkout, environment, deps.recipesRoot)
     if (read.kind !== "ready" || read.draft || read.version === undefined || !read.saved) return read
     const pinned = await runningVersion(read.saved, environment.app)
-    if (pinned === undefined || pinned === read.version || !(await appUp(environment.app))) return read
+    if (pinned === undefined || pinned === read.version) return read
+    if (!(await appUp(environment.app))) {
+      await unpinRunning(read.saved, environment.app)
+      return read
+    }
     const record = await readVersion(read.saved, pinned)
     if (!record) return read
     return { ...read, recipe: record.recipe, version: pinned, from: join(recipeVersions(read.saved), `${pinned}.json`), newer: read.version }
