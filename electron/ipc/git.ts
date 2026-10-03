@@ -27,10 +27,11 @@ export interface GitIpcContext {
   withHost<TResult>(
     operation: (host: AgentHost) => TResult | Promise<TResult>
   ): Promise<TResult>
+  models: UtilityModelStore
 }
 
 export function installGitIpc(context: GitIpcContext): void {
-  const { withHost } = context
+  const { withHost, models } = context
   configureKiriCache(join(app.getPath("userData"), "kiri-analysis-cache"))
   registerIpc("mako:git-select-repository", (_event, cwd: string, root: string) => withHost((host) => host.selectGitRepository(cwd, root)))
   registerIpc("mako:git-status", () => withHost((host) => host.gitStatus()))
@@ -83,32 +84,6 @@ export function installGitIpc(context: GitIpcContext): void {
   registerIpc("mako:git-commit-diff-all", (_event, hash: string) =>
     withHost((host) => host.gitCommitDiffAll(hash))
   )
-  const dataRoot = app.getPath("userData")
-  const directory = utilityModelDirectory({ dataRoot, appData: app.getPath("appData") })
-  const migration = migrateUtilityModels(
-    legacyUtilityModelDirectory(dataRoot),
-    directory
-  ).then(
-    (moved) => {
-      if (moved.moved.length || moved.replaced.length || moved.dropped.length)
-        hostLog("utility-models", "moved profile connections to the user store", {
-          to: directory,
-          moved: moved.moved.join(","),
-          replaced: moved.replaced.join(","),
-          dropped: moved.dropped.join(","),
-        })
-    },
-    // A copy that would not move stays where it was, in host.log, and out of
-    // the way: the user can still connect here, and nothing was deleted.
-    (error: NodeJS.ErrnoException) => {
-      hostWarn("utility-models", "profile connections were not moved", {
-        from: legacyUtilityModelDirectory(dataRoot),
-        to: directory,
-        error: error.message,
-      })
-    }
-  )
-  const models = new UtilityModelStore(directory, electronSecretEncryption(), { ready: migration })
   const generation = new CommitGeneration(models)
   const catalog = new UtilityModelCatalog(models)
   registerIpc("mako:utility-model-settings", () => models.settings())
@@ -139,4 +114,34 @@ export function installGitIpc(context: GitIpcContext): void {
       })
   )
   registerIpc("mako:default-commit-prompt", () => COMMIT_PROMPT)
+}
+
+/** This user's model connections, after moving a profile's older copies into them. */
+export function openUtilityModels(): UtilityModelStore {
+  const dataRoot = app.getPath("userData")
+  const directory = utilityModelDirectory({ dataRoot, appData: app.getPath("appData") })
+  const migration = migrateUtilityModels(
+    legacyUtilityModelDirectory(dataRoot),
+    directory
+  ).then(
+    (moved) => {
+      if (moved.moved.length || moved.replaced.length || moved.dropped.length)
+        hostLog("utility-models", "moved profile connections to the user store", {
+          to: directory,
+          moved: moved.moved.join(","),
+          replaced: moved.replaced.join(","),
+          dropped: moved.dropped.join(","),
+        })
+    },
+    // A copy that would not move stays where it was, in host.log, and out of
+    // the way: the user can still connect here, and nothing was deleted.
+    (error: NodeJS.ErrnoException) => {
+      hostWarn("utility-models", "profile connections were not moved", {
+        from: legacyUtilityModelDirectory(dataRoot),
+        to: directory,
+        error: error.message,
+      })
+    }
+  )
+  return new UtilityModelStore(directory, electronSecretEncryption(), { ready: migration })
 }

@@ -39,6 +39,7 @@ const reads = [
   "mako:thread-archives",
   "mako:thread-groups",
   "mako:thread-purposes",
+  "mako:thread-titles",
   "mako:thread-app-marks",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
   "mako:thread-app-probe",
@@ -132,6 +133,12 @@ const replays = [
   "mako:thread-remember-mode",
   /** `ThreadStore.createSession`: the operation id is receipted; a repeat returns the first Session. */
   "mako:thread-create-session",
+  /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */
+  "mako:thread-rename",
+  /** Importing names only fills Threads that have none, so a repeat changes nothing. */
+  "mako:thread-titles-import",
+  /** Choosing the model a second time is the same choice. */
+  "mako:thread-title-model",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
   /** `DeskApp.allowSecrets`: records the same answer twice as once. */

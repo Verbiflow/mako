@@ -12,6 +12,7 @@ import { usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
 import { useWorktrees, workingFolder } from "@/state/worktrees"
 import { useThreads } from "@/state/threads"
+import { useThreadTitles } from "@/state/thread-titles"
 import { AGENT_TAB_ID, viewer, useViewer } from "@/state/viewer"
 import { cn } from "@/lib/utils"
 import { ClipboardListIcon, Columns2Icon, Rows2Icon, ScrollTextIcon, XIcon } from "lucide-react"
@@ -46,6 +47,7 @@ export function StageStrip({
     [active, bound]
   )
   const sessionTabs = useThreadTabs(here)
+  const threadName = useThreadTitles((state) => (here.thread ? state.byThread[here.thread]?.title : undefined))
   const workspaceCwd = useSession((state) => state.meta?.cwd)
   // A pane without focus names only its Thread and tab; its folder is the tab's.
   const shownTab = sessionTabs.find((tab) => tab.id === onScreenTab(here))
@@ -66,6 +68,7 @@ export function StageStrip({
   // rail follows it here, and a nameless one is "New thread" in both places.
   const agentTitle =
     renamed ??
+    threadName ??
     (viewingOwnsAgent ? viewing?.title : liveTitle) ??
     nativeTitle ??
     "New thread"

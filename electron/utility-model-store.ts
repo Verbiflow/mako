@@ -32,6 +32,7 @@ const apiKeySchema = z
   .max(16_384)
   .regex(/^[\x20-\x7e]*$/)
 const storedSchema = connectionSchema.extend({ apiKey: apiKeySchema })
+const titleChoiceSchema = z.object({ model: z.string().min(1).max(400) })
 const credentialSchema = z.object({
   provider: utilityProviderSchema,
   baseUrl: z.string().max(2_048).optional(),
@@ -82,11 +83,51 @@ export class UtilityModelStore {
         })
       }
     }
-    return {
+    const settings: UtilityModelSettings = {
       providers: utilityProviders,
       connections,
       issues,
       secureStorage: await this.encryption.available(),
+    }
+    const titleModel = await this.titleModel()
+    if (titleModel) settings.titleModel = titleModel
+    return settings
+  }
+
+  /**
+   * The model chosen to name Threads, as `provider/model`, or null while
+   * automatic titles are off. It is a choice, not a key, so it is stored in
+   * the clear beside the connections and every host reads the same one.
+   */
+  async titleModel(): Promise<string | null> {
+    await this.ready
+    try {
+      const info = await stat(this.titleModelPath())
+      if (info.size > 4_096) return null
+      return titleChoiceSchema.parse(JSON.parse(await readFile(this.titleModelPath(), "utf8"))).model
+    } catch {
+      return null
+    }
+  }
+
+  /** Choose the connected model that names Threads, or null to turn automatic titles off. */
+  async setTitleModel(model: string | null): Promise<void> {
+    await this.ready
+    if (model === null) {
+      await rm(this.titleModelPath(), { force: true })
+      return
+    }
+    const provider = utilityProviders.find(({ id }) => model.startsWith(`${id}/`))
+    const connection = provider ? await this.load(provider.id) : null
+    if (!connection || `${connection.provider}/${connection.model}` !== model)
+      throw new Error("Connect this model in Settings > Commit messages before choosing it for Thread titles.")
+    await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    const temporary = `${this.titleModelPath()}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, JSON.stringify({ model }), { mode: 0o600, flag: "wx" })
+      await rename(temporary, this.titleModelPath())
+    } finally {
+      await rm(temporary, { force: true })
     }
   }
 
@@ -170,6 +211,8 @@ export class UtilityModelStore {
     this.lock(provider)
     try {
       await rm(this.path(provider), { force: true })
+      // Titles stop with the connection rather than moving to another provider.
+      if ((await this.titleModel())?.startsWith(`${provider}/`)) await rm(this.titleModelPath(), { force: true })
     } finally {
       this.writing.delete(provider)
     }
@@ -177,6 +220,10 @@ export class UtilityModelStore {
 
   private path(provider: UtilityProvider) {
     return join(this.directory, `${utilityProviderSchema.parse(provider)}.enc`)
+  }
+
+  private titleModelPath() {
+    return join(this.directory, "thread-titles.json")
   }
 
   private lock(provider: UtilityProvider) {

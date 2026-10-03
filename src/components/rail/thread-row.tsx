@@ -19,6 +19,7 @@ import {
   type FoldRow,
 } from "@/lib/thread-fold"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
+import { renameThreadTitle, useThreadTitles } from "@/state/thread-titles"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
@@ -30,7 +31,7 @@ import { threadFolderKey } from "@/lib/thread-folders"
 import { projectFolder } from "@/lib/worktree-paths"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { prefsStore, setPref, togglePinned, usePrefs } from "@/state/prefs"
+import { togglePinned, usePrefs } from "@/state/prefs"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
 import { acpForThread, activeAcp, useAcp } from "@/state/acp"
@@ -170,6 +171,7 @@ export const ThreadRow = memo(function ThreadRow({
     )
   )
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(ref, state.threadOf))
+  const named = useThreadTitles((state) => (thread ? state.byThread[thread]?.title : undefined))
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
@@ -220,7 +222,7 @@ export const ThreadRow = memo(function ThreadRow({
     : selectedPath
       ? selectedPath === ref.path
       : selectedLive || (focusedPath ? focusedPath === ref.path : active))
-  const title = override ?? ref.title ?? "Untitled session"
+  const title = override ?? named ?? ref.title ?? "Untitled session"
   const menu: ThreadMenuProps = {
     target,
     title,
@@ -234,7 +236,7 @@ export const ThreadRow = memo(function ThreadRow({
     archiveTargets: folded?.members.map(foldRowTarget),
     pinned: isPinned,
     onPin: () => togglePinned(ref.path),
-    onRename: () => setEditing(override ?? ref.title ?? ""),
+    onRename: () => setEditing(override ?? named ?? ref.title ?? ""),
   }
 
   return (
@@ -332,11 +334,7 @@ export const ThreadRow = memo(function ThreadRow({
             onKeyDown={(event) => {
               event.stopPropagation()
               if (event.key === "Enter") {
-                const next = editing.trim()
-                const all = { ...prefsStore.get().titleOverrides }
-                if (next && next !== ref.title) all[ref.path] = next
-                else delete all[ref.path]
-                setPref("titleOverrides", all)
+                void renameThreadTitle({ thread, path: ref.path, title: editing, shown: override ?? named ?? ref.title ?? "", native: ref.title })
                 setEditing(null)
               }
               if (event.key === "Escape") setEditing(null)
@@ -348,7 +346,7 @@ export const ThreadRow = memo(function ThreadRow({
           <span
             onDoubleClick={(event) => {
               event.stopPropagation()
-              setEditing(override ?? ref.title ?? "")
+              setEditing(override ?? named ?? ref.title ?? "")
             }}
             className={cn(
               "min-w-0 flex-[1_1_60%] truncate text-ui",

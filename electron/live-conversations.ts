@@ -84,6 +84,7 @@ import {
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import type { JournalFacts, SourceRef } from "./thread-store.js"
+import { completedExchange } from "./thread-titles.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "./contracts/thread-identity.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
@@ -265,6 +266,9 @@ export class LiveConversations {
       if (!placed) throw new Error("the conversation has no Thread yet")
       threads.markPurpose(placed.thread, purpose.kind, purpose.project)
       this.dependencies.emit({ type: "thread-purposes", purposes: threads.purposes() })
+      // The name Mako gave the job stays the Thread's; no agent or model renames it.
+      const kept = options.title ? threads.keepThreadTitle(placed.thread, options.title) : undefined
+      if (kept) this.dependencies.emit({ type: "thread-titles", titles: [kept] })
     } catch (error) {
       hostWarn("threads", "a Thread's purpose could not be recorded", { conversation: conversationId, purpose: purpose.kind, error: errorMessage({ error }) })
     }
@@ -3257,6 +3261,19 @@ export class LiveConversations {
     }, 16)
   }
 
+  /** Each request this commit saw finish, with the blocks it ended on. */
+  private reportExchanges(previous: LiveSnapshot, snapshot: LiveSnapshot): void {
+    const report = this.dependencies.exchangeCompleted
+    if (!report) return
+    const before = new Map(previous.requests.map((request) => [request.id, request.status]))
+    for (const request of snapshot.requests) {
+      if (request.status !== "completed" || before.get(request.id) === "completed") continue
+      const exchange = completedExchange(snapshot.blocks, request)
+      if (!exchange) continue
+      report({ conversationId: snapshot.session.id, requestId: request.id, completedAt: this.dependencies.now?.() ?? Date.now(), nativeTitle: snapshot.session.title, ...exchange })
+    }
+  }
+
   private flush(resident: Resident): void {
     if (resident.timer) clearTimeout(resident.timer)
     resident.timer = null
@@ -3282,6 +3299,7 @@ export class LiveConversations {
     this.syncMemory(previous.session, snapshot.session)
     if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
       this.registerThread(snapshot, undefined)
+    if (previous.requests !== snapshot.requests) this.reportExchanges(previous, snapshot)
     this.dependencies.emit({
       type: "live-batch",
       batch: {

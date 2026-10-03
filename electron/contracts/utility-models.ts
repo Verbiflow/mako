@@ -48,6 +48,8 @@ export interface UtilityModelSettings {
   connections: UtilityConnection[]
   issues: Array<{ provider: UtilityProvider; message: string }>
   secureStorage: boolean
+  /** The connected model that names Threads (`provider/model`); absent while automatic titles are off. */
+  titleModel?: string
 }
 
 export type CommitAnalysisMode = "fast" | "deep"
