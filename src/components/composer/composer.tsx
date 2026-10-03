@@ -12,6 +12,7 @@ import {
 } from "@/state/send-recovery"
 import { PromptQueue } from "./prompt-queue"
 import { promptDelivery } from "@/state/prompt-delivery"
+import { savedMessageDraft, type RestoreSavedMessageEvent } from "@/lib/saved-message-draft"
 import type { ProposedPlan } from "@mako/sessions/content"
 import { appendPlanContext, parsePlanContext } from "@/lib/proposed-plan"
 import { PlanContextChips } from "@/components/composer/plan-context"
@@ -188,8 +189,9 @@ export function Composer() {
     state.drafts.find((entry) => entry.key === draftKey)
   )
   const attachments = useAttachments(draftKey)
+  const restoredMessages = useRef(new Set<string>())
   const clipboard = useComposerClipboard(attachments)
-  const { reattach } = attachments
+  const { reattach, paste: pasteAttachments } = attachments
   const storedDraft = savedDraft?.text ?? ""
   const draft = restoreAttachmentReferences(storedDraft, attachments.items)
   const draftPlans = savedDraft?.plans
@@ -364,15 +366,39 @@ export function Composer() {
       setMention(mentionAt(next, caret))
       focusComposerSoon(textarea, caret)
     }
+    const restoreSaved = (event: RestoreSavedMessageEvent) => {
+      const live = activeLiveAcp(acpStore.get())
+      if (live?.key !== event.detail.conversationId || live.draftKey !== activeAttachmentDraft.current) return
+      const request = live.requests?.find((entry) => entry.id === event.detail.requestId)
+      if (!request || !["failed", "uncertain", "interrupted"].includes(request.status)) return
+      const receipt = `${live.key}:${request.id}`
+      // A handled event acknowledges draft preparation, never native delivery.
+      event.preventDefault()
+      if (restoredMessages.current.has(receipt)) return
+      const saved = savedMessageDraft(request)
+      const { body, plans } = parsePlanContext(saved.text)
+      const restored = pasteAttachments(body, saved.attachments)
+      const text = [draftRef.current, restored].filter(Boolean).join("\n\n")
+      appendRecoveredDraft(live.draftKey, { id: request.id, key: live.draftKey, text: restored, attachments: [], plans })
+      updateRef.current(text)
+      setMention(null)
+      restoredMessages.current.add(receipt)
+      const oldest = restoredMessages.current.values().next().value
+      if (restoredMessages.current.size > 128 && oldest !== undefined)
+        restoredMessages.current.delete(oldest)
+      focusComposerSoon(textarea, text.length)
+    }
     window.addEventListener("mako:focus-composer", focus)
     window.addEventListener("mako:compose", setText)
     window.addEventListener("mako:insert", insert)
+    window.addEventListener("mako:restore-saved-message", restoreSaved)
     return () => {
       window.removeEventListener("mako:focus-composer", focus)
       window.removeEventListener("mako:compose", setText)
       window.removeEventListener("mako:insert", insert)
+      window.removeEventListener("mako:restore-saved-message", restoreSaved)
     }
-  }, [reattach])
+  }, [reattach, pasteAttachments])
 
   const addAttachments = attachments.add
   useEffect(() => {

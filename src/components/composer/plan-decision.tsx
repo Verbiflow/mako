@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useState } from "react"
 import { ChevronDownIcon, ClipboardListIcon, CornerRightDownIcon, HammerIcon, SendIcon } from "lucide-react"
 import { openPlanTab, usePlanBuilding } from "@/components/transcript/plan-state"
@@ -16,6 +17,7 @@ const BUILD_PLAN_KEYS = ["⌘", "⇧", "↵"]
  * build it, hand it to a new session, or type what to change and send.
  */
 export function PlanDecisionBar({ decision }: { decision: PlanDecision }) {
+  useHarnessIdentity()
   const { plan, source, approval } = decision
   const { building, start } = usePlanBuilding(source, plan)
   const [declining, setDeclining] = useState(false)

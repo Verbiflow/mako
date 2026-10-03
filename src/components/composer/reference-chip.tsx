@@ -5,7 +5,9 @@ import { skillChipTitle, type SkillAppendixEntry } from "@/lib/skill-references"
 import { findThreadReference } from "@/lib/thread-references"
 import type { SkillDelivery } from "@/lib/types"
 import { UNIVERSAL_SKILL_PROVIDER } from "../../../electron/contracts/skill-reach"
-import { desktop } from "@/state/desktop"
+import { useState } from "react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { InlineFilePreview } from "@/components/transcript/file-preview"
 import { useThreads } from "@/state/threads"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -30,6 +32,7 @@ export function FileChip({
   interactive?: boolean
 }) {
   const body = name ?? fileName(path)
+  const [open, setOpen] = useState(false)
   if (!interactive) {
     return (
       <span className={chip} title={path} data-copy-file={path} data-copy-reference={`@${path}`}>
@@ -38,16 +41,26 @@ export function FileChip({
     )
   }
   return (
-    <button
-      type="button"
-      title={`Show ${path} in Finder`}
-      data-copy-file={path}
-      data-copy-reference={`@${path}`}
-      onClick={() => void desktop.revealPath(path)}
-      className={cn(chip, "pressable leading-[1.25]")}
-    >
-      {body}
-    </button>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={`Preview ${body}`}
+          data-copy-file={path}
+          data-copy-reference={`@${path}`}
+          className={cn(chip, "pressable leading-[1.25]")}
+        >
+          {body}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label={`${body} preview`}
+        align="start"
+        className="max-h-[75vh] w-[min(36rem,calc(100vw-2rem))] gap-0 overflow-auto p-0 [&>[data-inline-file-preview]]:my-0 [&>[data-inline-file-preview]]:border-0"
+      >
+        {open ? <InlineFilePreview path={path} name={body} initiallyOpen /> : null}
+      </PopoverContent>
+    </Popover>
   )
 }
 

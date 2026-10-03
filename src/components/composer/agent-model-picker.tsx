@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react"
+import { useHarnessIdentity } from "@/lib/harness-label"
+import { useEffect, useMemo, useState } from "react"
 import {
   AlertCircleIcon,
   CheckIcon,
@@ -35,6 +36,8 @@ import {
 } from "@/state/composer-settings"
 import {
   addToLoadout,
+  availableLoadoutModel,
+  loadoutAvailability,
   LOADOUT_LIMIT,
   removeFromLoadout,
   type LoadoutEntry,
@@ -164,13 +167,17 @@ function LoadoutRows({ view }: { view: ComposerSettingsView }) {
           key={`${entry.harness}:${entry.model}`}
           entry={entry}
           index={index}
+          cwd={view.target.cwd}
           active={entry.harness === harness && entry.model === current}
           effort={
             entry.harness === harness && entry.model === current
               ? currentEffort(view)
               : undefined
           }
-          onChoose={() => chooseHarnessModel(view, entry.harness, entry.model)}
+          onChoose={() => {
+            const model = availableLoadoutModel(entry, view.target.cwd)
+            if (model) chooseHarnessModel(view, entry.harness, model)
+          }}
         />
       ))}
       {current && !pinned && loadout.length < LOADOUT_LIMIT ? (
@@ -198,28 +205,33 @@ function currentEffort(view: ComposerSettingsView) {
 function LoadoutRow({
   entry,
   index,
+  cwd,
   active,
   effort,
   onChoose,
 }: {
   entry: LoadoutEntry
   index: number
+  cwd: string
   active: boolean
   effort?: string
   onChoose(): void
 }) {
-  const label = useProviders((state) => {
-    const models = state.profiles[entry.harness]?.models ?? []
-    return models.find((model) => model.id === entry.model)?.label
-  })
+  useHarnessIdentity()
+  const profile = useProviders((state) => state.contexts[providerProfileKey(entry.harness, cwd)] ?? state.profiles[entry.harness])
+  const availability = loadoutAvailability(entry, profile)
+  const label = availability.label
+  useEffect(() => {
+    void providers.load(entry.harness, false, cwd).catch(() => {})
+  }, [entry.harness, cwd])
   return (
-    <MenuItem onSelect={onChoose} className="group/loadout">
+    <MenuItem onSelect={onChoose} title={availability.kind === "ready" ? undefined : availability.reason} className="group/loadout">
       <HarnessIcon harness={entry.harness} className="size-3.5" />
       <span className={cn("min-w-0 truncate", active ? "font-medium text-foreground" : "text-foreground/90")}>
         {label ?? entry.model}
       </span>
       <span className="min-w-0 flex-1 truncate text-label text-faint">
-        {effort ?? harnessLabel(entry.harness)}
+        {availability.kind === "ready" ? (effort ?? harnessLabel(entry.harness)) : availability.kind === "loading" ? "Checking…" : "Unavailable"}
       </span>
       <button
         type="button"
@@ -252,6 +264,7 @@ function HarnessRows({ view }: { view: ComposerSettingsView }) {
 }
 
 function HarnessRow({ harness, composer }: { harness: string; composer: ComposerSettingsView }) {
+  useHarnessIdentity()
   const view = useComposerSettings(harness)
   const profile = view.profile
   const active = composer.target.harness === harness
@@ -299,6 +312,7 @@ function HarnessModels({
   active: boolean
   composer: ComposerSettingsView
 }) {
+  useHarnessIdentity()
   const [query, setQuery] = useState("")
   const favorites = usePrefs((prefs) => prefs.favoriteModels)
   const loadout = usePrefs((prefs) => prefs.modelLoadout)

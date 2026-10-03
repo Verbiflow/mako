@@ -154,11 +154,13 @@ function ThreadToken({ harness, id, raw }: { harness: string; id: string; raw: s
       </span>
     )
   return (
-    <span className="ref-token relative" title={thread.title}>
+    <span className="relative" title={thread.title}>
       <span className="text-transparent">{raw}</span>
-      <span className="absolute inset-0 flex items-center gap-1 overflow-hidden whitespace-nowrap">
-        <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate">{thread.title}</span>
+      <span className="absolute inset-0 flex items-center overflow-hidden whitespace-nowrap">
+        <span className="ref-token inline-flex max-w-full items-center gap-1">
+          <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+          <span className="min-w-0 truncate">{thread.title}</span>
+        </span>
       </span>
     </span>
   )

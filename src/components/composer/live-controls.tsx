@@ -11,7 +11,6 @@ import {
   chooseProviderMode,
   chooseThreadMode,
   providerAccessModes,
-  providerDefaultMode,
   savedProviderMode,
   threadAccessMode,
 } from "@/state/provider-access"
@@ -182,8 +181,8 @@ function ModePicker() {
  * The same ladder before a session exists: what the selected provider offers
  * a new session, with the level a send will run under current. The pick is
  * kept per provider and travels with the first prompt; when nothing was
- * picked the provider's own default stands, so the level is never hidden
- * until the agent is already working.
+ * picked, native configuration decides the level. Its effective value is
+ * reported after connection; a declared factory default cannot certify it.
  */
 export function NextSessionModePicker({
   planned,
@@ -205,15 +204,14 @@ export function NextSessionModePicker({
   const saved = usePrefs((prefs) =>
     savedProviderMode(prefs.providerModes, modes, harness)
   )
-  const defaulted = useThreads((state) =>
-    providerDefaultMode(state, modes, harness)
-  )
   if (!modes.length) return null
   const thread = viewing?.harness === harness ? viewing : undefined
   return (
     <AccessPicker
       modes={modes}
-      current={planned ?? remembered ?? saved ?? defaulted}
+      current={planned ?? remembered ?? saved ?? null}
+      unresolvedLabel="Native default"
+      unresolvedDetail="The agent uses its native configuration. Choose an access level to override it; the effective level appears after connection."
       harness={harness}
       heading={thread ? "Access when this thread continues" : "Access for the next session"}
       onSelect={(value) => {
@@ -231,11 +229,15 @@ function AccessPicker({
   harness,
   heading,
   onSelect,
+  unresolvedLabel = "Access not reported",
+  unresolvedDetail = "The agent has not reported its effective access level.",
 }: {
   modes: readonly LiveSessionMode[]
   current: string | null
   harness: string
   heading: string
+  unresolvedLabel?: string
+  unresolvedDetail?: string
   onSelect: (modeId: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -243,7 +245,7 @@ function AccessPicker({
     modes.find((mode) => mode.id === current) ??
     (modes.length === 1 ? modes[0] : undefined)
   // The Plan toggle beside it already names plan mode; the chip says what it allows.
-  const label = selected ? (selected.access === "plan" ? "Read-only" : modeLabel(selected)) : "Access"
+  const label = selected ? (selected.access === "plan" ? "Read-only" : modeLabel(selected)) : unresolvedLabel
   const full = selected?.access === "full"
   if (modes.length === 1 && selected) {
     // A one-mode provider offers nothing to choose: the chip states the one
@@ -274,7 +276,7 @@ function AccessPicker({
         <button
           type="button"
           aria-label={`Access: ${label}`}
-          title={selected ? (modeDetail(selected, harness) ?? label) : "Choose what the agent may do without asking"}
+          title={selected ? (modeDetail(selected, harness) ?? label) : unresolvedDetail}
           className="pressable flex h-7 max-w-40 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground"
         >
           {full ? (
@@ -290,6 +292,7 @@ function AccessPicker({
       </PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
         <p className="px-2 py-1.5 text-label text-faint">{heading}</p>
+        {!selected ? <p className="px-2 pb-2 text-label text-faint">{unresolvedDetail}</p> : null}
         <AccessModeList
           modes={modes}
           current={current}

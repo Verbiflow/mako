@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useState, type ReactNode } from "react"
 import { CompactionControl } from "./compaction-control"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -50,7 +51,7 @@ export function ContextMeter() {
   if (fraction === undefined && spent === undefined) return null
   const summary = fraction !== undefined
     ? `Context ${Math.round(fraction * 100)}% full${usage.compacted ? ", compacted since" : ""}`
-    : `${formatTokens(spent ?? 0)} tokens this session`
+    : `Session token spend: ${formatTokens(spent ?? 0)} tokens`
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Tooltip>
@@ -65,7 +66,7 @@ export function ContextMeter() {
               {fraction !== undefined ? (
                 <Ring fraction={fraction} compacted={usage.compacted === true} />
               ) : (
-                <span>{formatTokens(spent ?? 0)}</span>
+                <span>Tokens {formatTokens(spent ?? 0)}</span>
               )}
             </button>
           </PopoverTrigger>
@@ -112,13 +113,14 @@ export function UsageDetails({
   conversationId: string
   onCompact?: () => void
 }) {
+  useHarnessIdentity()
   const breakdown = useBreakdown(conversationId, usage.used)
   const fraction = usage.used !== undefined && usage.size ? usage.used / usage.size : undefined
   return (
     <div className="flex flex-col" data-usage-details>
       <section className="flex flex-col gap-2 px-3 pt-3 pb-2.5">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-ui">Context</span>
+          <span className="text-ui">{fraction !== undefined ? "Context" : "Token spend"}</span>
           {fraction !== undefined ? (
             <span className="text-label text-faint tabular-nums">{Math.round(fraction * 100)}%</span>
           ) : null}
