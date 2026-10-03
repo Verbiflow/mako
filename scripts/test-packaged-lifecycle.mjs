@@ -1,22 +1,19 @@
 import assert from "node:assert/strict"
-import { threadDebugPort } from "./thread-debug-port.mjs"
-import { spawn, execFileSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
   mkdtemp,
   mkdir,
   writeFile,
-  readFile,
   realpath,
-  rm,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import WebSocket from "ws"
 import { z } from "zod"
 import { extractFile } from "@electron/asar"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
+import { answerText as answer, PackagedApp, turnBlocks } from "./lib/packaged-app.mjs"
 
 const StartupTraceSchema = z.object({
   stage: z.enum(["local-control", "profile", "accepted", "discovery"]),
@@ -75,7 +72,6 @@ await writeFile(
   join(workspace, "README.md"),
   "Disposable package verification workspace.\n"
 )
-let executable = join(app, "Contents/MacOS/Mako")
 const updatedApp = updateFlag ? resolve(updateFlag.slice("--update-to=".length)) : undefined
 let conversationId = randomUUID()
 const marker = `PACKAGE_${randomUUID().replaceAll("-", "")}`
@@ -102,174 +98,33 @@ if (soakMs)
     "-o",
     memorySampler,
   ])
-let child
-let socket
-let counter = 0
-const callbacks = new Map()
-let launchError
-
-function command(method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const id = ++counter
-    const timer = setTimeout(() => {
-      callbacks.delete(id)
-      reject(new Error(`Timed out: ${method}`))
-    }, 120_000)
-    callbacks.set(id, (message) => {
-      clearTimeout(timer)
-      if (message.error) reject(new Error(JSON.stringify(message.error)))
-      else resolve(message.result)
-    })
-    socket.send(JSON.stringify({ id, method, params }))
-  })
-}
-async function evaluate(expression) {
-  const response = await command("Runtime.evaluate", {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  })
-  if (response.exceptionDetails)
-    throw new Error(JSON.stringify(response.exceptionDetails))
-  return response.result.value
-}
-async function waitFor(read, predicate, label, timeout = 90_000) {
-  const deadline = Date.now() + timeout
-  while (Date.now() < deadline) {
-    if (launchError) throw launchError
-    if (child?.exitCode !== null || child?.signalCode)
-      throw new Error(
-        `Package exited during ${label}: code=${child?.exitCode}, signal=${child?.signalCode}`
-      )
-    const value = await read()
-    if (predicate(value)) return value
-    await delay(250)
-  }
-  throw new Error(`Timed out waiting for ${label}`)
-}
-async function startPackage() {
-  await rm(join(root, "profile/DevToolsActivePort"), { force: true })
-  launchError = undefined
-  const env = {
-    ...process.env,
-    MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp",
-    MAKO_BACKEND_TOKEN: "",
-    MAKO_STANDALONE: "1",
-    MAKO_DATA_ROOT: join(root, "profile"),
-    MAKO_CURSOR_SDK_ROOT: join(root, "cursor"),
-  }
-  delete env.ELECTRON_RUN_AS_NODE
-  delete env.VITE_DEV_SERVER_URL
-  delete env.MAKO_WEB_SOCKET
-  delete env.MAKO_HOST_ONLY
-  delete env.MAKO_WEB_ONLY
-  const debugPort = await threadDebugPort()
-  child = spawn(
-    executable,
-    [
-      `--user-data-dir=${join(root, "profile")}`,
-      `--remote-debugging-port=${debugPort}`,
-      "--remote-debugging-address=127.0.0.1",
-    ],
-    { cwd: workspace, env, detached: true, stdio: ["ignore", "pipe", "pipe"] }
-  )
-  child.stderr.resume()
-  let traceBuffer = ""
-  child.stdout.on("data", (chunk) => {
-    traceBuffer = (traceBuffer + chunk.toString()).slice(-8192)
-    const lines = traceBuffer.split("\n")
-    traceBuffer = lines.pop() ?? ""
-    for (const line of lines) {
-      if (!line.startsWith("[mako-startup] ")) continue
-      let value
-      try {
-        value = JSON.parse(line.slice(15))
-      } catch {
-        continue
-      }
-      const trace = StartupTraceSchema.safeParse(value)
-      if (trace.success) {
-        report.phases.push({ phase: "startup-trace", ...trace.data })
-        console.log(
-          `Startup ${trace.data.stage}: ${Math.round(trace.data.elapsedMs)} ms`
-        )
-      }
-    }
-  })
-  child.once("error", (error) => {
-    launchError = error
-  })
-  const port = await waitFor(
-    async () => {
-      if (debugPort) return debugPort
-      try {
-        return Number(
-          (
-            await readFile(join(root, "profile/DevToolsActivePort"), "utf8")
-          ).split("\n")[0]
-        )
-      } catch {
-        return 0
-      }
-    },
-    Boolean,
-    "debugger"
-  )
-  const target = await waitFor(
-    async () => {
-      try {
-        return (
-          await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-        ).find((item) => item.type === "page" && item.url.startsWith("mako-app:"))
-      } catch {
-        return null
-      }
-    },
-    Boolean,
-    "packaged renderer"
-  )
-  socket = new WebSocket(target.webSocketDebuggerUrl)
-  await new Promise((resolve, reject) => {
-    socket.once("open", resolve)
-    socket.once("error", reject)
-  })
-  socket.on("message", (data) => {
-    const message = JSON.parse(data.toString())
-    if (message.id) {
-      const callback = callbacks.get(message.id)
-      callbacks.delete(message.id)
-      callback?.(message)
-    }
-  })
-  await waitFor(
-    () =>
-      evaluate(
-        "Boolean(window.mako && document.querySelector('.composer-input'))"
-      ),
-    Boolean,
-    "preload and composer"
-  )
-  return { url: target.url, pid: child.pid }
-}
-async function stopPackage() {
-  socket?.close()
-  socket = undefined
-  if (child && child.exitCode === null) {
-    process.kill(-child.pid, "SIGTERM")
-    await Promise.race([
-      new Promise((resolve) => child.once("exit", resolve)),
-      delay(5000),
-    ])
+const pkg = new PackagedApp({
+  executable: join(app, "Contents/MacOS/Mako"),
+  root,
+  workspace,
+  onStdoutLine(line) {
+    if (!line.startsWith("[mako-startup] ")) return
+    let value
     try {
-      process.kill(-child.pid, "SIGKILL")
+      value = JSON.parse(line.slice(15))
     } catch {
-      /* The owned process group has exited. */
+      return
     }
-  }
-  child = undefined
-}
-const bridge = (name, args) =>
-  evaluate(`window.mako[${JSON.stringify(name)}](...${JSON.stringify(args)})`)
+    const trace = StartupTraceSchema.safeParse(value)
+    if (trace.success) {
+      report.phases.push({ phase: "startup-trace", ...trace.data })
+      console.log(
+        `Startup ${trace.data.stage}: ${Math.round(trace.data.elapsedMs)} ms`
+      )
+    }
+  },
+})
+const command = (method, params) => pkg.command(method, params)
+const evaluate = (expression) => pkg.evaluate(expression)
+const waitFor = (read, predicate, label, timeout) => pkg.waitFor(read, predicate, label, timeout)
+const startPackage = () => pkg.start()
+const stopPackage = () => pkg.stop()
+const bridge = (name, args) => pkg.bridge(name, args)
 async function memorySample() {
   const processes = execFileSync("ps", ["-axo", "pid=,ppid=,rss="], {
     encoding: "utf8",
@@ -277,7 +132,7 @@ async function memorySample() {
     .trim()
     .split("\n")
     .map((line) => line.trim().split(/\s+/).map(Number))
-  const owned = new Set([child.pid])
+  const owned = new Set([pkg.child.pid])
   for (let previous = 0; previous !== owned.size;) {
     previous = owned.size
     for (const [pid, parent] of processes) if (owned.has(parent)) owned.add(pid)
@@ -414,7 +269,7 @@ async function soak() {
     assert.ok(
       sample.processes.some(
         (item) =>
-          item.pid === child.pid && item.physicalFootprintBytes !== undefined
+          item.pid === pkg.child.pid && item.physicalFootprintBytes !== undefined
       ),
       "Host physical footprint was unavailable"
     )
@@ -524,33 +379,6 @@ async function completed(requestId, { startedAt, id = conversationId } = {}) {
     "provider completion",
     120_000
   )
-}
-/** The blocks after a turn's prompt, from the live window or, once covered, from native history. */
-function turnBlocks(snapshot, requestId) {
-  const index = snapshot.blocks.findIndex(
-    (block) => block.type === "user" && block.requestId === requestId
-  )
-  if (index < 0) {
-    const request = snapshot.requests.find(item => item.id === requestId)
-    assert.ok(request, 'Requested turn is missing')
-    const entries = snapshot.base?.entries ?? []
-    // Native history includes Mako's injected control instructions. Strip only
-    // that known leading envelope; the user's entire prompt must still match.
-    const userText = text => text.replace(/^<mako-local-control>\n[\s\S]*?\n<\/mako-local-control>\n\n/, '')
-    const matches = entries.flatMap((entry, at) => entry.kind === 'user' && userText(entry.text) === request.text ? [at] : [])
-    assert.equal(matches.length, 1, 'Native history must contain one exact matching prompt')
-    const following = entries.slice(matches[0] + 1)
-    const nextUser = following.findIndex(entry => entry.kind === 'user')
-    return following.slice(0, nextUser < 0 ? undefined : nextUser)
-      .filter(entry => entry.kind === 'assistant').flatMap(entry => entry.blocks)
-  }
-  return snapshot.blocks.slice(index + 1)
-}
-function answer(snapshot, requestId) {
-  return turnBlocks(snapshot, requestId)
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
 }
 const stopText =
   "Write the whole numbers from 1 to 3000 in English words, one per line, with no other text. Do not use tools or modify files."
@@ -877,7 +705,7 @@ try {
     if (updatedApp) {
       await stopPackage()
       execFileSync("codesign", ["--verify", "--deep", "--strict", updatedApp], { stdio: "pipe" })
-      executable = join(updatedApp, "Contents/MacOS/Mako")
+      pkg.executable = join(updatedApp, "Contents/MacOS/Mako")
       await startPackage()
       const after = await bridge("liveSnapshot", [conversationId])
       assert.ok(after, "the update kept the conversation")
