@@ -2226,9 +2226,11 @@ I/O error, and deleting the plist on that verdict once left a job running for
 three days with no definition and no host able to see it. A loaded job with no
 plist is booted out by the installed app.
 
-A profile host (dev, sandbox, test) stops itself after twenty minutes with no
-client, no lifecycle work and no launcher lease (`host-idle.ts`; the dev
-launcher holds a pid-keyed lease beside the host socket). The installed
+A profile host (dev, sandbox, test) stops itself 15 seconds after nothing
+holds it: no client, no lifecycle work and no launcher lease (`host-idle.ts`;
+the dev launcher holds a pid-keyed lease beside the host socket). Its
+`host.log` records what holds it each time that changes (`lifecycle idle
+watch holds=…`). The installed
 app's default-profile host never does. Every host removes its runtime
 directory on exit, and a new host removes driver sockets whose owner is dead.
 Retained previous applications are pruned after a verified, launched install:
