@@ -28,7 +28,7 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       ? { kind: "supported", start: async (id, actionId) => (await import("../acp.js")).liveCompact(id, actionId) }
       : source.compaction,
     checkpoint: source.checkpoint,
-    resumeVerdict: source.resumeVerdict,
+    inspectNativeSession: source.inspectNativeSession,
     available: (appPath) => source.available(appPath),
     start: async (cwd, options) =>
       (await import("../acp.js")).liveStart(source.provider, cwd, options),

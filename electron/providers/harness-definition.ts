@@ -6,7 +6,7 @@ import type { ProviderArtifactPreview } from "./artifact-preview.js"
 import type { ProviderConnectionCapability } from "./connection-capability.js"
 import type { ProviderDecoderSource } from "./decoder-source.js"
 import type { ProviderHost } from "./host.js"
-import type { ProviderLiveDriver } from "./live-driver.js"
+import { validateLiveDriver, type ProviderLiveDriver } from "./live-driver.js"
 import type { ProviderMcpSource } from "./mcp-source.js"
 import type { NativeRunner } from "./native-runner.js"
 import type { ProviderProcessProbe } from "./process-probe.js"
@@ -97,6 +97,8 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
       throw new Error(`${harness.provider}'s ${family} capability is filed under ${"provider" in value ? value.provider : "no provider"}`)
     }
   }
+  // Native recovery preconditions must fail before installing any contribution.
+  validateLiveDriver(harness.live)
   const absent: HarnessRecord["absent"] = {}
   const install = <T extends ProviderCapability>(
     registry: ProviderRegistry<T>,

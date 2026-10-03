@@ -3,7 +3,8 @@ import { ApprovalEvidenceCapabilitySchema, type ApprovalEvidenceCapability } fro
 import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
+import type { ProviderBinding } from "../contracts/conversation-control.js"
+import type { NativeResumeEvidence } from "../native-continuation.js"
 import type {
   LivePermissionResponse,
   PromptAttachment,
@@ -142,8 +143,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   forkPoint?: "run" | "checkpoint"
   canResume: boolean
   checkpoint?(path: string): Promise<string | undefined>
-  /** Ownership and record state of a saved binding; absent, the host's generic probe-and-hash check answers. */
-  resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
+  /** Required when resumable. Native identity, source and ownership facts; shared policy decides eligibility. */
+  inspectNativeSession?(binding: ProviderBinding): Promise<NativeResumeEvidence>
   available(appPath: string): boolean
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
   /**
@@ -186,6 +187,8 @@ export type ProviderSteerResult =
  * at startup rather than at a call site months later.
  */
 export function validateLiveDriver(driver: ProviderLiveDriver): void {
+  if (driver.canResume && (!driver.checkpoint || !driver.inspectNativeSession))
+    throw new Error(`${driver.provider}: native recovery requires explicit checkpoint and session evidence`)
   ApprovalEvidenceCapabilitySchema.parse(driver.approvalEvidence)
   if (driver.approvalEvidence.kind === "no-interactive-requests" && driver.modes?.some(mode => mode.access === "ask" || mode.access === "edits"))
     throw new Error(`${driver.provider}: an asking mode requires native interactive requests`)

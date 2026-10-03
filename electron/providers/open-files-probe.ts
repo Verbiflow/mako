@@ -9,10 +9,13 @@ export async function probeOpenFiles({
   processNames,
   signal,
   accept,
+  sourcePath,
 }: {
   processNames: string[]
   signal: AbortSignal
   accept: (path: string) => boolean
+  /** Query a source inode across processes; executable names are not reliable ownership evidence. */
+  sourcePath?: string
 }): Promise<OpenFilesResult> {
   if (process.platform === "win32")
     return { kind: "unavailable", reason: "unsupported" }
@@ -20,7 +23,7 @@ export async function probeOpenFiles({
   return new Promise((resolve) => {
     const child = spawn(
       command,
-      ["-Fn", ...processNames.flatMap((name) => ["-c", name])],
+      sourcePath ? ["-Fn", "--", sourcePath] : ["-Fn", ...processNames.flatMap((name) => ["-c", name])],
       { signal, stdio: ["ignore", "pipe", "pipe"] }
     )
     let diagnostic = ""
@@ -30,12 +33,23 @@ export async function probeOpenFiles({
     })
     const paths = new Set<string>()
     let carry = ""
+    let incomplete = false
+    let bytes = 0
     child.stdout.setEncoding("utf8")
     child.stdout.on("data", (chunk: string) => {
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > 16 * 1024 * 1024) {
+        incomplete = true
+        child.kill()
+        return
+      }
       carry += chunk
       const lines = carry.split("\n")
       carry = lines.pop() ?? ""
-      if (carry.length > 64 * 1024) carry = ""
+      if (carry.length > 64 * 1024) {
+        incomplete = true
+        carry = ""
+      }
       for (const line of lines) {
         if (!line.startsWith("n")) continue
         const path = line.slice(1)
@@ -49,7 +63,11 @@ export async function probeOpenFiles({
       })
     )
     child.once("close", (code) => {
-      if (!signal.aborted && !diagnostic.trim() && (code === 0 || code === 1))
+      if (carry.startsWith("n")) {
+        const path = carry.slice(1)
+        if (accept(path)) paths.add(path)
+      }
+      if (!incomplete && !signal.aborted && !diagnostic.trim() && (code === 0 || code === 1))
         resolve({
           kind: "available",
           paths: [...paths],

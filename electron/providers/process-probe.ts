@@ -9,6 +9,12 @@ export interface ProviderActivitySession {
   detail?: string
 }
 
+/** Execution admission names the source being inspected; observation may scan the default inventory. */
+export interface ProviderProbeTarget {
+  nativeId: string
+  path: string
+}
+
 export type ProviderActivityResult =
   | { kind: "available"; sessions: ProviderActivitySession[] }
   | {
@@ -20,5 +26,5 @@ export interface ProviderProcessProbe extends ProviderCapability {
   pollIntervalMs?: number
   staleAfterMs?: number
   timeoutMs?: number
-  probe(signal: AbortSignal): Promise<ProviderActivityResult>
+  probe(signal: AbortSignal, target?: ProviderProbeTarget): Promise<ProviderActivityResult>
 }
