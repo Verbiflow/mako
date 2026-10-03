@@ -1,7 +1,136 @@
 @import "tailwindcss";
+
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+
+/* Local Office engines retain file-authored content colors. Their controls use
+   the desk's tokens instead of the viewer library's independent blue palette. */
+.office-preview .file-viewer-web-shell[data-viewer-theme] {
+  --file-viewer-bg: var(--surface);
+  --file-viewer-content-bg: var(--surface);
+  --file-viewer-text: var(--foreground);
+  --file-viewer-muted: var(--muted-foreground);
+  --file-viewer-border: var(--hairline);
+  --file-viewer-toolbar-bg: var(--surface);
+  --file-viewer-toolbar-border: var(--hairline);
+  --file-viewer-group-bg: transparent;
+  --file-viewer-group-border: transparent;
+  --file-viewer-toolbar-radius: var(--radius-md);
+  --file-viewer-button-color: var(--muted-foreground);
+  --file-viewer-button-hover-bg: var(--fill-hover);
+  --file-viewer-button-hover-color: var(--foreground);
+  --file-viewer-button-disabled-color: var(--faint);
+  --file-viewer-input-bg: var(--raised);
+  --file-viewer-input-color: var(--foreground);
+  --file-viewer-focus-ring: var(--ring);
+  --file-viewer-font: var(--text-ui)/1.45 var(--font-sans);
+}
+.office-preview .file-viewer-web-toolbar button {
+  font-weight: 530;
+}
+/* A contained slide fits against the viewport, not its own shrinking content. */
+[data-office-preview="presentation"] .file-render {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+.office-preview .file-viewer-web-shell[data-viewer-theme] .pptx-viewer-shell {
+  background: var(--surface);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+.office-preview .file-viewer-web-shell[data-viewer-theme] :is(.pptx-loading, .pptx-error, .pptx-slideshow-button) {
+  background: var(--raised);
+  color: var(--foreground);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  font: var(--text-label)/1.4 var(--font-sans);
+}
+.office-preview .file-viewer-web-shell[data-viewer-theme] .pptx-slideshow-button:hover {
+  background: var(--fill-hover);
+  border-color: var(--hairline);
+  color: var(--foreground);
+}
+.office-preview .file-viewer-web-shell[data-viewer-theme] .pptx-slideshow-button:focus-visible {
+  outline-color: var(--ring);
+}
+.office-preview .file-viewer-web-shell[data-viewer-theme] :is(.pptx-slideshow-button-key, .pptx-error p) {
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: var(--text-label);
+  letter-spacing: normal;
+}
+.office-preview .file-viewer-web-shell[data-viewer-theme] .pptx-loading-dot {
+  display: none;
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] {
+  font-family: var(--font-sans);
+  color: var(--foreground);
+  background: var(--surface);
+}
+.office-preview .excel-wrapper[data-spreadsheet-theme="dark"] {
+  color-scheme: dark;
+}
+.office-preview .excel-wrapper[data-spreadsheet-theme="light"] {
+  color-scheme: light;
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] :is(.e-virt-table, .e-virt-table-canvas) {
+  background: var(--surface);
+  scrollbar-color: var(--hairline) var(--surface);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] :is(.table-wrapper, .toolbar) {
+  background: var(--surface);
+  border-color: var(--hairline);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .sheet-tab {
+  color: var(--muted-foreground);
+  font-weight: 530;
+  border-radius: var(--radius-md);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .sheet-tab:hover {
+  background: var(--fill-hover);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .sheet-tab.active {
+  color: var(--foreground);
+  background: var(--fill-selected);
+  border-color: var(--hairline);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] :is(.summary, .sheet-loading-summary) {
+  color: var(--muted-foreground);
+}
+
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .loading {
+  background: var(--surface);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .loading-card {
+  border-color: var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  box-shadow: none;
+  padding: 20px;
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] :is(.loading-copy strong, .loading-brand) {
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  font-weight: 530;
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .loading-brand {
+  background: var(--fill-selected);
+  border-radius: var(--radius-md);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .loading-kicker {
+  display: none;
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] .loading-copy p {
+  color: var(--muted-foreground);
+  font-size: var(--text-label);
+}
+.office-preview .excel-wrapper[data-file-viewer-spreadsheet-root][data-spreadsheet-theme] :is(.loading-spinner, .sheet-loading-dot) {
+  border-color: var(--hairline);
+  border-top-color: var(--muted-foreground);
+}
 
 @custom-variant dark (&:is(.dark *));
 
@@ -1203,6 +1332,13 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 
 .mako-prose li + li {
   margin-top: 0.28em;
+}
+
+/* File previews align to the transcript column at every list depth. The
+   list item declares its inset without measuring or observing the DOM. */
+.mako-prose [data-inline-file-preview] {
+  margin-inline-start: calc(0px - var(--inline-file-inset, 0px));
+  width: calc(100% + var(--inline-file-inset, 0px));
 }
 
 .mako-prose a {
