@@ -14,7 +14,7 @@
 import { toast } from "sonner"
 import { setPref } from "@/state/prefs"
 import { threadsStore } from "@/state/thread-store"
-import type { SetupProgress } from "../../electron/contracts/thread-app"
+import type { AppProbeView, SetupProgress } from "../../electron/contracts/thread-app"
 import type { ProjectAppSetup } from "../../electron/contracts/project-app"
 import { RAIL_MARKS } from "./mock-rail-worktrees"
 import {
@@ -143,6 +143,41 @@ const FULL_PASS = [
 ]
 
 type Ready = Extract<ThreadAppView, { kind: "ready" }>
+
+/** What a running copy of Mako's own app touches outside its checkout, as the host's probe would say it. */
+function mockProbe(view: Ready): AppProbeView {
+  const running = view.phase === "running"
+  const home = "/Users/you"
+  return {
+    at: Date.now(),
+    running,
+    upSince: Date.now() - 12 * 60_000,
+    ports: { first: PORT, last: PORT + 9 },
+    listening: running ? [{ port: PORT, pid: 48211, fixed: false }, { port: 9229, pid: 48230, fixed: true }] : [],
+    connectsTo: running ? [{ port: 5432, owner: "postgres (pid 812), which Mako didn't start" }] : [],
+    connectsOutside: { entries: running ? ["140.82.113.21:443"] : [] },
+    writing: { entries: running ? [{ path: `${home}/Library/Application Support/Mako/host.lock`, pid: 48230 }] : [] },
+    leftovers: [{ pid: 48302, command: "node node_modules/esbuild/bin/esbuild --service=0.25.9 --ping", sure: true }],
+    changed: {
+      entries: [
+        {
+          folder: `${home}/Library/Application Support/Mako`,
+          paths: ["host.lock", "logs/host.log", "IndexedDB/http_localhost_20140.indexeddb.leveldb/000003.log"],
+          more: false,
+          who: "pid 48230 (Electron) has host.lock, logs/host.log open for writing now.",
+        },
+        { folder: `${home}/Library/Caches/com.apple.Safari`, paths: ["Cache.db-wal"], more: false, who: "Nothing of the app had a file open there when Mako looked, so what changed it is unknown." },
+      ],
+    },
+    changedBy: "history",
+    registered: [{
+      kind: "url-scheme",
+      name: "mako:",
+      detail: "Declared by /Users/you/mako/node_modules/electron/dist/Electron.app, which the app runs. Apps on this Mac that open these links: /Applications/Mako.app, /Users/you/mako/node_modules/electron/dist/Electron.app; the default is /Applications/Mako.app. With more than one, which copy a link reaches is up to the system, not this copy.",
+    }],
+    notes: [],
+  }
+}
 
 /** Where the scripted setup Thread has got to, as the host would learn it from Mako's tools. */
 export type MockSetupMoment =
@@ -330,6 +365,10 @@ export function installMockThreadApp(): void {
       allowed.set(projectOf(root), allow ? Date.now() : undefined)
       if (projectOf(root) === CWD) put({ credentialsWaiting: allow ? undefined : true })
       return mockSetup(root)
+    },
+    probe: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      return mockProbe(current())
     },
     readOutput: async (_cwd, key) => outputs.get(key) ?? "",
     subscribeOutput: (_cwd, key, listener) => {

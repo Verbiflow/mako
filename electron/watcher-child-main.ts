@@ -1,8 +1,8 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CanaryTestSchema, WatcherRequestSchema, type CanaryTest, type WatcherReply } from "./contracts/watcher-child.js"
+import { CanaryTestSchema, HistoryMarkSchema, WatcherRequestSchema, type CanaryTest, type HistoryMark, type WatcherReply } from "./contracts/watcher-child.js"
 
 /*
  * @parcel/watcher's FSEvents backend races its own callback thread on
@@ -23,6 +23,12 @@ process.on("message", (raw) => {
   const request = WatcherRequestSchema.safeParse(raw)
   if (!request.success) return
   const { id } = request.data
+  if (request.data.t === "mark" || request.data.t === "since") {
+    const asked = request.data
+    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots)).catch((error: unknown) =>
+      reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
+    return
+  }
   if (request.data.t === "unsub") {
     const subscription = subscriptions.get(id)
     subscriptions.delete(id)
@@ -54,6 +60,51 @@ process.on("message", (raw) => {
     })
   subscriptions.set(id, subscription)
 })
+
+/*
+ * The file system's history, read through parcel's snapshots. On FSEvents a
+ * snapshot is only an event id and a time, the same for every root, so one
+ * mark serves them all. Other backends' snapshots crawl the whole tree, so
+ * history is FSEvents only. Roots are read one at a time: parcel's FSEvents
+ * backend holds one lock across a read, and reads in parallel took seconds
+ * where one after another took milliseconds.
+ */
+function snapshotFile(): string {
+  return join(tmpdir(), `mako-history-${process.pid}-${Math.random().toString(36).slice(2)}`)
+}
+
+async function mark(id: number): Promise<void> {
+  if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
+  const file = snapshotFile()
+  try {
+    await parcel.writeSnapshot(tmpdir(), file, { backend: "fs-events" })
+    const [eventId, at] = readFileSync(file, "utf8").trim().split(/\s+/)
+    reply({ t: "marked", id, mark: HistoryMarkSchema.parse({ id: eventId, at }) })
+  } finally {
+    rmSync(file, { force: true })
+  }
+}
+
+async function since(id: number, from: HistoryMark, roots: string[]): Promise<void> {
+  if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
+  const file = snapshotFile()
+  writeFileSync(file, `${from.id}\n${from.at}`)
+  const paths = new Set<string>()
+  const lost: string[] = []
+  try {
+    for (const root of roots) {
+      if (!existsSync(root)) continue
+      try {
+        for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events" })) paths.add(event.path)
+      } catch {
+        lost.push(root)
+      }
+    }
+  } finally {
+    rmSync(file, { force: true })
+  }
+  reply({ t: "history", id, paths: [...paths], lost })
+}
 
 /*
  * A subscription that settles says nothing about delivery. An fseventsd

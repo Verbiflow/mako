@@ -1,7 +1,7 @@
 import { fork, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { WatcherReplySchema, type WatchEvent, type WatcherReply, type WatcherRequest } from "./contracts/watcher-child.js"
+import { WatcherReplySchema, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest } from "./contracts/watcher-child.js"
 import { headlessNodeExecutable } from "./headless-node.js"
 
 export interface WatchListener {
@@ -194,6 +194,107 @@ export function childBackend(script = defaultChildScript()): WatchBackend {
         post({ t: "sub", id, root, ignore: [...ignore] })
       } else if (!restart) start()
     })
+  }
+}
+
+/** What changed on disk in a stretch of time, from the file system's own history. */
+export interface FileHistory {
+  /** Where the history stands now. */
+  mark(): Promise<HistoryMark>
+  /** Every path under `roots` changed after `mark`; `lost` roots had events dropped, so theirs may be incomplete. */
+  since(mark: HistoryMark, roots: readonly string[]): Promise<{ paths: string[]; lost: string[] }>
+}
+
+/** A mark is asked for on the way to starting an app, so it waits less than a read of history. */
+const MARK_MS = 3_000
+/** A read of history this long is stuck, not slow: fseventsd has stopped answering. */
+const HISTORY_MS = 120_000
+
+/**
+ * The file system's history, read in a watcher child of its own: a read
+ * holds parcel's FSEvents lock until the system has replayed everything
+ * since the mark, which would stall every watch sharing the child, and a
+ * stuck read is ended by killing this child alone. Each request that runs
+ * out of time ends the child and every request in it; the next starts one.
+ */
+export function childHistory(script = defaultChildScript()): FileHistory {
+  let child: ChildProcess | undefined
+  let nextId = 1
+  let idle: NodeJS.Timeout | undefined
+  const pending = new Map<number, { child: ChildProcess; settle(reply: WatcherReply): void; fail(error: Error): void; timer: NodeJS.Timeout }>()
+
+  const end = (gone: ChildProcess, error: Error) => {
+    if (child === gone) child = undefined
+    gone.kill()
+    for (const [id, request] of pending) {
+      if (request.child !== gone) continue
+      pending.delete(id)
+      clearTimeout(request.timer)
+      request.fail(error)
+    }
+  }
+
+  const running = () => {
+    clearTimeout(idle)
+    if (child) return child
+    const next = fork(script, [], {
+      execPath: headlessNodeExecutable(),
+      execArgv: script.endsWith(".ts") ? process.execArgv : [],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+    })
+    child = next
+    next.on("message", (raw) => {
+      const reply = WatcherReplySchema.safeParse(raw)
+      if (!reply.success || !("id" in reply.data)) return
+      const request = pending.get(reply.data.id)
+      if (!request) return
+      pending.delete(reply.data.id)
+      clearTimeout(request.timer)
+      request.settle(reply.data)
+      if (![...pending.values()].some((other) => other.child === next)) rest()
+    })
+    next.once("exit", () => end(next, new Error("The file system's history reader stopped")))
+    next.once("error", (error) => end(next, error))
+    return next
+  }
+
+  const rest = () => {
+    child?.unref()
+    child?.channel?.unref()
+    clearTimeout(idle)
+    idle = setTimeout(() => {
+      if (pending.size || !child) return
+      const going = child
+      child = undefined
+      going.kill()
+    }, IDLE_MS)
+    idle.unref()
+  }
+
+  const ask = (request: WatcherRequest, ms: number) =>
+    new Promise<WatcherReply>((settle, fail) => {
+      const current = running()
+      current.ref()
+      current.channel?.ref()
+      const timer = setTimeout(() => end(current, new Error(`The file system's history didn't answer within ${Math.round(ms / 1000)} seconds`)), ms)
+      pending.set(request.id, { child: current, settle, fail, timer })
+      current.send(request)
+    })
+
+  const failed = (reply: WatcherReply) => new Error(reply.t === "failed" ? reply.message : `Unexpected reply ${reply.t}`)
+
+  return {
+    async mark() {
+      const reply = await ask({ t: "mark", id: nextId++ }, MARK_MS)
+      if (reply.t !== "marked") throw failed(reply)
+      return reply.mark
+    },
+    async since(mark, roots) {
+      const reply = await ask({ t: "since", id: nextId++, mark, roots: [...roots] }, HISTORY_MS)
+      if (reply.t !== "history") throw failed(reply)
+      return { paths: reply.paths, lost: reply.lost }
+    },
   }
 }
 

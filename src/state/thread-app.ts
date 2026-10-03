@@ -5,7 +5,7 @@ import { getMako } from "@/lib/bridge"
 import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
-import type { AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
+import type { AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProbeView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
 import type { ProjectAppSetup } from "../../electron/contracts/project-app"
 
 /**
@@ -20,6 +20,7 @@ export type {
   AppOutputKey,
   AppPhase,
   AppPrepareView,
+  AppProbeView,
   AppProcessView,
   ThreadAppView,
 } from "../../electron/contracts/thread-app"
@@ -45,6 +46,15 @@ export interface ThreadAppDriver {
   setup?(root: string): Promise<ProjectAppSetup>
   /** The person's answer on those files: new Threads get all of them, or none. */
   allowSecrets?(root: string, allow: boolean): Promise<ProjectAppSetup>
+  /** What the app touches outside its checkout and ports, as an agent's app_probe sees it. */
+  probe?(cwd: string): Promise<AppProbeView>
+}
+
+/** A folder's last look outside its checkout, kept while another look is under way. */
+export interface AppProbeState {
+  looking: boolean
+  view?: AppProbeView
+  error?: string
 }
 
 interface ThreadAppState {
@@ -57,6 +67,8 @@ interface ThreadAppState {
   shown?: { cwd: string; key: AppOutputKey }
   /** Projects whose people said the strip shouldn't offer setup, by root. */
   hidden: string[]
+  /** Each folder's look outside its checkout, by checkout. */
+  probes: Record<string, AppProbeState>
 }
 
 const HIDDEN_KEY = "mako.thread-app-hidden.v1"
@@ -70,7 +82,7 @@ function readHidden(): string[] {
   }
 }
 
-export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, marks: {}, followed: [], hidden: readHidden() })
+export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, marks: {}, followed: [], hidden: readHidden(), probes: {} })
 export const useThreadApp = createHook(threadAppStore)
 
 export function putAppMarks(marks: readonly AppMark[]): void {
@@ -111,6 +123,23 @@ export function putThreadApp(cwd: string, view: ThreadAppView | undefined): void
     else delete byCwd[cwd]
     return { byCwd }
   })
+}
+
+/** A look this recent stands when the menu opens again; Look again takes a new one. */
+const PROBE_FRESH_MS = 15_000
+
+/** Look at what the folder's app touches outside its checkout, unless a look is under way or, without `again`, recent. */
+export function probeThreadApp(cwd: string, { again = false } = {}): void {
+  const probe = driver?.probe
+  const current = threadAppStore.get().probes[cwd]
+  if (!probe || current?.looking) return
+  if (!again && current?.view && !current.error && Date.now() - current.view.at < PROBE_FRESH_MS) return
+  const put = (next: AppProbeState) => threadAppStore.set((state) => ({ probes: { ...state.probes, [cwd]: next } }))
+  put({ ...current, looking: true })
+  probe(cwd).then(
+    (view) => put({ looking: false, view }),
+    (error: unknown) => put({ looking: false, ...(current?.view ? { view: current.view } : {}), error: error instanceof Error ? error.message : String(error) })
+  )
 }
 
 export function hideSetupFor(root: string): void {

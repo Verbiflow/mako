@@ -40,6 +40,8 @@ const reads = [
   "mako:thread-groups",
   "mako:thread-purposes",
   "mako:thread-app-marks",
+  /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
+  "mako:thread-app-probe",
   "mako:project-app-setup",
   "mako:worktrees",
   "mako:worktree-ahead",

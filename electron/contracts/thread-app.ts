@@ -80,6 +80,41 @@ export type ThreadAppView =
       credentialsWaiting?: boolean
     }
 
+/** A list cut at the probe's limit, with how many it left out. */
+export interface Capped<T> {
+  entries: T[]
+  more?: number
+}
+
+/**
+ * What a Thread's app touches outside its checkout and ports, from one look
+ * at this Mac: what two copies of it would fight over. Its sentences are
+ * written for a person and an agent alike.
+ */
+export interface AppProbeView {
+  at: number
+  running: boolean
+  upSince?: number
+  /** The Thread's block of ports. */
+  ports: { first: number; last: number }
+  /** `fixed` is a port outside the block the system didn't pick, so a second copy would fight over it. */
+  listening: { port: number; pid: number; fixed: boolean }[]
+  /** Ports on this Mac it has a connection to, with who listens there. */
+  connectsTo: { port: number; owner: string }[]
+  connectsOutside: Capped<string>
+  /** Files it holds open for writing outside its checkout and data folder. */
+  writing: Capped<{ path: string; pid: number }>
+  /** Processes it left that no stop ends; `sure` when they carry the app's mark, not only work in its folders. */
+  leftovers: { pid: number; command: string; sure: boolean }[]
+  /** Folders where apps keep state with something changed since it came up, with who had files open there. */
+  changed: Capped<{ folder: string; paths: string[]; more: boolean; who: string }>
+  /** `history`: read from the file system's history, any depth. `times`: modification times one or two levels down. */
+  changedBy: "history" | "times"
+  /** What was registered with macOS while it ran: launchd services and agents, URL schemes, login items; each detail says whether it points into the app. */
+  registered: { kind: "service" | "launch-agent" | "url-handler" | "url-scheme" | "login-item"; name: string; detail: string }[]
+  notes: string[]
+}
+
 /** A checkout's app as the sidebar marks it. A stopped app has no mark. */
 export interface AppMark {
   checkout: string

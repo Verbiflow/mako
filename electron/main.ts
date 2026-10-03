@@ -50,6 +50,8 @@ import { ControlSessions } from "./control-sessions.js"
 import { launchLines } from "./control-launch.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
+import { beginTrace } from "./app-probe.js"
+import { childHistory } from "./watch-backend.js"
 import { environmentTools } from "./environment-tools.js"
 import { startControlService } from "./control-service.js"
 import type { ForkInput, MessageAnchor, TransferInput } from "./shared.js"
@@ -390,9 +392,16 @@ function whoseApp(app: AppKey): string | undefined {
   const folder = threadProcesses?.checkoutOf(app)
   return folder ? `the ${basename(folder)} folder` : undefined
 }
+/** What changed on disk while apps ran, for their probes; FSEvents keeps that history, so macOS only. */
+const fileHistory = process.platform === "darwin" ? childHistory() : undefined
 /** And its running app's records, so any host sees and stops the processes another host started. */
 const threadProcesses = threadStore
-  ? new ThreadProcesses({ root: join(realpathSync(dirname(threadStore.path)), "thread-environments"), listening: portListening, whose: (app) => whoseApp(app) })
+  ? new ThreadProcesses({
+      root: join(realpathSync(dirname(threadStore.path)), "thread-environments"),
+      listening: portListening,
+      whose: (app) => whoseApp(app),
+      cameUp: (folder, at) => beginTrace(folder, at, fileHistory),
+    })
   : null
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
@@ -2303,6 +2312,7 @@ app.whenReady().then(async () => {
     processes: threadProcesses,
     recipesRoot: threadRecipes,
     whose: whoseApp,
+    ...(fileHistory ? { history: fileHistory } : {}),
   }) : undefined
   conversationMcp = await startConversationMcp(
     liveConversations,

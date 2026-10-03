@@ -2,21 +2,22 @@ import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { capped, changedSince, socketsOf, systemPortsFrom, writingOf } from "./app-probe.js"
+import { probeApp, probeText, refreshTraces, SAMPLE_EVERY_MS, type ProbeInput } from "./app-probe.js"
 import { z } from "zod"
 import { childProcessEnv } from "./accounts-common.js"
 import { applyControlEnvironment } from "./control-launch.js"
 import type { AppKey, ThreadEnvironment } from "./contracts/thread-environments.js"
 import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "./contracts/thread-environments.js"
-import type { AppActionOutcome, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
+import type { AppActionOutcome, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
 import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView } from "./contracts/project-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
 import { bringFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
-import { listed, toolText, when } from "./tool-text.js"
+import { toolText, when } from "./tool-text.js"
 import { cleanOutput, presentOutput } from "./run-output.js"
 import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
+import type { FileHistory } from "./watch-backend.js"
 import {
   checkoutOf,
   inputsDigest,
@@ -67,6 +68,8 @@ const PROOF_START_MS = 5 * 60_000
 const PROOF_VERIFY_MS = 30 * 60_000
 /** A recipe's cleanup that takes longer than this is stopped, and the worktree goes anyway. */
 const CLEANUP_MS = 2 * 60_000
+/** How often running apps' traces are read; a probe reads at most this much of the file system's history. */
+const TRACE_EVERY_MS = 2 * 60_000
 
 interface Deps {
   cwd(conversationId: string): string | undefined
@@ -84,6 +87,8 @@ interface Deps {
   /** Whose app it is, in words, such as `the Thread "Fix login"`, to name whose app was stopped to make room. */
   whose?(app: AppKey): string | undefined
   pressure?: () => Promise<MemoryPressure>
+  /** The file system's history, for what apps changed at any depth; without it the probe compares modification times. */
+  history?: FileHistory
   settleMs?: number
   lineMs?: number
   now?: () => number
@@ -129,6 +134,8 @@ export interface DeskApp {
   /** For a recipe that runs one copy at a time: stops the copy another checkout runs, then starts this one. */
   takeTurn(cwd: string): Promise<AppActionOutcome>
   output(cwd: string, key: AppOutputKey, cursor?: AppOutputCursor): Promise<AppOutputChunk>
+  /** What the app touches outside its checkout and ports, as `app_probe` reports it. */
+  probe(cwd: string): Promise<AppProbeView>
   /** Every checkout on this Mac whose app isn't stopped, for the sidebar. */
   marks(): Promise<AppMark[]>
   /** The project's recipe written out, with its credentials files, for Settings. */
@@ -530,49 +537,45 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the prepare step" : status.name)
     const { leftovers } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
     const left = leftovers.length
-      ? ` Still running, though, and likely left behind by the app: ${leftovers.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up, outlived the process that started it and works in this checkout or data folder, so no stop reaches it. Stop one yourself if it's the app's and shouldn't outlive it.`
+      ? ` Still running, though, and likely left behind by the app: ${leftovers.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up and outlived the process that started it, so no stop reaches it; ${leftovers.every((entry) => entry.sure) ? "each carries the app's mark" : "each carries the app's mark or works in this checkout or data folder"}. Stop one yourself if it's the app's and shouldn't outlive it.`
       : ""
     if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.${left}`
     return (inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running.") + left
   }
-  const probe = async ({ environment, checkout }: Context) => {
-    const { pids, leftovers, since, records } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
-    const [sockets, writing, changed, picked] = await Promise.all([
-      socketsOf(pids),
-      writingOf(pids, [checkout, environment.dataDir, records]),
-      since === undefined ? Promise.resolve(undefined) : changedSince(since, [checkout, environment.dataDir, records, await projectRoot(checkout), join(homedir(), ".mako")]),
-      systemPortsFrom(),
-    ])
-    const last = environment.port + environment.ports - 1
-    const ours = (port: number) => (port >= environment.port && port <= last) || port >= picked
-    const local = [...new Set(sockets.connected.filter((entry) => entry.local).map((entry) => entry.port))]
-      .filter((port) => !sockets.listening.some((entry) => entry.port === port))
-    const owners = await Promise.all(local.map(async (port) => {
-      const owner = await deps.processes.portOwner(port).catch(() => undefined)
-      return { port, owner: owner ? deps.processes.ownerName(owner, environment.app) : "nothing listening now" }
-    }))
-    const outside = [...new Set(sockets.connected.filter((entry) => !entry.local).map((entry) => `${entry.host}:${entry.port}`))]
-    const writes = writing.map((entry) => entry.path)
-    const notes = [
-      owners.length ? "connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it." : undefined,
-      writes.length ? "writing is files the app holds open for writing outside this checkout and this Thread's data folder; two copies writing one file is a conflict." : undefined,
-      leftovers.length ? "leftovers, by pid, look left behind by the app: each started since it came up, outlived the process that started it and works in this checkout or data folder, so stopping the app doesn't end it." : undefined,
-      changed?.length ? "changedFolders is where apps keep state, with something in it changed since the app came up; other apps on this Mac write there too, so look for names of this project or its tools." : undefined,
-    ].filter(Boolean)
-    const report = {
-      running: pids.length > 0,
-      upSince: since === undefined ? undefined : when(since, (deps.now ?? Date.now)()),
-      listening: Object.fromEntries(sockets.listening.map((entry) =>
-        [entry.port, ours(entry.port) ? `pid ${entry.pid}` : `pid ${entry.pid}; outside this Thread's ports ${environment.port}-${last}, so a second copy would fight over it`])),
-      connectsTo: Object.fromEntries(owners.map(({ port, owner }) => [port, owner])),
-      connectsOutside: listed(capped(outside)),
-      writing: listed(capped(writes)),
-      leftovers: Object.fromEntries(leftovers.map((entry) => [entry.pid, entry.command])),
-      changedFolders: changed && listed(capped(changed)),
-      notes: notes.length ? notes : undefined,
+  const probe = async ({ environment, checkout }: Context): Promise<AppProbeView> => {
+    const { pids, commands, leftovers, since, records, folder } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
+    const own = [checkout, environment.dataDir, records].filter(Boolean)
+    const input: ProbeInput = {
+      folder,
+      pids,
+      commands,
+      leftovers,
+      own,
+      skip: [...own, await projectRoot(checkout), join(homedir(), ".mako")],
+      ports: { first: environment.port, last: environment.port + environment.ports - 1 },
+      owner: async (port) => {
+        const owner = await deps.processes.portOwner(port)
+        return owner ? deps.processes.ownerName(owner, environment.app) : "nothing listening now"
+      },
     }
-    return toolText(report)
+    if (since !== undefined) input.since = since
+    if (deps.history) input.history = deps.history
+    if (deps.now) input.now = deps.now
+    return probeApp(input)
   }
+  /**
+   * Every running app's trace, brought up to date now and then: what its
+   * processes hold open, to name who changed a folder, and the file
+   * system's history less often, so a probe reads only what changed since.
+   */
+  let historyReadAt = 0
+  setInterval(() => {
+    const history = deps.history && (deps.now ?? Date.now)() - historyReadAt >= TRACE_EVERY_MS ? deps.history : undefined
+    if (history) historyReadAt = (deps.now ?? Date.now)()
+    void deps.processes.active()
+      .then((apps) => apps.length ? refreshTraces(apps.map(({ folder, pids }) => ({ folder, pids })), history ? { history } : {}) : undefined)
+      .catch(() => {})
+  }, SAMPLE_EVERY_MS).unref()
   const stop = async (conversationId: string, names?: string[]) => stopIn(await context(conversationId), names)
   /**
    * Check runs a conversation hasn't had the result of yet, by app, tier and
@@ -1007,6 +1010,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (!found.environment) return empty
       return deps.processes.readLog(found.app, outputRun(key), cursor)
     },
+    async probe(cwd) {
+      if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
+      const found = await deps.folder(cwd, false)
+      if (!found.environment) throw new Error("This app hasn't run here yet, so there's nothing to look at.")
+      return probe({ environment: found.environment, checkout: found.checkout })
+    },
     async marks() {
       const marks: AppMark[] = []
       const seen = new Set<AppKey>()
@@ -1103,7 +1112,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return startText(await startIn(next, restarted, again(conversationId, restarted)))
     },
     async probe(conversationId) {
-      return probe(await context(conversationId))
+      return probeText(await probe(await context(conversationId)))
     },
     async ownPackages(conversationId) {
       const current = await withRecipe(conversationId)

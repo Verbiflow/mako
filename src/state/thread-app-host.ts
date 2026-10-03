@@ -159,6 +159,7 @@ export function installHostThreadApp(): void {
         threadAppStore.set({ followed: [...watched.keys()] })
       }
     },
+    probe: (cwd) => mako.probeThreadApp(cwd),
     setup: (root) => mako.projectAppSetup(root),
     allowSecrets: async (root, allow) => {
       const setup = await mako.allowProjectSecrets(root, allow)

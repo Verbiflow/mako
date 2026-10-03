@@ -38,6 +38,12 @@ const PROCESS_TABLE_BYTES = 16 * 1024 * 1024
  * code behind, and writes that code where the next host can read it.
  */
 const WRAPPER = 'command=$1; exit_file=$2; shift 2; IFS= read -r go || exit 125; [ "$go" = go ] || exit 125; (eval "$command") </dev/null; code=$?; printf "%s\\n" "$code" > "$exit_file"; exit "$code"'
+/**
+ * In the environment of every run, naming its app: a process that left its
+ * run's tree still carries it, unless it cleared its environment. Agents'
+ * shells carry the Thread's values but never this.
+ */
+const RUN_MARK = "MAKO_APP_RUN"
 
 export type RunKind = "process" | "check" | "prepare"
 
@@ -120,6 +126,16 @@ export interface ActiveApp {
   usedAt: number
   memoryBytes: number
   runs: string[]
+  /** Its records folder, and its processes in its runs' trees. */
+  folder: string
+  pids: number[]
+}
+
+/** A process that looks left behind by an app; `sure` when it carries the app's mark, not only works in its folders. */
+export interface Leftover {
+  pid: number
+  command: string
+  sure: boolean
 }
 
 export type MemoryPressure = "normal" | "warning" | "critical"
@@ -141,6 +157,12 @@ export interface ThreadProcessDependencies {
   listening(port: number): Promise<boolean>
   /** Whose app it is, in words, such as `the Thread "Fix login"`, to name the owner of a port. */
   whose?: (app: AppKey) => string | undefined
+  /**
+   * The app came up from nothing running: called with its records folder
+   * and that moment, before its first process starts, so the probe can
+   * record what it compares against. A failure starts the app regardless.
+   */
+  cameUp?: (folder: string, at: number) => Promise<void>
   now?: () => number
 }
 
@@ -187,8 +209,11 @@ export class ThreadProcesses {
           refused.push({ name: spec.name, reason: await this.describeHolder(spec.port, app) })
           continue
         }
-        if (spec.kind === "process" && !Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length))
-          await writeFile(join(this.folder(app), "up"), String(this.now()), { mode: 0o600 })
+        if (spec.kind === "process" && !Object.values(runs).some((record) => record.kind === "process" && members(rows, record).length)) {
+          const up = this.now()
+          await writeFile(join(this.folder(app), "up"), String(up), { mode: 0o600 })
+          await this.dependencies.cameUp?.(this.folder(app), up).catch(() => {})
+        }
         await this.spawn(app, spec, async (record) => {
           runs[key] = record
           await this.save(app, runs)
@@ -307,38 +332,47 @@ export class ThreadProcesses {
   }
 
   /**
-   * An app's processes now, for the probe: those in its runs' trees, and
-   * those that look left behind by them, which no stop ends: started since
-   * the app came up, outliving their parent, and working in one of
-   * `folders`, with whatever they started. An agent's shell there still
-   * has its parent. `since` is when the app's processes last came up from
+   * An app's processes now, for the probe: those in its runs' trees, with
+   * their command lines, and those that look left behind by them, which no
+   * stop ends: started since the app came up and outliving their parent,
+   * with whatever they started. One counts when it carries the app's mark;
+   * one whose environment the system won't show (Apple's own programs,
+   * such as sleep) counts when it works in one of `folders`. One whose
+   * environment shows no mark isn't the app's, such as a test someone ran
+   * in the checkout. `since` is when the app's processes last came up from
    * none running.
    */
-  async footprint(app: AppKey, folders: string[]): Promise<{ pids: number[]; leftovers: { pid: number; command: string }[]; since?: number; records: string }> {
+  async footprint(app: AppKey, folders: string[]): Promise<{ pids: number[]; commands: string[]; leftovers: Leftover[]; since?: number; records: string; folder: string }> {
     const runs = await this.runs(app)
     const rows = await processTable()
     const pids = new Set(Object.values(runs).flatMap((record) => members(rows, record).map((row) => row.pid)))
     const up = Number.parseInt(await readFile(join(this.folder(app), "up"), "utf8").catch(() => ""), 10)
     const since = Number.isFinite(up) ? up : undefined
-    const leftovers: { pid: number; command: string }[] = []
+    const leftovers: Leftover[] = []
     if (since !== undefined) {
       // ps gives start times to the second.
       const later = rows.filter((row) => row.startedMs >= Math.floor(since / 1000) * 1000 && !pids.has(row.pid) && row.pid !== process.pid)
       const orphans = later.filter((row) => row.ppid === 1)
-      const cwds = await workingDirectories(orphans.map((row) => row.pid))
+      const marks = await runMarks(orphans)
+      const hidden = orphans.filter((row) => !marks.has(row.pid))
+      const cwds = await workingDirectories(hidden.map((row) => row.pid))
       const roots = await Promise.all(folders.map((folder) => realpath(folder).catch(() => folder)))
-      const found = new Set(orphans.filter((row) => roots.some((root) => inside(cwds.get(row.pid), root))).map((row) => row.pid))
+      const found = new Map<number, boolean>([
+        ...orphans.filter((row) => marks.get(row.pid) === app).map((row) => [row.pid, true] as const),
+        ...hidden.filter((row) => roots.some((root) => inside(cwds.get(row.pid), root))).map((row) => [row.pid, false] as const),
+      ])
       for (let grew = found.size > 0; grew;) {
         grew = false
         for (const row of later)
           if (!found.has(row.pid) && found.has(row.ppid)) {
-            found.add(row.pid)
+            found.set(row.pid, found.get(row.ppid)!)
             grew = true
           }
       }
-      leftovers.push(...[...found].map((pid) => ({ pid, command: commandOf(rows, pid) })))
+      leftovers.push(...[...found].map(([pid, sure]) => ({ pid, command: commandOf(rows, pid), sure })))
     }
-    const report = { pids: [...pids], leftovers, records: this.dependencies.root }
+    const commands = [...new Set(rows.filter((row) => pids.has(row.pid)).map((row) => row.command))]
+    const report = { pids: [...pids], commands, leftovers, records: this.dependencies.root, folder: this.folder(app) }
     return since === undefined ? report : { ...report, since }
   }
 
@@ -384,21 +418,25 @@ export class ThreadProcesses {
 
   /** Every app on this Mac with a process running, with what it holds and when it was last used. */
   async active(): Promise<ActiveApp[]> {
+    const folders = await readdir(this.dependencies.root).catch(() => [])
+    if (!folders.length) return []
     const rows = await processTable()
     const found: ActiveApp[] = []
-    for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
+    for (const folder of folders) {
       const app = AppKeySchema.safeParse(folder)
       if (!app.success) continue
       const runs = await this.runs(app.data).catch(() => ({}))
       let memoryBytes = 0
       const alive: string[] = []
+      const pids: number[] = []
       for (const record of Object.values(runs)) {
         const held = members(rows, record)
         if (!held.length) continue
         alive.push(record.name)
+        pids.push(...held.map((row) => row.pid))
         memoryBytes += held.reduce((sum, row) => sum + row.rssKb * 1024, 0)
       }
-      if (alive.length) found.push({ app: app.data, usedAt: await this.usedAt(app.data), memoryBytes, runs: alive })
+      if (alive.length) found.push({ app: app.data, usedAt: await this.usedAt(app.data), memoryBytes, runs: alive, folder: this.folder(app.data), pids })
     }
     return found
   }
@@ -500,7 +538,7 @@ export class ThreadProcesses {
     try {
       const child = spawn("/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit], {
         cwd: spec.cwd,
-        env: spec.env,
+        env: { ...spec.env, [RUN_MARK]: app },
         detached: true,
         stdio: ["pipe", output.fd, output.fd],
       })
@@ -727,6 +765,38 @@ async function listeningPids(port: number): Promise<number[]> {
     throw error
   }
   return [...new Set(stdout.split("\n").filter((line) => line.startsWith("p")).map((line) => Number(line.slice(1))))]
+}
+
+/**
+ * The app each process's run mark names, or "" for a process whose
+ * environment shows none; a process the system won't show the environment
+ * of is left out. macOS shows the environment of this user's processes
+ * except Apple's own programs; Linux, of this user's.
+ */
+async function runMarks(rows: Row[]): Promise<Map<number, string>> {
+  const found = new Map<number, string>()
+  if (!rows.length) return found
+  const markIn = (variables: string) => new RegExp(`(?:^|\\s)${RUN_MARK}=(\\S+)`).exec(variables)?.[1] ?? ""
+  if (process.platform === "linux") {
+    await Promise.all(rows.map(async (row) => {
+      const text = await readFile(`/proc/${row.pid}/environ`, "utf8").catch(() => undefined)
+      if (text !== undefined) found.set(row.pid, markIn(text.split("\0").join(" ")))
+    }))
+    return found
+  }
+  // ps exits 1 when one of the pids has just ended; what it printed of the others still holds.
+  const { stdout } = await run("ps", ["-wwE", "-o", "pid=,command=", "-p", rows.map((row) => row.pid).join(",")], {
+    env: { ...process.env, LC_ALL: "C" },
+    maxBuffer: PROCESS_TABLE_BYTES,
+  }).catch((error: unknown) => z.object({ stdout: z.string() }).catch({ stdout: "" }).parse(error))
+  for (const line of stdout.split("\n")) {
+    const match = /^\s*(\d+) (.*)$/.exec(line)
+    const row = match && rows.find((candidate) => candidate.pid === Number(match[1]))
+    if (!row || !match[2]!.startsWith(row.command)) continue
+    const variables = match[2]!.slice(row.command.length)
+    if (/\s[A-Za-z_][A-Za-z0-9_]*=/.test(variables)) found.set(row.pid, markIn(variables))
+  }
+  return found
 }
 
 function commandOf(rows: Row[], pid: number): string {
