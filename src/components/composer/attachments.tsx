@@ -1,3 +1,5 @@
+import { AttachmentGallery } from "./attachment-gallery"
+import { useAssetPreview } from "@/components/viewer/asset-preview-context"
 import { FilePreviewTile } from "./diagnostic-tile"
 import {
   diagnosticFormat,
@@ -68,7 +70,7 @@ const Strip = memo(function Strip({
       className="attachment-strip flex shrink-0 [scrollbar-width:none] gap-2 overflow-x-auto px-4 pt-4 pb-1"
       aria-label="Attachments"
     >
-      {items.map((item) =>
+      <AttachmentGallery items={items} render={(item) =>
         diagnosticFormat(item.name) ||
         officeFormat(item.name, item.mimeType) ? (
           <FilePreviewTile key={item.id} item={item} onRemove={onRemove} />
@@ -78,13 +80,13 @@ const Strip = memo(function Strip({
         ) : (
           <FileTile key={item.id} item={item} onRemove={onRemove} />
         )
-      )}
+      } />
     </div>
   )
 })
 
 const tile =
-  "pressable flex h-14 shrink-0 overflow-hidden rounded-lg bg-raised ring-1 ring-hairline ring-inset transition-[box-shadow] duration-150 hover:ring-border focus-visible:outline focus-visible:outline-ring"
+  "pressable flex h-14 shrink-0 overflow-hidden asset-surface bg-raised ring-1 ring-hairline ring-inset transition-[box-shadow] duration-150 hover:ring-border focus-visible:outline focus-visible:outline-ring"
 
 function RemoveButton({
   label,
@@ -263,7 +265,10 @@ const FileTile = memo(function FileTile({
   const source = useAttachmentText(item)
   const [view, setView] = useState<"preview" | "source">("preview")
   const [open, setOpen] = useState(false)
-  const [enlarged, setEnlarged] = useState(false)
+  const [localEnlarged, setEnlarged] = useState(false)
+  const file = useMemo(() => source === undefined ? undefined : ({ path: item.stagedPath ?? item.name, contents: source, mimeType: item.mimeType, size: item.size ?? new TextEncoder().encode(source).length, binary: false, truncated: false }), [source, item.stagedPath, item.name, item.mimeType, item.size])
+  const collection = useAssetPreview(file, view)
+  const enlarged = collection?.enlarged ?? localEnlarged
   const markdown = filePreviewFormat(item.name, item.mimeType) === "markdown"
   const html = filePreviewFormat(item.name, item.mimeType) === "html"
   const text = useMemo(
@@ -329,7 +334,7 @@ const FileTile = memo(function FileTile({
           <PopoverContent
             side="top"
             align="start"
-            className="w-[min(40rem,calc(100vw-2rem))] overflow-hidden p-0"
+            className="w-[min(40rem,calc(100vw-2rem))] overflow-hidden asset-surface p-0"
           >
             <div className="flex min-w-0 items-center gap-3 border-b border-hairline px-3 py-2 text-label">
               <span className="truncate font-medium text-foreground">
@@ -359,7 +364,7 @@ const FileTile = memo(function FileTile({
                 </div>
               ) : null}
               <span className="ml-auto shrink-0 text-faint">{detail}</span>
-              <button type="button" aria-label={`Expand ${label}`} onClick={() => setEnlarged(true)} className="pressable rounded p-1 text-muted-foreground hover:bg-fill-hover"><ExpandIcon className="size-4" /></button>
+              <button type="button" aria-label={`Expand ${label}`} onClick={() => collection ? collection.setEnlarged(true) : setEnlarged(true)} className="pressable rounded p-1 text-muted-foreground hover:bg-fill-hover"><ExpandIcon className="size-4" /></button>
             </div>
             {open && !enlarged ? conflict ? (
               <ConflictList snapshot={conflict} />
@@ -395,7 +400,7 @@ const FileTile = memo(function FileTile({
       ) : (
         <div className={face}>{body}</div>
       )}
-      {source !== undefined ? <ExpandedFilePreview name={label} file={{ path: item.stagedPath ?? item.name, contents: source, mimeType: item.mimeType, size: item.size ?? new TextEncoder().encode(source).length, binary: false, truncated: false }} mode={view} open={enlarged} onOpenChange={setEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>('button[data-slot="popover-trigger"]') ?? null} /> : null}
+      {file && !collection ? <ExpandedFilePreview name={label} file={file} mode={view} open={enlarged} onOpenChange={setEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>('button[data-slot="popover-trigger"]') ?? null} /> : null}
       <RemoveButton label={item.name} onRemove={() => onRemove(item.id)} />
     </div>
   )
@@ -500,7 +505,7 @@ const Thumbnail = memo(function Thumbnail({
         <PopoverContent
           side="top"
           align="start"
-          className="w-[min(36rem,calc(100vw-2rem))] overflow-hidden p-0 [&>[data-inline-file-preview]]:my-0 [&>[data-inline-file-preview]]:border-0"
+          className="w-[min(36rem,calc(100vw-2rem))] overflow-hidden asset-surface p-0 [&>[data-inline-file-preview]]:my-0 [&>[data-inline-file-preview]]:border-0"
         >
           {open ? item.stagedPath ? (
             <InlineFilePreview path={item.stagedPath} name={item.name} mimeType={item.mimeType} initiallyOpen />

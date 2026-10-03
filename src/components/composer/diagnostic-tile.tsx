@@ -27,7 +27,7 @@ export function FilePreviewTile({
           <button
             type="button"
             aria-label={`Show ${item.name}`}
-            className="pressable flex h-14 w-60 items-center gap-3 overflow-hidden rounded-lg bg-raised px-3 text-left ring-1 ring-hairline ring-inset hover:ring-border focus-visible:outline focus-visible:outline-ring"
+            className="pressable flex h-14 w-60 items-center gap-3 overflow-hidden asset-surface bg-raised px-3 text-left ring-1 ring-hairline ring-inset hover:ring-border focus-visible:outline focus-visible:outline-ring"
           >
             <FileTypeIcon path={item.name} mimeType={item.mimeType} className="size-5 shrink-0 text-muted-foreground" />
             <span className="min-w-0">
@@ -44,7 +44,7 @@ export function FilePreviewTile({
         <PopoverContent
           side="top"
           align="start"
-          className="max-h-[70vh] w-[min(48rem,calc(100vw-2rem))] overflow-auto p-0 [&>[data-inline-file-preview]]:my-0 [&>[data-inline-file-preview]]:border-0"
+          className="max-h-[70vh] w-[min(48rem,calc(100vw-2rem))] overflow-auto asset-surface p-0 [&>[data-inline-file-preview]]:my-0 [&>[data-inline-file-preview]]:border-0"
         >
           {open ? item.stagedPath ? (
             <InlineFilePreview
