@@ -1,7 +1,7 @@
 import { cursorCanvasPreview } from "./canvas-preview.js"
 import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from "@mako/sessions"
 import { accountEnv } from "../../accounts.js"
-import { installHarness, lacks } from "../harness-definition.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { cursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
@@ -40,6 +40,12 @@ export const installCursor: ProviderModule = (host) => {
   const modelCache = createCursorModelCache()
   installHarness(host, {
     provider: "cursor",
+    presentation: { firstRunPriority: 2, icon: { id: "cursor-cube", tint: "currentColor" } },
+    hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+    commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
+    toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
+    skillEditing: { provider: "cursor", route: "skill-registry", operations: ["import", "remove"] },
+    mcpEditing: { provider: "cursor", route: "mcp-registry", operations: ["import"] },
     live: createCursorSdkDriver({ auth, stateRoot, modelCache }),
     decoder: cursorDecoderSource,
     profile: createCursorProfileLoader({

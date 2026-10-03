@@ -8,6 +8,7 @@ import type {
   UsageWindow,
 } from "../../account-types.js"
 import {
+  credentialFingerprint,
   jsonFields,
   jwtClaims,
   numberValue,
@@ -210,6 +211,7 @@ export function cursorAccountCapability(
     },
     accountEnv: async (_selection, base) => ({ ...base }),
     selectedAccount: () => ({ name: "default" }),
+    credentialRevision: async () => credentialFingerprint([(await auth.childEnv()).CURSOR_API_KEY ?? null]),
     async accountUsage() {
       const apiKey = (await auth.childEnv()).CURSOR_API_KEY
       if (!apiKey)

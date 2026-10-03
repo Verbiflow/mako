@@ -4,6 +4,7 @@ import type { ProviderMcpSource } from "../mcp-source.js"
 
 export const cursorMcpSource: ProviderMcpSource = {
   provider: "cursor",
+  readFormat: "named-map",
   command: () => "cursor-agent",
   userFiles: () => [join(homedir(), ".cursor", "mcp.json")],
   workspaceFiles: (cwd) => [join(cwd, ".cursor", "mcp.json")],
