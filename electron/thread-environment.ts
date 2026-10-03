@@ -64,7 +64,7 @@ function recipeInstructions(environment: ThreadEnvironment): string | undefined 
   return [
     names.length ? `The project's recipe also sets ${names.join(", ")} in your shell.` : undefined,
     processes.length ? `Its processes (${processes.join(", ")}) run through the mako server's app_start, app_stop, app_restart, app_status and app_logs tools; start them there rather than by hand, so they stay this Thread's and survive your turn.` : undefined,
-    recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with app_check; a passing full check is the proof to report.` : undefined,
+    recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with app_check, when one covers what you changed.` : undefined,
     recipe.linked?.length ? `This checkout's ${recipe.linked.join(", ")} link each package to the main checkout's, so it needed no install. An install here would write through the links into the main checkout's packages: before you install, add, remove or upgrade any dependency, call app_own_packages, which gives this checkout its own copy in a few seconds, then install as usual.` : undefined,
     "port_holder names whoever holds a port.",
     "If your change alters how the project installs, starts or is checked, update the recipe in the same turn with recipe_save.",

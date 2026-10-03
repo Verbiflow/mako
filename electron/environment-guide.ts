@@ -8,6 +8,8 @@ export const ENVIRONMENT_GUIDE = `# Setting up this project's recipe
 
 Mako runs many agents at once, each in its own Thread, usually in the Thread's own worktree: a Git worktree on a branch of its own, beside the main checkout the user works in. Your job: make every Thread able to start this project's app and pass its checks side by side with the others, with the least change to the project. You write one small recipe and save it in Mako with recipe_save. Every Thread of this project uses it from then on, on every branch, with nothing to commit or merge.
 
+The recipe is how every agent starts the app and checks a change, many times a day, and each one waits for it. So make starting the app and each check as fast as the project allows: a few seconds to start, and checks that report in about a minute (quick) and a few minutes at most (full). What the user asks for comes first: if they want a step in every start or check, it goes in, even if it's slow. Otherwise, speed wins.
+
 ## What each Thread already has
 
 - Ten ports of its own: MAKO_THREAD_PORT is the first, MAKO_THREAD_PORTS says how many.
@@ -81,8 +83,9 @@ The fields:
   - "port" is {port} or {port+N}. The process counts as running once that port answers.
   - A fixed port, such as "5432", only with "oneAtATime": true.
   - A process can set its own values, including HOME, TMPDIR or XDG_* for an app with no data-folder setting.
-- checks.quick: no running app, such as typecheck, lint and unit tests.
-- checks.full: runs against the running app, such as end-to-end tests. Mako starts the app first.
+- checks.quick: what an agent runs after an edit, with no running app: typecheck and lint, and unit tests if they take seconds. About a minute at most.
+- checks.full: that the running app works, such as a smoke test or a short end-to-end test against it. Mako starts the app first. A few minutes at most.
+- Never in a check, unless the user asks: packaging or release builds, installing the app, a test suite that takes many minutes, or anything only one change or one Session needs. An agent runs those in its own shell when its work needs them. A check is shared by every Thread, so never change it for one task.
 - Checks and prepare steps run in the checkout's root. For a subfolder, start the command with cd <folder> &&, and give a step's inputs and outputs from the root too.
 - prepare: install in a new worktree, and catch up after the branch moves. Each step runs again only when one of its inputs changes. Only add it if a new worktree can't start without it.
   - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch. Never a clean reinstall (npm ci, or deleting what it installs first): it throws away what a new worktree was given.
@@ -111,8 +114,10 @@ Never run the app with & or nohup in your own shell. Use the tools, so it stays 
    - listening: every port is inside this Thread's block; one with a note is a fixed port a second copy would fight over.
    - connectsTo: each local service it uses, with who runs it. A service another Thread's copy uses too is shared, so the copy needs its own database, namespace or prefix there (section 6).
    - writing and changedFolders: nothing of the project's in the usual data folder or profile, such as ~/Library/Application Support/<app>. Other apps write to these folders too; look for this project's names.
-5. Call app_check "quick", then app_check "full" if the recipe has one.
+5. Call app_check "quick", then app_check "full" if the recipe has one. Each result says how long it took; if the start or a check is slower than the targets at the top, make it faster, or tell the user what it costs.
 6. Call app_stop, then app_probe again: nothing is listening, and leftovers is empty. A leftover is a process the app left behind, such as a daemon it started, which the next copy would find.
+
+This proof is for the recipe, after it's saved. After that, agents run a check when it covers what they changed, not as a ritual every turn.
 
 ## 6. Outside services
 

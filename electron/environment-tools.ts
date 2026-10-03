@@ -34,8 +34,14 @@ import {
   type Recipe,
 } from "./thread-recipe.js"
 
-/** Under the one minute some agents (Codex) give an MCP tool; longer waits come back as "still starting". */
+/** Under the minute most harnesses' MCP clients give a tool call; longer waits come back as "still starting". */
 const SETTLE_MS = 25_000
+/**
+ * How long app_check waits for a result, by harness: Codex gives Mako's
+ * own servers fifteen minutes (mcp-runtime.ts), and Claude bounds an MCP
+ * call by nothing by default. The others get SETTLE_MS.
+ */
+const CHECK_WAIT_MS = new Map([["codex", 10 * 60_000], ["claude", 10 * 60_000]])
 const FAILURE_LINES = 40
 /** Under memory pressure, another Thread's app unused this long is stopped to make room. */
 const EVICT_QUIET_MS = 15 * 60 * 1000
@@ -333,8 +339,14 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
     const { done } = await deps.processes.prepared(checkout)
-    return Object.fromEntries(await Promise.all(recipe.prepare.map(async (step) =>
-      [step.command, done[step.command] === (await inputsDigest(checkout, step.inputs)) ? "up to date" : "runs before the next start or check"] as const)))
+    const root = await projectRoot(checkout)
+    const linked = root === checkout ? [] : await linkedEntries(checkout, recipe.prepare)
+    return Object.fromEntries(await Promise.all(recipe.prepare.map(async (step) => {
+      const digest = await inputsDigest(checkout, step.inputs)
+      // As prepare() decides: linked packages need no install while the inputs match the main checkout's.
+      const current = done[step.command] === digest || (step.link === true && linked.length > 0 && (await inputsDigest(root, step.inputs)) === digest)
+      return [step.command, current ? "up to date" : "runs before the next start or check"] as const
+    })))
   }
   /** Other checkouts of this project with the app's processes up: a recipe that runs one copy at a time waits for them. */
   const copiesElsewhere = async (current: Context): Promise<AppKey[]> => {
@@ -477,10 +489,62 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     return toolText(report)
   }
   const stop = async (conversationId: string, names?: string[]) => stopIn(await context(conversationId), names)
-  const checkIn = async (current: Context & { recipe: Recipe }, tier: CheckTier, again: () => Promise<StartOutcome>): Promise<string> => {
+  /**
+   * Check runs a conversation hasn't had the result of yet, by app, tier and
+   * conversation: the run its last app_check started or joined, and that
+   * run's result once a newer run replaced it. Its next app_check gets this
+   * instead of starting a run, so calling again to wait never loses a result.
+   */
+  const owed = new Map<string, { startedAt: number; result?: string }>()
+  const owedKey = (app: AppKey, tier: CheckTier, conversation: string) => `${app}\0${tier}\0${conversation}`
+  const checkRun = async (app: AppKey, tier: CheckTier) => (await deps.processes.status(app)).find((entry) => entry.kind === "check" && entry.name === tier)
+  const checkReport = async (app: AppKey, tier: CheckTier, status: RunStatus | undefined, command: string) => {
+    const actual = status?.command ?? command
+    const stale = actual !== command ? ` The recipe now names a different ${tier} check; this run doesn't prove it. Call app_check again to run the current recipe.` : ""
+    const passed = status?.state.kind === "exited" && status.state.code === 0
+    const output = await deps.processes.logs(app, runKey("check", tier), passed ? 15 : 60).catch(() => "")
+    return `The ${tier} check (${actual}) ${checkResult(status)}${took(status)}.${stale}\n${output}`
+  }
+  /** Before a new run replaces a finished one, keeps its result for each conversation still owed it. */
+  const keepOwedResults = async (app: AppKey, tier: CheckTier, command: string) => {
+    const status = await checkRun(app, tier)
+    if (!status || status.state.kind === "running" || status.state.kind === "starting") return
+    const waiting = [...owed.entries()].filter(([key, entry]) => key.startsWith(`${app}\0${tier}\0`) && entry.result === undefined && entry.startedAt === status.startedAt)
+    if (!waiting.length) return
+    const result = await checkReport(app, tier, status, command)
+    for (const [, entry] of waiting) entry.result = result
+  }
+  const checkWait = (conversation?: string) =>
+    deps.settleMs ?? (conversation === undefined ? undefined : CHECK_WAIT_MS.get(deps.conversation?.(conversation)?.harness ?? "")) ?? SETTLE_MS
+  /** Waits for the check under way, and returns its result or says it's still running. */
+  const awaitCheck = async (app: AppKey, tier: CheckTier, command: string, conversation: string | undefined, joined: boolean): Promise<string> => {
+    const [status] = await deps.processes.settle(app, [runKey("check", tier)], checkWait(conversation))
+    const now = (deps.now ?? Date.now)()
+    const joinedNote = joined && status?.startedAt ? ` This call joined a run already under way, started ${when(status.startedAt, now)}.` : ""
+    if (status?.state.kind === "running" || status?.state.kind === "starting") {
+      const actual = status.command
+      const stale = actual !== command ? ` The recipe now names a different ${tier} check; this run doesn't prove it.` : ""
+      return `The ${tier} check (${actual}) is still running, ${elapsed(now - (status.startedAt ?? now))} in, and keeps going.${joinedNote} Your next app_check with tier "${tier}" waits for this same run and returns its result, rather than starting another; app_logs with check "${tier}" shows its output so far.${stale}`
+    }
+    if (conversation !== undefined) owed.delete(owedKey(app, tier, conversation))
+    return (await checkReport(app, tier, status, command)) + (joinedNote ? `\n${joinedNote.trim()}` : "")
+  }
+  const checkIn = async (current: Context & { recipe: Recipe }, tier: CheckTier, again: () => Promise<StartOutcome>, conversation?: string): Promise<string> => {
     const command = current.recipe.checks[tier]
     if (!command) throw new Error(`The recipe has no ${tier} check.`)
     const { app } = current.environment
+    const mine = conversation === undefined ? undefined : owedKey(app, tier, conversation)
+    const waiting = mine === undefined ? undefined : owed.get(mine)
+    if (mine !== undefined && waiting) {
+      const status = await checkRun(app, tier)
+      const up = status?.state.kind === "running" || status?.state.kind === "starting"
+      if (waiting.result === undefined && up && status?.startedAt === waiting.startedAt) return awaitCheck(app, tier, command, conversation, false)
+      owed.delete(mine)
+      const earlier = "This is the run your last app_check left running. If you've changed files since it started, call app_check again for a new run."
+      if (waiting.result !== undefined) return `${waiting.result}\n${earlier}`
+      if (status?.startedAt === waiting.startedAt) return `${await checkReport(app, tier, status, command)}\n${earlier}`
+      return `The ${tier} check your last app_check left running was stopped before it finished, so it has no result. Call app_check again to run it.`
+    }
     if (tier === "full") {
       const names = Object.keys(current.recipe.processes)
       if (names.length) {
@@ -496,16 +560,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const preparing = await prepare(current)
       if (preparing) return preparing.message
     }
-    const key = runKey("check", tier)
-    await deps.processes.start(app, [{ kind: "check", name: tier, command, cwd: current.checkout, env: env(current, current.recipe) }])
-    const [status] = await deps.processes.settle(app, [key], settleMs)
-    const result = checkResult(status)
-    const actual = status?.command ?? command
-    const changed = actual !== command
-    const next = changed ? ` The recipe now names a different ${tier} check; this run doesn't prove it. Call app_check again once this run ends to run the current recipe.` : ""
-    if (status?.state.kind === "running") return `The ${tier} check (${actual}) is still running after ${Math.round(settleMs / 1000)} seconds. Call app_check with the same tier to keep waiting for this run, or app_logs with check "${tier}" to watch it.${next}`
-    const output = await deps.processes.logs(app, key, status?.state.kind === "exited" && status.state.code === 0 ? 15 : 60).catch(() => "")
-    return `The ${tier} check (${actual}) ${result}.${next}\n${output}`
+    await keepOwedResults(app, tier, command)
+    const { started } = await deps.processes.start(app, [{ kind: "check", name: tier, command, cwd: current.checkout, env: env(current, current.recipe) }])
+    const run = await checkRun(app, tier)
+    if (mine !== undefined && run?.startedAt !== undefined) owed.set(mine, { startedAt: run.startedAt })
+    return awaitCheck(app, tier, command, conversation, !started.includes(tier))
   }
   /** Why the install step runs now: the first step due, in words. */
   const prepareReason = async (recipe: Recipe, checkout: string): Promise<string> => {
@@ -810,7 +869,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return deps.processes.logs(environment.app, key, lines)
     },
     async check(conversationId, tier) {
-      return checkIn(await withRecipe(conversationId), tier, again(conversationId))
+      return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId)
     },
     async port(conversationId, port) {
       const { environment } = await context(conversationId)
@@ -833,7 +892,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; Mako's saved recipe comes first, so that file is ignored while this one exists.` : undefined,
         ...carried,
         running ? "This Thread's processes are still running as they were started; app_restart runs them with this recipe." : undefined,
-        "Agents already running keep the values their shell started with; their next Session gets these. Prove it with app_start and app_check.",
+        "Agents already running keep the values their shell started with; their next Session gets these. Prove it now: app_restart, then app_check quick and full.",
       ].filter(Boolean).join("\n")
     },
   }
@@ -1002,6 +1061,20 @@ function checkLine(command: string | undefined, status: RunStatus | undefined, n
   return status && status.command !== command ? `${result}; ran ${status.command}` : result
 }
 
+/** How long a finished run took, as " in 2 min 48 s"; nothing for one still going. */
+function took(status: RunStatus | undefined): string {
+  if (status?.state.kind !== "exited" || status.startedAt === undefined) return ""
+  return ` in ${elapsed(status.state.at - status.startedAt)}`
+}
+
+function elapsed(ms: number): string {
+  const seconds = Math.max(0, ms) / 1000
+  if (seconds < 10) return `${seconds.toFixed(1)} s`
+  if (seconds < 60) return `${Math.round(seconds)} s`
+  const whole = Math.round(seconds)
+  return `${Math.floor(whole / 60)} min${whole % 60 ? ` ${whole % 60} s` : ""}`
+}
+
 function checkResult(status: RunStatus | undefined): string {
   if (!status) return "not run yet"
   if (status.state.kind === "running") return "running"
@@ -1110,7 +1183,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_check",
     {
       description:
-        "Prove your change works before you report it. \"quick\" runs the recipe's check that needs no running app (such as typecheck, lint and unit tests); \"full\" starts the app first, then runs the project's end-to-end check against it. Runs in this Thread's checkout with this Thread's values and waits up to about 25 seconds; a check still running then keeps going, and calling again with the same tier waits for that run. A passing full check is the proof to report.",
+        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app first, then checks it while it runs. After recipe_save, both must pass before you report the recipe. Returns the result and how long it took. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
       inputSchema: z.object({ tier: z.enum(["quick", "full"]) }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -1130,7 +1203,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "recipe_save",
     {
       description:
-        "Replace this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run; the version it replaces is kept. Mako keeps it for the project, so every Thread on every branch uses it at once and nothing needs committing. Prove it afterwards with app_restart and app_check.",
+        "Replace this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run; the version it replaces is kept. Mako keeps it for the project, so every Thread on every branch uses it at once and nothing needs committing. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more. Prove it in the same turn: app_restart, then app_check quick and full.",
       inputSchema: z.object({
         recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and carry, secrets and oneAtATime when it needs them."),
       }).strict(),
