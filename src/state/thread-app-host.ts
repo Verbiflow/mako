@@ -1,6 +1,6 @@
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
-import { installThreadAppDriver, putAppMarks, putThreadApp, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
+import { installThreadAppDriver, putAppMarks, putRoom, putThreadApp, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
 import type { AppActionOutcome, AppOutputCursor } from "../../electron/contracts/thread-app"
 
 /** While something is changing, the control follows it closely; otherwise it looks now and then. */
@@ -84,26 +84,48 @@ export function installHostThreadApp(): void {
       })
   }
 
-  /** The sidebar's marks: one look at every app on this Mac, closer while one is starting. */
+  /**
+   * The sidebar's marks: one look at every app on this Mac, closer while one
+   * is starting. While the Room shows, the same look brings it too.
+   */
   let markWatchers = 0
+  let roomWatchers = 0
   let markTimer: ReturnType<typeof setTimeout> | undefined
   /** Bumped whenever a look starts over, so an older answer still on its way neither lands nor schedules another. */
   let markLook = 0
   const refreshMarks = async () => {
     clearTimeout(markTimer)
     const look = ++markLook
+    const watching = () => look === markLook && (markWatchers > 0 || roomWatchers > 0)
+    const withRoom = roomWatchers > 0 && document.visibilityState === "visible"
     let wait = SETTLED_MS
     try {
-      const marks = await mako.threadAppMarks()
-      if (look !== markLook || !markWatchers) return
+      const room = withRoom ? await mako.threadAppRoom() : undefined
+      const marks = room?.marks ?? await mako.threadAppMarks()
+      if (!watching()) return
       putAppMarks(marks)
+      if (room) putRoom(room)
       if (marks.some((mark) => mark.state === "starting")) wait = BUSY_MS
     } catch {
-      if (look !== markLook || !markWatchers) return
+      if (!watching()) return
       putAppMarks([])
+      if (withRoom) putRoom(undefined)
       wait = UNAVAILABLE_MS
     }
     markTimer = setTimeout(() => void refreshMarks(), document.visibilityState === "hidden" ? HIDDEN_MS : wait)
+  }
+  const watchLooks = (count: () => number, change: (by: number) => void) => {
+    change(1)
+    if (count() === 1) void refreshMarks()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      change(-1)
+      if (markWatchers > 0 || roomWatchers > 0) return
+      clearTimeout(markTimer)
+      markLook += 1
+    }
   }
 
   installThreadAppDriver({
@@ -165,15 +187,20 @@ export function installHostThreadApp(): void {
       for (const cwd of watched.keys()) schedule(cwd, 0)
       return setup
     },
-    watchMarks: () => {
-      if (++markWatchers === 1) void refreshMarks()
-      let released = false
+    watchMarks: () => watchLooks(() => markWatchers, (by) => { markWatchers += by }),
+    watchRoom: () => {
+      const release = watchLooks(() => roomWatchers, (by) => { roomWatchers += by })
       return () => {
-        if (released) return
-        released = true
-        if (--markWatchers > 0) return
-        clearTimeout(markTimer)
-        markLook += 1
+        release()
+        if (!roomWatchers) putRoom(undefined)
+      }
+    },
+    stopApps: async (apps) => {
+      try {
+        await mako.stopThreadApps(apps)
+      } finally {
+        if (markWatchers || roomWatchers) void refreshMarks()
+        for (const cwd of watched.keys()) schedule(cwd, 0)
       }
     },
   })
@@ -181,7 +208,7 @@ export function installHostThreadApp(): void {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return
     for (const cwd of watched.keys()) schedule(cwd, 0)
-    if (markWatchers) void refreshMarks()
+    if (markWatchers || roomWatchers) void refreshMarks()
   })
 }
 

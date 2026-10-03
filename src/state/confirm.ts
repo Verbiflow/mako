@@ -2,7 +2,7 @@ import { createHook, createStore } from "@/state/store"
 
 /** One thing the action touches, named exactly, with what becomes of it. */
 export interface ConfirmSubject {
-  kind: "folder" | "branch"
+  kind: "folder" | "branch" | "app"
   name: string
   /** A word or two: "Deleted", "Kept", "3 commits". */
   detail?: string
@@ -17,7 +17,7 @@ export interface ConfirmRequest {
   confirm: string
   /** Negative for an action that deletes something. */
   tone?: "negative" | "default"
-  icon?: "remove" | "merge"
+  icon?: "remove" | "merge" | "stop"
   subjects?: readonly ConfirmSubject[]
   /** Subjects past the shown ones, counted in a last row. */
   more?: number

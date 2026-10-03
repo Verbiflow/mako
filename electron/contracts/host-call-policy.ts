@@ -40,6 +40,7 @@ const reads = [
   "mako:thread-groups",
   "mako:thread-purposes",
   "mako:thread-app-marks",
+  "mako:thread-app-room",
   "mako:project-app-setup",
   "mako:worktrees",
   "mako:worktree-ahead",

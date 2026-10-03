@@ -1,6 +1,6 @@
 import { registerIpc } from "./register.js"
 import type { DeskApp } from "../environment-tools.js"
-import { AppOutputKeySchema, type AppActionOutcome, type AppMark, type AppOutputChunk, type AppOutputCursor, type ThreadAppView } from "../contracts/thread-app.js"
+import { AppOutputKeySchema, type AppActionOutcome, type AppMark, type AppOutputChunk, type AppOutputCursor, type RoomView, type ThreadAppView } from "../contracts/thread-app.js"
 import type { ProjectAppSetup } from "../contracts/project-app.js"
 
 /** A folder's app for the strip and the terminal dock: its view, its buttons, and what it printed. */
@@ -15,6 +15,8 @@ export function installThreadAppIpc(desk: DeskApp) {
   registerIpc("mako:thread-app-output", (_event, cwd: string, key: string, cursor?: AppOutputCursor): Promise<AppOutputChunk> =>
     desk.output(cwd, AppOutputKeySchema.parse(key), cursor))
   registerIpc("mako:thread-app-marks", (): Promise<AppMark[]> => desk.marks())
+  registerIpc("mako:thread-app-room", (): Promise<RoomView> => desk.room())
+  registerIpc("mako:thread-app-stop-apps", (_event, apps: string[]): Promise<void> => desk.stopApps(apps))
   registerIpc("mako:project-app-setup", (_event, cwd: string): Promise<ProjectAppSetup> => desk.setup(cwd))
   registerIpc("mako:project-app-secrets", (_event, cwd: string, allow: boolean): Promise<ProjectAppSetup> => desk.allowSecrets(cwd, allow))
 }

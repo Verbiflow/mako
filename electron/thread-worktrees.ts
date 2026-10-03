@@ -13,7 +13,7 @@ import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDet
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
-import { placeSpare, setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
+import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 
 const execute = promisify(execFile)
 /** Git's own markers for work under way, which a removal would throw away. */
@@ -685,7 +685,7 @@ export class ThreadWorktreeService {
     const spare = await this.spares.claim(receipt.repoRoot)
     if (!spare) return undefined
     try {
-      await placeSpare(spare, receipt.path, receipt.branch, receipt.base)
+      await this.spares.place(spare, receipt.path, receipt.branch, receipt.base)
     } catch {
       await this.spares.discard(spare)
       if (!existsSync(receipt.path)) return undefined
@@ -699,12 +699,20 @@ export class ThreadWorktreeService {
       const [main, here] = await Promise.all([inputsDigest(receipt.repoRoot, outputs.inputs), inputsDigest(receipt.path, outputs.inputs)])
       const step = recipe?.prepare.find((step) => step.command === outputs.command &&
         step.inputs.length === outputs.inputs.length && step.inputs.every((input, index) => input === outputs.inputs[index]))
+      let removed = false
       for (const entry of outputs.entries) {
         if (main === outputs.digest && here === outputs.digest &&
           step?.outputs?.some((pattern) => matchesGlob(entry, pattern))) continue
         const aside = join(this.trash(), randomUUID())
         await mkdir(this.trash(), { recursive: true, mode: 0o700 })
         if (await rename(join(receipt.path, entry), aside).then(() => true, () => false)) void removeBelowAgents(aside)
+        removed = true
+      }
+      // The record came with the spare; a step whose outputs went runs again.
+      const record = removed ? await this.setup?.prepared(receipt.path) : undefined
+      if (record && record.done[outputs.command] !== undefined) {
+        const done = Object.fromEntries(Object.entries(record.done).filter(([command]) => command !== outputs.command))
+        await this.setup!.savePrepared(receipt.path, { ...record, done })
       }
     }
     return spare

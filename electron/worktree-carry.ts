@@ -7,6 +7,7 @@ import { promisify } from "node:util"
 import { belowAgents } from "./background-priority.js"
 import type { Prepared } from "./thread-processes.js"
 import { holdsCredentials } from "./recipe-secrets.js"
+import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { git } from "./worktree-git.js"
 
@@ -14,6 +15,12 @@ const execute = promisify(execFile)
 
 /** Beside a project's checkouts: output clones being made, renamed into place when whole. */
 export const CARRYING = ".carrying"
+/** Spare checkouts' folders are named with this, beside the Threads' worktrees. */
+export const SPARE_PREFIX = ".spare-"
+
+export function isSpareCheckout(path: string): boolean {
+  return basename(path).startsWith(SPARE_PREFIX)
+}
 /** A clone takes seconds; one staged longer ago than this was left by a host that stopped. */
 export const CARRYING_STALE_MS = 60 * 60_000
 /** Smaller files are copied in-process; cloning only pays for itself past the cost of starting `cp`. */
@@ -41,6 +48,9 @@ export interface CheckoutSetup {
   grantedSecrets?(checkout: string, recipe: Recipe | undefined): Promise<string[]>
   prepared(checkout: string): Promise<Prepared>
   savePrepared(checkout: string, prepared: Prepared): Promise<void>
+  forgetPrepared?(checkout: string): Promise<void>
+  /** Runs a spare checkout's install steps in the background; without it, spares get cloned outputs only. */
+  spareInstall?: SpareInstall
 }
 
 /** One install step's outputs, cloned from the main checkout for the inputs they were made from. */

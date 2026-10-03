@@ -10,16 +10,17 @@
 // setup-fallback (the same, with Codex chosen for setting up but signed out), and
 // setup-asking (not set up, after a setup Thread's turn ended without a recipe), and
 // rail (running, with four of the api project's Threads in worktrees whose
-// apps run, start, crash and wait, for the sidebar's marks).
+// apps run, start, crash and wait, for the sidebar's marks and the Status view's Room).
 import { toast } from "sonner"
 import { setPref } from "@/state/prefs"
 import { threadsStore } from "@/state/thread-store"
 import type { SetupProgress } from "../../electron/contracts/thread-app"
 import type { ProjectAppSetup } from "../../electron/contracts/project-app"
-import { RAIL_MARKS } from "./mock-rail-worktrees"
+import { RAIL_MARKS, railRoom } from "./mock-rail-worktrees"
 import {
   installThreadAppDriver,
   putAppMarks,
+  putRoom,
   putThreadApp,
   threadAppStore,
   type AppOutputKey,
@@ -167,6 +168,8 @@ export function installMockThreadApp(): void {
   let installed = scenario !== "demo"
   let crashes = scenario === "demo"
   let roomMade = false
+  /** Apps stopped from the Room, which stay gone from it. */
+  const roomStopped = new Set<string>()
 
   const emit = (key: AppOutputKey, lines: string[]) => {
     const chunk = lines.map((line) => `${line}\r\n`).join("")
@@ -324,6 +327,17 @@ export function installMockThreadApp(): void {
     takeTurn: () => {
       put({ elsewhere: undefined })
       start()
+    },
+    watchRoom: () => {
+      if (scenario !== "rail") return () => {}
+      const room = railRoom(Date.now())
+      putRoom({ ...room, apps: room.apps.filter((app) => !roomStopped.has(app.app)) })
+      return () => putRoom(undefined)
+    },
+    stopApps: async (apps) => {
+      for (const app of apps) roomStopped.add(app)
+      const room = threadAppStore.get().room
+      if (room) putRoom({ ...room, apps: room.apps.filter((app) => !roomStopped.has(app.app)) })
     },
     setup: async (root) => mockSetup(root),
     allowSecrets: async (root, allow) => {
