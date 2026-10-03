@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
+import { configuredListenPort } from "./listen-port.js"
 import type { ControlPreviews } from "./control-previews.js"
 import {
   ComputerObservationSchema,
@@ -222,7 +223,7 @@ export async function startControlService(
   server.requestTimeout = 70_000
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
-    server.listen(0, "127.0.0.1", resolve)
+    server.listen(configuredListenPort("MAKO_RUNTIME_CONTROL_PORT"), "127.0.0.1", resolve)
   })
   const { port } = z.object({ port: z.number() }).parse(server.address())
   return {

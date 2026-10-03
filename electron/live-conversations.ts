@@ -74,7 +74,7 @@ import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, T
 import { controlNote } from "./control-launch.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
 import { carriedUsage, spendBetween } from "./session-usage.js"
-import { CONNECTION_LOST_STOP, type ContextBreakdown } from "./contracts/providers-acp.js"
+import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type ContextBreakdown } from "./contracts/providers-acp.js"
 import {
   AUTO_CONTINUE_DELAY_MS,
   autoContinueCandidate,
@@ -3537,10 +3537,11 @@ function observeNativeActivity(
  * saved session holds the turn so far: then a process that died under the
  * turn, or a turn that failed on a dropped connection, is picked up where it
  * stopped. Without that receipt the outcome is unknown and stays the user's
- * call. A session that reports itself closed was ended on purpose.
+ * call. A session that reports itself closed was ended on purpose, and one
+ * whose transport already exhausted its own retries is never re-run here.
  */
 function continuableInterruption(request: LiveRequest, session: LiveSessionState): InterruptionReason | undefined {
-  if (session.status === "closed") return undefined
+  if (session.status === "closed" || session.lastStop === RETRIES_EXHAUSTED_STOP) return undefined
   if (session.lastStop === CONNECTION_LOST_STOP) return "connection-lost"
   if (session.status === "ready" || request.nativeDelivery?.evidence.kind !== "accepted") return undefined
   if (session.connection === "disconnected") return "provider-exited"

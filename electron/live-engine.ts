@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto"
-import type { ApprovalSubmission, ApprovalEndSource } from "./contracts/approval-response.js"
+import type {
+  ApprovalSubmission,
+  ApprovalEndSource,
+} from "./contracts/approval-response.js"
 import type {
   LiveDriverEvent,
   LivePermissionRequest,
@@ -10,9 +13,16 @@ import type {
   NativeAgentObservation,
   NativeNotice,
 } from "./shared.js"
-import { compactionEvent, type Compaction, type TranscriptEvent } from "@mako/sessions/events"
+import {
+  compactionEvent,
+  type Compaction,
+  type TranscriptEvent,
+} from "@mako/sessions/events"
 import type { JsonValue } from "./codex-app-json.js"
-import { decodedNotices, type DecodedSink } from "./contracts/native-decoding.js"
+import {
+  decodedNotices,
+  type DecodedSink,
+} from "./contracts/native-decoding.js"
 import { retainUnknown, type UnknownReason } from "./native-unknown.js"
 
 /** What a live engine's per-session record must carry to share the runtime. */
@@ -20,12 +30,18 @@ export interface EngineLive {
   state: LiveSessionState
   emit(event: LiveDriverEvent): void
   /** Present when the engine answers requests through a pending map. */
-  pendingPermissions?: Map<string, (response: LivePermissionResponse, ended?: ApprovalEndSource) => void>
+  pendingPermissions?: Map<
+    string,
+    (response: LivePermissionResponse, ended?: ApprovalEndSource) => void
+  >
 }
 
 /** Sessions whose permission requests resolve through a pending map. */
 export interface PermittingLive extends EngineLive {
-  pendingPermissions: Map<string, (response: LivePermissionResponse, ended?: ApprovalEndSource) => void>
+  pendingPermissions: Map<
+    string,
+    (response: LivePermissionResponse, ended?: ApprovalEndSource) => void
+  >
 }
 
 export interface LiveEngineApi<Live extends EngineLive> {
@@ -54,7 +70,12 @@ export interface LiveEngineApi<Live extends EngineLive> {
    * means the decoder does not know it, and `kind` is logged as unhandled.
    * `source` is the native event's own id, which names its markers.
    */
-  observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined, source?: string): void
+  observe(
+    live: Live,
+    kind: string,
+    notices: readonly NativeNotice[] | undefined,
+    source?: string
+  ): void
   /**
    * A native event this engine does not translate. Logged once per harness
    * and kind for the host's life, so a new provider event is on record
@@ -67,14 +88,27 @@ export interface LiveEngineApi<Live extends EngineLive> {
    * Where a harness decoder's events go for this session. `effect` takes
    * the harness's own facts; `usage` the plan-limit windows it reported.
    */
-  sink<Effect>(live: Live, handlers: { effect(effect: Effect): void; usage?(windows: import("./account-types.js").UsageWindow[]): void }): DecodedSink<Effect>
+  sink<Effect>(
+    live: Live,
+    handlers: {
+      effect(effect: Effect): void
+      usage?(windows: import("./account-types.js").UsageWindow[]): void
+    }
+  ): DecodedSink<Effect>
   /**
    * Put a request to the desk and wait for its answer. The pending entry
    * is removed when the answer arrives; `release` answers whatever is
    * left when the session stops.
    */
-  ask(live: PermittingLive, request: LivePermissionRequest): Promise<LivePermissionResponse>
-  respondPermission(id: string, requestId: string, response: LivePermissionResponse): ApprovalSubmission
+  ask(
+    live: PermittingLive,
+    request: LivePermissionRequest
+  ): Promise<LivePermissionResponse>
+  respondPermission(
+    id: string,
+    requestId: string,
+    response: LivePermissionResponse
+  ): ApprovalSubmission
   /** Every request a stopping session leaves behind gets no choice. */
   release(live: PermittingLive): void
 }
@@ -102,7 +136,9 @@ interface Compacting {
   until?: number
 }
 
-export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live> {
+export function createLiveEngine<
+  Live extends EngineLive,
+>(): LiveEngineApi<Live> {
   const sessions = new Map<string, Live>()
   const compacting = new WeakMap<Live, Compacting>()
   /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
@@ -110,18 +146,26 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
     const held = compacting.get(live)
     if (held && held.until === undefined) held.until = Date.now()
   }
-  const activity = (live: Live, observation: NativeActivityObservation | null): void => {
+  const activity = (
+    live: Live,
+    observation: NativeActivityObservation | null
+  ): void => {
     const held = compacting.get(live)
     if (observation?.kind === "compacting") {
-      if (!held || held.until !== undefined) compacting.set(live, { since: Date.now() })
+      if (!held || held.until !== undefined)
+        compacting.set(live, { since: Date.now() })
     } else if (observation?.kind !== "retrying") stopCompacting(live)
-    live.emit({ type: "live-activity", id: live.state.id, activity: observation })
+    live.emit({
+      type: "live-activity",
+      id: live.state.id,
+      activity: observation,
+    })
   }
   const drawn = new WeakMap<Live, Set<string>>()
   /** Whether this native event already has its marker; the first one drawn stands. */
   const repeated = (live: Live, id: string): boolean => {
     let ids = drawn.get(live)
-    if (!ids) drawn.set(live, ids = new Set())
+    if (!ids) drawn.set(live, (ids = new Set()))
     if (ids.has(id)) return true
     ids.add(id)
     if (ids.size > MAX_DRAWN_MARKERS) ids.delete(ids.values().next().value!)
@@ -129,21 +173,37 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
   }
   const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
     if (id && repeated(live, id)) return
-    live.emit({ type: "live-update", id: live.state.id, update: id ? { kind: "event", id, ...marker } : { kind: "event", ...marker } })
+    const update: LiveUpdate = id
+      ? {
+          kind: "event",
+          ...marker,
+          id,
+          source: marker.source ?? { harness: live.state.harness, record: id },
+        }
+      : { kind: "event", ...marker }
+    live.emit({ type: "live-update", id: live.state.id, update })
   }
-  const compacted = (live: Live, compaction?: Compaction, id?: string): void => {
+  const compacted = (
+    live: Live,
+    compaction?: Compaction,
+    id?: string
+  ): void => {
     const held = compacting.get(live)
     compacting.delete(live)
     const until = held?.until ?? Date.now()
-    const measured = held && compaction?.durationMs === undefined && Date.now() - until < COMPACTION_LINGER_MS
-      ? { ...compaction, durationMs: until - held.since }
-      : compaction
+    const measured =
+      held &&
+      compaction?.durationMs === undefined &&
+      Date.now() - until < COMPACTION_LINGER_MS
+        ? { ...compaction, durationMs: until - held.since }
+        : compaction
     event(live, compactionEvent(measured), id)
     activity(live, null)
   }
   /** Patch the session's state and report the new whole. */
   const patch = (live: Live, change: Partial<LiveSessionState>): void => {
-    if (change.status !== undefined && change.status !== "running") stopCompacting(live)
+    if (change.status !== undefined && change.status !== "running")
+      stopCompacting(live)
     live.state = { ...live.state, ...change }
     live.emit({ type: "live-session", session: live.state })
   }
@@ -176,27 +236,42 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
     activity,
     compacted,
     event,
-    observe(live: Live, kind: string, notices: readonly NativeNotice[] | undefined, source?: string): void {
+    observe(
+      live: Live,
+      kind: string,
+      notices: readonly NativeNotice[] | undefined,
+      source?: string
+    ): void {
       if (!notices) return unhandledEvent(live, kind)
       for (const item of decodedNotices(notices, source)) {
         if (item.kind === "activity") activity(live, item.activity)
-        else if (item.kind === "compacted") compacted(live, item.compaction, item.source)
+        else if (item.kind === "compacted")
+          compacted(live, item.compaction, item.source)
         else if (item.kind === "marker") event(live, item.marker, item.source)
       }
     },
     unhandled: unhandledEvent,
-    unknown(live: Live, kind: string, reason: UnknownReason, raw: JsonValue): void {
+    unknown(
+      live: Live,
+      kind: string,
+      reason: UnknownReason,
+      raw: JsonValue
+    ): void {
       retainUnknown(live.state.harness, kind, reason, raw)
     },
     sink(live, handlers) {
       return {
-        updates: (updates) => updates.length === 1 ? emitUpdate(live, updates[0]!) : emitUpdates(live, updates),
+        updates: (updates) =>
+          updates.length === 1
+            ? emitUpdate(live, updates[0]!)
+            : emitUpdates(live, updates),
         patch: (change) => patch(live, change),
         activity: (observation) => activity(live, observation),
         marker: (marker, source) => event(live, marker, source),
         compacted: (compaction, source) => compacted(live, compaction, source),
         usage: (windows) => handlers.usage?.(windows),
-        unknown: (kind, reason, raw) => retainUnknown(live.state.harness, kind, reason, raw),
+        unknown: (kind, reason, raw) =>
+          retainUnknown(live.state.harness, kind, reason, raw),
         effect: (effect) => handlers.effect(effect),
       }
     },
@@ -206,16 +281,30 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
      * is removed when the answer arrives; `release` answers whatever is
      * left when the session stops.
      */
-    ask(live: PermittingLive, request: LivePermissionRequest): Promise<LivePermissionResponse> {
-      if (live.pendingPermissions.has(request.id)) throw new Error("Repeated pending permission request")
+    ask(
+      live: PermittingLive,
+      request: LivePermissionRequest
+    ): Promise<LivePermissionResponse> {
+      if (live.pendingPermissions.has(request.id))
+        throw new Error("Repeated pending permission request")
       const observationId = randomUUID()
       return new Promise((resolve) => {
         live.pendingPermissions.set(request.id, (response, ended) => {
           live.pendingPermissions.delete(request.id)
-          if (ended) live.emit({ type: "live-permission-ended", id: live.state.id, requestId: request.id, observationId, source: ended })
+          if (ended)
+            live.emit({
+              type: "live-permission-ended",
+              id: live.state.id,
+              requestId: request.id,
+              observationId,
+              source: ended,
+            })
           resolve(response)
         })
-        live.emit({ type: "live-permission", request: { ...request, observationId } })
+        live.emit({
+          type: "live-permission",
+          request: { ...request, observationId },
+        })
       })
     },
 
@@ -225,7 +314,12 @@ export function createLiveEngine<Live extends EngineLive>(): LiveEngineApi<Live>
       response: LivePermissionResponse
     ): ApprovalSubmission {
       const respond = sessions.get(id)?.pendingPermissions?.get(requestId)
-      if (!respond) return { kind: "not-submitted", pending: false, reason: "request-ended" }
+      if (!respond)
+        return {
+          kind: "not-submitted",
+          pending: false,
+          reason: "request-ended",
+        }
       respond(response)
       return { kind: "submitted", source: "callback" }
     },

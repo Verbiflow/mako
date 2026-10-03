@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, relative } from "node:path"
+import { basename, dirname, isAbsolute, join, matchesGlob, relative } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { ThreadStore } from "./thread-store.js"
@@ -688,11 +688,15 @@ export class ThreadWorktreeService {
       if (!(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"]))) await git(receipt.path, ["checkout", "-q", receipt.branch])
     }
     await this.spares.used(spare)
-    // Its outputs were cloned for the inputs of that moment; if either side's have changed since, they go.
+    // A warmed spare must obey the current recipe as well as the current inputs.
+    const recipe = await this.setup?.recipe(receipt.path)
     for (const outputs of spare.outputs) {
       const [main, here] = await Promise.all([inputsDigest(receipt.repoRoot, outputs.inputs), inputsDigest(receipt.path, outputs.inputs)])
-      if (main === outputs.digest && here === outputs.digest) continue
+      const step = recipe?.prepare.find((step) => step.command === outputs.command &&
+        step.inputs.length === outputs.inputs.length && step.inputs.every((input, index) => input === outputs.inputs[index]))
       for (const entry of outputs.entries) {
+        if (main === outputs.digest && here === outputs.digest &&
+          step?.outputs?.some((pattern) => matchesGlob(entry, pattern))) continue
         const aside = join(this.trash(), randomUUID())
         await mkdir(this.trash(), { recursive: true, mode: 0o700 })
         if (await rename(join(receipt.path, entry), aside).then(() => true, () => false)) void removeBelowAgents(aside)

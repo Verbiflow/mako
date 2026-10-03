@@ -13,7 +13,7 @@ import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView } from "./c
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
-import { carryFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
+import { bringFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
 import { listed, toolText, when } from "./tool-text.js"
 import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
@@ -139,7 +139,7 @@ type StartOutcome =
   | ({ kind: "blocked" } & Unprepared)
   | { kind: "waiting"; notes: string[]; message: string }
   | { kind: "elsewhere"; whose: string }
-  | { kind: "started"; notes: string[]; lines: string[]; refused: { name: string; reason: string }[]; stillStarting: boolean }
+  | { kind: "started"; notes: string[]; lines: string[]; refused: { name: string; reason: string }[]; stillStarting: boolean; address?: string }
 
 export function environmentTools(deps: Deps): EnvironmentTools {
   const settleMs = deps.settleMs ?? SETTLE_MS
@@ -173,7 +173,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (installTimer || !afterInstall.size) return
     installTimer = setTimeout(() => {
       void (async () => {
-        for (const [app, again] of [...afterInstall]) {
+        for (const [app, again] of Array.from(afterInstall)) {
           const install = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")
           if (install?.state.kind === "running" || install?.state.kind === "starting") continue
           afterInstall.delete(app)
@@ -298,13 +298,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     await deps.processes.settle(app, [PREPARE_KEY], settleMs)
     return settled()
   }
-  /** The credentials files the person allowed, into a checkout made before they did; the main checkout has its own. */
-  const bringSecrets = async ({ checkout, recipe }: Context & { recipe: Recipe }) => {
-    if (!deps.recipesRoot || !recipe.secrets?.length) return
+  /** Catch up older worktrees with the recipe's files and approved credentials, keeping their own edits. */
+  const bringCheckoutFiles = async ({ checkout, recipe }: Context & { recipe: Recipe }) => {
     const root = await projectRoot(checkout)
     if (root === checkout) return
-    const granted = grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
-    if (granted.length) await carryFiles(root, checkout, granted)
+    const granted = deps.recipesRoot ? grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout)) : []
+    await bringFiles(root, checkout, [...(recipe.carry ?? []), ...granted].map((path) => ({ path })), granted)
   }
   /** Under memory pressure, stops other Threads' quiet apps first; the start waits only while the machine stays critical. */
   const makeRoom = async (app: AppKey): Promise<{ refused?: string; notes: string[] }> => {
@@ -365,8 +364,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         return { kind: "elsewhere", whose: deps.whose?.(holder) || holder }
       }
     }
+    await bringCheckoutFiles(current)
     if (idle.length) {
-      await bringSecrets(current)
       const preparing = await prepare(current)
       if (preparing?.installing) {
         afterInstall.set(app, again)
@@ -398,9 +397,9 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const already = !result.started.includes(name)
       return `${name}: ${describe(status)}${already && status?.state.kind === "running" ? " (it was already running)" : ""}${await failureTail(deps.processes, app, status)}`
     }))
-    return { kind: "started", notes, lines, refused: result.refused, stillStarting: statuses.some((status) => status.state.kind === "starting") }
+    return { kind: "started", notes, lines, refused: result.refused, stillStarting: statuses.some((status) => status.state.kind === "starting"), address: appAddress(current.recipe, current.environment, [...statuses, ...before]) }
   }
-  const startText = (current: Context, outcome: StartOutcome): string => {
+  const startText = (outcome: StartOutcome): string => {
     if (outcome.kind === "nothing") return "The recipe names no processes to start."
     if (outcome.kind === "blocked") return outcome.message
     if (outcome.kind === "waiting") return [...outcome.notes, outcome.message].join("\n")
@@ -409,7 +408,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     return [
       ...outcome.notes,
       ...outcome.lines,
-      `App: http://${current.environment.host}:${current.environment.port}`,
+      outcome.address ? `App: ${outcome.address}` : undefined,
       outcome.stillStarting ? `Still starting after ${Math.round(settleMs / 1000)} seconds; call app_status to see when it's up, or app_logs to see why not.` : undefined,
     ].filter(Boolean).join("\n")
   }
@@ -420,7 +419,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const deskAgain = (cwd: string) => async (): Promise<StartOutcome> => startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd))
   const start = async (conversationId: string, names?: string[]) => {
     const current = await withRecipe(conversationId)
-    return startText(current, await startIn(current, names, again(conversationId, names)))
+    return startText(await startIn(current, names, again(conversationId, names)))
   }
   /** Stops the named processes, or the whole app with its install step and any check under way; finished checks keep their results. */
   const stopIn = async ({ environment, checkout, read }: Context & { read?: Read }, names?: string[]) => {
@@ -485,14 +484,15 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (tier === "full") {
       const names = Object.keys(current.recipe.processes)
       if (names.length) {
-        const running = startText(current, await startIn(current, names, again))
+        const running = startText(await startIn(current, names, again))
         const statuses = await deps.processes.status(app)
         const down = names.filter((name) => statuses.find((entry) => entry.kind === "process" && entry.name === name)?.state.kind !== "running")
         if (down.length) return `The full check needs the app running, and ${down.join(", ")} isn't up yet:\n${running}`
       }
+      else await bringCheckoutFiles(current)
     }
     else {
-      await bringSecrets(current)
+      await bringCheckoutFiles(current)
       const preparing = await prepare(current)
       if (preparing) return preparing.message
     }
@@ -500,9 +500,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     await deps.processes.start(app, [{ kind: "check", name: tier, command, cwd: current.checkout, env: env(current, current.recipe) }])
     const [status] = await deps.processes.settle(app, [key], settleMs)
     const result = checkResult(status)
-    if (status?.state.kind === "running") return `The ${tier} check (${command}) is still running after ${Math.round(settleMs / 1000)} seconds. Call app_check with the same tier to keep waiting for this run, or app_logs with check "${tier}" to watch it.`
+    const actual = status?.command ?? command
+    const changed = actual !== command
+    const next = changed ? ` The recipe now names a different ${tier} check; this run doesn't prove it. Call app_check again once this run ends to run the current recipe.` : ""
+    if (status?.state.kind === "running") return `The ${tier} check (${actual}) is still running after ${Math.round(settleMs / 1000)} seconds. Call app_check with the same tier to keep waiting for this run, or app_logs with check "${tier}" to watch it.${next}`
     const output = await deps.processes.logs(app, key, status?.state.kind === "exited" && status.state.code === 0 ? 15 : 60).catch(() => "")
-    return `The ${tier} check (${command}) ${result}.\n${output}`
+    return `The ${tier} check (${actual}) ${result}.${next}\n${output}`
   }
   /** Why the install step runs now: the first step due, in words. */
   const prepareReason = async (recipe: Recipe, checkout: string): Promise<string> => {
@@ -533,7 +536,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       : processes.some((entry) => entry && failed(entry)) ? "failed"
       : processes.some((entry) => entry && working(entry)) ? "running"
       : "waiting"
-    const checks = (["quick", "full"] as const).filter((tier) => read.recipe.checks[tier]).map((tier) => runs.find((entry) => entry.kind === "check" && entry.name === tier))
+    const checks = (["quick", "full"] as const).filter((tier) => read.recipe.checks[tier]).map((tier) => runs.find((entry) => entry.kind === "check" && entry.name === tier && entry.command === read.recipe.checks[tier]))
     const passed = (entry: RunStatus | undefined) => entry?.state.kind === "exited" && entry.state.code === 0
     const checkStep: SetupStep = checks.length && checks.every(passed) ? "done"
       : checks.some((entry) => entry && working(entry)) ? "running"
@@ -585,7 +588,9 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return command ? [checkView(tier, command, run("check", tier))] : []
     })
     const view: ThreadAppView = { kind: "ready", project: found.project, phase: "stopped", processes, checks }
-    if (found.environment) view.address = { host: found.environment.host, port: found.environment.port }
+    const browser = processes.find((entry) => entry.name === "web" && entry.state === "running" && entry.port !== undefined)
+      ?? processes.find((entry) => entry.state === "running" && entry.port !== undefined)
+    if (found.environment && browser?.port !== undefined) view.address = { host: found.environment.host, port: browser.port }
     if (deps.recipesRoot && read.recipe.secrets?.length
       && grantedSecrets(read.recipe, await readAllowedSecrets(deps.recipesRoot, found.checkout)).length < read.recipe.secrets.length)
       view.credentialsWaiting = true
@@ -746,7 +751,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         return command || status ? [[tier, checkLine(command, status, now)] as const] : []
       })
       const report = {
-        app: `http://${environment.host}:${environment.port}`,
+        app: read.kind === "ready" ? appAddress(read.recipe, environment, runs) : `http://${environment.host}:${environment.port}`,
         ports: `${environment.port}-${environment.port + environment.ports - 1}`,
         dataFolder: environment.dataDir,
         recipe: recipeSummary(read),
@@ -781,7 +786,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const current = await withRecipe(conversationId)
       const picked = chosen(current.recipe, names)
       await deps.processes.stop(current.environment.app, picked.map((name) => runKey("process", name)))
-      return startText(current, await startIn(current, picked, again(conversationId, picked)))
+      return startText(await startIn(current, picked, again(conversationId, picked)))
     },
     async probe(conversationId) {
       return probe(await context(conversationId))
@@ -859,9 +864,26 @@ function markState(runs: AppOverview["runs"]): AppMark["state"] | undefined {
   return undefined
 }
 
+/** A web process is preferred; recipes without one use their first listening process. */
+function appAddress(recipe: Recipe, environment: ThreadEnvironment, runs?: RunStatus[]): string | undefined {
+  const entries = Object.entries(recipe.processes)
+  const active = entries.filter(([name]) => {
+    const run = runs?.find((run) => run.kind === "process" && run.name === name)
+    return run && run.port !== undefined && (run.state.kind === "running" || run.state.kind === "starting")
+  })
+  const available = active.length ? active : entries
+  const picked = available.find(([name, spec]) => name === "web" && spec.port) ?? available.find(([, spec]) => spec.port)
+  if (!picked) return undefined
+  const [name, spec] = picked
+  const status = runs?.find((run) => run.kind === "process" && run.name === name)
+  const port = status && (status.state.kind === "running" || status.state.kind === "starting") ? status.port : processPort(spec, environment)
+  return port === undefined ? undefined : `http://${environment.host}:${port}`
+}
+
 function processView(name: string, port: number | undefined, status: RunStatus | undefined): AppProcessView {
   const view: AppProcessView = { name, state: "stopped" }
-  if (port !== undefined) view.port = port
+  const listening = status && (status.state.kind === "running" || status.state.kind === "starting") ? status.port : port
+  if (listening !== undefined) view.port = listening
   if (!status) return view
   if (status.memoryBytes !== undefined) view.memoryBytes = status.memoryBytes
   if (status.state.kind === "running" || status.state.kind === "starting") view.state = status.state.kind
@@ -874,6 +896,7 @@ function processView(name: string, port: number | undefined, status: RunStatus |
 
 function checkView(tier: CheckTier, command: string, status: RunStatus | undefined): AppCheckView {
   const view: AppCheckView = { tier, command, state: "never" }
+  if (status && status.command !== command) return view
   if (status?.state.kind === "running" || status?.state.kind === "starting") view.state = "running"
   if (status?.state.kind === "exited") {
     view.state = status.state.code === 0 ? "passed" : "failed"

@@ -40,7 +40,7 @@ function variableProblem(name: string): string | undefined {
 }
 
 /** A path in the checkout, or a pattern: `*` stays within one folder, `**` crosses any number of them. */
-const checkoutPattern = z.string().trim().min(1).max(300).refine(
+export const checkoutPattern = z.string().trim().min(1).max(300).refine(
   (pattern) => !isAbsolute(pattern) && !pattern.split("/").some((part) => part === "" || part === "." || part === ".." || part === ".git"),
   "a path in the checkout, such as .env or **/node_modules",
 )

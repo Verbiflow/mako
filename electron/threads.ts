@@ -21,7 +21,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join } from "node:path"
 import { MessageChannel, Worker } from "node:worker_threads"
 import { app } from "electron"
 import { connectOnDemandCatalog } from "./catalog-connection.js"
@@ -53,8 +53,8 @@ import type {
 } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "./host-log.js"
-import { WorkspaceGit } from "./host-git.js"
-import { WorkspaceFiles } from "./host-workspace.js"
+import { readConversationFile } from "./host-workspace.js"
+import { threadFileWorkspace } from "./contracts/thread-file-workspace.js"
 import { WorktreeOrigins } from "./worktree-origins.js"
 import { annotate as annotateLineage, loadLineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
@@ -1002,8 +1002,10 @@ export async function readThreadFile(
   const ref = daemon
     ? mirror.get(threadPath)
     : catalog?.list().find((candidate) => candidate.path === threadPath)
-  const cwd = ref?.workspace ?? ref?.cwd ?? "/"
-  return new WorkspaceFiles(cwd, new WorkspaceGit(cwd)).read(filePath)
+  const cwd = ref ? threadFileWorkspace(ref) : undefined
+  if (!cwd && !isAbsolute(filePath) && !filePath.startsWith("~/"))
+    throw new Error("This conversation has no recorded working folder. Open the file by its full path.")
+  return readConversationFile(cwd ?? "/", filePath)
 }
 
 export async function pageThread(

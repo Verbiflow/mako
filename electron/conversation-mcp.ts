@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
+import { configuredListenPort } from "./listen-port.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationTools } from "./providers/live-driver.js"
 import { registerWorkspaceTools, type WorkspaceTools } from "./workspace-tools.js"
@@ -30,7 +31,7 @@ const MAKO_INSTRUCTIONS = [
   "- checkout: either of these; this Session edits in one.",
   "- app: the project running from a checkout on this Thread's ports. Threads in the main checkout share its app; a worktree's app is its Thread's alone.",
   "- recipe: how every Thread of the project installs, starts and checks its app. Mako keeps one per project, for every branch.",
-  "worktree_*: which checkout this Session edits in; moving it into this Thread's worktree, merging the worktree's branch and removing the worktree.",
+  "worktree_*: which checkout this Session edits in; moving it into this Thread's worktree, bringing ignored files from the main checkout, merging the worktree's branch and removing the worktree.",
   "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
   "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save replaces it. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
@@ -145,7 +146,7 @@ export async function startConversationMcp(
   server.requestTimeout = 15_000
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
-    server.listen(0, "127.0.0.1", resolve)
+    server.listen(configuredListenPort("MAKO_CONVERSATION_MCP_PORT"), "127.0.0.1", resolve)
   })
   const address = server.address()
   if (!address || Object.prototype.toString.call(address) === "[object String]")

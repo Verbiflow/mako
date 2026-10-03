@@ -141,7 +141,7 @@ export class ThreadEnvironments {
     if (read.kind === "none") return { ...environment, recipe: { kind: "none" } }
     if (read.kind === "invalid") return { ...environment, recipe: { kind: "invalid", message: read.message } }
     const linked = await linkedEntries(checkout, read.recipe.prepare).catch((): string[] => [])
-    return {
+    const result: ThreadEnvironment = {
       ...environment,
       values: recipeValues(read.recipe, environment),
       recipe: {
@@ -153,9 +153,10 @@ export class ThreadEnvironments {
           return entry
         }),
         checks: Object.keys(read.recipe.checks),
-        ...(linked.length ? { linked } : {}),
       },
     }
+    if (result.recipe?.kind === "ready" && linked.length) result.recipe.linked = linked
+    return result
   }
 
   /**

@@ -98,14 +98,16 @@ export class AgentHost {
   }
 
   async start(cwd = this.workspace): Promise<void> {
-    this.setWorkspace(cwd)
+    await this.setWorkspace(cwd)
   }
 
-  private setWorkspace(cwd: string): void {
+  private async setWorkspace(cwd: string): Promise<void> {
     this.stopWorkspaceWatcher()
     this.workspaceGit.setCwd(cwd)
     this.workspaceFiles.setCwd(cwd)
     if (this.foreground) this.startWorkspaceWatcher()
+    // A caller may write immediately after start or a folder change resolves.
+    await Promise.all([this.workspaceWatcher?.ready, this.gitDirWatch?.ready])
   }
 
   private startWorkspaceWatcher(): void {
@@ -214,7 +216,7 @@ export class AgentHost {
   }
 
   async setCwd(cwd: string): Promise<void> {
-    this.setWorkspace(cwd)
+    await this.setWorkspace(cwd)
     this.pushState()
     void this.pushGit()
   }

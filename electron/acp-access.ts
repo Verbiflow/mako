@@ -144,7 +144,10 @@ export function acpModeChange(
   current: string | null = null
 ): AcpModeChange {
   const tier = accessTierOfModeId(modeId)
-  if (!tier) return { kind: "native", modeId, nativeModeId: modeId }
+  if (!tier) {
+    if (!modes.some((mode) => mode.id === modeId)) throw new Error(`${harness} does not offer that mode`)
+    return { kind: "native", modeId, nativeModeId: modeId }
+  }
   const mode = modes.find((item) => item.id === modeId)
   if (!mode) throw new Error(`${harness} does not offer that access level`)
   if (policy?.launch?.includes(tier) && tier === launchedTier)

@@ -3,9 +3,9 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { promisify } from "node:util"
 import { z } from "zod"
-import { accountEnv, selectedAccount } from "./accounts.js"
+import { resolveAccountLaunch } from "./accounts.js"
 import { providerHost } from "./providers/index.js"
-import type { ProviderMcpSource } from "./providers/mcp-source.js"
+import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
 import { backendConnectionCredentials } from "./backend-connection.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
@@ -53,6 +53,8 @@ const RawDefinitionSchema = RawTransportSchema.extend({
   name: OptionalStringSchema,
   auth_status: OptionalStringSchema,
   transport: RawTransportSchema.optional(),
+  enabled: z.boolean().optional(),
+  disabled: z.boolean().optional(),
 })
 const JsonMapSchema = z.record(z.string(), z.json())
 const NamedRootSchema = z
@@ -75,6 +77,7 @@ const OpenCodeRootSchema = z.object({
           env: StringMapSchema.optional(),
           environment: StringMapSchema.optional(),
           headers: StringMapSchema.optional(),
+          enabled: z.boolean().optional(),
         })
         .passthrough()
     )
@@ -87,6 +90,7 @@ interface CleanUrlResult {
 }
 
 export interface McpInternalDefinition extends McpServerDefinition {
+  enabled?: boolean
   env?: Record<string, string>
   headers?: Record<string, string>
   bearerTokenEnvVar?: string
@@ -104,6 +108,7 @@ export interface McpDiscoveryRoute {
   env: NodeJS.ProcessEnv
   command: string | null
   readsCli: boolean
+  readFormat: McpReadFormat
   write: ProviderMcpSource["write"]
   userFiles: string[]
   workspaceFiles: string[]
@@ -206,6 +211,8 @@ function parseDefinition(
   if (Object.keys(env).length > 0) result.env = env
   if (Object.keys(headers).length > 0) result.headers = headers
   if (bearerTokenEnvVar) result.bearerTokenEnvVar = bearerTokenEnvVar
+  if (root.enabled !== undefined) result.enabled = root.enabled
+  else if (root.disabled !== undefined) result.enabled = !root.disabled
   return result
 }
 
@@ -224,11 +231,11 @@ function parseNamedMap(value: JsonValue): McpInternalDefinition[] {
 }
 
 export function parseProviderJson(
-  provider: McpProvider,
+  format: McpReadFormat,
   contents: string
 ): McpInternalDefinition[] {
   const value = z.json().parse(JSON.parse(contents))
-  if (provider === "opencode") {
+  if (format === "command-array-map") {
     const parsed = OpenCodeRootSchema.safeParse(value)
     if (!parsed.success) return []
     return Object.entries(parsed.data.mcp ?? {}).flatMap(
@@ -242,12 +249,13 @@ export function parseProviderJson(
         if (definition.type) normalized.type = definition.type
         if (definition.url) normalized.url = definition.url
         if (definition.headers) normalized.headers = definition.headers
+        if (definition.enabled !== undefined) normalized.enabled = definition.enabled
         const item = parseDefinition(name, normalized)
         return item ? [item] : []
       }
     )
   }
-  if ((provider === "codex" || provider === "grok") && Array.isArray(value)) {
+  if (format === "named-map-or-list" && Array.isArray(value)) {
     return value.flatMap((entry) => {
       const parsed = RawDefinitionSchema.safeParse(entry)
       if (!parsed.success || !parsed.data.name) return []
@@ -298,6 +306,7 @@ export function mergeMcpDefinitions(
     )
       continue
     const safe = safeDefinition(item.definition)
+    const origin = item.definition.enabled === undefined ? item.origin : { ...item.origin, enabled: item.definition.enabled }
     const body = bodyKey(safe)
     namesByBody.set(body, (namesByBody.get(body) ?? new Set()).add(safe.name))
     bodiesByName.set(
@@ -306,14 +315,15 @@ export function mergeMcpDefinitions(
     )
     const existing = grouped.get(body)
     if (existing) {
-      if (!existing.origins.some((origin) => sameOrigin(origin, item.origin)))
-        existing.origins.push(item.origin)
+      const previous = existing.origins.findIndex((candidate) => sameOrigin(candidate, origin))
+      if (previous === -1) existing.origins.push(origin)
+      else existing.origins[previous] = origin
       continue
     }
     grouped.set(body, {
       ...safe,
       id: createHash("sha256").update(body).digest("hex").slice(0, 16),
-      origins: [item.origin],
+      origins: [origin],
     })
   }
   const records = [...grouped.values()]
@@ -359,8 +369,7 @@ export async function mcpDiscoveryRoute(
   const source = providerHost.mcpSources.get(provider)
   if (!source)
     throw new Error(`Provider ${provider} has no MCP discovery source`)
-  const env = await accountEnv(provider, process.env)
-  const selected = await selectedAccount(provider)
+  const { env, account: selected } = await resolveAccountLaunch(provider, process.env)
   return {
     provider,
     account: selected.name,
@@ -368,6 +377,7 @@ export async function mcpDiscoveryRoute(
     env,
     command: source.command(env),
     readsCli: source.readsCli,
+    readFormat: source.readFormat,
     write: source.write,
     userFiles: source.userFiles(selected),
     workspaceFiles: source.workspaceFiles(cwd),
@@ -385,7 +395,7 @@ async function readJsonDefinitions(
     for (const file of files) {
       try {
         const parsed = parseProviderJson(
-          route.provider,
+          route.readFormat,
           await readFile(file, "utf8")
         )
         if (
@@ -430,7 +440,7 @@ async function readCliDefinitions(
       maxBuffer: MAX_CLI_OUTPUT,
       windowsHide: true,
     })
-    const parsed = parseProviderJson(route.provider, stdout)
+    const parsed = parseProviderJson(route.readFormat, stdout)
     return parsed
       .filter(
         (definition) =>
@@ -575,23 +585,8 @@ export function projectPortableDefinitions(
   provider: McpProvider,
   transports: readonly McpTransport[]
 ): McpServerDefinition[] {
-  const nativeNames = new Set(
-    snapshot.servers
-      .filter((server) =>
-        server.origins.some((origin) => origin.provider === provider)
-      )
-      .map((server) => server.name)
-  )
-  return snapshot.servers
-    .filter(
-      (server) =>
-        server.portable &&
-        !server.origins.some((origin) => origin.provider === "mako") &&
-        !server.conflict &&
-        server.availability !== "unavailable" &&
-        transports.includes(server.transport) &&
-        !nativeNames.has(server.name)
-    )
+  return projectedMcpServers(snapshot, provider, transports)
+    .filter((server) => !server.origins.some((origin) => origin.provider === "mako"))
     .map(safeDefinition)
 }
 

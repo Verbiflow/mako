@@ -147,6 +147,8 @@ interface Live {
   settling: Array<() => void>
   /** Stop is closing and resuming the session to end its background work; a prompt waits for it. */
   reopening?: Promise<void>
+  /** Only one native mode request may own the acknowledgment at a time. */
+  changingMode?: boolean
   /** The tier the process was launched with, for providers that read it at start. */
   launchAccess: AccessTier | null
 }
@@ -472,21 +474,25 @@ async function startAcp(
       const startup = mcpStartup?.decode(method, params)
       const native = startup ?? source?.decodeNotification?.(method, params)
       const decoded = native && (startup || native.connectionWide) ? { ...native, sessionId: native.sessionId ?? live.sessionId ?? undefined } : native
-      if (decoded) applyNotification(decoded)
-      else if (!observed && !report) engine.unhandled(live, method)
+      if (decoded) applyNotification(decoded, { method, params })
+      else if (!observed && !report) engine.unknown(live, method, "unknown", { method, params })
     },
   }
   /**
    * A notification for another session is not this conversation's; an unknown one is logged either way.
    * Notices said while the session is still opening (MCP servers failing to start) wait for its id.
    */
-  function applyNotification(decoded: AcpNotificationDecoding): void {
+  function applyNotification(decoded: AcpNotificationDecoding, raw?: JsonObject): void {
     const { sessionId, kind, notices, state, id: source } = decoded
     if ((notices?.length || decoded.usage?.length) && !live.sessionId) {
       opening.push(decoded)
       return
     }
     if (notices && sessionId !== live.sessionId) return
+    if (notices === undefined && raw) {
+      engine.unknown(live, kind, "unknown", raw)
+      return
+    }
     const marked = live.compaction ? notices?.map(asManualCompaction) : notices
     engine.observe(live, kind, marked, source)
     if (notices && state) update(live, state)
@@ -510,12 +516,12 @@ async function startAcp(
    */
   function refusedUpdate({ params, kind, known }: RefusedSessionUpdate): void {
     const decoded = known ? undefined : source?.decodeNotification?.("session/update", params)
-    if (decoded) applyNotification(decoded)
-    else engine.unhandled(live, known ? `session/update/${kind}/invalid` : `session/update/${kind}`)
+    if (decoded) applyNotification(decoded, { method: "session/update", params })
+    else engine.unknown(live, known ? `session/update/${kind}/invalid` : `session/update/${kind}`, "unreadable", { method: "session/update", params })
   }
   /** The SDK kept this update but not all of it; each lost place is logged once. */
-  function lossyUpdate({ kind, paths }: LossySessionUpdate): void {
-    for (const path of paths) engine.unhandled(live, `session/update/${kind}/lost/${path}`)
+  function lossyUpdate({ params, kind, paths }: LossySessionUpdate): void {
+    for (const path of paths) engine.unknown(live, `session/update/${kind}/lost/${path}`, "unreadable", { method: "session/update", params })
   }
   const mcpStartup = source?.mcpStartup?.()
   const opening: AcpNotificationDecoding[] = []
@@ -942,22 +948,32 @@ export function acpRespondPermission(
 
 export async function liveSetMode(id: string, modeId: string): Promise<void> {
   const live = sessions.get(id)
-  if (!live?.sessionId || !live.connection) return
+  if (!live?.sessionId || !live.connection || live.state.status === "closed" || live.state.connection === "disconnected" || live.startup.signal.aborted)
+    throw new Error("This session is no longer connected. Reconnect before changing its mode.")
+  if (live.changingMode) throw new Error("A mode change is already waiting for the agent. Wait for its acknowledgment.")
+  if (live.reopening) throw new Error("This session is reconnecting. Wait before changing its mode.")
   const policy = providerHost.acpSources.get(live.harness)?.access
   const change = acpModeChange(policy, live.state.modes, modeId, live.launchAccess, live.harness, live.state.currentMode)
   if (change.kind === "unchanged") {
     update(live, { currentMode: change.modeId })
     return
   }
+  const connection = live.connection
+  const sessionId = live.sessionId
   const nativeMode = change.nativeModeId
-  if (nativeMode) {
-    await live.connection.setSessionMode({ sessionId: live.sessionId, modeId: nativeMode })
+  live.changingMode = true
+  try {
+    await connection.setSessionMode({ sessionId, modeId: nativeMode })
+    if (sessions.get(id) !== live || live.connection !== connection || live.sessionId !== sessionId || live.startup.signal.aborted)
+      throw new Error("The session ended before its mode change was acknowledged.")
     live.configOptions = live.configOptions.map((option) =>
       option.type === "select" && (option.category === "mode" || option.id === "mode")
         ? { ...option, currentValue: nativeMode } : option
     )
+    update(live, { currentMode: change.modeId, configOptions: normalizeAcpOptions(live.configOptions), settings: acpObservedSettings(live.configOptions, live.state.settings?.model) })
+  } finally {
+    live.changingMode = false
   }
-  update(live, { currentMode: change.modeId, configOptions: normalizeAcpOptions(live.configOptions), settings: acpObservedSettings(live.configOptions, live.state.settings?.model) })
 }
 
 /** Project the mode reported by the native runtime. */

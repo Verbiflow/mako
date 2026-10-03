@@ -3,6 +3,11 @@ import { contextBridge, ipcRenderer, webUtils } from "electron"
 // values, and bundling them would put all of zod into every renderer's preload.
 import { createMakoBridge } from "./contracts/renderer-bridge.js"
 import type { HostEvent, TerminalEvent } from "./shared.js"
+import { resolveDeskPreviewUrl } from "./desk-preview-url.js"
+
+// Sandboxed Electron preloads have Chromium's location even though this
+// compiler project uses Node libraries rather than the full DOM library.
+declare const location: { readonly href: string }
 
 const clientId = process.argv.find((argument) => argument.startsWith("--mako-client="))?.slice("--mako-client=".length)
 const api = createMakoBridge({
@@ -28,10 +33,7 @@ const api = createMakoBridge({
     }
   },
   resolveFileUrl: (url) => {
-    if (!clientId || !url.startsWith("mako-file:")) return url
-    const target = new URL(url)
-    target.searchParams.set("client", clientId)
-    return target.href
+    return resolveDeskPreviewUrl(url, location.href, clientId)
   },
   pathForFile: (file) => {
     try {

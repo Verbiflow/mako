@@ -52,8 +52,7 @@ import { environmentTools } from "./environment-tools.js"
 import { startControlService } from "./control-service.js"
 import type { ForkInput, MessageAnchor, TransferInput } from "./shared.js"
 import { TransferInputSchema } from "./contracts/conversation-control.js"
-import { WorkspaceFiles } from "./host-workspace.js"
-import { WorkspaceGit } from "./host-git.js"
+import { readConversationFile } from "./host-workspace.js"
 import { resolveFilePreview } from "./file-previews.js"
 import { providerHost } from "./providers/index.js"
 import { describeConnection } from "./providers/connection-capability.js"
@@ -247,6 +246,8 @@ import {
 } from "./relay-worker.js"
 import type { RelayWorkspaceCandidate } from "./relay-workspace.js"
 import { applyMcpSync, previewMcpSync } from "./mcp-sync.js"
+import { nativeAuthoringCatalog, listNativeAuthoring, readNativeAuthoring, writeNativeAuthoring, removeNativeAuthoring } from "./native-authoring.js"
+import type { NativeAuthoringTarget, NativeAuthoringWrite, NativeAuthoringRemove } from "./contracts/native-authoring.js"
 import {
   discoverSkillRegistry,
   resolveSkillReferences,
@@ -1569,6 +1570,11 @@ function bindIpc() {
   handle("mako:skills-discover", () =>
     withHost((host) => discoverSkillRegistry(host.workspace))
   )
+  handle("mako:native-authoring-catalog", () => withHost((host) => nativeAuthoringCatalog(host.workspace)))
+  handle("mako:native-authoring-list", (_e, target: NativeAuthoringTarget) => withHost((host) => listNativeAuthoring(host.workspace, target)))
+  handle("mako:native-authoring-read", (_e, target: NativeAuthoringTarget, id: string) => withHost((host) => readNativeAuthoring(host.workspace, target, id)))
+  handle("mako:native-authoring-write", (_e, input: NativeAuthoringWrite) => withHost((host) => writeNativeAuthoring(host.workspace, input)))
+  handle("mako:native-authoring-remove", (_e, input: NativeAuthoringRemove) => withHost((host) => removeNativeAuthoring(host.workspace, input)))
   handle("mako:skills-resolve", (_e, names: string[], harness: string) =>
     withHost(async (host) =>
       resolveSkillReferences(
@@ -1626,15 +1632,12 @@ function bindIpc() {
     const drivers = providerHost.liveDrivers
       .list()
       .filter((driver) => driver.available(app.getAppPath()))
-    const providers = new Set([
-      ...resumable,
-      ...drivers.map((driver) => driver.provider),
-    ])
-    return [...providers].map((provider) => {
+    return providerHost.harnesses.list().map(({ provider, presentation }) => {
       const driver = drivers.find((entry) => entry.provider === provider)
       const descriptor: HarnessDescriptor = {
         provider,
         displayName: providerHost.profiles.get(provider)?.label ?? provider,
+        presentation,
         resumable: resumable.has(provider),
         live: driver !== undefined,
         canResume: driver?.canResume ?? false,
@@ -1810,10 +1813,7 @@ function bindIpc() {
   handle("mako:read-live-file", (_event, id: string, path: string) => {
     const snapshot = liveConversations.snapshot(id)
     if (!snapshot) throw new Error("That conversation is unavailable")
-    return new WorkspaceFiles(
-      snapshot.session.cwd,
-      new WorkspaceGit(snapshot.session.cwd)
-    ).read(path)
+    return readConversationFile(snapshot.session.cwd, path)
   })
   handle("mako:live-snapshot", (_event, id: string) =>
     liveConversations.refreshedSnapshot(id)
@@ -2111,7 +2111,7 @@ app.whenReady().then(async () => {
   trace("backend configured")
   protocol.handle("mako-file", readFilePreview)
   if (!isDev) {
-    serveDesk(rendererBundle)
+    serveDesk(rendererBundle, readFilePreview)
     const moved = await adoptDeskOrigin({ userData: app.getPath("userData"), dist: rendererBundle })
     if (moved.kind === "failed") hostWarn("renderer", "storage move failed", { error: moved.error })
     else if (moved.kind === "moved") hostLog("renderer", "storage moved", { origin: "mako-app://desk", entries: moved.entries })
@@ -2289,6 +2289,7 @@ app.whenReady().then(async () => {
       worktrees: threadWorktrees,
       moves,
       removed: () => emit({ type: "worktrees-changed" }),
+      recipesRoot: threadRecipes,
     }),
     appTools
   )

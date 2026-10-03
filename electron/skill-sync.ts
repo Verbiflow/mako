@@ -1,3 +1,4 @@
+import { providerHost } from "./providers/index.js"
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { cp, mkdir, rename, rm } from "node:fs/promises"
@@ -61,7 +62,19 @@ export async function previewSkillSync(
   target: SkillSyncTarget
 ): Promise<SkillSyncPreview> {
   const skill = findSkill(snapshot, skillId)
-  const status = snapshot.providers.find((entry) => entry.id === target.provider)
+  if (
+    !providerHost.skillEditing
+      .get(target.provider)
+      ?.operations.includes("import")
+  )
+    return blockedPreview(
+      skillId,
+      target,
+      "Skill import is not implemented for this harness"
+    )
+  const status = snapshot.providers.find(
+    (entry) => entry.id === target.provider
+  )
   if (!status || status.account !== target.account)
     return blockedPreview(
       skillId,
@@ -77,7 +90,8 @@ export async function previewSkillSync(
   const root = await skillTargetRoot(snapshot.cwd, target)
   const targetDirectory = join(root, skill.name)
   const targetHash = await currentHash(targetDirectory)
-  const action = targetHash === skill.hash ? "unchanged" : targetHash ? "replace" : "add"
+  const action =
+    targetHash === skill.hash ? "unchanged" : targetHash ? "replace" : "add"
   previews.set(previewKey(skillId, target), {
     action,
     sourceHash: skill.hash,
@@ -100,7 +114,19 @@ export async function previewSkillRemove(
   target: SkillSyncTarget
 ): Promise<SkillSyncPreview> {
   const skill = findSkill(snapshot, skillId)
-  const status = snapshot.providers.find((entry) => entry.id === target.provider)
+  if (
+    !providerHost.skillEditing
+      .get(target.provider)
+      ?.operations.includes("remove")
+  )
+    return blockedPreview(
+      skillId,
+      target,
+      "Skill removal is not implemented for this harness"
+    )
+  const status = snapshot.providers.find(
+    (entry) => entry.id === target.provider
+  )
   if (!status || status.account !== target.account)
     return blockedPreview(
       skillId,
@@ -151,7 +177,14 @@ export async function applySkillSync(
   const key = previewKey(skillId, target)
   const cached = previews.get(key)
   if (!cached) throw new Error("Preview this skill change before applying it")
-  if (cached.action === "blocked") throw new Error("This skill change is blocked")
+  if (cached.action === "blocked")
+    throw new Error("This skill change is blocked")
+  if (
+    !providerHost.skillEditing
+      .get(target.provider)
+      ?.operations.includes(cached.action === "remove" ? "remove" : "import")
+  )
+    throw new Error("This skill operation is not implemented for this harness")
   if (cached.action === "unchanged") {
     previews.delete(key)
     return

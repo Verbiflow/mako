@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { WebSocketServer, type WebSocket } from "ws"
 import { z } from "zod"
+import { configuredListenPort } from "./listen-port.js"
 import type { LocalBrowser } from "@mako/control-runtime/desktop"
 import type { JsonObject } from "./codex-app-json.js"
 
@@ -102,7 +103,7 @@ export class DeskBrowser {
   }
 
   private async open(generation: number): Promise<string> {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 })
+    const server = new WebSocketServer({ host: "127.0.0.1", port: configuredListenPort("MAKO_DESK_BROWSER_PORT") })
     await new Promise<void>((resolve, reject) => {
       server.once("listening", resolve)
       server.once("error", reject)

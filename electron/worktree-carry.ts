@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
-import { copyFile, cp, lstat, mkdir, readdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { copyFile, cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve } from "node:path"
 import { promisify } from "node:util"
 import { belowAgents } from "./background-priority.js"
@@ -81,7 +81,16 @@ export async function matchedEntries(repoRoot: string, patterns: readonly string
   const ignored = await ignoredEntries(repoRoot).catch((): string[] => [])
   const found = new Set(ignored.filter((entry) => patterns.some((pattern) => matchesGlob(entry, pattern))))
   for (const pattern of patterns) {
-    if (/[*?[\]{}]/.test(pattern) || found.has(pattern)) continue
+    if (/[*?[\]{}]/.test(pattern)) {
+      const prefix = pattern.slice(0, pattern.search(/[*?[\]{}]/))
+      // Git collapses an ignored folder; ask only for a pattern aimed inside it.
+      if (ignored.some((entry) => prefix.startsWith(`${entry}/`) && !matchesGlob(entry, pattern))) {
+        const nested = await git(repoRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", `:(glob)${pattern}`])
+        for (const entry of nested.split("\0").filter(Boolean)) found.add(entry)
+      }
+      continue
+    }
+    if (found.has(pattern)) continue
     if (ignored.some((entry) => pattern.startsWith(`${entry}/`)) && existsSync(join(repoRoot, pattern))) found.add(pattern)
   }
   return [...found].sort()
@@ -227,11 +236,12 @@ export async function carryFiles(repoRoot: string, checkout: string, patterns: r
   for (const entry of await matchedEntries(repoRoot, patterns)) {
     const from = join(repoRoot, entry)
     const to = join(checkout, entry)
-    if (existsSync(to)) continue
+    if (await lstat(to).catch(() => undefined)) continue
     const info = await lstat(from).catch(() => undefined)
     if (!info || (info.isDirectory() && virtualEnvironment(from))) continue
     await mkdir(dirname(to), { recursive: true })
-    if (info.isSymbolicLink()) await symlink(await readlink(from), to)
+    if (info.isSymbolicLink() && holdsCredentials(entry)) await copyFile(from, to, constants.COPYFILE_EXCL)
+    else if (info.isSymbolicLink()) await symlink(await readlink(from), to)
     else if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(from, to, constants.COPYFILE_EXCL)
     // Node's FICLONE never clones on macOS (libuv copies the bytes there); `cp -c` does.
     else if (info.isFile() && process.platform === "darwin") await execute("/bin/cp", ["-c", "-n", from, to])
@@ -239,14 +249,73 @@ export async function carryFiles(repoRoot: string, checkout: string, patterns: r
     else if (info.isDirectory()) {
       const [cloned] = await cloneTrees([[from, to]], false)
       if (!cloned) {
-        // It wasn't there before, so whatever a failed clone left is its own.
-        await rm(to, { recursive: true, force: true })
-        await cp(from, to, { recursive: true, verbatimSymlinks: true })
+        // Another caller may have placed it while clonefile ran; never remove or replace that copy.
+        await cp(from, to, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true })
       }
     } else continue
     copied += 1
   }
   return copied
+}
+
+export interface BringEntry {
+  path: string
+  link?: boolean
+}
+
+export interface BringReport {
+  copied: string[]
+  linked: string[]
+  existing: string[]
+  missing: string[]
+}
+
+/** One-off ignored files, with no value reads and no replacement of the worktree's own files. */
+export async function bringFiles(repoRoot: string, checkout: string, entries: readonly BringEntry[], granted: readonly string[]) {
+  const report: BringReport = { copied: [], linked: [], existing: [], missing: [] }
+  const selected = new Map<string, boolean>()
+  for (const request of entries) {
+    const matches = await matchedEntries(repoRoot, [request.path])
+    if (!matches.length) report.missing.push(request.path)
+    for (const path of matches) {
+      if (selected.has(path) && selected.get(path) !== Boolean(request.link)) throw new Error(`Both copy and link were requested for ${path}. Choose one.`)
+      selected.set(path, Boolean(request.link))
+    }
+  }
+  // Validate every selection before copying any of it.
+  for (const path of selected.keys()) {
+    const source = await realpath(join(repoRoot, path))
+    if (!inside(source, repoRoot)) throw new Error(`${path} points outside the main checkout, so it wasn't brought.`)
+    if (virtualEnvironment(source)) throw new Error(`${path} is a Python virtual environment. Run its install step in this worktree instead.`)
+    const files = (await git(repoRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", path])).split("\0").filter(Boolean)
+    const credentials = [path, relative(repoRoot, source), ...files].filter((file) => holdsCredentials(file) && !granted.some((pattern) => matchesGlob(file, pattern)))
+    if (credentials.length) throw new Error(`${credentials[0]} holds credentials the user hasn't allowed this worktree to have. List it under recipe secrets and allow it in Mako's App setup; nobody reads its values.`)
+    let parent = dirname(join(checkout, path))
+    while (!(await lstat(parent).catch(() => undefined))) parent = dirname(parent)
+    if (!inside(await realpath(parent), checkout)) throw new Error(`${path}'s destination points outside this worktree, so it wasn't brought.`)
+  }
+  for (const [path, link] of selected) {
+    const to = join(checkout, path)
+    if (await lstat(to).catch(() => undefined)) { report.existing.push(path); continue }
+    await mkdir(dirname(to), { recursive: true })
+    if (link) {
+      await symlink(relative(dirname(to), join(repoRoot, path)), to)
+      report.linked.push(path)
+    } else {
+      // Env files that happen to be symlinks still become independent copies.
+      const source = await realpath(join(repoRoot, path))
+      const info = await lstat(source)
+      if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(source, to, constants.COPYFILE_EXCL)
+      else if (info.isFile() && process.platform === "darwin") await execute("/bin/cp", ["-c", "-n", source, to])
+      else if (info.isFile()) await copyFile(source, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
+      else if (info.isDirectory()) {
+        const [cloned] = await cloneTrees([[source, to]], false)
+        if (!cloned) await cp(source, to, { recursive: true, verbatimSymlinks: true, force: false, errorOnExist: true })
+      } else throw new Error(`${path} isn't a file or folder.`)
+      report.copied.push(path)
+    }
+  }
+  return report
 }
 
 /**

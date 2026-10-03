@@ -1,10 +1,11 @@
 import { appendFile, mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
-import { hostLog, hostLogPath, scrubSecrets } from "./host-log.js"
+import { hostLog, hostLogPath } from "./host-log.js"
+import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
 
 /**
- * Opt-in recording of a harness's native messages exactly as they arrived,
+ * Opt-in recording of a harness's native messages with secrets scrubbed,
  * so a session that rendered wrong can be decoded again
  * (`npm run decode -- codex <capture>`) and kept as a fixture.
  *
@@ -53,6 +54,17 @@ export function nativeCapture(
       hostLog("live", "native capture stopped", { harness, path, error: String(error) })
     })
   }
+  const append = (line: string): boolean => {
+    const size = Buffer.byteLength(line, "utf8")
+    if (bytes + size > MAX_BYTES) {
+      stopped = true
+      write(`${JSON.stringify({ truncated: true, bytes })}\n`)
+      return false
+    }
+    bytes += size
+    write(line)
+    return true
+  }
   return {
     path,
     record(message) {
@@ -60,19 +72,12 @@ export function nativeCapture(
       if (bytes === 0) {
         queue = queue.then(() => mkdir(dirname(path), { recursive: true })).then(() => undefined)
         const header = { capture: 1, harness, conversation, session: session() }
-        const line = `${JSON.stringify(header)}\n`
-        bytes += line.length
-        write(line)
+        const line = `${nativeDiagnosticJson(header)}\n`
+        if (!append(line)) return
         hostLog("live", "native capture started", { harness, path })
       }
-      const line = `${scrubSecrets(JSON.stringify({ at: new Date().toISOString(), message }))}\n`
-      if (bytes + line.length > MAX_BYTES) {
-        stopped = true
-        write(`${JSON.stringify({ truncated: true, bytes })}\n`)
-        return
-      }
-      bytes += line.length
-      write(line)
+      const line = `${nativeDiagnosticJson({ at: new Date().toISOString(), message })}\n`
+      append(line)
     },
     flush: () => queue,
   }

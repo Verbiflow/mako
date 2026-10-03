@@ -28,7 +28,15 @@ export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
       continue
     }
     if (block.type === "event") {
-      entries.push({ kind: "event", label: block.label, detail: block.detail })
+      entries.push({
+        kind: "event",
+        id: block.id,
+        label: block.label,
+        detail: block.detail,
+        body: block.body,
+        tone: block.tone,
+        source: block.source,
+      })
       continue
     }
     if (block.type === "plan") {

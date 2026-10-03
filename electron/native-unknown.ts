@@ -1,7 +1,8 @@
 import { appendFile, mkdir, rename, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { JsonValue } from "./codex-app-json.js"
-import { hostLog, hostLogPath, scrubSecrets } from "./host-log.js"
+import { hostLog, hostLogPath } from "./host-log.js"
+import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
 
 /**
  * Native records no decoder has a meaning for, kept so a new provider event
@@ -67,7 +68,7 @@ export function flushUnknown(): Promise<void> {
 }
 
 function sample(raw: JsonValue): JsonValue | string {
-  const text = scrubSecrets(JSON.stringify(raw) ?? "null")
+  const text = nativeDiagnosticJson(raw)
   if (text.length > MAX_SAMPLE) return `${text.slice(0, MAX_SAMPLE)}… (${text.length} characters)`
   try {
     const parsed: JsonValue = JSON.parse(text)

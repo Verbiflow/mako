@@ -35,6 +35,8 @@ export interface RefusedSessionUpdate {
 
 /** A `session/update` the SDK accepted after dropping or replacing part of it. */
 export interface LossySessionUpdate {
+  /** Original notification params, before the SDK discarded values. */
+  params: JsonObject
   kind: string
   /** Where the SDK lost a value, list indices as `[]`, e.g. `status` or `entries[]`. */
   paths: string[]
@@ -101,7 +103,7 @@ export async function screenSessionUpdates(
       if (!isObject(accepted)) return
       const paths = new Set<string>()
       lostValues(update, accepted["update"], "", paths)
-      if (paths.size) lossy({ kind, paths: [...paths] })
+      if (paths.size) lossy({ params, kind, paths: [...paths] })
     },
   }))
   return { readable, writable: stream.writable }

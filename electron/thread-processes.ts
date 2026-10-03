@@ -311,7 +311,8 @@ export class ThreadProcesses {
       }
       leftovers.push(...[...found].map((pid) => ({ pid, command: commandOf(rows, pid) })))
     }
-    return { pids: [...pids], leftovers, records: this.dependencies.root, ...(since === undefined ? {} : { since }) }
+    const report = { pids: [...pids], leftovers, records: this.dependencies.root }
+    return since === undefined ? report : { ...report, since }
   }
 
   /** Who listens on a port: one of an app's runs, or a process Mako didn't start. */

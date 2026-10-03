@@ -1,3 +1,4 @@
+import { providerHost } from "./providers/index.js"
 import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
@@ -14,10 +15,7 @@ import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { JsonObject } from "./codex-app-json.js"
-import {
-  mcpDiscoveryRoute,
-  type McpDiscoveryRoute,
-} from "./mcp-registry.js"
+import { mcpDiscoveryRoute, type McpDiscoveryRoute } from "./mcp-registry.js"
 import type {
   McpRegistrySnapshot,
   McpServerDefinition,
@@ -58,30 +56,33 @@ function directPath(
     : (route.workspaceFiles[0] ?? null)
 }
 
+/** Native JSON shapes, reusable by any adapter declaring that shape. */
+const JSON_FORMATS = {
+  claude: { root: "mcpServers", command: "string", remote: "transport" },
+  cursor: { root: "mcpServers", command: "string", remote: "implicit" },
+  opencode: { root: "mcp", command: "array", remote: "remote" },
+} as const
+type JsonMcpFormat = keyof typeof JSON_FORMATS
+
 function serializableDefinition(
   definition: McpServerDefinition,
-  provider: "claude" | "cursor" | "opencode" = "cursor"
+  format: JsonMcpFormat = "cursor"
 ): JsonObject {
+  const encoding = JSON_FORMATS[format]
   if (definition.transport === "stdio") {
-    const env = {}
-    if (provider === "opencode") {
-      const result: JsonObject = {
+    if (encoding.command === "array")
+      return {
         type: "local",
         command: [definition.command ?? "", ...(definition.args ?? [])],
       }
-      if (Object.keys(env).length > 0) result.environment = env
-      return result
-    }
     const result: JsonObject = { command: definition.command ?? "" }
     if (definition.args?.length) result.args = definition.args
-    if (Object.keys(env).length > 0) result.env = env
     return result
   }
   const result: JsonObject = { url: definition.url ?? "" }
-  if (provider === "opencode") result.type = "remote"
-  if (provider === "claude") {
+  if (encoding.remote === "remote") result.type = "remote"
+  if (encoding.remote === "transport")
     result.type = definition.transport === "sse" ? "sse" : "http"
-  }
   return result
 }
 
@@ -89,36 +90,29 @@ function parseConfig(contents: string): JsonObject {
   return contents.trim() ? JsonObjectSchema.parse(JSON.parse(contents)) : {}
 }
 
-function serverMap(
-  config: JsonObject,
-  provider: "claude" | "cursor" | "opencode"
-): JsonObject {
-  const parsed = JsonObjectSchema.safeParse(
-    provider === "opencode" ? config.mcp : config.mcpServers
-  )
-  return parsed.success ? { ...parsed.data } : {}
-}
-
 export function mergeJsonMcpConfig(
   contents: string,
   definition: McpServerDefinition,
-  provider: "claude" | "cursor" | "opencode" = "cursor"
+  format: JsonMcpFormat = "cursor"
 ): string {
   const config = parseConfig(contents)
-  const servers = serverMap(config, provider)
-  servers[definition.name] = serializableDefinition(definition, provider)
-  const next =
-    provider === "opencode"
-      ? { ...config, mcp: servers }
-      : { ...config, mcpServers: servers }
-  return `${JSON.stringify(next, null, 2)}\n`
+  const root = JSON_FORMATS[format].root
+  const parsed = JsonObjectSchema.safeParse(config[root])
+  const servers = parsed.success ? { ...parsed.data } : {}
+  const entry = JsonObjectSchema.safeParse(servers[definition.name])
+  // Transport fields are replaced together; native enablement, credentials,
+  // timeouts and unknown options belong to the target and must survive sync.
+  const preserved: JsonObject = entry.success ? { ...entry.data } : {}
+  for (const key of ["type", "command", "args", "url"]) delete preserved[key]
+  servers[definition.name] = { ...preserved, ...serializableDefinition(definition, format) }
+  return `${JSON.stringify({ ...config, [root]: servers }, null, 2)}\n`
 }
 
 export async function atomicJsonMcpMerge(
   path: string,
   expectedHash: string,
   definition: McpServerDefinition,
-  provider: "claude" | "cursor" | "opencode" = "cursor"
+  format: JsonMcpFormat = "cursor"
 ): Promise<void> {
   const previous = writes.get(path) ?? Promise.resolve()
   const operation = previous
@@ -129,7 +123,7 @@ export async function atomicJsonMcpMerge(
         throw new Error(
           "The MCP config changed after preview; review it again before syncing"
         )
-      const next = mergeJsonMcpConfig(current, definition, provider)
+      const next = mergeJsonMcpConfig(current, definition, format)
       await mkdir(dirname(path), { recursive: true })
       if (current) {
         const backup = `${path}.mako-backup-${Date.now()}`
@@ -213,6 +207,14 @@ export async function previewMcpSync(
   target: McpSyncTarget
 ): Promise<McpSyncPreview> {
   const definition = findServer(snapshot, serverId)
+  if (
+    !providerHost.mcpEditing.get(target.provider)?.operations.includes("import")
+  )
+    return blockedPreview(
+      serverId,
+      target,
+      "MCP configuration editing is not implemented for this harness"
+    )
   if (definition.managed)
     return blockedPreview(
       serverId,
@@ -279,6 +281,12 @@ export async function applyMcpSync(
   target: McpSyncTarget
 ): Promise<void> {
   const definition = findServer(snapshot, serverId)
+  if (
+    !providerHost.mcpEditing.get(target.provider)?.operations.includes("import")
+  )
+    throw new Error(
+      "MCP configuration editing is not implemented for this harness"
+    )
   if (definition.managed)
     throw new Error(
       "Mako-managed tools attach only to sessions launched by Mako"
@@ -326,21 +334,13 @@ export async function applyMcpSync(
     )
   }
   try {
-    await run(
-      command,
-      route.write.args(
-        definition,
-        target.scope,
-        {}
-      ),
-      {
-        cwd: snapshot.cwd,
-        env: route.env,
-        timeout: 15_000,
-        maxBuffer: 1024 * 1024,
-        windowsHide: true,
-      }
-    )
+    await run(command, route.write.args(definition, target.scope, {}), {
+      cwd: snapshot.cwd,
+      env: route.env,
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    })
   } finally {
     previews.delete(key)
   }

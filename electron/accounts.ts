@@ -46,6 +46,7 @@ import type {
 import {
   childProcessEnv,
   readSelection,
+  withAccountMutation,
   writeSelection,
 } from "./accounts-common.js"
 import type {
@@ -53,7 +54,12 @@ import type {
   SelectableAccountCapability,
 } from "./providers/account-capability.js"
 import { providerHost } from "./providers/index.js"
-import { bindingWindow, hasReset, nextReset, windowsAt } from "./contracts/account-usage.js"
+import {
+  bindingWindow,
+  hasReset,
+  nextReset,
+  windowsAt,
+} from "./contracts/account-usage.js"
 
 export type {
   AccountCatalog,
@@ -138,17 +144,47 @@ export async function captureAccount(
   harness: AccountHarness,
   name: string
 ): Promise<void> {
-  await selectableCapability(harness).captureAccount(name)
+  await mutateAccount(harness, async () => {
+    await selectableCapability(harness).captureAccount(name)
+    forgetUsage(`${harness}:${name}`)
+  })
+}
+
+/** Serialize identity mutations per provider so selecting and deleting cannot race. */
+const accountMutations = new Map<string, Promise<unknown>>()
+async function mutateAccount<T>(
+  provider: string,
+  run: () => Promise<T>
+): Promise<T> {
+  const previous = accountMutations.get(provider) ?? Promise.resolve()
+  const task = previous
+    .catch(() => undefined)
+    .then(() => withAccountMutation(provider, run))
+  accountMutations.set(provider, task)
+  try {
+    return await task
+  } finally {
+    if (accountMutations.get(provider) === task)
+      accountMutations.delete(provider)
+  }
 }
 
 export async function removeAccount(
   harness: AccountHarness,
   name: string
 ): Promise<void> {
-  const capability = selectableCapability(harness)
-  if ((await readSelection(harness)) === name)
-    await selectAccount(harness, null)
-  await capability.removeAccount(name)
+  return mutateAccount(harness, async () => {
+    const capability = selectableCapability(harness)
+    // Removing credentials must never choose a different paying identity.
+    // The user first selects another saved account or explicitly selects the
+    // CLI login. Refusing also preserves selection if native deletion fails.
+    if ((await readSelection(harness)) === name)
+      throw new Error(
+        "This account is selected. Choose another account before removing it."
+      )
+    await capability.removeAccount(name)
+    forgetUsage(`${harness}:${name}`)
+  })
 }
 
 /* ------------------------------------------------------------ selection */
@@ -158,10 +194,12 @@ export async function selectAccount(
   harness: AccountHarness,
   name: string | null
 ): Promise<void> {
-  const capability = selectableCapability(harness)
-  if (name !== null)
-    await capability.accountEnv(name, childProcessEnv(process.env))
-  await writeSelection(harness, name)
+  return mutateAccount(harness, async () => {
+    const capability = selectableCapability(harness)
+    if (name !== null)
+      await capability.accountEnv(name, childProcessEnv(process.env))
+    await writeSelection(harness, name)
+  })
 }
 
 /**
@@ -176,23 +214,31 @@ export async function accountEnv(
   provider: string,
   base: NodeJS.ProcessEnv
 ): Promise<NodeJS.ProcessEnv> {
+  return (await resolveAccountLaunch(provider, base)).env
+}
+
+/** Resolve selection and its launch environment together under the identity lease.
+ * This is configured identity, not proof of the identity reported by native code.
+ */
+export async function resolveAccountLaunch(
+  provider: string,
+  base: NodeJS.ProcessEnv
+): Promise<{ env: NodeJS.ProcessEnv; account: SelectedAccount }> {
   const env = childProcessEnv(base)
   const capability = providerHost.accountCapabilities.get(provider)
-  if (!capability) return env
-  return capability.accountEnv(await capabilitySelection(capability), env)
+  if (!capability) return { env, account: { name: "default" } }
+  const resolve = async () => {
+    const selection = await capabilitySelection(capability)
+    const resolved = await capability.accountEnv(selection, env)
+    return { env: resolved, account: capability.selectedAccount(selection, resolved) }
+  }
+  return capability.mode === "selectable" ? mutateAccount(provider, resolve) : resolve()
 }
 
 export async function selectedAccount(
   provider: string
 ): Promise<SelectedAccount> {
-  const capability = providerHost.accountCapabilities.get(provider)
-  if (!capability) return { name: "default" }
-  const selection = await capabilitySelection(capability)
-  const env = await capability.accountEnv(
-    selection,
-    childProcessEnv(process.env)
-  )
-  return capability.selectedAccount(selection, env)
+  return (await resolveAccountLaunch(provider, process.env)).account
 }
 
 /* ------------------------------------------------------------ usage */
@@ -218,22 +264,36 @@ const usageCache = new Map<string, CachedUsage>()
 /** The latest good reading per account, kept through failed refreshes. */
 const lastGood = new Map<string, Extract<AccountUsage, { status: "ok" }>>()
 const usageReads = new Map<string, Promise<AccountUsage>>()
+/** Effective credential equality remains host-only, independent of display name/email. */
+const usageRevisions = new Map<string, string>()
 /** Who each `harness:name` was signed in as when the accounts were last listed. */
 const usageIdentity = new Map<string, string>()
-const usageListeners = new Set<(harness: string, name: string, usage: AccountUsage) => void>()
+const usageListeners = new Set<
+  (harness: string, name: string, usage: AccountUsage) => void
+>()
 const USAGE_FRESH_MS = 60_000
 const USAGE_RETRY_MS = 15_000
 /** How old a kept reading may be before a failed refresh stops covering for it. */
 const LAST_GOOD_MS = 30 * 60_000
 
-function storeUsage(key: string, usage: AccountUsage, now: number, retry = usage.status !== "ok"): void {
-  const expiresAt = Math.min(now + (retry ? USAGE_RETRY_MS : USAGE_FRESH_MS), nextReset(usage, now) ?? Infinity)
+function storeUsage(
+  key: string,
+  usage: AccountUsage,
+  now: number,
+  retry = usage.status !== "ok"
+): void {
+  const expiresAt = Math.min(
+    now + (retry ? USAGE_RETRY_MS : USAGE_FRESH_MS),
+    nextReset(usage, now) ?? Infinity
+  )
   usageCache.set(key, { usage, expiresAt })
   if (usage.status === "ok" && !retry) lastGood.set(key, usage)
 }
 
 /** Readings that change outside a request: a live session's limits. */
-export function onAccountUsage(listener: (harness: string, name: string, usage: AccountUsage) => void): () => void {
+export function onAccountUsage(
+  listener: (harness: string, name: string, usage: AccountUsage) => void
+): () => void {
   usageListeners.add(listener)
   return () => usageListeners.delete(listener)
 }
@@ -243,12 +303,29 @@ export async function accountUsage(
   name: string
 ): Promise<AccountUsage> {
   const key = `${provider}:${name}`
+  const capability = providerHost.accountCapabilities.get(provider)
+  let revision: string | undefined
+  try { revision = await capability?.credentialRevision(name) }
+  catch { return { status: "error", detail: "The account credentials could not be read." } }
+  if (revision !== undefined && usageRevisions.get(key) !== revision) {
+    forgetUsage(key)
+    usageRevisions.set(key, revision)
+  }
   const cached = usageCache.get(key)
   if (cached && Date.now() < cached.expiresAt) return cached.usage
   const reading = usageReads.get(key)
   if (reading) return reading
   const read: Promise<AccountUsage> = readUsage(provider, name)
-    .then((result) => settleUsage(key, read, result))
+    .then(async (result) => {
+      // A native refresh can rotate credentials while reading. Never cache a
+      // result or carry last-good usage across that unacknowledged boundary.
+      const after = await capability?.credentialRevision(name).catch(() => undefined)
+      if (after !== revision) {
+        if (usageReads.get(key) === read) forgetUsage(key)
+        return result
+      }
+      return settleUsage(key, read, result)
+    })
     .finally(() => {
       if (usageReads.get(key) === read) usageReads.delete(key)
     })
@@ -260,20 +337,43 @@ export async function accountUsage(
  * A read that a newer one, a live reading or a new login superseded while it
  * was in flight answers its caller but leaves the cache alone.
  */
-function settleUsage(key: string, read: Promise<AccountUsage>, result: AccountUsage): AccountUsage {
+function settleUsage(
+  key: string,
+  read: Promise<AccountUsage>,
+  result: AccountUsage
+): AccountUsage {
   const at = Date.now()
-  const usage: AccountUsage = result.status === "ok" ? { ...result, readAt: at } : result
+  const usage: AccountUsage =
+    result.status === "ok" ? { ...result, readAt: at } : result
   const good = lastGood.get(key)
-  const kept = usage.status === "error" && good !== undefined && !hasReset(good, at) &&
-    at - (good.readAt ?? 0) < LAST_GOOD_MS ? good : undefined
-  if (usageReads.get(key) === read) storeUsage(key, kept ?? usage, at, kept !== undefined || usage.status !== "ok")
+  const kept =
+    usageReads.get(key) === read &&
+    usage.status === "error" &&
+    good !== undefined &&
+    !hasReset(good, at) &&
+    at - (good.readAt ?? 0) < LAST_GOOD_MS
+      ? good
+      : undefined
+  if (usageReads.get(key) === read)
+    storeUsage(
+      key,
+      kept ?? usage,
+      at,
+      kept !== undefined || usage.status !== "ok"
+    )
   return kept ?? usage
 }
 
-async function readUsage(provider: AccountProvider, name: string): Promise<AccountUsage> {
+async function readUsage(
+  provider: AccountProvider,
+  name: string
+): Promise<AccountUsage> {
   const capability = providerHost.accountCapabilities.get(provider)
   if (!capability)
-    return { status: "unavailable", detail: `Native usage is unavailable for ${provider}` }
+    return {
+      status: "unavailable",
+      detail: `Native usage is unavailable for ${provider}`,
+    }
   return capability.accountUsage(name).catch((error) => ({
     status: "error" as const,
     detail: error instanceof Error ? error.message : String(error),
@@ -331,7 +431,10 @@ export async function useResetCredit(
   attempt: string
 ): Promise<ResetCreditOutcome> {
   const capability = providerHost.accountCapabilities.get(harness)
-  if (!capability?.useResetCredit) throw new Error(`${capability?.label ?? harness} has no reset credits to use`)
+  if (!capability?.useResetCredit)
+    throw new Error(
+      `${capability?.label ?? harness} has no reset credits to use`
+    )
   try {
     return await capability.useResetCredit(name, attempt)
   } finally {
@@ -348,7 +451,10 @@ const SPENT_THROTTLE_MS = 20_000
  * whether windows should read again: at most once per `throttleMs` per
  * harness, so a busy session does not become a stream of requests.
  */
-export function accountUsageSpent(harness: string, throttleMs = SPENT_THROTTLE_MS): boolean {
+export function accountUsageSpent(
+  harness: string,
+  throttleMs = SPENT_THROTTLE_MS
+): boolean {
   if (!providerHost.accountCapabilities.get(harness)) return false
   const last = spentAt.get(harness) ?? 0
   if (Date.now() - last < throttleMs) return false

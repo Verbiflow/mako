@@ -1,3 +1,5 @@
+import { diagnosticFormat, officeFormat } from "./contracts/file-preview.js"
+import { fileContentType, mediaForContentType } from "./file-media.js"
 import { providerHost } from "./providers/index.js"
 import { filePreviewUrl } from "./file-previews.js"
 import {
@@ -14,7 +16,6 @@ import { homedir } from "node:os"
 import {
   basename,
   dirname,
-  extname,
   isAbsolute,
   join,
   relative,
@@ -22,7 +23,7 @@ import {
   sep,
 } from "node:path"
 import type { FileContents, StagedFile, WorkspaceFile } from "./shared.js"
-import type { WorkspaceGit } from "./host-git.js"
+import { WorkspaceGit } from "./host-git.js"
 
 /**
  * The most of a file the viewer will render.
@@ -31,40 +32,6 @@ import type { WorkspaceGit } from "./host-git.js"
  * renderer. Above it the head is shown and the viewer says the rest was cut.
  */
 const FILE_VIEW_LIMIT = 2_000_000
-
-interface MediaType {
-  media: NonNullable<FileContents["media"]>
-  mimeType: string
-}
-
-const MEDIA_TYPES = {
-  ".avif": { media: "image", mimeType: "image/avif" },
-  ".gif": { media: "image", mimeType: "image/gif" },
-  ".jpeg": { media: "image", mimeType: "image/jpeg" },
-  ".jpg": { media: "image", mimeType: "image/jpeg" },
-  ".png": { media: "image", mimeType: "image/png" },
-  ".svg": { media: "image", mimeType: "image/svg+xml" },
-  ".webp": { media: "image", mimeType: "image/webp" },
-  ".pdf": { media: "pdf", mimeType: "application/pdf" },
-  ".mp3": { media: "audio", mimeType: "audio/mpeg" },
-  ".wav": { media: "audio", mimeType: "audio/wav" },
-  ".ogg": { media: "audio", mimeType: "audio/ogg" },
-  ".flac": { media: "audio", mimeType: "audio/flac" },
-  ".m4a": { media: "audio", mimeType: "audio/mp4" },
-  ".mp4": { media: "video", mimeType: "video/mp4" },
-  ".mov": { media: "video", mimeType: "video/quicktime" },
-  ".webm": { media: "video", mimeType: "video/webm" },
-  ".xlsx": {
-    media: "spreadsheet",
-    mimeType:
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  },
-  ".xls": { media: "spreadsheet", mimeType: "application/vnd.ms-excel" },
-  ".numbers": {
-    media: "spreadsheet",
-    mimeType: "application/vnd.apple.numbers",
-  },
-} satisfies Record<string, MediaType>
 
 /** The `@` picker re-queries per keystroke; the file set does not move that fast. */
 const FILE_CACHE_MS = 5_000
@@ -93,6 +60,7 @@ const WALK_SKIP = new Set([
 export class WorkspaceFiles {
   private cwdValue: string
   private fileCache: { at: number; files: WorkspaceFile[] } | null = null
+  private fileLoad: { cwd: string; promise: Promise<WorkspaceFile[]> } | undefined
   private readonly git: WorkspaceGit
 
   constructor(cwd: string, git: WorkspaceGit) {
@@ -118,6 +86,19 @@ export class WorkspaceFiles {
    * that fast.
    */
   async list(): Promise<WorkspaceFile[]> {
+    if (this.fileCache && Date.now() - this.fileCache.at < FILE_CACHE_MS)
+      return this.fileCache.files
+    if (this.fileLoad?.cwd === this.cwdValue) return this.fileLoad.promise
+    const load = { cwd: this.cwdValue, promise: this.loadList() }
+    this.fileLoad = load
+    try {
+      return await load.promise
+    } finally {
+      if (this.fileLoad === load) this.fileLoad = undefined
+    }
+  }
+
+  private async loadList(): Promise<WorkspaceFile[]> {
     for (;;) {
       const now = Date.now()
       if (this.fileCache && now - this.fileCache.at < FILE_CACHE_MS)
@@ -128,11 +109,13 @@ export class WorkspaceFiles {
       const paths = gitPaths
         ? gitPaths
         : // Not a repo: a bounded walk, skipping the usual heavy directories.
-          await walkWorkspace(cwd, cwd, 0)
+          await walkWorkspace(cwd, cwd, 0, (dir) => new WorkspaceGit(dir).listFiles())
       const status = await this.git.status().catch(() => null)
-      const changed = new Set(status?.files.map((file) =>
-        status.root ? relative(cwd, join(status.root, file.path)) : file.path
-      ) ?? [])
+      const changed = new Set(
+        status?.files.map((file) =>
+          status.root ? relative(cwd, join(status.root, file.path)) : file.path
+        ) ?? []
+      )
       const files = paths
         .sort((a, b) => a.localeCompare(b))
         .map((path) => (changed.has(path) ? { path, changed: true } : { path }))
@@ -238,23 +221,40 @@ export class WorkspaceFiles {
    * takes longer to draw than to read. Both are reported rather than silently
    * applied — a truncated file that does not say so is a lie about the code.
    */
-  async read(requested: string): Promise<FileContents> {
-    const { absolute, path } = await this.locate(requested)
+  async read(requested: string, options?: { relativeTo: "cwd" }): Promise<FileContents> {
+    const { absolute, path } = await this.locate(requested, options?.relativeTo)
     const info = await stat(absolute)
     if (info.isDirectory()) throw new Error(`${path} is a directory`)
-    const extension = extname(path).toLowerCase()
-    const media = Object.entries(MEDIA_TYPES).find(
-      ([candidate]) => candidate === extension
-    )?.[1]
-    if (media) {
+    const prefixFile = await open(absolute, "r")
+    const prefix = Buffer.alloc(Math.min(info.size, 4096))
+    try {
+      await prefixFile.read(prefix, 0, prefix.length, 0)
+    } finally {
+      await prefixFile.close()
+    }
+    const diagnostic = diagnosticFormat(path)
+    if (diagnostic)
+      return {
+        path,
+        diagnostic,
+        contents: prefix.toString("utf8"),
+        size: info.size,
+        binary: false,
+        truncated: info.size > prefix.length,
+        mimeType: "application/json",
+        previewUrl: filePreviewUrl(absolute),
+      }
+    const mimeType = await fileContentType(path, prefix)
+    const media = mediaForContentType(mimeType)
+    if (media || officeFormat(path, mimeType) || prefix.includes(0)) {
       return {
         path,
         contents: "",
         size: info.size,
         binary: true,
         truncated: false,
-        media: media.media,
-        mimeType: media.mimeType,
+        media: media?.media,
+        mimeType,
         previewUrl: filePreviewUrl(absolute),
       }
     }
@@ -273,6 +273,8 @@ export class WorkspaceFiles {
           size: info.size,
           binary: true,
           truncated: false,
+          mimeType,
+          previewUrl: filePreviewUrl(absolute),
         }
       }
       const contents = buffer.toString("utf8")
@@ -324,9 +326,12 @@ export class WorkspaceFiles {
    * `/tmp/report.md` means that file or nothing.
    */
   private async locate(
-    requested: string
+    requested: string,
+    relativeTo?: "cwd"
   ): Promise<{ absolute: string; path: string }> {
-    const absolute = await this.resolvePath(requested)
+    const absolute = relativeTo === "cwd" && !isAbsolute(requested) && !requested.startsWith("~/")
+      ? await realpath(resolve(this.cwdValue, requested)).catch(() => resolve(this.cwdValue, requested))
+      : await this.resolvePath(requested)
     const found = await stat(absolute).then(
       () => true,
       (error: NodeJS.ErrnoException) => {
@@ -335,7 +340,9 @@ export class WorkspaceFiles {
       }
     )
     if (found) return { absolute, path: requested }
-    if (isAbsolute(requested)) throw new Error(`No file at ${requested}`)
+    if (isAbsolute(requested) || requested.startsWith("~/") ||
+      (relativeTo === "cwd" && (requested.startsWith("./") || requested.startsWith("../"))))
+      throw new Error(`No file at ${requested}`)
     const matches = await this.matchByName(requested)
     const only = matches[0]
     if (only && matches.length === 1)
@@ -370,11 +377,36 @@ export class WorkspaceFiles {
    * meant a linked file the agent had just created could not be viewed.
    */
   async resolvePath(path: string): Promise<string> {
+    if (isAbsolute(path) || path.startsWith("~/")) {
+      const absolute = path.startsWith("~/") ? resolve(homedir(), path.slice(2)) : resolve(path)
+      return realpath(absolute).catch(() => absolute)
+    }
     const lexicalRoot = resolve((await this.git.root()) ?? this.cwdValue)
     const root = await realpath(lexicalRoot).catch(() => lexicalRoot)
-    const lexical = resolve(root, path)
+    const lexical = path.startsWith("~/")
+      ? resolve(homedir(), path.slice(2))
+      : resolve(root, path)
     return realpath(lexical).catch(() => lexical)
   }
+}
+
+const conversationFiles = new Map<string, { files: WorkspaceFiles; at: number }>()
+
+/** Share short-lived indexes across reply cards without sharing mutable active-workspace state. */
+export function readConversationFile(cwd: string, path: string): Promise<FileContents> {
+  const key = resolve(cwd)
+  const now = Date.now()
+  for (const [folder, held] of conversationFiles)
+    if (now - held.at >= FILE_CACHE_MS) conversationFiles.delete(folder)
+  const held = conversationFiles.get(key) ?? { files: new WorkspaceFiles(key, new WorkspaceGit(key)), at: now }
+  held.at = now
+  conversationFiles.delete(key)
+  conversationFiles.set(key, held)
+  if (conversationFiles.size > 8) {
+    const oldest = conversationFiles.keys().next().value
+    if (oldest !== undefined) conversationFiles.delete(oldest)
+  }
+  return held.files.read(path, { relativeTo: "cwd" })
 }
 
 export async function readText(path: string): Promise<string | null> {
@@ -390,7 +422,8 @@ export async function readText(path: string): Promise<string | null> {
 export async function walkWorkspace(
   root: string,
   dir: string,
-  depth: number
+  depth: number,
+  listRepository?: (dir: string) => Promise<string[] | null>
 ): Promise<string[]> {
   if (depth > WALK_MAX_DEPTH) return []
   let entries
@@ -399,16 +432,22 @@ export async function walkWorkspace(
   } catch {
     return []
   }
+  // A workspace can contain several repositories. Use each repository's own
+  // ignore-aware index instead of spending the walk budget on ignored output.
+  if (depth > 0 && listRepository && entries.some((entry) => entry.name === ".git")) {
+    const paths = await listRepository(dir)
+    if (paths) return paths.slice(0, WALK_MAX_FILES).map((path) => relative(root, join(dir, path)))
+  }
   const out: string[] = []
   for (const entry of entries) {
     if (entry.name.startsWith(".") || WALK_SKIP.has(entry.name)) continue
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
-      out.push(...(await walkWorkspace(root, full, depth + 1)))
+      out.push(...(await walkWorkspace(root, full, depth + 1, listRepository)))
     } else if (entry.isFile()) {
       out.push(relative(root, full))
     }
     if (out.length > WALK_MAX_FILES) break
   }
-  return out
+  return out.slice(0, WALK_MAX_FILES)
 }

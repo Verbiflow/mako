@@ -1,5 +1,6 @@
 import type { CustomScheme } from "electron"
 import { resolve, sep } from "node:path"
+import { DESK_SCHEME, DESK_HOST, DESK_ORIGIN } from "./desk-preview-url.js"
 
 /**
  * The packaged desk document is served from `mako-app://desk/`, not opened
@@ -11,15 +12,14 @@ import { resolve, sep } from "node:path"
  *
  * The scheme is also a real origin. Under `file:` the renderer's localStorage
  * (drafts, preferences, review notes) lived in the opaque `file://` origin;
- * `renderer-storage.ts` moves it across once per profile. Only files under
- * `dist/` are ever served, and only the exact `index.html` counts as the desk
- * for the hidden agent windows (`desk-browser-policy.ts`). This module is
+ * `renderer-storage.ts` moves it across once per profile. Bundle files stay under
+ * `dist/`, and only the exact `index.html` counts as the desk
+ * for the hidden agent windows (`desk-browser-policy.ts`). Authorized previews
+ * use a reserved same-origin route through the existing file handler. This module is
  * pure so tests can run it under Node; `desk-protocol.ts` binds it to
  * Electron's protocol module.
  */
-export const DESK_SCHEME = "mako-app"
-export const DESK_HOST = "desk"
-export const DESK_ORIGIN = `${DESK_SCHEME}://${DESK_HOST}`
+export { DESK_SCHEME, DESK_HOST, DESK_ORIGIN } from "./desk-preview-url.js"
 export const DESK_DOCUMENT = `${DESK_ORIGIN}/index.html`
 /** The page `renderer-storage.ts` uses to read and write an origin's storage. */
 export const STORAGE_BRIDGE_DOCUMENT = `${DESK_ORIGIN}/storage-bridge.html`

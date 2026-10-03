@@ -7,6 +7,9 @@ import type { ThreadWorktreeService } from "./thread-worktrees.js"
 import { toolText } from "./tool-text.js"
 import type { WorkspaceMoves } from "./workspace-moves.js"
 import { git } from "./worktree-git.js"
+import { checkoutOf, checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
+import { grantedSecrets, readAllowedSecrets } from "./recipe-secrets.js"
+import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
 
 type Worktrees = Pick<ThreadWorktreeService, "ofConversation" | "ahead" | "merge" | "remove">
 
@@ -16,6 +19,7 @@ interface Deps {
   moves: Pick<WorkspaceMoves, "ask" | "answerFor">
   /** The Thread's worktree went away; windows refresh their list. */
   removed(): void
+  recipesRoot?: string
 }
 
 export interface WorkspaceStatus {
@@ -26,6 +30,7 @@ export interface WorkspaceStatus {
   outsideWorktree?: { folder: string; mainCheckout: string }
   threadWorktree?: { folder: string; branch: string; mainCheckout: string; commitsSinceBranching?: number }
   move?: "asking" | "allowed" | "declined" | "moving"
+  ignoredInMain?: { folder: string; paths: string[]; omitted?: number }
 }
 
 export interface WorkspaceTools {
@@ -33,6 +38,7 @@ export interface WorkspaceTools {
   move(conversationId: string): Promise<string>
   merge(conversationId: string): Promise<string>
   remove(conversationId: string): Promise<string>
+  bring(conversationId: string, entries?: BringEntry[]): Promise<string>
 }
 
 async function within(folder: string, path: string): Promise<boolean> {
@@ -88,6 +94,14 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       }
       if (checkout?.linked) status.outsideWorktree = { folder: checkout.linked.path, mainCheckout: checkout.linked.repoRoot }
       if (branch) status.branch = branch
+      if (project) {
+        const main = onIt && worktree ? worktree.repoRoot : checkout?.linked?.repoRoot ?? project
+        const ignored = await ignoredEntries(main)
+        if (ignored.length) {
+          status.ignoredInMain = { folder: main, paths: ignored.slice(0, 200) }
+          if (ignored.length > 200) status.ignoredInMain.omitted = ignored.length - 200
+        }
+      }
       if (changed !== undefined) status.uncommittedFiles = changed
       if (worktree) {
         status.threadWorktree = { folder: worktree.path, branch: worktree.branch, mainCheckout: worktree.repoRoot }
@@ -99,6 +113,18 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       return status
     },
     move: (conversationId) => deps.moves.ask(conversationId),
+    async bring(conversationId, entries) {
+      const cwd = cwdOf(conversationId)
+      const checkout = await checkoutOf(cwd)
+      const worktree = deps.worktrees?.ofConversation(conversationId)
+      if (!worktree || !(await within(worktree.path, checkout))) throw new Error("This Session must edit in this Thread's worktree before bringing files into it. worktree_status says where it edits.")
+      const main = await projectRoot(checkout)
+      const recipe = await projectRecipe(checkout, deps.recipesRoot)
+      const granted = deps.recipesRoot ? grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout)) : []
+      const wanted = entries ?? [...(recipe?.carry ?? []), ...granted].map((path) => ({ path }))
+      const result = await bringFiles(main, checkout, wanted, granted)
+      return toolText({ mainCheckout: main, worktree: checkout, ...result })
+    },
     async merge(conversationId) {
       const worktree = threadWorktree(conversationId)
       const merged = await deps.worktrees!.merge(worktree.path)
@@ -133,11 +159,20 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_status",
     {
       description:
-        "Call when you're unsure which checkout your edits land in, and before moving, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. Returns the folder with its branch and uncommitted files, this Thread's worktree with the commits on its branch, and the user's answer to a move you asked for.",
+        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. Returns the folder with its branch and uncommitted files, this Thread's worktree with the commits on its branch, the user's answer to a move you asked for, and ignored paths in the originating main checkout. Lists names only; ignored folders are named once.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => reply(async () => toolText(await tools.status(conversationId())))
+  )
+  server.registerTool(
+    "worktree_bring",
+    {
+      description: "Bring ignored files from the originating main checkout into this Thread's existing worktree. Call when the recipe added carry or secrets after the worktree was created, or when this Thread needs a one-off local file or output. Leave entries out to copy the recipe's carry and approved secrets, or name relative paths/patterns without changing the project recipe. Copies by default, cloning large folders on supported volumes; link: true explicitly shares an entry with the main checkout, so writes affect both. Env files are independent copies unless explicitly linked. Existing destination entries stay untouched, including broken links. Credentials require the user's existing App setup grant; no file values are read or returned. Refuses outside paths and Python virtual environments. worktree_status lists the main checkout's ignored paths. Use prepare outputs for dependency folders whose matching inputs Mako should check.",
+      inputSchema: z.object({ entries: z.array(z.object({ path: checkoutPattern, link: z.boolean().optional() }).strict()).max(20).optional() }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    ({ entries }) => reply(() => tools.bring(conversationId(), entries))
   )
   server.registerTool(
     "worktree_move",

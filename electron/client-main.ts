@@ -195,7 +195,7 @@ async function start() {
   powerMonitor.on("shutdown", () => { shuttingDown = true })
   protocol.handle("mako-file", (request) => runtimeFile(runtime.socket, request))
   if (!isDev) {
-    serveDesk(rendererBundle)
+    serveDesk(rendererBundle, (request) => runtimeFile(runtime.socket, request))
     const moved = await adoptDeskOrigin({ userData: uiRoot, dist: rendererBundle })
     if (moved.kind === "failed") console.warn(`[mako-client] renderer storage move failed: ${moved.error}`)
   }

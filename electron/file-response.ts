@@ -1,3 +1,4 @@
+import { fileContentType } from "./file-media.js"
 import { open } from "node:fs/promises"
 import { Readable } from "node:stream"
 
@@ -9,6 +10,15 @@ export async function fileResponse(
 ): Promise<Response> {
   const headers = new Headers(source.headers)
   headers.set("accept-ranges", "bytes")
+  const prefixFile = await open(path, "r")
+  try {
+    const prefix = Buffer.alloc(4096)
+    const { bytesRead } = await prefixFile.read(prefix, 0, prefix.length, 0)
+    const mime = await fileContentType(path, prefix.subarray(0, bytesRead))
+    if (mime) headers.set("content-type", mime)
+  } finally {
+    await prefixFile.close()
+  }
   const range = request.headers.get("range")
   if (!range)
     return new Response(source.body, { status: source.status, headers })
