@@ -38,6 +38,7 @@ async function validatedSessions<Value>(
   const active: ProviderActivitySession[] = []
   for (const session of GrokActiveSessionsSchema.parse(value)) {
     const nativeId = session.session_id ?? session.sessionId ?? session.id
+    if (!nativeId) throw new Error("Grok activity record has no session identity")
     if (
       nativeId &&
       (await processIdentityMatches({

@@ -68,7 +68,7 @@ async function registrySessionsRoot(
   if (files.length > 1_000) throw new Error("Claude activity inventory exceeds the read limit")
   const sessions: ProviderActivitySession[] = []
   for (const file of files) {
-    if (signal.aborted) return null
+    signal.throwIfAborted()
     if (!file.endsWith(".json")) continue
     const path = join(root, file)
     const info = await stat(path)
@@ -77,6 +77,8 @@ async function registrySessionsRoot(
     const agent = ClaudeAgentSchema.parse(
       JSON.parse(await readFile(path, { encoding: "utf8", signal }))
     )
+    if (!agent.pid || !agent.sessionId)
+      throw new Error("Claude activity record has no ownership identity")
     if (
       agent.pid &&
       agent.sessionId &&
