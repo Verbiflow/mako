@@ -187,7 +187,7 @@ export default function OfficeDocument({
     )
   return (
     <div
-      className={`office-preview relative ${expanded ? "h-[calc(100dvh-6rem)]" : "h-96"} overflow-hidden`}
+      className={`office-preview relative ${expanded ? "h-full" : "h-96"} overflow-hidden`}
       data-office-preview={format}
       data-ready={ready || undefined}
     >

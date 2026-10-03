@@ -24,7 +24,7 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
     setView({ open, identity, mode: open ? mode ?? "preview" : view.mode })
   const selectedMode = view.mode
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent overlayClassName="z-60" className="z-60 flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden p-0 asset-surface" onKeyDown={(event) => {
+    <DialogContent overlayClassName="z-60" className="z-60 flex h-[min(76dvh,48rem)] w-[min(84vw,64rem)] max-w-none flex-col overflow-hidden p-0 asset-surface" onKeyDown={(event) => {
       if (!navigation || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
       const target = event.target
       // Document controls keep their own cursor, cell and playback shortcuts.

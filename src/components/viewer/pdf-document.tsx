@@ -42,7 +42,7 @@ export default function PdfDocument({ url, name, expanded = false }: { url: stri
 
 
   return (
-    <div ref={host} className={`${expanded ? "h-[calc(100dvh-6rem)]" : "max-h-[60vh]"} overflow-y-auto bg-background`}>
+    <div ref={host} className={`${expanded ? "h-full" : "max-h-[60vh]"} overflow-y-auto bg-background`}>
       {error ? <p role="status" className="p-4 text-ui text-muted-foreground">This document could not be previewed. Open the original file to view it.</p> : (
         <>
           <div className="sticky top-0 z-10 flex items-center justify-center gap-3 border-b border-hairline bg-popover px-3 py-2 text-label">

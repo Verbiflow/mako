@@ -125,7 +125,7 @@ export function DiagnosticPreview({
   return (
     <section
       aria-label={summary.title}
-      className={`flex min-h-64 flex-col text-ui ${expanded ? "h-[calc(100dvh-6rem)]" : ""}`}
+      className={`flex min-h-64 flex-col text-ui ${expanded ? "h-full" : ""}`}
     >
       <div className="grid grid-cols-2 gap-3 border-b border-hairline p-4 sm:grid-cols-4">
         {summary.metrics.map((metric) => (

@@ -72,7 +72,7 @@ export default function RichFilePreview({
     )
   if (format === "pdf" && file.previewUrl)
     return (
-      <div className={`${expanded ? "" : "max-h-[60vh]"} overflow-auto`}>
+      <div className={`${expanded ? "h-full" : "max-h-[60vh]"} overflow-auto`}>
         <PdfPreview url={file.previewUrl} name={name} expanded={expanded} />
       </div>
     )
@@ -162,13 +162,13 @@ function FileMediaPreview({
     )
   if (format === "image")
     return (
-      <div className="bg-shell/40">
-        {expanded ? <div className="flex items-center gap-1 border-b border-hairline px-4 py-2 text-label">
+      <div className={`bg-shell/40 ${expanded ? "flex h-full min-h-0 flex-col" : ""}`}>
+        {expanded ? <div className="flex shrink-0 items-center gap-1 border-b border-hairline px-4 py-2 text-label">
           {([false, true] as const).map((actual) => <button key={String(actual)} type="button" aria-pressed={actualSize === actual} onClick={() => setActualSize(actual)} className={`pressable rounded-md px-2 py-1 ${actualSize === actual ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover"}`}>
             {actual ? "Actual size" : "Fit"}
           </button>)}
         </div> : null}
-        <button type="button" aria-label={expanded ? `View ${name} ${actualSize ? "fitted" : "at actual size"}` : `Enlarge ${name}`} onClick={expanded ? () => setActualSize(!actualSize) : onExpand} disabled={!expanded && !onExpand} className={`pressable block w-full overflow-auto ${expanded ? "h-[calc(100dvh-10rem)]" : "cursor-zoom-in"} ${actualSize ? "cursor-zoom-out" : ""}`}>
+        <button type="button" aria-label={expanded ? `View ${name} ${actualSize ? "fitted" : "at actual size"}` : `Enlarge ${name}`} onClick={expanded ? () => setActualSize(!actualSize) : onExpand} disabled={!expanded && !onExpand} className={`pressable block w-full overflow-auto ${expanded ? "min-h-0 flex-1" : "cursor-zoom-in"} ${actualSize ? "cursor-zoom-out" : ""}`}>
           <img
           loading="lazy"
           decoding="async"
@@ -189,7 +189,7 @@ function FileMediaPreview({
         src={url}
         aria-label={name}
         onError={() => { setFailed(true); onPreviewError?.() }}
-        className={`${expanded ? "h-[calc(100dvh-6rem)]" : "max-h-[32rem]"} w-full bg-shell object-contain`}
+        className={`${expanded ? "h-full" : "max-h-[32rem]"} w-full bg-shell object-contain`}
       />
     )
   return (
