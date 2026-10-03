@@ -19,6 +19,11 @@ export interface ThreadTitlesState {
 export const threadTitlesStore = createStore<ThreadTitlesState>({ byThread: {} })
 export const useThreadTitles = createHook(threadTitlesStore)
 
+/** A Thread's own name now, if it has one. */
+export function threadTitle(thread: string | undefined): string | undefined {
+  return thread ? threadTitlesStore.get().byThread[thread]?.title : undefined
+}
+
 /** Changes told while the whole set is loading, applied over it once it arrives. */
 let told: ThreadTitleEntry[] | null = null
 

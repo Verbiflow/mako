@@ -1,3 +1,4 @@
+import { z } from "zod"
 import { registerIpc } from "./register.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
@@ -5,6 +6,9 @@ import { ThreadIdSchema } from "../contracts/thread-identity.js"
 import type { ThreadStore } from "../thread-store.js"
 import type { ThreadTitler } from "../thread-titles.js"
 import type { UtilityModelStore } from "../utility-model-store.js"
+
+const TitleSchema = z.string().max(400)
+const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSchema })).max(5_000)
 
 /**
  * Threads' names for every window: the ones to draw, a person's rename
@@ -25,23 +29,26 @@ export function installThreadTitlesIpc(input: {
   registerIpc("mako:thread-titles", (): ThreadTitleEntry[] => store?.titles() ?? [])
   registerIpc("mako:thread-rename", (_event, operationId: string, thread: string, title: string | null, original?: string): ThreadTitleEntry => {
     if (!store) throw new Error("This Mako couldn't open its Thread store, so it can't rename a Thread.")
+    const operation = z.string().uuid().parse(operationId)
     const id = ThreadIdSchema.parse(thread)
+    const named = TitleSchema.nullable().parse(title)
     titler?.cancel(id)
-    const entry = title === null
-      ? store.clearThreadTitle({ operationId, thread: id, actor: store.person() })
-      : store.titleEntry(store.renameThread({ operationId, thread: id, title, original, actor: store.person() }).id)
+    const entry = named === null
+      ? store.clearThreadTitle({ operationId: operation, thread: id, actor: store.person() })
+      : store.titleEntry(store.renameThread({ operationId: operation, thread: id, title: named, original: TitleSchema.optional().parse(original), actor: store.person() }).id)
     if (!entry) throw new Error("That Thread no longer exists")
     tell([entry])
     return entry
   })
   registerIpc("mako:thread-titles-import", (_event, entries: ReadonlyArray<{ thread: string; title: string }>): ThreadTitleEntry[] => {
     if (!store) return []
-    const imported = store.importThreadTitles(entries.map((entry) => ({ thread: ThreadIdSchema.parse(entry.thread), title: entry.title })))
+    const imported = store.importThreadTitles(ImportSchema.parse(entries))
     tell(imported)
     return imported
   })
   registerIpc("mako:thread-title-model", async (_event, model: string | null): Promise<void> => {
-    await models.setTitleModel(model)
-    titler?.configure(model !== null)
+    const chosen = TitleSchema.nullable().parse(model)
+    await models.setTitleModel(chosen)
+    titler?.configure(chosen !== null)
   })
 }

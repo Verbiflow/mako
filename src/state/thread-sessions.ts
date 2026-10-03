@@ -27,6 +27,7 @@ import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
 import { threads, useThreads } from "@/state/threads"
+import { threadTitle } from "@/state/thread-titles"
 import { followCheckouts } from "@/state/checkout-heads"
 import { useWorktrees, workingFolder, worktreesStore, type WorktreePlaces } from "@/state/worktrees"
 
@@ -71,12 +72,14 @@ function onScreen(view: ViewSlot | null, live: LiveSlot | null, draft: SessionDr
   const viewerShown = view && (!live || view.viewingPath !== live.threadPath || (live.starting && view.viewingPath !== undefined))
   if (viewerShown) {
     const { ref } = view
-    return { thread: rowThread(ref, threadOf), session: ref.sessionId, cwd: workingFolder(places, ref), title: prefsStore.get().titleOverrides[ref.path] ?? ref.title }
+    const thread = rowThread(ref, threadOf)
+    return { thread, session: ref.sessionId, cwd: workingFolder(places, ref), title: prefsStore.get().titleOverrides[ref.path] ?? threadTitle(thread) ?? ref.title }
   }
   if (live) {
-    const title = (live.threadPath ? prefsStore.get().titleOverrides[live.threadPath] : undefined) ?? live.title
+    const thread = rowThread(live, threadOf)
+    const title = (live.threadPath ? prefsStore.get().titleOverrides[live.threadPath] : undefined) ?? threadTitle(thread) ?? live.title
     const cwd = liveMovedTo ? workingFolder(places, { cwd: live.cwd, currentCwd: liveMovedTo }) : live.cwd
-    return { thread: rowThread(live, threadOf), session: live.sessionId, cwd, title }
+    return { thread, session: live.sessionId, cwd, title }
   }
   if (draft) return { thread: draft.thread, draft, cwd: draft.cwd, title: draft.title }
   return {}

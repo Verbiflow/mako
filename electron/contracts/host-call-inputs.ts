@@ -854,18 +854,13 @@ export const hostCallInputs = {
   ]),
   "mako:thread-preview": z.tuple([z.string()]),
   "mako:thread-purposes": z.tuple([]),
-  "mako:thread-rename": z.tuple([
-    z.string().uuid(),
-    z.string(),
-    z.string().max(400).nullable(),
-    z.string().max(400).optional(),
-  ]),
-  "mako:thread-title-model": z.tuple([z.string().max(400).nullable()]),
-  "mako:thread-titles": z.tuple([]),
-  "mako:thread-titles-import": z.tuple([
-    z.array(z.object({ thread: z.string(), title: z.string().max(400) })).max(5_000),
-  ]),
   "mako:thread-remember-mode": z.tuple([z.string(), z.string()]),
+  "mako:thread-rename": z.tuple([
+    z.string(),
+    z.string(),
+    z.union([z.null(), z.string()]),
+    z.string().optional(),
+  ]),
   "mako:thread-run": z.tuple([z.string()]),
   "mako:thread-stop": z.tuple([
     z.union([
@@ -880,6 +875,11 @@ export const hostCallInputs = {
         token: z.string(),
       }),
     ]),
+  ]),
+  "mako:thread-title-model": z.tuple([z.union([z.null(), z.string()])]),
+  "mako:thread-titles": z.tuple([]),
+  "mako:thread-titles-import": z.tuple([
+    z.array(z.object({ thread: z.string(), title: z.string() })),
   ]),
   "mako:thread-unfollow": z.tuple([]),
   "mako:threads": z.tuple([
