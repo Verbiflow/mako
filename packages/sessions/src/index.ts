@@ -123,6 +123,7 @@ import { DevinCliProvider } from "./providers/devin-cli.js"
 import { ClaudeProvider } from "./providers/claude.js"
 import { OpenCodeProvider } from "./providers/opencode.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
+import { restrictNativeStores } from "./read-only-sqlite.js"
 
 // Freeze the implementation identity for this loaded module lifetime. A dev
 // rebuild on disk must not make an old host claim it loaded the new readers.
@@ -149,10 +150,15 @@ export function readableHarnesses(): string[] {
   return [...new Set(defaultProviders().map(provider => provider.harness))]
 }
 
-/** The catalog with every built-in provider, ready to scan. */
+/**
+ * The catalog with every built-in provider, ready to scan. `readOnly` writes
+ * neither the archive nor any harness's store, and from then on this process
+ * opens every native store read-only at the file level.
+ */
 export function defaultCatalog(
-  options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy } = {}
+  options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean } = {}
 ): SessionCatalog {
+  if (options.readOnly) restrictNativeStores()
   const catalog = new SessionCatalog(
     defaultProviders(),
     options

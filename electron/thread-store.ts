@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve, sep } from "node:path"
 import { DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
+import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
 import {
   ActorSchema,
   PrincipalIdSchema,
@@ -141,7 +142,7 @@ export function openThreadStore(path: string, options: ThreadStoreOptions = {}):
     return { store: new ThreadStore(path, options) }
   } catch (error) {
     const sqlite = SqliteErrorSchema.safeParse(error)
-    if (error instanceof ThreadStoreVersionError || !sqlite.success || !DAMAGED_CODES.has(sqlite.data.errcode))
+    if (options.readOnly || error instanceof ThreadStoreVersionError || !sqlite.success || !DAMAGED_CODES.has(sqlite.data.errcode))
       return { store: null, problem: `Threads are off: ${error instanceof Error ? error.message : String(error)}` }
     const kept = `${path}.damaged-${new Date(options.now?.() ?? Date.now()).toISOString().replaceAll(":", "-")}`
     for (const suffix of ["", "-wal", "-shm"])
@@ -196,6 +197,13 @@ export interface ThreadStoreOptions {
    * created.
    */
   self?: ExecutionOwner
+  /**
+   * Only read the store another host keeps: nothing is created or migrated,
+   * every write throws `ReadOnlyStoreError`, and a row no writing host has
+   * placed is served without a Thread. A fixture desk opens the user's store
+   * this way.
+   */
+  readOnly?: boolean
 }
 
 export interface MoveStatus {
@@ -437,7 +445,8 @@ export class ThreadStore {
   readonly localPrincipal: PrincipalId
   /** The environment whose ownership this store's host enforces. */
   readonly self: ExecutionOwner
-  private readonly db: DatabaseSync
+  private db: DatabaseSync
+  private readonly reader: ReadOnlyConnection | undefined
   private readonly now: () => number
   private readonly realPath: (path: string) => string
   private depth = 0
@@ -458,48 +467,68 @@ export class ThreadStore {
     this.path = path
     this.now = options.now ?? Date.now
     this.realPath = options.realPath ?? realNativePath
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-    this.db = new DatabaseSync(path)
+    if (options.readOnly) {
+      this.reader = new ReadOnlyConnection(path, { timeout: WRITE_WAIT_MS })
+      this.db = this.reader.database
+    } else {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+      this.db = new DatabaseSync(path)
+    }
     try {
-      this.db.exec(`PRAGMA busy_timeout=${OPEN_WAIT_MS}`)
-      enableSharedWal(this.db, OPEN_WAIT_MS)
-      this.db.exec(`PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
-        CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
-      // Lock before reading the version so two hosts creating the store at
-      // once cannot both mint a device and a principal.
-      this.db.exec("BEGIN IMMEDIATE")
-      try {
-        const found = this.meta("schema")
-        if (found === undefined) {
-          this.db.exec(SCHEMA)
-          const principal = randomUUID()
-          this.db.prepare("INSERT INTO principals VALUES (?, 'person', NULL, ?)").run(principal, this.now())
-          const insert = this.db.prepare("INSERT INTO store_meta VALUES (?, ?)")
-          insert.run("device", randomUUID())
-          insert.run("principal", principal)
-          insert.run("schema", String(THREAD_STORE_SCHEMA))
-        } else if (Number(found) > THREAD_STORE_SCHEMA) {
-          throw new ThreadStoreVersionError(Number(found))
-        }
-        this.migrate(options.self)
-        this.db.exec("COMMIT")
-      } catch (error) {
-        this.db.exec("ROLLBACK")
-        throw error
-      }
+      if (this.reader) this.checkReadable()
+      else this.create(options.self)
       this.deviceId = z.string().uuid().parse(this.meta("device"))
       this.changeSeq = CountSchema.parse(this.db.prepare("SELECT coalesce(max(seq), 0) AS count FROM placement_changes").get()).count
       this.localPrincipal = PrincipalIdSchema.parse(this.meta("principal"))
       this.self = ExecutionOwnerSchema.parse(JSON.parse(z.string().parse(this.meta("self"))))
-      this.db.exec(`PRAGMA busy_timeout=${WRITE_WAIT_MS}`)
+      if (!this.reader) this.db.exec(`PRAGMA busy_timeout=${WRITE_WAIT_MS}`)
     } catch (error) {
-      this.db.close()
+      this.close()
       throw error
     }
   }
 
+  private create(self: ExecutionOwner | undefined): void {
+    this.db.exec(`PRAGMA busy_timeout=${OPEN_WAIT_MS}`)
+    enableSharedWal(this.db, OPEN_WAIT_MS)
+    this.db.exec(`PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
+      CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
+    // Lock before reading the version so two hosts creating the store at
+    // once cannot both mint a device and a principal.
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      const found = this.meta("schema")
+      if (found === undefined) {
+        this.db.exec(SCHEMA)
+        const principal = randomUUID()
+        this.db.prepare("INSERT INTO principals VALUES (?, 'person', NULL, ?)").run(principal, this.now())
+        const insert = this.db.prepare("INSERT INTO store_meta VALUES (?, ?)")
+        insert.run("device", randomUUID())
+        insert.run("principal", principal)
+        insert.run("schema", String(THREAD_STORE_SCHEMA))
+      } else if (Number(found) > THREAD_STORE_SCHEMA) {
+        throw new ThreadStoreVersionError(Number(found))
+      }
+      this.migrate(self)
+      this.db.exec("COMMIT")
+    } catch (error) {
+      this.db.exec("ROLLBACK")
+      throw error
+    }
+  }
+
+  /** A reader cannot create or migrate, so it needs a store a host of this schema has migrated. */
+  private checkReadable(): void {
+    const found = this.meta("schema")
+    if (found === undefined) throw new Error("No Mako host has created the Thread store yet")
+    if (Number(found) > THREAD_STORE_SCHEMA) throw new ThreadStoreVersionError(Number(found))
+    if (!this.db.prepare("SELECT 1 AS found FROM store_migrations WHERE version = ?").get(THREAD_STORE_MIGRATION))
+      throw new Error("The Thread store predates this build; it is read once a current host has opened it")
+  }
+
   close(): void {
-    this.db.close()
+    if (this.reader) this.reader.close()
+    else this.db.close()
   }
 
   /** The actor for anything the person at this Mac does. */
@@ -680,7 +709,7 @@ export class ThreadStore {
   resolveRefs(refs: readonly SourceRef[], actor: Actor): Map<string, ThreadPlacement> {
     this.syncVersion()
     const located = refs.map((ref) => ({ ref, path: this.realPath(ref.path) }))
-    const placed = this.write(() => {
+    const placed = this.reader ? this.recordedPlacements(located) : this.write(() => {
       const known = located.filter((entry) => this.locator(entry.path))
       const unknown = parentsFirst(located.filter((entry) => !this.locator(entry.path)))
       const result = new Map<string, ThreadPlacement>()
@@ -696,6 +725,17 @@ export class ThreadStore {
       if (!current) continue
       placed.set(ref.path, current)
       this.remember(placementKey(ref), current)
+    }
+    return placed
+  }
+
+  /** Rows another host placed, without placing the rest. */
+  private recordedPlacements(located: readonly { ref: SourceRef; path: string }[]): Map<string, ThreadPlacement> {
+    const placed = new Map<string, ThreadPlacement>()
+    for (const entry of located) {
+      const { bySource, byPath, claimed } = this.recorded({ ...entry.ref, path: entry.path })
+      const session = bySource ?? byPath ?? claimed
+      if (session) placed.set(entry.ref.path, this.placeSession(session))
     }
     return placed
   }
@@ -1125,7 +1165,8 @@ export class ThreadStore {
     return paths
   }
 
-  private resolveOne(ref: SourceRef, actor: Actor): string {
+  /** What this device recorded for a catalog row, by its identity, its path and its native claim. */
+  private recorded(ref: SourceRef) {
     const key = ref.identity ?? ref.nativeId
     const located = this.locator(ref.path)
     const byPath = located && compatible(located, ref) ? located.session_id : undefined
@@ -1133,6 +1174,11 @@ export class ThreadStore {
     // A pathless binding's claim speaks only for rows without a distinct
     // identity; a Cursor `chats/` copy never answers to its agent's claim.
     const claimed = key === ref.nativeId ? this.nativeClaim(ref.harness, ref.nativeId) : undefined
+    return { key, located, byPath, bySource, claimed }
+  }
+
+  private resolveOne(ref: SourceRef, actor: Actor): string {
+    const { key, located, byPath, bySource, claimed } = this.recorded(ref)
     let session = bySource ?? byPath ?? claimed
     for (const other of [byPath, claimed])
       if (session && other && other !== session)
@@ -1611,6 +1657,11 @@ export class ThreadStore {
 
   /** `data_version` moves only for other connections' commits; this host's own are consumed in `write`. */
   private syncVersion(): void {
+    if (this.reader?.refresh()) {
+      this.db = this.reader.database
+      this.statements.clear()
+      this.dataVersion = -1
+    }
     const version = VersionSchema.parse(this.sql("PRAGMA data_version").get()).data_version
     if (version === this.dataVersion) return
     this.dataVersion = version
@@ -1654,6 +1705,7 @@ export class ThreadStore {
   }
 
   private write<T>(work: () => T): T {
+    if (this.reader) throw new ReadOnlyStoreError("The Thread store")
     if (this.depth > 0) return work()
     this.db.exec("BEGIN IMMEDIATE")
     this.depth += 1

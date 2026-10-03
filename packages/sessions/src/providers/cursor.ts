@@ -64,6 +64,7 @@ import {
 import { normalizeToolOutput } from "../tool-output.js"
 import { todoDetails } from "../tool-plan.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
+import { openNativeStore } from "../read-only-sqlite.js"
 import {
   SessionUnreadable,
   type NativeFile,
@@ -261,9 +262,8 @@ let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
 async function openDatabase(path: string): Promise<DatabaseSync | null> {
   if (sqliteOpen === undefined) {
     try {
-      const sqlite = await import("node:sqlite")
-      sqliteOpen = (file) =>
-        new sqlite.DatabaseSync(file, { readOnly: true, timeout: READ_BUSY_TIMEOUT_MS })
+      await import("node:sqlite")
+      sqliteOpen = (file) => openNativeStore(file, { timeout: READ_BUSY_TIMEOUT_MS })
     } catch {
       sqliteOpen = null
     }

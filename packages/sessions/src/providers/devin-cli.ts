@@ -36,6 +36,7 @@ import {
 import { createHash } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
+import { nativeStoreVersion, openNativeStore } from "../read-only-sqlite.js"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
@@ -130,8 +131,8 @@ let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
 async function openDatabase(path: string): Promise<DatabaseSync | null> {
   if (sqliteOpen === undefined) {
     try {
-      const sqlite = await import("node:sqlite")
-      sqliteOpen = (file) => new sqlite.DatabaseSync(file, { readOnly: true })
+      await import("node:sqlite")
+      sqliteOpen = (file) => openNativeStore(file)
     } catch {
       sqliteOpen = null
     }
@@ -203,7 +204,7 @@ export class DevinCliProvider implements SessionProvider {
   private async connection(): Promise<DatabaseSync | null> {
     const info = await stat(this.dbPath()).catch(() => null)
     if (!info) return null
-    const identity = `${info.dev}:${info.ino}`
+    const identity = `${info.dev}:${info.ino}:${nativeStoreVersion(this.dbPath())}`
     if (this.db && this.dbIdentity === identity) return this.db
     this.db?.close()
     this.db = await openDatabase(this.dbPath())

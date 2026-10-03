@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { DatabaseSync } from "node:sqlite"
+import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
 import type { UsageSummary, UsageTotals } from "./shared.js"
@@ -424,7 +425,7 @@ async function scanOpenCode(
   for (const name of ["opencode-next.db", "opencode.db"]) {
     let db: DatabaseSync | undefined
     try {
-      db = new DatabaseSync(join(root, name), { readOnly: true })
+      db = openNativeStore(join(root, name))
       db.exec("PRAGMA query_only = ON")
       const rows = selectOpenCodeRows(db, name)
       if (rows.length >= MAX_OPENCODE_ROWS) truncated = true

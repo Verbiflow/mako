@@ -45,6 +45,7 @@ import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { stat, rm } from "node:fs/promises"
 import type { SQLOutputValue } from "node:sqlite"
+import { openNativeStore } from "../read-only-sqlite.js"
 import {
   clip,
   titleFrom,
@@ -667,9 +668,7 @@ export class CodexProvider implements SessionProvider {
     const load = (async () => {
       const sqlite = await import("node:sqlite").catch(() => null)
       if (!sqlite) return undefined
-      const database = new sqlite.DatabaseSync(this.metadataPath, {
-        readOnly: true,
-      })
+      const database = openNativeStore(this.metadataPath)
       try {
         const row = database
           .prepare(
@@ -739,7 +738,7 @@ export class CodexProvider implements SessionProvider {
     const sqlite = existsSync(this.metadataPath) ? await import("node:sqlite").catch(() => null) : null
     if (!sqlite) return names
     try {
-      const database = new sqlite.DatabaseSync(this.metadataPath, { readOnly: true })
+      const database = openNativeStore(this.metadataPath)
       try {
         for (const row of database.prepare("SELECT id, name FROM threads WHERE name IS NOT NULL AND name != ''").all()) {
           const id = sqliteText(row.id)
