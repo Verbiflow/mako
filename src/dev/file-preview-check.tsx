@@ -1,3 +1,5 @@
+import previewVideoUrl from "./assets/preview.mp4?url"
+import previewAudioUrl from "./assets/preview.wav?url"
 /* eslint-disable react-refresh/only-export-components -- This isolated acceptance entry exposes controlled fixture inputs and receipts. */
 import { z } from "zod"
 // Explicit browser acceptance fixture. No native agent is started.
@@ -26,6 +28,8 @@ import "../index.css"
 
 bindTheme()
 export function fixtureTheme(theme: "light" | "dark") { prefsStore.set({ theme }) }
+let setHarness: ((harness: NonNullable<Exchange["response"][number]["provider"]>) => void) | undefined
+export function fixtureHarness(harness: NonNullable<Exchange["response"][number]["provider"]>) { setHarness?.(harness) }
 let setReply: ((text: string) => void) | undefined
 export function fixtureReply(text: string) { setReply?.(text) }
 let setPrompt: ((prompt: Exchange["prompt"]) => void) | undefined
@@ -144,7 +148,7 @@ textFile(
 )
 textFile("/fixture/malformed.har", "{ invalid diagnostic")
 const svg =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="320"><rect width="640" height="320" rx="24" fill="#282828"/><text x="40" y="150" fill="#eee" font-family="system-ui" font-size="32">Native image asset</text><text x="40" y="195" fill="#aaa" font-family="system-ui" font-size="18">Extensionless source · detected by the host</text></svg>'
+  '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="320"><rect width="640" height="320" fill="#282828"/><text x="40" y="150" fill="#eee" font-family="system-ui" font-size="32">Native image asset</text><text x="40" y="195" fill="#aaa" font-family="system-ui" font-size="18">Extensionless source · detected by the host</text></svg>'
 fixtureFile({
   path: "/fixture/native-image",
   contents: "",
@@ -155,6 +159,10 @@ fixtureFile({
   size: svg.length,
   truncated: false,
 })
+for (const [path, previewUrl, mimeType, media, size] of [
+  ["/fixture/demo.mp4", previewVideoUrl, "video/mp4", "video", 18808],
+  ["/fixture/voice.wav", previewAudioUrl, "audio/wav", "audio", 32044],
+] as const) fixtureFile({ path, previewUrl, mimeType, media, contents: "", binary: true, truncated: false, size })
 // Only this explicit fixture persists its bounded file samples; product drafts
 // continue storing authorised staged paths rather than base64 or blob URLs.
 const fixtureAssets = z
@@ -338,6 +346,8 @@ const diagnosticPaths = [
   "malformed.har",
 ]
 function Fixture() {
+  const [harness, updateHarness] = useState<NonNullable<Exchange["response"][number]["provider"]>>("claude")
+  useEffect(() => { setHarness = updateHarness; return () => { setHarness = undefined } }, [])
   const [scenario, setScenario] = useState("media")
   const [reply, updateReply] = useState<string>()
   const [prompt, updatePrompt] = useState<Exchange["prompt"]>()
@@ -396,6 +406,7 @@ function Fixture() {
       { type: "attachment", name: "generated.md", mimeType: "text/markdown", source: { kind: "inline", data: btoa("# Native Markdown\n\n**Formatted content** from the native attachment, without a filesystem path.\n\n- Shared renderer\n- Preserved source") } },
       { type: "attachment", name: "generated.html", mimeType: "text/html", source: { kind: "inline", data: btoa('<!doctype html><html><head></head><body style="font:16px system-ui;padding:24px;background:var(--surface);color:var(--foreground)"><h1>Native HTML attachment</h1><p>Inline reply preview</p><button onclick="this.textContent=\'Interaction works\'">Try interaction</button></body></html>') } },
     ]
+  for (const turn of turns) for (const message of turn.response) message.provider = harness
   return (
     <TooltipProvider>
       <WorkspaceFocusContext
