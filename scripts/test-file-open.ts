@@ -83,6 +83,41 @@ try {
   assert.equal((await readConversationFile(join(root, "src"), "owned.md")).contents, "Nested working folder's output", "A conversation-relative path uses its cwd even inside a Git repository")
   assert.equal((await readConversationFile(join(root, "src"), "../owned.md")).contents, "Original project output", "Parent-relative paths preserve native working-directory semantics")
   await assert.rejects(readConversationFile(join(root, "src"), "./AGENTS.md"), /No file at \.\/AGENTS\.md/, "Explicit relative paths never silently select the repository-root file")
+  // The reported failure: a reply cites an output in its Thread's data folder.
+  const dataDir = join(outer, "thread-data", "owner")
+  const ownedDataDir = async () => dataDir
+  const otherData = join(outer, "thread-data", "other")
+  const artifact = "flage-proof/side-by-side.mts"
+  for (const folder of [dataDir, otherData]) await mkdir(join(folder, "flage-proof"), { recursive: true })
+  await writeFile(join(dataDir, artifact), "Owning Thread's script")
+  await writeFile(join(otherData, artifact), "Another Thread's script")
+  assert.ok(inlineFileTarget(artifact))
+  await assert.rejects(readConversationFile(root, artifact), /No file named/, "A project index cannot find a Thread artifact")
+  for (const harness of registeredHarnessIds()) {
+    const read = await readConversationFile(root, artifact, ownedDataDir)
+    assert.equal(read.contents, "Owning Thread's script", `${harness} uses the same owner-scoped artifact route`)
+    assert.equal(read.path, join(dataDir, artifact), "Refresh, Open and copy references carry the actual file location")
+  }
+  assert.equal((await readConversationFile(root, artifact, async () => otherData)).contents, "Another Thread's script", "Shared workspace caches do not share a data-file owner")
+  assert.equal((await readConversationFile(root, artifact, ownedDataDir)).contents, "Owning Thread's script")
+  await assert.rejects(readConversationFile(root, "side-by-side.mts", ownedDataDir), /No file named/, "The artifact route does not recursively scan the private data folder")
+  await assert.rejects(readConversationFile(root, `./${artifact}`, ownedDataDir), /No file at/, "Explicit cwd paths never become data-folder paths")
+  await assert.rejects(readConversationFile(root, "flage-proof/../../other/flage-proof/side-by-side.mts", ownedDataDir), /No file named/, "A data-folder fallback cannot traverse into another Thread")
+  await mkdir(join(root, "flage-proof"))
+  await writeFile(join(root, artifact), "Project's script")
+  assert.equal((await readConversationFile(root, artifact, ownedDataDir)).contents, "Project's script", "A real cwd-relative path keeps precedence")
+  let rootLookups = 0
+  const lazyRoot = async () => { rootLookups++; return dataDir }
+  await readConversationFile(root, artifact, lazyRoot)
+  await readConversationFile(root, join(otherData, artifact), lazyRoot)
+  await assert.rejects(readConversationFile(root, `./absent.mts`, lazyRoot), /No file at/)
+  assert.equal(rootLookups, 0, "Existing project files, absolute paths and explicit cwd paths never look up data ownership")
+  assert.equal((await readConversationFile(root, join(otherData, artifact), ownedDataDir)).contents, "Another Thread's script", "An explicitly linked absolute file keeps its meaning")
+  await rm(join(root, "flage-proof"), { recursive: true })
+  assert.equal((await readConversationFile(root, artifact, lazyRoot)).contents, "Owning Thread's script")
+  assert.equal(rootLookups, 1, "Only a missing implicit project path looks up the data folder")
+  await rm(join(dataDir, artifact))
+  await assert.rejects(readConversationFile(root, artifact, ownedDataDir), /No file named/, "A removed artifact never falls through to another Thread")
   let scans = 0
   const indexGate = Promise.withResolvers<void>()
   class CountedGit extends WorkspaceGit {

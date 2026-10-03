@@ -6,6 +6,8 @@ import { visit } from "unist-util-visit"
 import type { Root } from "hast"
 import { markdownAnchorLine } from "../src/lib/markdown-headings"
 import { inlineFileLinks } from "../src/lib/inline-file-links"
+import { filePreviewIdentity } from "../src/lib/inline-file-links"
+import { responseSections } from "../src/lib/exchanges"
 import {
   parseProse,
   prosePlugins,
@@ -112,3 +114,52 @@ assert.equal(groupedAssets.children.filter(node => node.type === "element" && no
 const loneAssets = unified().use(rehypeAssetGroups).runSync(parseProse("[guide.md](guide.md#setup)\n\n[site](https://example.test)\n\nText with [image](one.png).\n\n[two.mp4](two.mp4)"))
 assert.equal(loneAssets.children.some(node => node.type === "element" && node.properties.dataAssetGroup), false)
 console.log("Asset groups stay beside their prose and preserve anchors, external links and cached trees")
+
+// An explicit visual and its path citation must not mount the same file twice.
+const screenshot = "/thread-data/selected-state/selected-state-after.png"
+const duplicatedVisual = `Here's the rail.\n\n![Selected Cursor thread row, idle and hovered](${screenshot})\n\nThe file is at \`${screenshot}\`.\n\n- Keep [another image](/other/selected-state-after.png).\n- Keep [source](${screenshot}#L12).`
+const visualTree = parseProse(duplicatedVisual)
+const visualOriginal = structuredClone(visualTree)
+const planned = unified().use(rehypeAssetGroups).runSync(structuredClone(visualTree))
+const automatic: string[] = []
+const visuals: string[] = []
+visit(planned, "element", node => {
+  if (node.tagName === "p" || node.tagName === "li") automatic.push(...inlineFileLinks(node))
+  if (node.tagName === "img") visuals.push(String(node.properties.src))
+})
+assert.deepEqual(visuals, [screenshot])
+assert.deepEqual(automatic, ["/other/selected-state-after.png"], "Distinct directories stay distinct; the repeated path becomes link-only")
+const visualMarkup = renderToStaticMarkup(createElement(Markdown, {
+  remarkPlugins: [skipMarkdownParse],
+  rehypePlugins: [[reuseParsedProse, visualTree], rehypeAssetGroups],
+}, duplicatedVisual))
+assert.ok(visualMarkup.includes(`href="${screenshot}"`), "The readable path remains a link")
+assert.ok(visualMarkup.includes(`href="${screenshot}#L12"`), "Line navigation survives")
+assert.deepEqual(visualTree, visualOriginal, "Preview planning never mutates worker/cache inputs")
+const nativeSource = "![Authored caption](./images/screen%20one.png)\n\nThe file is at `images/screen one.png`.\n\n[image](images/screen%20one.png)"
+const nativeTree = parseProse(nativeSource)
+const nativePlan = unified().use(rehypeAssetGroups, { previewedFiles: ["images/screen one.png"] }).runSync(structuredClone(nativeTree))
+const nativePaths: string[] = []
+visit(nativePlan, "element", node => {
+  assert.notEqual(node.tagName, "img", "A file-backed native attachment owns its visual")
+  if (node.tagName === "p") nativePaths.push(...inlineFileLinks(node))
+})
+assert.deepEqual(nativePaths, [])
+assert.ok(renderToStaticMarkup(createElement(Markdown, {
+  remarkPlugins: [skipMarkdownParse], rehypePlugins: [[reuseParsedProse, nativeTree], [rehypeAssetGroups, { previewedFiles: ["images/screen one.png"] }]],
+}, nativeSource)).includes("Authored caption"), "Native deduplication keeps the authored caption as a link")
+const independent = unified().use(rehypeAssetGroups).runSync(structuredClone(nativeTree))
+assert.ok(independent.children.some(node => node.type === "element" && node.children.some(child => child.type === "element" && child.tagName === "img")), "Another reply with no native visual still renders the image")
+const onlyPaths = unified().use(rehypeAssetGroups).runSync(parseProse("Here is `images/screen.png`."))
+assert.deepEqual(onlyPaths.children.flatMap(node => node.type === "element" ? inlineFileLinks(node) : []), ["images/screen.png"], "A path without an explicit visual retains its preview")
+assert.notEqual(filePreviewIdentity("images/link/../screen.png"), filePreviewIdentity("images/screen.png"), "Do not collapse parent traversal through a possible symlink")
+const splitReply = responseSections([{ id: "native-reply", role: "assistant", blocks: [
+  { type: "attachment", name: "screen.png", mimeType: "image/png", source: { kind: "file", path: screenshot } },
+  { type: "text", text: duplicatedVisual },
+] }, { id: "independent-reply", role: "assistant", blocks: [{ type: "text", text: duplicatedVisual }] }])
+assert.deepEqual(splitReply.map(section => section.kind === "prose" ? section.previewedFiles : undefined), [[screenshot], [screenshot], []], "Native provenance survives section splitting without leaking to another message")
+for (const path of ["video.mp4", "voice.wav", "report.xlsx", "report.pdf", "trace.har", "guide.md"]) {
+  const plan = unified().use(rehypeAssetGroups, { previewedFiles: [path] }).runSync(parseProse(`The file is at \`${path}\`.`))
+  assert.deepEqual(plan.children.flatMap(node => node.type === "element" ? inlineFileLinks(node) : []), [], `Native ${path} does not gain a second automatic preview`)
+}
+console.log("Explicit Markdown/native visuals keep one preview; path citations, distinct files, captions and isolated cache reuse survive")

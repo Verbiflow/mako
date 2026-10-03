@@ -35,6 +35,12 @@ async function stableAndApart(): Promise<void> {
   const first = started(store)
   const second = started(store)
 
+  const unclaimed = await environments.fileDataDir({ conversationId: first.conversationId })
+  assert.equal(unclaimed, environments.dataDir(app(first.thread)))
+  assert.equal(existsSync(unclaimed!), false, "File resolution never creates a data folder")
+  assert.equal(store.heldEnvironments().length, 0, "File resolution never claims ports or updates their use")
+  assert.equal(await environments.fileDataDir({}), undefined, "A missing owner cannot use the active Thread's data folder")
+
   const one = await environments.forLaunch(first.conversationId, "Fix the login redirect")
   assert.ok(one)
   assert.equal(one.thread, first.thread)
@@ -55,6 +61,7 @@ async function stableAndApart(): Promise<void> {
   const again = await environments.forLaunch(first.conversationId, "Renamed later")
   assert.deepEqual(again, one, "a Thread keeps its values for its life, even while its own app holds its ports")
   assert.deepEqual(environments.launchedWith(first.conversationId), one)
+  assert.equal(await environments.fileDataDir({ conversationId: first.conversationId, cwd: root }), one.dataDir, "A running agent keeps the data folder it was launched with after a cwd change")
 
   const untitled = started(store)
   const three = await environments.forLaunch(untitled.conversationId)
@@ -168,6 +175,7 @@ async function onePerFolder(): Promise<void> {
   assert.equal(two.app, one.app, "two Threads in one folder, even from a subfolder, share its app")
   assert.equal(two.port, one.port)
   assert.equal(two.dataDir, one.dataDir)
+  assert.equal(await environments.fileDataDir({ cwd: join(shop, "web"), thread: second.thread }), one.dataDir, "An imported native conversation resolves the folder's data owner from its recorded cwd")
   assert.equal(one.host, "shop.thread.localhost", "the folder's app is named after the folder")
   assert.notEqual(two.thread, one.thread, "each agent still knows its own Thread")
 
@@ -180,6 +188,8 @@ async function onePerFolder(): Promise<void> {
   assert.equal(own?.app, owner.thread, "a Worktree Thread's app is keyed by the Thread")
   assert.equal(own?.host, "shop-coupons.thread.localhost", "and named after its worktree")
   assert.notEqual(own?.port, one.port)
+  assert.equal(await environments.fileDataDir({ cwd: worktree, thread: owner.thread }), own?.dataDir, "A native worktree conversation uses its Worktree Thread's data folder")
+  assert.equal(await environments.fileDataDir({ cwd: join(project, "elsewhere") }), environments.dataDir(folderApp(join(project, "elsewhere"))), "Native folder ownership is deterministic even when ports have not been claimed")
   const visitor = started(store)
   assert.equal((await environments.forConversation(visitor.conversationId, "Look around", worktree))?.app, owner.thread, "another Thread's Session in that worktree shares its app")
   assert.deepEqual(environments.held(one.app), { app: one.app, host: one.host, port: one.port, ports: THREAD_PORT_COUNT, dataDir: one.dataDir })
