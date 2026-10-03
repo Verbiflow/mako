@@ -19,6 +19,7 @@ export type LiveSteering = "step" | "interrupt"
 export interface HarnessDescriptor {
   provider: string
   displayName: string
+  presentation?: import("./harness-presentation.js").HarnessPresentation
   /** A headless native run can continue this provider's sessions. */
   resumable: boolean
   /** An interactive transport can drive this provider right now. */
@@ -35,9 +36,8 @@ export interface HarnessDescriptor {
    */
   modes?: LiveSessionMode[]
   /**
-   * The mode a fresh session runs under when the user has not chosen one.
-   * The desk reports it as the current level so no provider ever opens a
-   * session whose access is unaccounted for.
+   * The adapter's factory default. Native user/project configuration may
+   * override it; this is not an observed effective permission level.
    */
   defaultMode?: string
 }
@@ -191,13 +191,21 @@ export interface LiveSessionState {
  */
 export const CONNECTION_LOST_STOP = "connection-lost"
 
+/**
+ * The `lastStop` of a turn the agent's own transport gave up on after
+ * retrying it. Each of those retries already re-ran the turn, so the request
+ * is failed and never continued by the host, whatever its error text says.
+ */
+export const RETRIES_EXHAUSTED_STOP = "retries-exhausted"
+
 /** One streamed piece of an interactive turn, reduced for rendering. */
 export type { LiveUpdate } from "./live-content.js"
 
 export interface PromptAttachment {
   name: string
   mimeType: string
-  size: number
+  /** Absent when native history preserved only a source path. */
+  size?: number
   data?: string
   path?: string
 }

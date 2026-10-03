@@ -67,6 +67,9 @@ const reads = [
   /** Answers from the host's readings; a re-read it starts behind the answer is idempotent. */
   "mako:harness-updates",
   "mako:accounts",
+  "mako:native-authoring-catalog",
+  "mako:native-authoring-list",
+  "mako:native-authoring-read",
   "mako:provider-connections",
   "mako:list-models",
   "mako:list-plugins",

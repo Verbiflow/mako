@@ -5,7 +5,7 @@ import {
   ProposedPlanSchema,
   MAX_PROPOSED_PLAN_LENGTH,
 } from "@mako/sessions/content"
-import { sameSetupEvent } from "@mako/sessions/events"
+import { NativeEventSourceSchema, sameSetupEvent } from "@mako/sessions/events"
 
 const plan = z.array(z.object({ content: z.string(), status: z.string() }))
 /**
@@ -15,6 +15,7 @@ const plan = z.array(z.object({ content: z.string(), status: z.string() }))
 const unfinished = z.literal(true).optional()
 /** `TranscriptEvent` from `@mako/sessions/events`. */
 const transcriptEvent = {
+  source: NativeEventSourceSchema.optional(),
   label: z.string(),
   detail: z.string().optional(),
   body: z.string().optional(),
@@ -88,7 +89,11 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
    * event is drawn once. A setup marker the conversation already shows is
    * dropped, whichever turn or session start reports it again.
    */
-  z.object({ kind: z.literal("event"), id: z.string().optional(), ...transcriptEvent }),
+  z.object({
+    kind: z.literal("event"),
+    id: z.string().optional(),
+    ...transcriptEvent,
+  }),
   /** The provider withdrew content it had sent: the turn's text, thinking and tool blocks with these ids go. */
   z.object({ kind: z.literal("retract"), ids: z.array(z.string()).min(1) }),
 ])
@@ -121,7 +126,12 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("tool"),
     /** A view preview, resolved from the immutable retained snapshot on expansion. */
-    historyRest: z.object({ index: z.number().int().nonnegative(), length: z.number().nonnegative() }).optional(),
+    historyRest: z
+      .object({
+        index: z.number().int().nonnegative(),
+        length: z.number().nonnegative(),
+      })
+      .optional(),
     /** Display-only immutable content identity, including a resolved detail. */
     historyVersion: z.string().optional(),
     id: z.string(),
@@ -137,7 +147,11 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("plan"), entries: plan }),
   z.object({ type: z.literal("provider-turn"), reason: z.string() }),
-  z.object({ type: z.literal("event"), id: z.string().optional(), ...transcriptEvent }),
+  z.object({
+    type: z.literal("event"),
+    id: z.string().optional(),
+    ...transcriptEvent,
+  }),
 ])
 export type LiveBlock = z.infer<typeof LiveBlockSchema>
 
@@ -148,7 +162,10 @@ export function liveToolFinished(status: string): boolean {
 
 /** A block that opens a turn: the user's prompt, or the cause of one the provider started itself. */
 export function isTurnStart(block: LiveBlock | undefined): boolean {
-  return (block?.type === "user" && !block.steeringFor) || block?.type === "provider-turn"
+  return (
+    (block?.type === "user" && !block.steeringFor) ||
+    block?.type === "provider-turn"
+  )
 }
 
 const changes = new WeakMap<
@@ -348,12 +365,33 @@ export function reduceLiveUpdates(
         replace(-1, { type: "provider-turn", reason: update.reason })
         break
       case "event": {
-        if (update.setup && next.some((candidate) => candidate.type === "event" && sameSetupEvent(candidate, update)))
+        if (
+          update.setup &&
+          next.some(
+            (candidate) =>
+              candidate.type === "event" && sameSetupEvent(candidate, update)
+          )
+        )
           break
-        const block: LiveBlock = { type: "event", label: update.label, detail: update.detail, body: update.body, tone: update.tone }
+        const block: LiveBlock = {
+          type: "event",
+          source: update.source,
+          label: update.label,
+          detail: update.detail,
+          body: update.body,
+          tone: update.tone,
+        }
         if (update.setup) block.setup = true
         if (update.id) block.id = update.id
-        replace(update.id ? findCurrent((candidate) => candidate.type === "event" && candidate.id === update.id) : -1, block)
+        replace(
+          update.id
+            ? findCurrent(
+                (candidate) =>
+                  candidate.type === "event" && candidate.id === update.id
+              )
+            : -1,
+          block
+        )
         break
       }
       case "retract": {
@@ -361,7 +399,12 @@ export function reduceLiveUpdates(
         let kept = turnStart + 1
         for (let index = turnStart + 1; index < next.length; index++) {
           const block = next[index]!
-          const withdrawn = (block.type === "text" || block.type === "thinking" || block.type === "tool") && block.id !== undefined && ids.has(block.id)
+          const withdrawn =
+            (block.type === "text" ||
+              block.type === "thinking" ||
+              block.type === "tool") &&
+            block.id !== undefined &&
+            ids.has(block.id)
           if (withdrawn) from = Math.min(from, kept)
           else next[kept++] = block
         }

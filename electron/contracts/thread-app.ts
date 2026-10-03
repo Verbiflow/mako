@@ -62,7 +62,7 @@ export type ThreadAppView =
       kind: "ready"
       project: string
       phase: AppPhase
-      /** Once the folder's app has ports of its own; before its first start it has none. */
+      /** A running process's address: web first, then the first process with a port. */
       address?: { host: string; port: number }
       startedAt?: number
       processes: AppProcessView[]

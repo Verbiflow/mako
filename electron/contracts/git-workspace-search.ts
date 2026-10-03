@@ -203,6 +203,7 @@ export interface FileContents {
    */
   path: string
   contents: string
+  diagnostic?: import("./file-preview.js").DiagnosticFormat
   media?: "image" | "pdf" | "audio" | "video" | "spreadsheet"
   mimeType?: string
   previewUrl?: string

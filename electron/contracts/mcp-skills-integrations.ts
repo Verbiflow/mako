@@ -154,6 +154,8 @@ export interface McpServerOrigin {
   account: string
   scope: McpScope
   provenance: string
+  /** Native source-local disablement; absence keeps the source's default enabled state. */
+  enabled?: boolean
 }
 
 export interface McpServerRecord extends McpServerDefinition {

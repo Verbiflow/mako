@@ -46,6 +46,22 @@ export function isMakoManagedServer(server: McpServerRecord): boolean {
   return server.origins.some((origin) => origin.provider === "mako")
 }
 
+const SCOPE_ORDER = { managed: 0, user: 1, workspace: 2, effective: 3 } as const
+
+/** The most specific native source decides; disabled definitions still reserve their name. */
+function ownServerEnabled(server: McpServerRecord, provider: McpProvider): boolean {
+  let selected: McpServerRecord["origins"][number] | undefined
+  for (const origin of server.origins) {
+    if (origin.provider !== provider) continue
+    if (!selected || SCOPE_ORDER[origin.scope] >= SCOPE_ORDER[selected.scope]) selected = origin
+  }
+  return selected !== undefined && selected.enabled !== false
+}
+
+function enabledSomewhere(server: McpServerRecord): boolean {
+  return server.origins.some((origin) => ownServerEnabled(server, origin.provider))
+}
+
 function ownServerNames(
   snapshot: McpRegistrySnapshot,
   provider: McpProvider
@@ -54,7 +70,6 @@ function ownServerNames(
     snapshot.servers
       .filter(
         (server) =>
-          server.availability !== "unavailable" &&
           server.origins.some((origin) => origin.provider === provider)
       )
       .map((server) => server.name)
@@ -76,6 +91,7 @@ export function projectedMcpServers(
       (server.portable || managedRuntime) &&
       !server.conflict &&
       server.availability !== "unavailable" &&
+      enabledSomewhere(server) &&
       transports.includes(server.transport) &&
       !own.has(server.name) &&
       (!managed || managedRuntime)
@@ -89,13 +105,12 @@ export function reachableMcpServers(
   provider: McpProvider,
   transports: readonly McpTransport[]
 ): McpServerRecord[] {
-  const own = ownServerNames(snapshot, provider)
   const projected = new Set(
     projectedMcpServers(snapshot, provider, transports).map(
       (server) => server.name
     )
   )
   return snapshot.servers.filter(
-    (server) => own.has(server.name) || projected.has(server.name)
+    (server) => (server.availability !== "unavailable" && ownServerEnabled(server, provider)) || projected.has(server.name)
   )
 }

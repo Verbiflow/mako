@@ -178,7 +178,7 @@ export const hostCallInputs = {
           z.object({
             name: z.string(),
             mimeType: z.string(),
-            size: z.number(),
+            size: z.number().optional(),
             data: z.string().optional(),
             path: z.string().optional(),
           })
@@ -195,7 +195,7 @@ export const hostCallInputs = {
           z.object({
             name: z.string(),
             mimeType: z.string(),
-            size: z.number(),
+            size: z.number().optional(),
             data: z.string().optional(),
             path: z.string().optional(),
           })
@@ -228,7 +228,7 @@ export const hostCallInputs = {
         z.object({
           name: z.string(),
           mimeType: z.string(),
-          size: z.number(),
+          size: z.number().optional(),
           data: z.string().optional(),
           path: z.string().optional(),
         })
@@ -309,7 +309,7 @@ export const hostCallInputs = {
         z.object({
           name: z.string(),
           mimeType: z.string(),
-          size: z.number(),
+          size: z.number().optional(),
           data: z.string().optional(),
           path: z.string().optional(),
         })
@@ -387,7 +387,7 @@ export const hostCallInputs = {
             z.object({
               name: z.string(),
               mimeType: z.string(),
-              size: z.number(),
+              size: z.number().optional(),
               data: z.string().optional(),
               path: z.string().optional(),
             })
@@ -427,7 +427,7 @@ export const hostCallInputs = {
         z.object({
           name: z.string(),
           mimeType: z.string(),
-          size: z.number(),
+          size: z.number().optional(),
           data: z.string().optional(),
           path: z.string().optional(),
         })
@@ -445,7 +445,7 @@ export const hostCallInputs = {
         z.object({
           name: z.string(),
           mimeType: z.string(),
-          size: z.number(),
+          size: z.number().optional(),
           data: z.string().optional(),
           path: z.string().optional(),
         })
@@ -484,6 +484,41 @@ export const hostCallInputs = {
   "mako:merge-pull": z.tuple([
     z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
   ]),
+  "mako:native-authoring-catalog": z.tuple([]),
+  "mako:native-authoring-list": z.tuple([
+    z.object({
+      provider: z.string(),
+      family: z.union([z.literal("hooks"), z.literal("commands")]),
+      cwd: z.string(),
+    }),
+  ]),
+  "mako:native-authoring-read": z.tuple([
+    z.object({
+      provider: z.string(),
+      family: z.union([z.literal("hooks"), z.literal("commands")]),
+      cwd: z.string(),
+    }),
+    z.string(),
+  ]),
+  "mako:native-authoring-remove": z.tuple([
+    z.object({
+      id: z.string(),
+      revision: z.string(),
+      provider: z.string(),
+      family: z.union([z.literal("hooks"), z.literal("commands")]),
+      cwd: z.string(),
+    }),
+  ]),
+  "mako:native-authoring-write": z.tuple([
+    z.object({
+      id: z.string(),
+      contents: z.string(),
+      revision: z.union([z.null(), z.string()]),
+      provider: z.string(),
+      family: z.union([z.literal("hooks"), z.literal("commands")]),
+      cwd: z.string(),
+    }),
+  ]),
   "mako:native-dismiss": z.tuple([z.string()]),
   "mako:native-edit-queued": z.tuple([
     z.object({
@@ -508,7 +543,7 @@ export const hostCallInputs = {
         z.object({
           name: z.string(),
           mimeType: z.string(),
-          size: z.number(),
+          size: z.number().optional(),
           data: z.string().optional(),
           path: z.string().optional(),
         })

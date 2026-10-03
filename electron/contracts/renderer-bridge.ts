@@ -1,4 +1,5 @@
 import type { GitRemoteInput, GitRemoteResult } from "./git-workspace-search.js"
+import type { NativeAuthoringCatalog, NativeAuthoringTarget, NativeAuthoringDocument, NativeAuthoringWrite, NativeAuthoringRemove } from "./native-authoring.js"
 import type {
   ThreadTarget,
   ThreadControls,
@@ -503,6 +504,11 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<IntegrationCatalogSnapshot>("mako:integrations"),
     discoverMcp: () =>
       invokeTrustedHost<McpRegistrySnapshot>("mako:mcp-discover"),
+    nativeAuthoringCatalog: () => invokeTrustedHost<NativeAuthoringCatalog>("mako:native-authoring-catalog"),
+    listNativeAuthoring: (target: NativeAuthoringTarget) => invokeTrustedHost<{ id: string; name: string }[]>("mako:native-authoring-list", target),
+    readNativeAuthoring: (target: NativeAuthoringTarget, id: string) => invokeTrustedHost<NativeAuthoringDocument>("mako:native-authoring-read", target, id),
+    writeNativeAuthoring: (input: NativeAuthoringWrite) => invokeTrustedHost<NativeAuthoringDocument>("mako:native-authoring-write", input),
+    removeNativeAuthoring: (input: NativeAuthoringRemove) => invokeTrustedHost<void>("mako:native-authoring-remove", input),
     previewMcpSync: (serverId: string, target: McpSyncTarget) =>
       invokeTrustedHost<McpSyncPreview>(
         "mako:mcp-sync-preview",
