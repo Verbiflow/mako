@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { CheckIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
@@ -285,6 +286,7 @@ function Action({ children, ...props }: { children: ReactNode } & Omit<Parameter
  * whatever model it's on; a new Thread does it in a worktree of its own.
  */
 function NoneMenu({ cwd, view, focused }: { cwd: string; view: Extract<ThreadAppView, { kind: "none" }>; focused: boolean }) {
+  useHarnessIdentity()
   const fresh = useSetupAgent()
   const here = useThreadAgent()
   const stopped = view.stopped
