@@ -1,1 +1,1 @@
-export { HARNESS_LABEL, harnessLabel } from "@/lib/harness-label"
+export { harnessLabels, harnessLabel, useHarnessLabels } from "@/lib/harness-label"

@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { RailAnnouncer } from "@/components/rail/thread-status"
 import type { RailAsk } from "@/lib/rail-announcement"
@@ -11,7 +12,7 @@ import { AppMarkIcon } from "@/components/rail/app-mark"
 import { threadAppDriver } from "@/state/thread-app"
 import type { AcpPresence } from "@/state/acp-presence"
 import { ThreadRow } from "@/components/rail/thread-row"
-import { HARNESS_LABEL, harnessLabel } from "@/components/rail/harness-meta"
+import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import {
   groupThreadFolders,
@@ -36,7 +37,7 @@ import {
   type BoardSection as BoardSectionData,
 } from "@/lib/thread-board"
 import { useRowFlip } from "@/components/rail/use-row-flip"
-import { EMPTY_FOLD, foldThreads, foldedThreadStatus, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
+import { EMPTY_FOLD, foldThreads, foldedThreadState, unreadReview, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
 import { useThreadGroups } from "@/state/thread-groups"
 import { RailTip } from "@/components/rail/rail-tip"
 import { railRanksStore } from "@/state/rail-ranks"
@@ -153,6 +154,7 @@ function useLiveTime(): number {
 }
 
 export function AgentThreads() {
+  useHarnessIdentity()
   const rail = useRef<HTMLDivElement>(null)
   const topFade = useRef<HTMLSpanElement>(null)
   const [query, setQuery] = useState("")
@@ -310,18 +312,20 @@ export function AgentThreads() {
     const nextStatuses: Record<string, ThreadStatus> = {}
     for (const ref of shownRefs) {
       const folded = fold.byLead.get(ref.path)
-      const status = folded
-        ? foldedThreadStatus(folded.members, (member) => threadStatus(member, state))
-        : threadStatus(ref, state)
+      // A folded Thread counts each fact any of its Sessions holds: one
+      // running and one finished is a running Thread and one to review.
+      const foldState = folded ? foldedThreadState(folded.members, (member) => threadStatus(member, state)) : undefined
+      const status = foldState?.status ?? threadStatus(ref, state)
+      const sessions = foldState?.sessions.map((session) => session.status) ?? [status]
       nextStatuses[ref.path] = status
-      nextPriorities[ref.path] = threadStatusPriority(status)
+      nextPriorities[ref.path] = foldState?.priority ?? threadStatusPriority(status)
       nextActivity[ref.path] = {
-        running: status.kind === "working",
-        needsInput: status.kind === "needs-permission",
-        failed: status.kind === "failed",
-        unread: status.kind === "review" && status.unread,
-        active: status.kind === "external-active",
-        observed: status.kind === "observed",
+        running: sessions.some((session) => session.kind === "working"),
+        needsInput: sessions.some((session) => session.kind === "needs-permission"),
+        failed: sessions.some((session) => session.kind === "failed"),
+        unread: sessions.some(unreadReview),
+        active: sessions.some((session) => session.kind === "external-active"),
+        observed: sessions.some((session) => session.kind === "observed"),
       }
     }
     return { priorities: nextPriorities, threadActivity: nextActivity, statuses: nextStatuses }
@@ -785,6 +789,7 @@ function HarnessFilter({
   counts: Map<string, number>
   filter: string[]
 }) {
+  useHarnessIdentity()
   const [open, setOpen] = useState(false)
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const scope = usePrefs((prefs) => prefs.railScope)
@@ -821,7 +826,7 @@ function HarnessFilter({
       <PopoverContent align="end" sideOffset={6} className="w-56 p-1">
         <p className={section}>Agents</p>
         {[...counts.entries()]
-          .filter(([harness]) => harness in HARNESS_LABEL)
+          .filter(([harness]) => harness in harnessLabels())
           .sort((a, b) => b[1] - a[1])
           .map(([harness, count]) => {
             const active = filter.includes(harness)

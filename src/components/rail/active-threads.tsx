@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useState } from "react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
@@ -8,7 +9,17 @@ import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/compon
 import { ROW_ACTIONS, ROW_ACTIONS_BESIDE_MARK, SessionCount } from "@/components/rail/thread-row"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { workspaceName } from "@/lib/format"
-import { FOLD_GLYPHS, foldRowHarness, type FoldedThread } from "@/lib/thread-fold"
+import {
+  FOLD_GLYPHS,
+  foldedThreadState,
+  foldRowHarness,
+  sameFoldedThreadState,
+  sessionRunning,
+  sessionStateText,
+  type FoldedThread,
+} from "@/lib/thread-fold"
+import { ReadyBesideMark, ThreadStatusMark } from "@/components/rail/thread-status"
+import { threadStatus, useThreads } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { acp } from "@/state/acp"
 import type { AcpPresence } from "@/state/acp-presence"
@@ -28,6 +39,7 @@ export function LiveAgentRow({
   folded?: FoldedThread
   indent?: boolean
 }) {
+  useHarnessIdentity()
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(presence, state.threadOf))
   const setup = useThreadPurposes((state) => (thread ? state.byThread[thread]?.kind : undefined) ?? presence.purpose) === "setup"
@@ -53,6 +65,13 @@ export function LiveAgentRow({
           : presence.status === "failed"
             ? "failed"
             : "idle"
+  const foldState = useThreads(
+    (threadState) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, threadState)) : null),
+    sameFoldedThreadState
+  )
+  // A folded row whose other Session is the one doing something shows that
+  // Session's state; this conversation's own mark is for when it's the news.
+  const otherSession = foldState && foldState.status.kind !== "idle" && foldState.sessions[0]?.status !== foldState.status
   const title =
     presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
   const open = () => {
@@ -79,7 +98,13 @@ export function LiveAgentRow({
         role="button"
         tabIndex={0}
         onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open() } }}
-        aria-label={[title, setup ? "setup Thread" : undefined, folded ? `${folded.members.length} sessions` : undefined, label].filter(Boolean).join(", ")}
+        aria-label={[
+          title,
+          setup ? "setup Thread" : undefined,
+          foldState
+            ? `${foldState.sessions.length} sessions: ${foldState.sessions.map((session) => `${harnessLabel(session.harness)} ${sessionStateText(session.status)}`).join(", ")}`
+            : label,
+        ].filter(Boolean).join(", ")}
         data-thread-row
         data-flip-key={presence.key}
         data-conversation-id={presence.key}
@@ -91,14 +116,17 @@ export function LiveAgentRow({
         )}
       >
         <span className="flex shrink-0 items-center -space-x-1">
-          {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
-            <FoldGlyph
-              key={member?.key ?? presence.key}
-              harness={member ? foldRowHarness(member) : presence.harness}
-              live={false}
-              rowSince={since}
-            />
-          ))}
+          {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member, index) => {
+            const session = foldState?.sessions[index]
+            return (
+              <FoldGlyph
+                key={member?.key ?? presence.key}
+                harness={member ? foldRowHarness(member) : presence.harness}
+                live={session ? sessionRunning(session.status) : false}
+                rowSince={since}
+              />
+            )
+          })}
         </span>
         <span className="min-w-0 flex-[1_1_60%] truncate text-ui text-foreground/85">
           {title}
@@ -118,9 +146,14 @@ export function LiveAgentRow({
           <ThreadActions {...menu} />
         </span>
         {checkout ? <AppMarkIcon checkout={checkout} /> : null}
-        <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
-          <ActivityMark state={state} size={20} />
-        </span>
+        {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
+        {otherSession ? (
+          <ThreadStatusMark status={foldState.status} />
+        ) : (
+          <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
+            <ActivityMark state={state} size={20} />
+          </span>
+        )}
       </div>
     </ThreadContextMenu>
   )

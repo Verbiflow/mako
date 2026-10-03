@@ -1,13 +1,23 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ThreadStatusMark } from "@/components/rail/thread-status"
+import { ReadyBesideMark, ThreadStatusMark } from "@/components/rail/thread-status"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
-import { FOLD_GLYPHS, foldedThreadStatus, foldRowHarness, type FoldedThread, type FoldRow } from "@/lib/thread-fold"
+import {
+  FOLD_GLYPHS,
+  foldedThreadState,
+  foldRowHarness,
+  sameFoldedThreadState,
+  sessionRunning,
+  sessionStateText,
+  type FoldedThread,
+  type FoldRow,
+} from "@/lib/thread-fold"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
@@ -129,15 +139,18 @@ export const ThreadRow = memo(function ThreadRow({
   indent?: boolean
   showFolder?: boolean
 }) {
+  useHarnessIdentity()
   const override = usePrefs((prefs) => prefs.titleOverrides[ref.path])
   const [editing, setEditing] = useState<string | null>(null)
   const [since] = useState(() => performance.now())
   // A thread whose CLI is being driven from here right now wears a pulse —
   // the same promise a tab's dot makes: something is working behind this row.
-  const status = useThreads(
-    (state) => (folded ? foldedThreadStatus(folded.members, (member) => threadStatus(member, state)) : threadStatus(ref, state)),
-    sameThreadStatus
+  const ownStatus = useThreads((state) => threadStatus(ref, state), sameThreadStatus)
+  const foldState = useThreads(
+    (state) => (folded ? foldedThreadState(folded.members, (member) => threadStatus(member, state)) : null),
+    sameFoldedThreadState
   )
+  const status = foldState?.status ?? ownStatus
   const archived = useThreadArchives((state) => archivedThread(ref, state.keys))
   const target = nativeThreadTarget(ref)
   const foldedLive = useAcp((state) =>
@@ -249,8 +262,11 @@ export const ThreadRow = memo(function ThreadRow({
         // never a native `title`: on macOS those arrive late or not at all.
         data-tip={[
           title,
-          folded
-            ? `${folded.members.length} sessions: ${folded.members.map((member) => harnessLabel(foldRowHarness(member))).join(", ")}`
+          foldState
+            ? [
+                `${foldState.sessions.length} sessions`,
+                ...foldState.sessions.map((session) => `${harnessLabel(session.harness)} · ${sessionStateText(session.status)}`),
+              ].join("\n")
             : undefined,
           ref.archived
             ? "Archived: the native store lost this; Mako kept it. Reply to bring it back to life."
@@ -291,14 +307,17 @@ export const ThreadRow = memo(function ThreadRow({
                 className="size-3 opacity-40"
               />
             ))),
-            ...(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member) => (
-              <FoldGlyph
-                key={member?.key ?? ref.path}
-                harness={member && member.key !== ref.path ? foldRowHarness(member) : (liveProvider ?? ref.harness)}
-                live={working || activeElsewhere}
-                rowSince={since}
-              />
-            )),
+            ...(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member, index) => {
+              const session = foldState?.sessions[index]
+              return (
+                <FoldGlyph
+                  key={member?.key ?? ref.path}
+                  harness={member && member.key !== ref.path ? foldRowHarness(member) : (liveProvider ?? ref.harness)}
+                  live={session ? sessionRunning(session.status) : working || activeElsewhere}
+                  rowSince={since}
+                />
+              )
+            }),
           ]}
         </span>
         {editing !== null ? (
@@ -383,6 +402,7 @@ export const ThreadRow = memo(function ThreadRow({
           <Detach path={ref.path} />
         </span>
         {checkout ? <AppMarkIcon checkout={checkout} /> : null}
+        {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
         <ThreadStatusMark status={status} updatedAt={ref.updatedAt} />
       </div>
     </ThreadContextMenu>
