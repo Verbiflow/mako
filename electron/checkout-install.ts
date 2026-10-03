@@ -29,6 +29,15 @@ export async function installsDue(checkout: string, steps: readonly PrepareStep[
 }
 
 /**
+ * What the install steps that just passed record: their inputs as the
+ * install left them, since one such as npm install can rewrite its own lockfile.
+ */
+export async function installedDigests(checkout: string, steps: readonly PrepareStep[], pending: Record<string, string>): Promise<Record<string, string>> {
+  const ran = steps.filter((step) => pending[step.command] !== undefined)
+  return Object.fromEntries(await Promise.all(ran.map(async (step) => [step.command, await inputsDigest(checkout, step.inputs)] as const)))
+}
+
+/**
  * What a spare checkout installs before any Thread has it: the leading due
  * steps that write into the checkout (they name `outputs`) and whose
  * commands use none of the values that differ between Threads. The rest
@@ -51,8 +60,7 @@ export function spareInstalls(recipe: Recipe, due: readonly DueInstall[]): DueIn
 export async function movableInstalls(checkout: string, steps: readonly PrepareStep[], pending: Record<string, string>): Promise<Record<string, string>> {
   const kept: Record<string, string> = {}
   for (const step of steps) {
-    const digest = pending[step.command]
-    if (digest === undefined) continue
+    if (pending[step.command] === undefined) continue
     const environments = (await matchedEntries(checkout, step.outputs ?? []).catch(() => [])).filter((entry) => virtualEnvironment(join(checkout, entry)))
     if (environments.length) {
       const staging = join(dirname(checkout), CARRYING)
@@ -63,7 +71,7 @@ export async function movableInstalls(checkout: string, steps: readonly PrepareS
       }
       break
     }
-    kept[step.command] = digest
+    kept[step.command] = await inputsDigest(checkout, step.inputs)
   }
   return kept
 }

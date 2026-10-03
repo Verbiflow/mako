@@ -19,7 +19,7 @@ import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
 import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type StepRecord, type StepState } from "./check-steps.js"
 import { freeMemory, memoryPressure, runKey, type AppOverview, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import type { FileHistory } from "./watch-backend.js"
-import { installsDue, movableInstalls } from "./checkout-install.js"
+import { installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
 import { installStatus, settleHanded } from "./spare-install.js"
 import {
   checkoutOf,
@@ -407,7 +407,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         return undefined
       }
       const passed = status.state.kind === "exited" && status.state.code === 0
-      await deps.processes.savePrepared(checkout, { done: passed ? { ...record.done, ...record.pending } : record.done })
+      await deps.processes.savePrepared(checkout, { done: passed ? { ...record.done, ...(await installedDigests(checkout, steps, record.pending)) } : record.done })
       if (passed) return undefined
       return { shown: true, message: `Preparing this checkout ${checkResult(status)}${took(status)}, so nothing started; it runs again on the next start. It ran: ${status.command}\n\n${await runOutput(deps.processes, app, PREPARE_KEY)}` }
     }
@@ -423,7 +423,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const result = await deps.processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: env(current, current.recipe) }])
     if (result.refused.length) {
       await deps.processes.savePrepared(checkout, record)
-      return { shown: false, message: `This checkout needs preparing (${command}), and ${result.refused[0]!.reason.toLowerCase()}` }
+      return { shown: false, message: `This checkout needs preparing (${command}) because ${await prepareReason(current.recipe, checkout)}, which can't run while the app does: stop it with app_stop, then call again.` }
     }
     await deps.processes.settle(app, [PREPARE_KEY], settleMs)
     return settled()
