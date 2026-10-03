@@ -8,6 +8,7 @@ import type {
   UsageWindow,
 } from "../../account-types.js"
 import {
+  credentialFileFingerprint,
   jsonFields,
   numberValue,
   parseUsageReset,
@@ -152,14 +153,15 @@ async function fetchDevinStatus(): Promise<DevinStatus | null> {
  * The same call answers who is signed in and what is left, so listing and
  * usage share one reading a minute rather than asking twice.
  */
-let reading: { at: number; status: Promise<DevinStatus | null> } | undefined
+let reading: { at: number; revision: string; status: Promise<DevinStatus | null> } | undefined
 
-function devinStatus(): Promise<DevinStatus | null> {
-  if (reading && Date.now() - reading.at < 60_000) return reading.status
+async function devinStatus(): Promise<DevinStatus | null> {
+  const revision = await credentialFileFingerprint(credentialsPath(process.env))
+  if (reading && reading.revision === revision && Date.now() - reading.at < 60_000) return reading.status
   const status = fetchDevinStatus()
-  reading = { at: Date.now(), status }
+  reading = { at: Date.now(), revision, status }
   status.catch(() => {
-    reading = undefined
+    if (reading?.status === status) reading = undefined
   })
   return status
 }
@@ -184,6 +186,7 @@ export const devinAccountCapability: ObservedAccountCapability = {
   },
   accountEnv: async (_selection, base) => ({ ...base }),
   selectedAccount: () => ({ name: "default" }),
+  credentialRevision: () => credentialFileFingerprint(credentialsPath(process.env)),
   async accountUsage() {
     try {
       const status = await devinStatus()

@@ -8,6 +8,7 @@ import { devinExecutable } from "./executable.js"
 
 export const devinMcpSource: ProviderMcpSource = {
   provider: "devin",
+  readFormat: "named-map",
   command: () => devinExecutable(),
   userFiles: () => [
     join(homedir(), ".config", "devin", "mcp_config.json"),

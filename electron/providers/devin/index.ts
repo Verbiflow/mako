@@ -1,7 +1,7 @@
 import { acpLiveDriver } from "../acp-live-driver.js"
 import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitDevinSession } from "@mako/sessions"
-import { installHarness, lacks } from "../harness-definition.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { devinAccountCapability } from "./accounts.js"
 import { devinAcpSource } from "./acp.js"
@@ -15,6 +15,12 @@ import { scriptInstall } from "../update-source.js"
 
 export const installDevin: ProviderModule = (host) => installHarness(host, {
   provider: "devin",
+  presentation: { firstRunPriority: 5, icon: { id: "devin-mark", tint: "#4E8DF6" } },
+  hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+  commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
+  toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
+  skillEditing: { provider: "devin", route: "skill-registry", operations: ["import", "remove"] },
+  mcpEditing: { provider: "devin", route: "mcp-registry", operations: ["import"] },
   live: acpLiveDriver(devinAcpSource),
   decoder: acpDecoderSource(devinAcpSource),
   profile: devinProfileLoader,
