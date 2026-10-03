@@ -38,7 +38,7 @@ export function RoomSection() {
   return <RoomList room={room} />
 }
 
-export function RoomList({ room, now = Date.now() }: { room: RoomView; now?: number }) {
+export function RoomList({ room, now = room.at }: { room: RoomView; now?: number }) {
   const { cwd } = useWorkspaceFocus()
   const [selected, setSelected] = useState<readonly string[]>([])
   const [stopping, setStopping] = useState<readonly string[]>([])
