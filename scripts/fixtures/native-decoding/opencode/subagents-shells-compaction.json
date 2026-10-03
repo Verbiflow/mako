@@ -956,7 +956,13 @@
           "type": "session.summary.updated",
           "reason": "unknown",
           "raw": {
-            "type": "session.summary.updated"
+            "id": "evt_0033",
+            "created": 1,
+            "type": "session.summary.updated",
+            "data": {
+              "sessionID": "ses_root",
+              "text": "A newer kind in a session"
+            }
           }
         }
       ]
@@ -976,7 +982,12 @@
           "type": "workspace.indexed",
           "reason": "unknown",
           "raw": {
-            "type": "workspace.indexed"
+            "id": "evt_0034",
+            "created": 1,
+            "type": "workspace.indexed",
+            "data": {
+              "files": 120
+            }
           }
         }
       ]
