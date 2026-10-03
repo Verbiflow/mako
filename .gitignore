@@ -68,3 +68,6 @@ vendor/control-media/.build-*/
 
 # Synthetic Local Control acceptance output, collected locally or by CI.
 /evidence/
+
+# Office preview workers are copied from pinned packages by the Vite plugin.
+/public/file-viewer/

@@ -2,6 +2,7 @@ import path from "node:path"
 import { createRequire } from "node:module"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
+import { fileViewerRenderers } from "@file-viewer/vite-plugin"
 import { defineConfig, type Plugin } from "vite"
 
 const root = import.meta.dirname
@@ -21,7 +22,26 @@ function developmentMark(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), developmentMark()],
+  plugins: [
+    {
+      name: "mako-spreadsheet-palette",
+      enforce: "pre",
+      transform(code, id) {
+        if (id.split("?")[0]?.replaceAll("\\", "/").endsWith("/@file-viewer/renderer-spreadsheet/dist/spreadsheet.js"))
+          return code.replaceAll("'./spreadsheet/view.js'", JSON.stringify(path.resolve(root, "src/lib/spreadsheet-view.ts")))
+      },
+    },
+    react(),
+    tailwindcss(),
+    developmentMark(),
+    fileViewerRenderers({
+      formats: ["docx", "xlsx", "pptx"],
+      inject: false,
+      autoPresets: false,
+      copyAssets: { baseDir: "file-viewer" },
+      chunkStrategy: "renderer",
+    }),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(root, "./src"),
@@ -42,6 +62,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    exclude: ["@file-viewer/renderer-spreadsheet"],
     entries: ["index.html", "src/**/*.{ts,tsx}"],
   },
   // Desktop assets are read locally; gzip size reporting compresses every chunk
