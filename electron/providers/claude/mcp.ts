@@ -4,6 +4,7 @@ import type { ProviderMcpSource } from "../mcp-source.js"
 
 export const claudeMcpSource: ProviderMcpSource = {
   provider: "claude",
+  readFormat: "named-map",
   command: () => "claude",
   userFiles: (account) => [
     account.dir ? join(account.dir, ".claude.json") : join(homedir(), ".claude.json"),

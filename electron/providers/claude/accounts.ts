@@ -21,6 +21,7 @@ import type {
 } from "../../account-types.js"
 import {
   childProcessEnv,
+  credentialFingerprint,
   accountDir,
   accountsRoot,
   cleanAccountName,
@@ -227,11 +228,12 @@ async function subrouterAccounts(): Promise<HarnessAccount[]> {
         await readFile(join(root, router, "claude.json"), "utf8")
       )
       for (const profile of profiles) {
+        const dir = join(root, router, "claude", profile.dir)
         accounts.push({
           harness: "claude",
           name: profile.email,
-          email: profile.email,
-          dir: join(root, router, "claude", profile.dir),
+          email: await accountEmail(dir) ?? profile.email,
+          dir,
           active: false,
           source: "subrouter",
         })
@@ -277,7 +279,10 @@ async function listAccounts(
     accounts.map((account) => account.email ?? account.name)
   )
   for (const account of await subrouterAccounts()) {
-    if (!known.has(account.email ?? account.name)) accounts.push(account)
+    if (selection === account.name || !known.has(account.email ?? account.name)) {
+      accounts.push({ ...account, active: selection === account.name })
+      known.add(account.email ?? account.name)
+    }
   }
   return accounts
 }
@@ -455,8 +460,8 @@ export async function claudeOAuthUsage(
   }
 }
 
-async function accountUsage(name: string): Promise<AccountUsage> {
-  if (name === "default") return usageForEnv(process.env)
+async function usageEnv(name: string): Promise<NodeJS.ProcessEnv> {
+  if (name === "default") return process.env
   // Use the same captured-before-router precedence as native launches.
   const routed = (await subrouterAccounts()).find(
     (account) => account.name === name
@@ -464,8 +469,13 @@ async function accountUsage(name: string): Promise<AccountUsage> {
   const captured = accountDir("claude", name)
   const dir = existsSync(captured) ? captured : routed?.dir ?? captured
   const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CONFIG_DIR: dir }
+  for (const key of AUTH_ENV) delete env[key]
   delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
-  return usageForEnv(env)
+  return env
+}
+
+async function accountUsage(name: string): Promise<AccountUsage> {
+  return usageForEnv(await usageEnv(name))
 }
 
 export const claudeAccountCapability: SelectableAccountCapability = {
@@ -482,4 +492,8 @@ export const claudeAccountCapability: SelectableAccountCapability = {
       ? { name: selection, dir: env.CLAUDE_CONFIG_DIR }
       : { name: "default" },
   accountUsage,
+  credentialRevision: async (name) => {
+    const env = await usageEnv(name)
+    return credentialFingerprint([await readCredentials(env), ...AUTH_ENV.map((key) => env[key] ?? null)])
+  },
 }

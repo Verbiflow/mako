@@ -1,7 +1,8 @@
 import { applyControlEnvironment } from "../../control-launch.js"
 import { applyThreadEnvironment } from "../../thread-environment.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { accountEnv } from "../../accounts.js"
+import { resolveAccountLaunch } from "../../accounts.js"
+import type { ClaudeSdkConfiguration } from "./sdk-driver.js"
 import { acpMcpServers } from "../../mcp-runtime.js"
 import { conversationServers, type ProviderStartOptions } from "../live-driver.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
@@ -12,8 +13,8 @@ export async function claudeSdkOptions(
   cwd: string,
   input: ProviderStartOptions,
   trace: ProviderLaunchTrace
-): Promise<Options> {
-  const env = await trace.step("account", () => accountEnv("claude", process.env))
+): Promise<ClaudeSdkConfiguration> {
+  const { env, account } = await trace.step("account", () => resolveAccountLaunch("claude", process.env))
   applyControlEnvironment(env, input.conversationTools?.control)
   applyThreadEnvironment(env, input.threadEnvironment)
   const runtime = trace.sync("runtime-discovery", () => claudeRuntime(env))
@@ -54,7 +55,7 @@ export async function claudeSdkOptions(
   if (input.conversationTools)
     for (const { name, url } of conversationServers(input.conversationTools))
       mcpServers[name] = { type: "http", url, headers: { Authorization: `Bearer ${input.conversationTools.token}` } }
-  return {
+  return { account, options: {
     cwd,
     env,
     // Native approval observation requires the SDK to choose its own build.
@@ -77,5 +78,5 @@ export async function claudeSdkOptions(
     mcpServers,
     includePartialMessages: true,
     title: input.title,
-  }
+  } }
 }

@@ -8,6 +8,7 @@ import type { NativeApprovalDecision, NativeApprovalIdentity } from "../../contr
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { RetainedApprovalDecisions, readRetainedApprovalDecisions } from "../retained-approval-decisions.js"
 import { claudeTelemetryOptionsCompatible } from "./approval-telemetry-settings.js"
+import { configuredListenPort } from "../../listen-port.js"
 
 const Envelope = z.object({ resourceLogs: z.array(z.object({ scopeLogs: z.array(z.object({
   logRecords: z.array(z.object({ attributes: z.array(z.object({
@@ -96,7 +97,7 @@ export async function listenClaudePermissionDecisions(input: {
   server.maxConnections = 8
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => { server.off("error", reject); resolve() })
+    server.listen(configuredListenPort("MAKO_CLAUDE_PERMISSION_PORT"), "127.0.0.1", () => { server.off("error", reject); resolve() })
   })
   server.unref()
   const address = z.object({ port: z.number().int().positive() }).parse(server.address())

@@ -28,7 +28,7 @@ import { ClaudeDecoder } from "./decoder.js"
 import { claudeContextBreakdown } from "./context-breakdown.js"
 import { mergeWindows } from "../../contracts/account-usage.js"
 import { deliverDecoded, type DecodedSink } from "../../contracts/native-decoding.js"
-import type { UsageWindow } from "../../account-types.js"
+import type { SelectedAccount, UsageWindow } from "../../account-types.js"
 import { nativeCapture, type NativeCapture } from "../../native-capture.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
@@ -69,13 +69,13 @@ interface Receipt {
 }
 /** A turn reported where its account stands: the meter moves without a request. */
 function observeLimits(live: Live, windows: UsageWindow[]): void {
-  void Promise.all([live.account, import("../../accounts.js")]).then(([name, accounts]) =>
-    accounts.observeAccountUsage("claude", name, (previous) => mergeWindows(previous, windows, Date.now())))
+  void import("../../accounts.js").then((accounts) =>
+    accounts.observeAccountUsage("claude", live.account, (previous) => mergeWindows(previous, windows, Date.now())))
 }
 
 interface Live {
   /** The account this session spends, resolved beside its start. */
-  account: Promise<string>
+  account: string
   compaction?: { actionId: string; runId: string; confirmed: boolean }
   decoder: ClaudeDecoder
   sink?: DecodedSink<never>
@@ -99,9 +99,14 @@ interface Live {
   providerTurnCause?: string
   exited(): Promise<void>
 }
+export interface ClaudeSdkConfiguration {
+  options: Options
+  account: SelectedAccount
+}
+
 export interface ClaudeSdkDependencies {
   available(): boolean
-  configure(cwd: string, options: ProviderStartOptions, trace: ProviderLaunchTrace): Promise<Options>
+  configure(cwd: string, options: ProviderStartOptions, trace: ProviderLaunchTrace): Promise<ClaudeSdkConfiguration>
   query(input: {
     prompt: AsyncIterable<SDKUserMessage>
     options: Options
@@ -333,9 +338,12 @@ export function createClaudeSdkDriver(
       const publishDecision = (decision: import("../../contracts/approval-response.js").NativeApprovalDecision) => options.emit!({ type: "live-approval-decision", id: options.conversationId, decision })
       const approvals = new ClaudeApprovalObserver(nativeId, options.observedApprovals ?? [], publishDecision)
       let config: Options
+      let account: SelectedAccount
       let toolApprovals: ClaudePermissionObserver | undefined
       try {
-        config = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
+        const configured = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
+        config = configured.options
+        account = configured.account
         toolApprovals = await trace.step("observation", async () => {
           try {
             return await dependencies.prepareApprovals?.({ config, sessionId: nativeId,
@@ -427,9 +435,7 @@ export function createClaudeSdkDriver(
         },
       }) } catch (error) { await disposeApprovals(); throw error }
       const live: Live = {
-        account: import("../../accounts.js")
-          .then((accounts) => accounts.selectedAccount("claude"))
-          .then((account) => account.name, () => "default"),
+        account: account.name,
         query,
         exited: () => exited,
         input,

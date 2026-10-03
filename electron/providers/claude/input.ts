@@ -1,3 +1,4 @@
+import { appendPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { open } from "node:fs/promises"
 import { z } from "zod"
 import type { PromptAttachment } from "../../shared.js"
@@ -60,13 +61,16 @@ export async function claudeInputContent(
   attachments: PromptAttachment[]
 ): Promise<SDKUserMessage["message"]["content"]> {
   const blocks: Exclude<SDKUserMessage["message"]["content"], string> = [
-    { type: "text", text },
+    { type: "text", text: appendPromptAttachments(text, attachments.filter((attachment) => !attachment.mimeType.startsWith("image/")).map(({ name, mimeType, path }) => {
+      if (!path) throw new Error(`Attachment ${name} was not staged`)
+      return { name, mimeType, path }
+    })) },
   ]
   for (const attachment of attachments) {
     if (!attachment.path)
       throw new Error(`Attachment ${attachment.name} was not staged`)
     if (attachment.mimeType.startsWith("image/")) {
-      if (attachment.size > 20 * 1024 * 1024)
+      if (attachment.size !== undefined && attachment.size > 20 * 1024 * 1024)
         throw new Error("Claude image attachments must be under 20 MB")
       const mediaType = ImageMimeSchema.parse(attachment.mimeType)
       const file = await open(attachment.path, "r")
@@ -102,11 +106,7 @@ export async function claudeInputContent(
           data: data.toString("base64"),
         },
       })
-    } else
-      blocks.push({
-        type: "text",
-        text: `User attachment ${attachment.name} (${attachment.mimeType}): ${attachment.path}`,
-      })
+    }
   }
   return blocks
 }
