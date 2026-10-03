@@ -81,25 +81,30 @@ export function devinProcessProbeFor({
             return { kind: "available", sessions: [] }
           throw error
         }
+        if (names.length > MAX_LOCKS) return { kind: "unavailable", reason: "failed" }
         const next = new Map<string, { mtimeMs: number; pid: number | undefined }>()
         const sessions: ProviderActivitySession[] = []
-        await Promise.all(
-          names.slice(0, MAX_LOCKS).map(async (name) => {
+        for (let offset = 0; offset < names.length; offset += 16) {
+          signal.throwIfAborted()
+          await Promise.all(names.slice(offset, offset + 16).map(async (name) => {
             if (!name.endsWith(".lock")) return
             const path = join(locks, name)
-            const mtimeMs = await stat(path).then((info) => info.mtimeMs, () => undefined)
+            const info = await stat(path)
+            if (info.size > 64) throw new Error("Devin's lock exceeds the read limit")
+            const mtimeMs = info.mtimeMs
             if (mtimeMs === undefined || mtimeMs < oldest) return
             let lock = read.get(name)
             if (lock?.mtimeMs !== mtimeMs) {
-              const text = await readFile(path, { encoding: "utf8", signal }).catch(() => "")
+              const text = await readFile(path, { encoding: "utf8", signal })
               lock = { mtimeMs, pid: lockedBy(text) }
+              if (lock.pid === undefined) throw new Error("Devin's lock is unreadable")
             }
             next.set(name, lock)
             const startedAt = lock.pid === undefined ? undefined : started.get(lock.pid)
             if (startedAt !== undefined && mtimeMs >= startedAt - START_SLACK_MS)
               sessions.push({ nativeId: name.slice(0, -".lock".length), status: "open" })
-          })
-        )
+          }))
+        }
         read = next
         return { kind: "available", sessions }
       } catch {
