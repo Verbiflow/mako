@@ -59,6 +59,7 @@ import { WorktreeOrigins } from "./worktree-origins.js"
 import { annotate as annotateLineage, loadLineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
 import type { ThreadStore } from "./thread-store.js"
+import type { ThreadEnvironments } from "./thread-environment.js"
 import type { Actor } from "./contracts/thread-identity.js"
 import {
   resolveAnchor,
@@ -997,7 +998,8 @@ export function nativePathForSession(
  */
 export async function readThreadFile(
   threadPath: string,
-  filePath: string
+  filePath: string,
+  environments?: ThreadEnvironments
 ): Promise<FileContents> {
   const ref = daemon
     ? mirror.get(threadPath)
@@ -1005,7 +1007,11 @@ export async function readThreadFile(
   const cwd = ref ? threadFileWorkspace(ref) : undefined
   if (!cwd && !isAbsolute(filePath) && !filePath.startsWith("~/"))
     throw new Error("This conversation has no recorded working folder. Open the file by its full path.")
-  return readConversationFile(cwd ?? "/", filePath)
+  const dataDir = ref && environments ? () => environments.fileDataDir({
+    cwd: ref.cwd ?? ref.workspace ?? cwd,
+    thread: threadStore?.place(ref, CATALOG_ACTOR).thread,
+  }) : undefined
+  return readConversationFile(cwd ?? "/", filePath, dataDir)
 }
 
 export async function pageThread(

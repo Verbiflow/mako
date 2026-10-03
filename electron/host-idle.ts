@@ -14,8 +14,13 @@ import { join } from "node:path"
  * Idle means: no client attached, no launcher lease, no lifecycle work, no
  * shutdown already in progress. Only a continuous idle span longer than the
  * window counts; any activity restarts it. The decision to stop is taken once.
+ *
+ * The window only has to bridge a launcher's restart, from its old lease to its
+ * new one. A profile host does not stay up waiting for a launcher to return:
+ * starting it again takes a few seconds, and one left running costs a whole
+ * Electron process and its helpers.
  */
-export const PROFILE_HOST_IDLE_MS = 20 * 60_000
+export const PROFILE_HOST_IDLE_MS = 15_000
 
 export interface IdleShutdownDependencies {
   idleMs: number

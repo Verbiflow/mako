@@ -835,37 +835,57 @@ function hasActiveWork(): boolean {
 }
 
 /**
- * A profile host (dev, sandbox, test) stops itself after a long idle span with
- * no client, no launcher lease and no work. The installed app's host on the
+ * A profile host (dev, sandbox, test) stops itself soon after nothing holds
+ * it: no client, no launcher lease, no work. The installed app's host on the
  * default profile never does: it is the product and outlives every window.
+ * What holds it is logged whenever that changes, so a host that stays up says
+ * why.
  */
 function watchProfileHostIdle(hostDirectory: string): void {
   let leases = 0
+  let held: string | null = null
+  const holds = () => {
+    const clients = webHost?.clients().length ?? 0
+    const reasons = [
+      shuttingDown && "shutting down",
+      relaunching && "relaunching",
+      application?.lifecycle.blocked && "lifecycle blocked",
+      hasActiveWork() && "active work",
+      [...rendererWindows].some((renderer) => !deskWindows.has(renderer)) &&
+        "open window",
+      clients > 0 && `${clients} web client${clients === 1 ? "" : "s"}`,
+      leases > 0 && `${leases} launcher lease${leases === 1 ? "" : "s"}`,
+    ].filter(Boolean)
+    const now = reasons.join(", ") || "nothing"
+    if (now !== held) {
+      held = now
+      hostLog("lifecycle", "idle watch", { holds: now })
+    }
+    return reasons.length > 0
+  }
   const idle = new IdleShutdown({
     idleMs: PROFILE_HOST_IDLE_MS,
     now: () => Date.now(),
-    busy: () =>
-      shuttingDown ||
-      relaunching ||
-      Boolean(application?.lifecycle.blocked) ||
-      hasActiveWork() ||
-      [...rendererWindows].some((renderer) => !deskWindows.has(renderer)) ||
-      (webHost?.clients().length ?? 0) > 0 ||
-      leases > 0,
+    busy: holds,
     quit: () => {
-      console.info(
-        `[mako-host] profile ${instanceProfile} idle for ${Math.round(PROFILE_HOST_IDLE_MS / 60_000)} minutes with no client; stopping`
-      )
+      hostLog("lifecycle", "idle; stopping", {
+        profile: instanceProfile,
+        idleSeconds: PROFILE_HOST_IDLE_MS / 1000,
+      })
       shuttingDown = true
       app.quit()
     },
   })
   const timer = setInterval(() => {
-    void activeHostLeases(hostDirectory).then((holders) => {
-      leases = holders.length
-      idle.tick()
-    })
-  }, 30_000)
+    activeHostLeases(hostDirectory)
+      .then((holders) => {
+        leases = holders.length
+        idle.tick()
+      })
+      .catch((error) =>
+        hostWarn("lifecycle", "idle watch failed", { error: String(error) })
+      )
+  }, 5_000)
   timer.unref()
 }
 
@@ -1250,7 +1270,7 @@ function bindIpc() {
   }))
   handle("mako:thread-open", (_e, path: string) => openThread(path))
   handle("mako:thread-file", (_e, threadPath: string, filePath: string) =>
-    readThreadFile(threadPath, filePath)
+    readThreadFile(threadPath, filePath, threadEnvironments ?? undefined)
   )
   handle(
     "mako:thread-page",
@@ -1813,7 +1833,8 @@ function bindIpc() {
   handle("mako:read-live-file", (_event, id: string, path: string) => {
     const snapshot = liveConversations.snapshot(id)
     if (!snapshot) throw new Error("That conversation is unavailable")
-    return readConversationFile(snapshot.session.cwd, path)
+    const dataDir = threadEnvironments ? () => threadEnvironments.fileDataDir({ conversationId: id, cwd: snapshot.session.cwd }) : undefined
+    return readConversationFile(snapshot.session.cwd, path, dataDir)
   })
   handle("mako:live-snapshot", (_event, id: string) =>
     liveConversations.refreshedSnapshot(id)

@@ -32,6 +32,8 @@ import { WorkspaceGit } from "./host-git.js"
  * renderer. Above it the head is shown and the viewer says the rest was cut.
  */
 const FILE_VIEW_LIMIT = 2_000_000
+type ConversationDataDir = () => Promise<string | undefined>
+type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir }
 
 /** The `@` picker re-queries per keystroke; the file set does not move that fast. */
 const FILE_CACHE_MS = 5_000
@@ -221,8 +223,8 @@ export class WorkspaceFiles {
    * takes longer to draw than to read. Both are reported rather than silently
    * applied — a truncated file that does not say so is a lie about the code.
    */
-  async read(requested: string, options?: { relativeTo: "cwd" }): Promise<FileContents> {
-    const { absolute, path } = await this.locate(requested, options?.relativeTo)
+  async read(requested: string, options?: FileReadOptions): Promise<FileContents> {
+    const { absolute, path } = await this.locate(requested, options)
     const info = await stat(absolute)
     if (info.isDirectory()) throw new Error(`${path} is a directory`)
     const prefixFile = await open(absolute, "r")
@@ -327,8 +329,9 @@ export class WorkspaceFiles {
    */
   private async locate(
     requested: string,
-    relativeTo?: "cwd"
+    options?: FileReadOptions
   ): Promise<{ absolute: string; path: string }> {
+    const relativeTo = options?.relativeTo
     const absolute = relativeTo === "cwd" && !isAbsolute(requested) && !requested.startsWith("~/")
       ? await realpath(resolve(this.cwdValue, requested)).catch(() => resolve(this.cwdValue, requested))
       : await this.resolvePath(requested)
@@ -343,6 +346,21 @@ export class WorkspaceFiles {
     if (isAbsolute(requested) || requested.startsWith("~/") ||
       (relativeTo === "cwd" && (requested.startsWith("./") || requested.startsWith("../"))))
       throw new Error(`No file at ${requested}`)
+    // Agents also write into MAKO_THREAD_DATA_DIR and cite its relative path.
+    // Only the owner's exact path is tried, before the project's suffix index;
+    // never walk data folders or let a relative traversal select another owner.
+    const dataDir = await options?.dataDir?.()
+    if (dataDir) {
+      const root = resolve(dataDir)
+      const candidate = resolve(root, requested)
+      if (candidate.startsWith(`${root}${sep}`)) {
+        const present = await stat(candidate).then(() => true, (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT" || error.code === "ENOTDIR") return false
+          throw error
+        })
+        if (present) return { absolute: candidate, path: candidate }
+      }
+    }
     const matches = await this.matchByName(requested)
     const only = matches[0]
     if (only && matches.length === 1)
@@ -393,7 +411,7 @@ export class WorkspaceFiles {
 const conversationFiles = new Map<string, { files: WorkspaceFiles; at: number }>()
 
 /** Share short-lived indexes across reply cards without sharing mutable active-workspace state. */
-export function readConversationFile(cwd: string, path: string): Promise<FileContents> {
+export function readConversationFile(cwd: string, path: string, dataDir?: ConversationDataDir): Promise<FileContents> {
   const key = resolve(cwd)
   const now = Date.now()
   for (const [folder, held] of conversationFiles)
@@ -406,7 +424,7 @@ export function readConversationFile(cwd: string, path: string): Promise<FileCon
     const oldest = conversationFiles.keys().next().value
     if (oldest !== undefined) conversationFiles.delete(oldest)
   }
-  return held.files.read(path, { relativeTo: "cwd" })
+  return held.files.read(path, { relativeTo: "cwd", dataDir })
 }
 
 export async function readText(path: string): Promise<string | null> {

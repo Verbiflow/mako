@@ -244,6 +244,14 @@ export class ThreadProcesses {
     }
   }
 
+  /** Everything a run wrote, stdout and stderr together, and the log it's in. */
+  async output(app: AppKey, key: string): Promise<{ text: string; log: string }> {
+    const log = this.file(app, key, "log")
+    const text = await readTail(log, LOG_LIMIT_BYTES).catch(() => undefined)
+    if (text === undefined) throw new Error(`Nothing has run as ${key} in this app yet.`)
+    return { text, log }
+  }
+
   /** The last `lines` lines a run wrote, stdout and stderr together. */
   async logs(app: AppKey, key: string, lines: number): Promise<string> {
     const path = this.file(app, key, "log")

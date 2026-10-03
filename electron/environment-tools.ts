@@ -15,6 +15,7 @@ import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
 import { bringFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
 import { listed, toolText, when } from "./tool-text.js"
+import { cleanOutput, presentOutput } from "./run-output.js"
 import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
   checkoutOf,
@@ -42,7 +43,6 @@ const SETTLE_MS = 25_000
  * call by nothing by default. The others get SETTLE_MS.
  */
 const CHECK_WAIT_MS = new Map([["codex", 10 * 60_000], ["claude", 10 * 60_000]])
-const FAILURE_LINES = 40
 /** Under memory pressure, another Thread's app unused this long is stopped to make room. */
 const EVICT_QUIET_MS = 15 * 60 * 1000
 const PREPARE_KEY = runKey("prepare", "checkout")
@@ -275,8 +275,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const passed = status.state.kind === "exited" && status.state.code === 0
       await deps.processes.savePrepared(checkout, { done: passed ? { ...record.done, ...record.pending } : record.done })
       if (passed) return undefined
-      const tail = await deps.processes.logs(app, PREPARE_KEY, FAILURE_LINES).catch(() => "")
-      return { shown: true, message: `Preparing this checkout failed (${describe(status)}), so nothing started. It runs again on the next start.\nLast lines of its log:\n${tail}` }
+      return { shown: true, message: `Preparing this checkout ${checkResult(status)}${took(status)}, so nothing started; it runs again on the next start. It ran: ${status.command}\n\n${await runOutput(deps.processes, app, PREPARE_KEY)}` }
     }
     const earlier = await settled()
     if (earlier) return earlier
@@ -500,10 +499,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const checkRun = async (app: AppKey, tier: CheckTier) => (await deps.processes.status(app)).find((entry) => entry.kind === "check" && entry.name === tier)
   const checkReport = async (app: AppKey, tier: CheckTier, status: RunStatus | undefined, command: string) => {
     const actual = status?.command ?? command
-    const stale = actual !== command ? ` The recipe now names a different ${tier} check; this run doesn't prove it. Call app_check again to run the current recipe.` : ""
+    const stale = actual !== command ? ` It ran ${actual}, and the recipe now names a different ${tier} check, so this run doesn't prove it. Call app_check again to run the current recipe.` : ""
     const passed = status?.state.kind === "exited" && status.state.code === 0
-    const output = await deps.processes.logs(app, runKey("check", tier), passed ? 15 : 60).catch(() => "")
-    return `The ${tier} check (${actual}) ${checkResult(status)}${took(status)}.${stale}\n${output}`
+    if (passed) return `The ${tier} check passed${took(status)}.${stale}`
+    return `The ${tier} check ${checkResult(status)}${took(status)}.${stale || ` It ran: ${actual}`}\n\n${await runOutput(deps.processes, app, runKey("check", tier))}`
   }
   /** Before a new run replaces a finished one, keeps its result for each conversation still owed it. */
   const keepOwedResults = async (app: AppKey, tier: CheckTier, command: string) => {
@@ -866,7 +865,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async logs(conversationId, target, lines) {
       const { environment } = await context(conversationId)
       const key = "check" in target ? runKey("check", target.check) : target.process === "prepare" ? PREPARE_KEY : runKey("process", target.process)
-      return deps.processes.logs(environment.app, key, lines)
+      return cleanOutput(await deps.processes.logs(environment.app, key, lines))
     },
     async check(conversationId, tier) {
       return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId)
@@ -886,9 +885,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const after = await readRecipe(checkout, environment, deps.recipesRoot)
       if (after.kind !== "ready") throw new Error(`Saved to ${saved.file}, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
       const running = (await deps.processes.status(environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
+      const changes = read.kind === "ready" ? recipeChanges(read.recipe, after.recipe) : []
       return [
         `Saved as this project's recipe in Mako, ${saved.file}. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that.`,
-        saved.previous ? `The version it replaced is kept at ${saved.previous}.` : read.kind === "none" ? "It's the project's first recipe." : undefined,
+        read.kind === "none"
+          ? "It's the project's first recipe."
+          : read.kind === "invalid"
+            ? "The recipe it replaced couldn't be read, so there's nothing to compare it with."
+            : changes.length
+              ? `Changed from the version it replaced:\n${changes.map((change) => `  ${change}`).join("\n")}`
+              : "It's the same as the version it replaced.",
+        saved.previous ? `The version it replaced is kept at ${saved.previous}.` : undefined,
         after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; Mako's saved recipe comes first, so that file is ignored while this one exists.` : undefined,
         ...carried,
         running ? "This Thread's processes are still running as they were started; app_restart runs them with this recipe." : undefined,
@@ -1083,11 +1090,66 @@ function checkResult(status: RunStatus | undefined): string {
   return "not run yet"
 }
 
+/** Every field of a recipe by its path, such as `checks.quick` or `prepare[0].link`, written as JSON. */
+function recipeFields(recipe: Recipe): Map<string, string> {
+  const found = new Map<string, string>()
+  const put = (path: string, value: string | boolean | readonly string[] | undefined) => {
+    if (value !== undefined) found.set(path, JSON.stringify(value))
+  }
+  // A field added to the recipe fails to compile here until it's listed below.
+  const { $schema, values, processes, checks, prepare, carry, secrets, oneAtATime, ...unlisted } = recipe
+  const none: Record<string, never> = unlisted
+  void none
+  put("$schema", $schema)
+  for (const [name, value] of Object.entries(values)) put(`values.${name}`, value)
+  for (const [name, spec] of Object.entries(processes)) {
+    const { command, cwd, port, values: own, ...unlistedProcess } = spec
+    const noneInProcess: Record<string, never> = unlistedProcess
+    void noneInProcess
+    put(`processes.${name}.command`, command)
+    put(`processes.${name}.cwd`, cwd)
+    put(`processes.${name}.port`, port)
+    for (const [key, value] of Object.entries(own ?? {})) put(`processes.${name}.values.${key}`, value)
+  }
+  put("checks.quick", checks.quick)
+  put("checks.full", checks.full)
+  prepare.forEach(({ command, inputs, outputs, link, ...unlistedStep }, index) => {
+    const noneInStep: Record<string, never> = unlistedStep
+    void noneInStep
+    put(`prepare[${index}].command`, command)
+    put(`prepare[${index}].inputs`, inputs)
+    put(`prepare[${index}].outputs`, outputs)
+    put(`prepare[${index}].link`, link)
+  })
+  put("carry", carry)
+  put("secrets", secrets)
+  put("oneAtATime", oneAtATime)
+  return found
+}
+
+/** Every field that differs between two recipes, as "checks.quick: was …, now …". */
+function recipeChanges(before: Recipe, after: Recipe): string[] {
+  const old = recipeFields(before)
+  const now = recipeFields(after)
+  return [...new Set([...old.keys(), ...now.keys()])].flatMap((path) => {
+    const was = old.get(path)
+    const is = now.get(path)
+    if (was === is) return []
+    if (was === undefined) return [`${path}: added, ${is}`]
+    if (is === undefined) return [`${path}: removed, was ${was}`]
+    return [`${path}: was ${was}, now ${is}`]
+  })
+}
+
+async function runOutput(processes: ThreadProcesses, app: AppKey, key: string): Promise<string> {
+  const run = await processes.output(app, key).catch(() => undefined)
+  return run ? presentOutput(run.text, run.log) : "(its output couldn't be read)"
+}
+
 async function failureTail(processes: ThreadProcesses, app: AppKey, status: RunStatus | undefined): Promise<string> {
   if (!status || status.state.kind === "running" || status.state.kind === "starting") return ""
   if (status.state.kind === "exited" && status.state.code === 0) return ""
-  const tail = await processes.logs(app, runKey(status.kind, status.name), FAILURE_LINES).catch(() => "")
-  return tail ? `\nLast lines of its log:\n${tail}` : ""
+  return `\n\n${await runOutput(processes, app, runKey(status.kind, status.name))}`
 }
 
 async function reply(work: () => Promise<string>) {
@@ -1183,7 +1245,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_check",
     {
       description:
-        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app first, then checks it while it runs. After recipe_save, both must pass before you report the recipe. Returns the result and how long it took. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
+        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app first, then checks it while it runs. After recipe_save, both must pass before you report the recipe. Returns the result and how long it took, and for a failure the run's whole output. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
       inputSchema: z.object({ tier: z.enum(["quick", "full"]) }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },

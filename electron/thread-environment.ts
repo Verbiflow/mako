@@ -205,6 +205,16 @@ export class ThreadEnvironments {
     return join(this.dependencies.dataRoot, AppKeySchema.parse(app))
   }
 
+  /** File reads use the owner's data folder without claiming ports, creating folders or reading recipes. */
+  async fileDataDir(owner: { cwd?: string; thread?: ThreadId; conversationId?: string }): Promise<string | undefined> {
+    const launched = owner.conversationId ? this.launchedWith(owner.conversationId) : undefined
+    if (launched) return launched.dataDir
+    const thread = owner.thread ?? (owner.conversationId ? this.dependencies.store.journalPlacement(owner.conversationId)?.thread : undefined)
+    const checkout = owner.cwd ? await checkoutOf(owner.cwd) : undefined
+    if (!thread && !checkout) return undefined
+    return this.dataDir(this.appFor(thread, checkout).app)
+  }
+
   /** What the conversation's running agent process was started with. */
   launchedWith(conversationId: string): ThreadEnvironment | undefined {
     return this.launched.get(conversationId)
