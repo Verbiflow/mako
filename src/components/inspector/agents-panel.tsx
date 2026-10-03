@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useState } from "react"
 import { GitBranchIcon, ChevronDownIcon } from "lucide-react"
 import { activeLiveAcp, useAcp } from "@/state/acp"
@@ -61,6 +62,7 @@ function AgentRoster({
   roster?: NativeAgentRoster
   provider?: string
 }) {
+  useHarnessIdentity()
   const [visible, setVisible] = useState(40)
   const supported = useThreads(
     (state) => descriptorFor(state, provider)?.observesNativeAgents === true
@@ -132,6 +134,7 @@ const marks = {
 } satisfies Record<NativeAgent["state"]["kind"], ActivityState>
 
 export function AgentRow({ agent }: { agent: NativeAgent }) {
+  useHarnessIdentity()
   const [expanded, setExpanded] = useState(false)
   const facts = [
     harnessLabel(agent.provider),
