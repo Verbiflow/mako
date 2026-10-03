@@ -198,11 +198,13 @@
    * the composer dock, tab strips, tables, anything meeting a pane edge.
    * Everything placed on it is rounded, and the radius shrinks with depth:
    * floating surfaces (dialogs, menus, popovers, toasts, notice cards) xl;
-   * cards in a pane or the transcript (code, tool output, images, the
+   * file tiles and preview frames use the separate sharp asset token;
+   * other cards in a pane or the transcript (code, tool output, the
    * commit editor, settings cards) lg; controls, fields and one-line strips
    * md; marks (keycaps, inline code, badges) sm; pills and dots full. The
    * prompt bubble keeps its xl with a tighter tail corner.
    */
+  --radius-asset: 0px;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -1336,7 +1338,8 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 
 /* File previews align to the transcript column at every list depth. The
    list item declares its inset without measuring or observing the DOM. */
-.mako-prose [data-inline-file-preview] {
+.mako-prose [data-inline-file-preview],
+.mako-prose [data-asset-collection] {
   margin-inline-start: calc(0px - var(--inline-file-inset, 0px));
   width: calc(100% + var(--inline-file-inset, 0px));
 }
@@ -1993,3 +1996,12 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
     transition: none;
   }
 }
+
+/* File chrome uses one shape across draft tiles, inline previews and the gallery. */
+.asset-surface { border-radius: var(--radius-asset); }
+[data-asset-collection] [data-inline-file-preview],
+[data-asset-collection] [data-inline-document] { margin: 0; width: 100%; }
+.attachment-strip button:not([aria-label^="Remove"]),
+.attachment-strip [data-slot="popover-content"] { border-radius: var(--radius-asset); }
+
+.mako-prose img.asset-surface { border-radius: var(--radius-asset); }

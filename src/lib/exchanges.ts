@@ -123,7 +123,13 @@ export function responseSections(
       workBlocks = []
     }
 
+    let attachmentProse: ChatMessage | undefined
     for (const block of message.blocks) {
+      if (block.type === "attachment" && attachmentProse) {
+        attachmentProse.blocks.push(block)
+        continue
+      }
+      attachmentProse = undefined
       if (
         message.role === "assistant" &&
         ((block.type === "text" && block.text) ||
@@ -133,6 +139,7 @@ export function responseSections(
         flushMessageWork()
         flushWork()
         const prose = splitMessage(message, [block])
+        if (block.type === "attachment") attachmentProse = prose
         generated.push(prose)
         sections.push({ kind: "prose", id: prose.id, message: prose })
       } else {
