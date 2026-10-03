@@ -1,4 +1,4 @@
-// Two minimal model turns per installed harness. Uses normal selected-account
+// Minimal real model turns per installed harness. Uses normal selected-account
 // routing; never copies credentials or replays an uncertain prompt.
 import { spawn } from "node:child_process"
 import { once } from "node:events"
@@ -38,6 +38,7 @@ async function main(app) {
   await app.whenReady()
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
+  const { reduceLiveUpdates } = await import(join(repo, "dist-electron/contracts/live-content.js"))
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
   const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
   const { nativePathForSession } = await import(join(repo, "dist-electron/threads.js"))
@@ -51,13 +52,32 @@ async function main(app) {
       if (process.env.MAKO_WAKE_HARNESS && driver.provider !== process.env.MAKO_WAKE_HARNESS) continue
       let prompts = 0
       let starts = 0
+      const uncertain = process.env.MAKO_WAKE_SCENARIO === "uncertain"
+      let loseEvidence = false
+      let nativeStatus
+      let nativeBlocks = []
+      const receive = (event, forward) => {
+        if (!loseEvidence) return forward(event)
+        if (event.type === "live-session") nativeStatus = event.session.status
+        const updates = event.type === "live-updates" ? event.updates : event.type === "live-update" ? [event.update] : []
+        nativeBlocks = reduceLiveUpdates(nativeBlocks, updates)
+      }
       let owner
       const began = performance.now()
       const id = randomUUID()
       const counts = { starts: () => starts, prompts: () => prompts }
       const adapter = { ...driver,
-        start: (...args) => { starts++; return driver.start(...args) },
-        prompt: (...args) => { prompts++; return driver.prompt(...args) },
+        start: (cwd, options) => {
+          starts++
+          return driver.start(cwd, { ...options, emit: event => receive(event, event => options.emit?.(event)) })
+        },
+        prompt: async (id, text, attachments, tuning, dispatch) => {
+          prompts++
+          if (!uncertain) return driver.prompt(id, text, attachments, tuning, dispatch)
+          loseEvidence = true
+          await driver.prompt(id, text, attachments, tuning, { ...dispatch, report: () => {} })
+          throw new Error("Acceptance injection: native delivery receipts and results lost")
+        },
       }
       const cwd = join(root, `work-${driver.provider}`)
       await mkdir(cwd)
@@ -70,12 +90,25 @@ async function main(app) {
           checkpoint: (path, provider) => providerHost.liveDrivers.get(provider ?? driver.provider)?.checkpoint?.(path),
           resumeVerdict: binding => assessProviderResume(binding, adapter),
           providerIdleMs: 100, providerWarmLimit: 0,
+          autoContinueDelayMs: 10,
           mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
         })
-        bindCodexApp(event => owner.observe(event))
+        bindCodexApp(event => receive(event, event => owner.observe(event)))
         const full = driver.modes?.find(mode => mode.access === "full")
         await owner.start(driver.provider, cwd, { conversationId: id, modeId: full?.id })
         const marker = `wake-${randomUUID().slice(0, 8)}`
+        if (uncertain) {
+          owner.submit(id, randomUUID(), `Reply with only ${marker}. Do not use any tools.`)
+          await until("native execution despite lost evidence", () => ({ nativeStatus, reply: nativeBlocks.filter(block => block.type === "text").map(block => block.text).join("") }), value => value.nativeStatus === "ready" && value.reply.trim() === marker)
+          await until("host uncertainty", () => owner.snapshot(id), value => value?.requests[0]?.nativeDelivery?.evidence.kind === "uncertain")
+          await delay(3000)
+          const final = owner.snapshot(id)
+          if (starts !== 1 || prompts !== 1 || final.requests.length !== 1) throw new Error("An uncertain native request was replayed")
+          results.push({ harness: driver.provider, result: "passed", scenario: "native execution with lost host evidence", durationMs: performance.now() - began, starts, prompts, nativeReplyExact: true, hostDeliveryEvidence: final.requests[0].nativeDelivery.evidence.kind, hostRequestStatus: final.requests[0].status, observationMs: 3000 })
+          await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed native runtimes through the freshly built isolated host; not the installed Mako app", results }, null, 2))
+          console.log(JSON.stringify(results.at(-1)))
+          continue
+        }
         owner.submit(id, randomUUID(), `Remember ${marker}. Reply with only ACK. Do not use any tools.`)
         const snapshot = () => owner.snapshot(id)
         await until("first request terminal", snapshot, value => value?.requests[0] && !["queued", "held", "dispatching"].includes(value.requests[0].status))
@@ -98,12 +131,15 @@ async function main(app) {
       } finally {
         if (owner) {
           await owner.close(id).catch(() => {})
-          owner.stop()
+          await owner.stop()
         }
       }
       await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed native runtimes through the freshly built isolated host; not the installed Mako app", results }, null, 2))
       console.log(JSON.stringify(results.at(-1)))
     }
-  } finally { memory.close() }
+  } finally {
+    await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed native runtimes through the freshly built isolated host; not the installed Mako app", results }, null, 2))
+    memory.close()
+  }
   if (results.some(result => result.result !== "passed")) throw new Error("Native wake acceptance has failures; original prompts were not retried.")
 }

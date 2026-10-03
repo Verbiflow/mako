@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import type { Actor, ThreadPlacement } from "../electron/contracts/thread-identity.js"
 import { MoveIdSchema, RuntimeIdSchema, type ExecutionOwner, type MoveId } from "../electron/contracts/thread-execution.js"
 import { LiveConversations } from "../electron/live-conversations.js"
+import { assessProviderResume } from "../electron/provider-recovery.js"
 import { MoveNotQuietError } from "../electron/live-moves.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { SessionMemory } from "../electron/session-memory.js"
@@ -49,6 +50,8 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
       approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
       provider: harness,
       canResume: true,
+      checkpoint: async () => "checkpoint",
+      inspectNativeSession: async () => ({ kind: "available", checkpoint: "checkpoint", strategy: "same-session" }),
       available: () => true,
       start: async (cwd, options) => {
         state.starts += 1
@@ -101,6 +104,7 @@ function host(input: { threads: ThreadStore; journals: string; fixtures: Map<str
     emit: () => {},
     nativePath: (session) => session.nativeId ? join(root, "native", session.harness, `${session.nativeId}.jsonl`) : undefined,
     checkpoint: async () => "checkpoint",
+    resumeVerdict: binding => assessProviderResume(binding, input.fixtures.get(binding.provider)?.driver),
     providerIdleMs: 60_000,
     providerWarmLimit: 20,
   })

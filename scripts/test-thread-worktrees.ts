@@ -55,7 +55,9 @@ function repository(name: string, commit = true): string {
 const busy = new Map<string, string[]>()
 const working = new Map<string, string[]>()
 const threads = new ThreadStore(join(root, "threads.sqlite"))
-const INSTALL = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"] }
+// This suite proves cloned outputs and inherited install records; package-link
+// defaults are exercised separately by test-package-links.
+const INSTALL = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: false }
 let recipe: Recipe | undefined = RecipeSchema.parse({ secrets: [".env", ".env.*"], prepare: [INSTALL] })
 let secretsAllowed = true
 const records = new Map<string, Prepared>()

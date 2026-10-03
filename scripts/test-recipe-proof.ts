@@ -1,15 +1,16 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { setTimeout as sleep } from "node:timers/promises"
 import { parse as parseYaml } from "yaml"
 import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
 import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { readRecipe, readVersion, recipePath, RecipeSchema, type Recipe } from "../electron/thread-recipe.js"
+import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, type Recipe } from "../electron/thread-recipe.js"
 
 /**
  * A recipe version's life on real processes: a draft only its Thread runs,
@@ -72,9 +73,13 @@ try {
   assert.ok(Date.now() - began >= 1_400 && existsSync(join(mine.dataDir, `ready-${mine.port}`)), "the start waited for the ready command, past the port answering")
   await tools.stop(conversation)
   const waiting = toolsFor(mine, 2_000)
-  await waiting.save(conversation, recipe({ processes: { web: { ...web, ready: "exit 1" } } }), "Never ready")
-  assert.match(await waiting.start(conversation), /^web: starting; its ready command \(exit 1\) hasn't passed yet/)
+  const tries = join(mine.dataDir, "ready-tries")
+  await waiting.save(conversation, recipe({ processes: { web: { ...web, ready: "echo >> \"$MAKO_THREAD_DATA_DIR/ready-tries\"; exit 1" } } }), "Never ready")
+  assert.match(await waiting.start(conversation), /^web: starting; its ready command \(echo >> "\$MAKO_THREAD_DATA_DIR\/ready-tries"; exit 1\) hasn't passed yet/)
   await waiting.stop(conversation)
+  const triedBy = readFileSync(tries, "utf8").length
+  await sleep(1_500)
+  assert.equal(readFileSync(tries, "utf8").length, triedBy, "a stopped process's ready command isn't tried again")
 
   // Targets: a start without one runs the first target's processes; a target runs its own.
   await tools.save(conversation, recipe({
@@ -127,13 +132,19 @@ try {
   assert.equal(parseYaml(await tools.status(conversation)).recipe.version, `${first}, which this app's processes started with; version ${second} is published, and app_restart of the whole app runs it`)
   await tools.restart(conversation)
   assert.equal(parseYaml(await tools.status(conversation)).recipe.version, `${second}, published`)
+  await tools.stop(conversation)
+  await other.save(conversation, recipe({ values: { PORT: "{port}", THEIRS: "1", AGAIN: "1" } }), "Published while stopped")
+  await other.publish(conversation)
+  const third = second + 1
+  assert.equal(parseYaml(await tools.status(conversation)).recipe.version, `${third}, published`, "a stopped app runs what's published")
+  assert.ok(!existsSync(join(recipeVersions(file), "running", `${mine.app}.json`)), "and forgets the version it last ran, so later reads don't look for running processes")
 
   // A draft made from a version that's since been replaced isn't published over it.
   await tools.save(conversation, recipe({ values: { PORT: "{port}", MINE: "1" } }), "My change")
-  await other.save(conversation, recipe({ values: { PORT: "{port}", THEIRS: "2" } }), "Their second change")
+  await other.save(conversation, recipe({ values: { PORT: "{port}", THEIRS: "2", AGAIN: "1" } }), "Their second change")
   await other.publish(conversation)
   const stale = await tools.publish(conversation)
-  assert.match(stale, new RegExp(`^Draft \\d+ passed its proof but wasn't published: Version ${second + 2} was published after this draft was made from version ${second}\\. Publishing it would undo that version's changes\\.\\nWhat it changed:\\n  values\\.THEIRS: was "1", now "2"\\nMake your change on top of it`))
+  assert.match(stale, new RegExp(`^Draft \\d+ passed its proof but wasn't published: Version ${third + 2} was published after this draft was made from version ${third}\\. Publishing it would undo that version's changes\\.\\nWhat it changed:\\n  values\\.THEIRS: was "1", now "2"\\nMake your change on top of it`))
   await tools.stop(conversation)
   await other.stop(conversation)
 

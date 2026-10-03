@@ -417,20 +417,20 @@ process.stdin.on("end", () => process.exit(0))
     push(compacted)
     push(compacted)
     assert.deepEqual(await until("the compaction", () => markers().find(marker => marker.label === "Context compacted")),
-      { kind: "event", id: compacted.id, label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
+      { kind: "event", id: compacted.id, source: { harness: "opencode", record: compacted.id }, label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
 
     push(event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" }))
     const failed = event("session.compaction.failed", { sessionID: root, reason: "auto", error: { type: "compaction.failed", message: "The model could not summarize" } })
     push(failed)
     assert.deepEqual(await until("the failed compaction", () => markers().find(marker => marker.label === "Compaction failed")),
-      { kind: "event", id: failed.id, label: "Compaction failed", detail: "The model could not summarize", tone: "warning" }, "an automatic compaction that fails leaves its trace")
+      { kind: "event", id: failed.id, source: { harness: "opencode", record: failed.id }, label: "Compaction failed", detail: "The model could not summarize", tone: "warning" }, "an automatic compaction that fails leaves its trace")
     assert.equal(activities().at(-1), null, "compacting ends with the failure")
     assert.equal(markers().filter(marker => marker.label === "Context compacted").length, 1, "OpenCode's event replayed is drawn once")
 
     const interrupted = event("session.execution.interrupted", { sessionID: root, reason: "inactivity" })
     push(interrupted)
     assert.deepEqual(await until("OpenCode's stop", () => markers().find(marker => marker.label === "Stopped by OpenCode")),
-      { kind: "event", id: interrupted.id, label: "Stopped by OpenCode", detail: "the workspace was idle too long" })
+      { kind: "event", id: interrupted.id, source: { harness: "opencode", record: interrupted.id }, label: "Stopped by OpenCode", detail: "the workspace was idle too long" })
     await until("the stopped turn to settle", () => session()?.status === "ready")
 
     mcpServers = [{ name: "docs", status: { status: "failed", error: "spawn docs-mcp ENOENT" } }]

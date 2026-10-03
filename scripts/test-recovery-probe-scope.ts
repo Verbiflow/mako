@@ -22,6 +22,9 @@ try {
   const binding = { id, provider: "claude", nativeId: id, path, coveredBlocks: 0, includesBase: false }
   const probe = claudeProcessProbeFor(join(root, "unrelated-default-home"))
   assert.equal((await resumeVerdict(binding, probe)).kind, "held", "custom-account registry owns its source even when the default registry is absent")
+  await writeFile(join(profile, "sessions", "active.json"), JSON.stringify({ pid: process.pid }))
+  assert.equal((await resumeVerdict(binding, probe)).kind, "unavailable", "an unidentifiable live record is incomplete evidence, not an empty registry")
+  await writeFile(join(profile, "sessions", "active.json"), JSON.stringify({ sessionId: id, pid: process.pid, state: "working" }))
   await Promise.all(Array.from({ length: 1000 }, (_, index) => writeFile(join(profile, "sessions", `extra-${index}`), "")))
   assert.equal((await resumeVerdict(binding, probe)).kind, "unavailable", "a truncated registry cannot establish an empty ownership inventory")
 
@@ -31,6 +34,8 @@ try {
   await writeFile(grokPath, "fixture source")
   await writeFile(join(grok, "active_sessions.json"), JSON.stringify([{ session_id: id, pid: process.pid }]))
   assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "held", "admission uses the source store rather than the current GROK_HOME")
+  await writeFile(join(grok, "active_sessions.json"), JSON.stringify([{ pid: process.pid }]))
+  assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "unavailable", "an unidentified Grok owner cannot establish an empty store")
 
   if (process.platform !== "win32") {
     const codexPath = join(root, "custom-codex-home", "sessions", `${id}.jsonl`)
