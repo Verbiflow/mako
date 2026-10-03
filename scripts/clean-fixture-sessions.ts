@@ -20,7 +20,7 @@ import { defaultCatalog } from "@mako/sessions"
 import type { ThreadRef } from "@mako/sessions"
 
 const FIXTURE_DIRECTORY =
-  /\/(?:mako-provider-e2e|mako-e2e|mako-packaged-lifecycle|mako-rewind-e2e|acp-perm|acp-steer|acp-steer-tools|acp-probe|mako-workspace-ui|mako-live-test|mako-codex-large|mako-catalog-growth|mako-catalog-remove|codex-home|codex-steer)-[^/]+(?:\/|$)/
+  /\/(?:mako-provider-e2e|mako-e2e|mako-packaged-lifecycle|mako-setup-run|mako-rewind-e2e|acp-perm|acp-steer|acp-steer-tools|acp-probe|mako-workspace-ui|mako-live-test|mako-codex-large|mako-catalog-growth|mako-catalog-remove|codex-home|codex-steer)-[^/]+(?:\/|$)/
 
 function fixtureRoot(ref: ThreadRef): boolean {
   const cwd = ref.cwd ?? ""
