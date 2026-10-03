@@ -1057,7 +1057,15 @@ starts no desktop window, and its host refuses every host call outside
 Electron windows on its socket, and its own hidden desk windows that agents
 drive. Writes, provider calls, git, terminals and unknown calls fail with
 `fixture-refused` before their arguments are parsed. It still reads the real
-conversation catalog, so real titles and transcripts appear. A plain `--sandbox`
+conversation catalog, so real titles and transcripts appear. Below the host
+calls, the shared Thread store, session ledger and archive are constructed
+`readOnly`, and `restrictNativeStores` makes every harness database open
+through `packages/sessions/src/read-only-sqlite.ts` and every emit or removal
+throw `ReadOnlyStoreError`. While a writer has a database open it is read
+`mode=ro&readonly_shm=1`, so the main file and `-shm` are held read-only and
+commits stay visible; SQLite always opens `-wal` read-write but this
+connection never writes it. With no writer it is read `immutable` and
+reopened once the file changes. A plain `--sandbox`
 or `dev` desk changes real conversations and settings.
 
 The host keeps its own log at `<data root>/logs/host.log` (`electron/host-log.ts`,

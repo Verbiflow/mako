@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -73,7 +73,10 @@ try {
     const held = modes(path)
     assert.deepEqual(held.main, ['r'], `the main file is open read-only: ${JSON.stringify(held)}`)
     assert.ok(held['-shm']?.length && held['-shm'].every((mode) => mode === 'r' || mode === ' ' || mode === ''), `-shm is mapped read-only: ${JSON.stringify(held)}`)
+    const wal = readFileSync(`${path}-wal`)
+    count(database)
     database.close()
+    assert.ok(readFileSync(`${path}-wal`).equals(wal), 'the -wal SQLite holds read-write is never written by the reader, not even on close')
     assert.equal(await writer.send('close'), 'closed')
     assert.deepEqual(sides(path), { wal: false, shm: false }, 'the last writer still cleans up after a reader')
   }
