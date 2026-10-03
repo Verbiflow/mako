@@ -1696,3 +1696,18 @@ assert.equal(anchorLine("Setup\n=====", "setup"), 1)
 assert.equal(anchorLine("## [Setup](./guide.md)", "setup"), 1)
 assert.equal(anchorLine("## 日本語", "日本語"), 1)
 assert.deepEqual(markdownFileTarget("notes.md#L1-cache"), {path:"notes.md",line:undefined,endLine:undefined,anchor:"L1-cache"})
+
+// Contiguous native attachments share a preview section without moving across prose/tool boundaries.
+const nativeAssetMessage = { id: "native-assets", role: "assistant", blocks: [
+  { type: "text", text: "Before" },
+  { type: "attachment", name: "one.png", mimeType: "image/png", source: { kind: "file", path: "one.png" } },
+  { type: "attachment", name: "two.mp4", mimeType: "video/mp4", source: { kind: "file", path: "two.mp4" } },
+  { type: "text", text: "Between" },
+  { type: "attachment", name: "three.wav", mimeType: "audio/wav", source: { kind: "file", path: "three.wav" } },
+  { type: "toolCall", id: "boundary", name: "read" },
+  { type: "attachment", name: "four.pdf", mimeType: "application/pdf", source: { kind: "file", path: "four.pdf" } },
+] } satisfies ChatMessage
+const nativeAssetOriginal = structuredClone(nativeAssetMessage)
+const nativeAssetSections = responseSections([nativeAssetMessage])
+assert.deepEqual(nativeAssetSections.map(section => section.kind === "work" ? "work" : section.message.blocks.map(block => block.type === "text" ? block.text : block.type === "attachment" ? block.name : block.type)), [["Before"], ["one.png", "two.mp4"], ["Between"], ["three.wav"], "work", ["four.pdf"]])
+assert.deepEqual(nativeAssetMessage, nativeAssetOriginal)

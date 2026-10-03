@@ -96,3 +96,19 @@ assert.deepEqual(listPaths, [["guide.md"], ["requests.har"]], "Each list item di
 console.log(
   "Worker Markdown pipeline preserves heading IDs/source lines, lists, setext, GFM, references, code, citations, escaping, Unicode, incomplete syntax and immutable reuse"
 )
+
+// Group only adjacent asset-only paragraphs. The cached worker tree stays intact.
+const { rehypeAssetGroups } = await import("../src/lib/markdown-asset-groups")
+const { unified } = await import("unified")
+const groupedSource = "Before.\n\n![first](one.png)\n\n[two.mp4](two.mp4)\n\nMiddle explanation.\n\n[report.xlsx](report.xlsx)\n\n[review.pptx](review.pptx)\n\nAfter."
+const cachedAssets = parseProse(groupedSource)
+const assetOriginal = structuredClone(cachedAssets)
+const groupedAssets = unified().use(rehypeAssetGroups).runSync(structuredClone(cachedAssets))
+const groups = groupedAssets.children.filter(node => node.type === "element" && node.properties.dataAssetGroup)
+assert.equal(groups.length, 2)
+assert.deepEqual(groups.map(node => node.type === "element" ? node.children.filter(child => child.type === "element").length : 0), [2, 2])
+assert.deepEqual(cachedAssets, assetOriginal)
+assert.equal(groupedAssets.children.filter(node => node.type === "element" && node.tagName === "p" && !node.properties.dataAssetGroup).length, 3)
+const loneAssets = unified().use(rehypeAssetGroups).runSync(parseProse("[guide.md](guide.md#setup)\n\n[site](https://example.test)\n\nText with [image](one.png).\n\n[two.mp4](two.mp4)"))
+assert.equal(loneAssets.children.some(node => node.type === "element" && node.properties.dataAssetGroup), false)
+console.log("Asset groups stay beside their prose and preserve anchors, external links and cached trees")

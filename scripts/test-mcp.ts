@@ -545,9 +545,9 @@ async function testMakoRuntimeProjection(): Promise<void> {
   const snapshot: McpRegistrySnapshot = {cwd:tmpdir(),generatedAt:1,providers:[],servers:[]}
   const tools = {token:"t",computerUrl:"http://127.0.0.1:43123/computer",makoUrl:"http://127.0.0.1:43123/mako"}
   assert.deepEqual(codexMcpConfig(snapshot, conversationServers(tools)), {mcp_servers:{
-    "mako-computer":{url:tools.computerUrl,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN"},
-    "mako":{url:tools.makoUrl,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN"},
-  }}, "both of Mako's servers, opened with the one grant")
+    "mako-computer":{url:tools.computerUrl,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN",tool_timeout_sec:900},
+    "mako":{url:tools.makoUrl,bearer_token_env_var:"MAKO_CONVERSATIONS_TOKEN",tool_timeout_sec:900},
+  }}, "both of Mako's servers, opened with one grant and enough time for full checks")
   assert.deepEqual(Object.keys(codexMcpConfig(snapshot, conversationServers({token:"t",computerUrl:tools.computerUrl})).mcp_servers ?? {}), ["mako-computer"], "a host serving no Thread tools adds no mako server")
   assert.deepEqual(codexMcpConfig(snapshot), {}, "no grant, no Mako server")
 }

@@ -95,6 +95,7 @@ try {
   assert.match(await inFix.check("c1", "quick"), /passed/i)
   assert.equal(existsSync(ran), false, "no install ran over the links")
   assert.match(await inFix.status("c1"), /node_modules link each package to the main checkout's\. Call app_own_packages/)
+  assert.match(await inFix.status("c1"), /prepare:\n {2}.*: up to date\n/, "a linked checkout whose lockfile matches the main checkout's has nothing to install")
 
   // Asked first, the checkout gets its own copy and the main checkout's stays as it was.
   assert.match(await inFix.ownPackages("c1"), /node_modules is now this checkout's own/)
