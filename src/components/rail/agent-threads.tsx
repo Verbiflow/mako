@@ -82,6 +82,7 @@ import { cn } from "@/lib/utils"
 import { Blank } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
 import { DraftThreads } from "@/components/rail/draft-threads"
+import { RoomSection } from "@/components/rail/room-section"
 import { archivedLive, archivedThread, useThreadArchives } from "@/state/thread-lifecycle"
 import { FolderActivity, RailSkeleton } from "@/components/rail/rail-activity"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -584,6 +585,7 @@ export function AgentThreads() {
                   }
                 />
               ))}
+              <RoomSection />
             </div>
           ) : searchActive || grouping !== "project" ? (
             <div className="pt-1">

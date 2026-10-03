@@ -1,24 +1,26 @@
-import { stat } from "node:fs/promises"
+import { lstat, readlink, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { probeApp, probeText, refreshTraces, SAMPLE_EVERY_MS, type ProbeInput } from "./app-probe.js"
 import { z } from "zod"
 import { childProcessEnv } from "./accounts-common.js"
 import { applyControlEnvironment } from "./control-launch.js"
-import type { AppKey, ThreadEnvironment } from "./contracts/thread-environments.js"
+import { AppKeySchema, type AppKey, type ThreadEnvironment } from "./contracts/thread-environments.js"
 import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "./contracts/thread-environments.js"
-import type { AppActionOutcome, AppCheckStepView, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
+import type { AppActionOutcome, AppCheckStepView, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppProcessView, RoomApp, RoomFit, RoomView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
 import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView, RecipeVersionView } from "./contracts/project-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
-import { bringFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
+import { bringFiles, carryReport, isSpareCheckout, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
 import { ago, listed, toolText, when } from "./tool-text.js"
 import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
 import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type StepRecord, type StepState } from "./check-steps.js"
-import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
+import { freeMemory, memoryPressure, runKey, type AppOverview, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import type { FileHistory } from "./watch-backend.js"
+import { installsDue, movableInstalls } from "./checkout-install.js"
+import { installStatus, settleHanded } from "./spare-install.js"
 import {
   checkoutOf,
   inputsDigest,
@@ -59,6 +61,8 @@ import {
 
 /** Under the minute most harnesses' MCP clients give a tool call; longer waits come back as "still starting". */
 const SETTLE_MS = 25_000
+/** While the Room is open its memory figures are this fresh: a look reads the process table (about 35 ms) and the footprint of each process whose size moved (about 30 ms of CPU each). */
+const ROOM_MEMORY_MS = 15_000
 /**
  * How long app_check waits for a result, by harness: Codex gives Mako's
  * own servers fifteen minutes (mcp-runtime.ts), and Claude bounds an MCP
@@ -98,9 +102,12 @@ interface Deps {
   recipesRoot?: string
   /** Whose app it is, in words, such as `the Thread "Fix login"`, to name whose app was stopped to make room. */
   whose?(app: AppKey): string | undefined
+  /** The Worktree Thread whose app it is, for the Room. */
+  owner?(app: AppKey): { id: string; title: string } | undefined
   pressure?: () => Promise<MemoryPressure>
   /** The file system's history, for what apps changed at any depth; without it the probe compares modification times. */
   history?: FileHistory
+  freeMemory?: () => Promise<{ freeBytes: number; totalBytes: number } | undefined>
   settleMs?: number
   lineMs?: number
   now?: () => number
@@ -154,6 +161,10 @@ export interface DeskApp {
   probe(cwd: string): Promise<AppProbeView>
   /** Every checkout on this Mac whose app isn't stopped, for the sidebar. */
   marks(): Promise<AppMark[]>
+  /** Every app running or waiting for memory on this Mac, with what each holds and how many more fit; the marks come with it. */
+  room(): Promise<RoomView>
+  /** Stops each app, as its own Stop does; one waiting for memory leaves the line. */
+  stopApps(apps: string[]): Promise<void>
   /** The project's recipe written out, with its credentials files, for Settings. */
   setup(cwd: string): Promise<ProjectAppSetup>
   /** The person's answer on the recipe's credentials files: new checkouts get all of them, or none. */
@@ -224,6 +235,16 @@ type StartOutcome =
   | { kind: "elsewhere"; whose: string }
   | { kind: "started"; notes: string[]; lines: string[]; refused: { name: string; reason: string }[]; stillStarting: boolean; address?: string }
 
+/** What every command Mako runs for an app starts from: the host's environment without Mako's own secrets, with the Thread's values when there's a Thread. */
+export function commandEnvironment(environment?: ThreadEnvironment): NodeJS.ProcessEnv {
+  const base = childProcessEnv(process.env)
+  delete base.ELECTRON_RUN_AS_NODE
+  delete base.MAKO_CONVERSATIONS_TOKEN
+  applyControlEnvironment(base)
+  applyThreadEnvironment(base, environment)
+  return base
+}
+
 export function environmentTools(deps: Deps): EnvironmentTools {
   const settleMs = deps.settleMs ?? SETTLE_MS
   /**
@@ -249,15 +270,20 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }, deps.lineMs ?? LINE_MS)
     lineTimer.unref?.()
   }
+  /** The run installing a checkout: one a spare checkout handed over with it, else the app's own. */
+  const installOf = async (app: AppKey, checkout: string) => {
+    const carrier = (await deps.processes.prepared(checkout)).by ?? app
+    return { carrier, status: await installStatus(deps.processes, carrier) }
+  }
   /** Starts that found their checkout's install still running, by app: each goes ahead once its install has ended. */
-  const afterInstall = new Map<AppKey, () => Promise<StartOutcome>>()
+  const afterInstall = new Map<AppKey, { checkout: string; again: () => Promise<StartOutcome> }>()
   let installTimer: ReturnType<typeof setTimeout> | undefined
   const followInstalls = () => {
     if (installTimer || !afterInstall.size) return
     installTimer = setTimeout(() => {
       void (async () => {
-        for (const [app, again] of Array.from(afterInstall)) {
-          const install = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")
+        for (const [app, { checkout, again }] of Array.from(afterInstall)) {
+          const install = (await installOf(app, checkout)).status
           if (install?.state.kind === "running" || install?.state.kind === "starting") continue
           afterInstall.delete(app)
           await again().catch(() => undefined)
@@ -334,14 +360,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (unknown.length) throw new Error(`The recipe has no process named ${unknown.join(", ")}; it has ${all.join(", ") || "none"}.`)
     return names
   }
-  const env = (context: Context, recipe: Recipe, own: Record<string, string> = {}) => {
-    const base = childProcessEnv(process.env)
-    delete base.ELECTRON_RUN_AS_NODE
-    delete base.MAKO_CONVERSATIONS_TOKEN
-    applyControlEnvironment(base)
-    applyThreadEnvironment(base, { ...context.environment, values: recipeValues(recipe, context.environment) })
-    return { ...base, ...own }
-  }
+  const env = (context: Context, recipe: Recipe, own: Record<string, string> = {}) =>
+    ({ ...commandEnvironment({ ...context.environment, values: recipeValues(recipe, context.environment) }), ...own })
   const processSpecs = async (context: Context, recipe: Recipe, names: string[]): Promise<RunSpec[]> =>
     Promise.all(names.map(async (name) => {
       const spec = recipe.processes[name]!
@@ -368,10 +388,19 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const { app } = current.environment
     const { checkout } = current
     const settled = async (): Promise<Unprepared | undefined> => {
-      const status = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")
       const record = await deps.processes.prepared(checkout)
-      if (status?.state.kind === "running") return { shown: true, installing: true, message: `Preparing this checkout (${status.command}); it keeps going. Call again to wait for it, or app_logs with process "prepare" to watch it.` }
+      const status = await installStatus(deps.processes, record.by ?? app)
+      if (status?.state.kind === "running") {
+        const handed = record.by ? ", which started before this Thread took the checkout" : ""
+        return { shown: true, installing: true, message: `Preparing this checkout (${status.command})${handed}; it keeps going. Call again to wait for it, or app_logs with process "prepare" to watch it.` }
+      }
       if (!record.pending) return undefined
+      // A spare checkout's install ran without this Thread's values; what it didn't finish runs now as the Thread's own.
+      if (record.by) {
+        const passed = status?.state.kind === "exited" && status.state.code === 0
+        await settleHanded(deps.processes, checkout, passed ? await movableInstalls(checkout, steps, record.pending) : {})
+        return undefined
+      }
       if (!status) {
         // Stopped before it finished, and its run forgotten: it runs again now.
         await deps.processes.savePrepared(checkout, { done: record.done })
@@ -385,19 +414,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const earlier = await settled()
     if (earlier) return earlier
     const record = await deps.processes.prepared(checkout)
-    const digests = await Promise.all(steps.map((step) => inputsDigest(checkout, step.inputs)))
-    const root = await projectRoot(checkout)
-    const linked = root === checkout ? [] : await linkedEntries(checkout, steps)
-    const mains = linked.length ? await Promise.all(steps.map((step) => step.link ? inputsDigest(root, step.inputs) : undefined)) : []
-    const due = steps.flatMap((step, index) => {
-      if (record.done[step.command] === digests[index]) return []
-      // Linked packages are the main checkout's own, so there's nothing to catch up on while the inputs match it.
-      if (step.link && linked.length && mains[index] === digests[index]) return []
-      return [{ step, command: step.command, digest: digests[index]! }]
-    })
+    const due = await installsDue(checkout, steps, record.done)
     if (!due.length) return undefined
     // An install over the links would write into the main checkout's packages.
-    if (linked.length && due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
+    if (due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
     await deps.processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((step) => [step.command, step.digest])) })
     const command = due.map((step) => step.command).join(" && ")
     const result = await deps.processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: env(current, current.recipe) }])
@@ -421,7 +441,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if ((await pressure()) === "normal") return { notes }
     const now = (deps.now ?? Date.now)()
     const others = (await deps.processes.active()).filter((entry) => entry.app !== app)
-    for (const quiet of others.filter((entry) => entry.usedAt < now - EVICT_QUIET_MS).sort((a, b) => a.usedAt - b.usedAt)) {
+    // A spare checkout's install is for a Thread nobody has started yet, so it goes first; one handed to a Thread left a link where it was.
+    const ahead = (await Promise.all(others.map(async (entry) => {
+      const checkout = deps.processes.checkoutOf(entry.app)
+      return checkout && isSpareCheckout(checkout) && !(await lstat(checkout).catch(() => undefined))?.isSymbolicLink() ? [entry] : []
+    }))).flat()
+    if (ahead.length) {
+      for (const entry of ahead) await deps.processes.stop(entry.app)
+      notes.push(`Stopped the install of ${ahead.length === 1 ? "a checkout" : `${ahead.length} checkouts`} kept ready for new Threads, to make room.`)
+      if ((await pressure()) === "normal") return { notes }
+    }
+    for (const quiet of others.filter((entry) => !ahead.includes(entry) && entry.usedAt < now - EVICT_QUIET_MS).sort((a, b) => a.usedAt - b.usedAt)) {
       await deps.processes.stop(quiet.app)
       notes.push(`Stopped the quiet app of ${deps.whose?.(quiet.app) || quiet.app} (${bytes(quiet.memoryBytes)}, unused for ${minutes(now - quiet.usedAt)}) to make room.`)
       if ((await pressure()) === "normal") return { notes }
@@ -442,10 +472,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       : "This checkout's own (installed or cloned here, or the main checkout); install as usual."
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
-    const { done } = await deps.processes.prepared(checkout)
+    const { done, pending, by } = await deps.processes.prepared(checkout)
     const root = await projectRoot(checkout)
     const linked = root === checkout ? [] : await linkedEntries(checkout, recipe.prepare)
+    const handed = by && (await installStatus(deps.processes, by))?.state.kind === "running" ? pending : undefined
     return Object.fromEntries(await Promise.all(recipe.prepare.map(async (step) => {
+      if (handed?.[step.command] !== undefined) return [step.command, "installing now, in a run that started before this Thread took the checkout; a start waits for it"] as const
       const digest = await inputsDigest(checkout, step.inputs)
       // As prepare() decides: linked packages need no install while the inputs match the main checkout's.
       const current = done[step.command] === digest || (step.link === true && linked.length > 0 && (await inputsDigest(root, step.inputs)) === digest)
@@ -484,9 +516,9 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (idle.length) {
       const preparing = await prepare(current)
       if (preparing?.installing) {
-        afterInstall.set(app, again)
+        afterInstall.set(app, { checkout: current.checkout, again })
         followInstalls()
-        const { command } = (await deps.processes.status(app)).find((entry) => entry.kind === "prepare")!
+        const command = (await installOf(app, current.checkout)).status?.command ?? "the recipe's install"
         return { kind: "blocked", shown: true, message: `Preparing this checkout (${command}); the app starts by itself once it's done, and app_status shows when. app_logs with process "prepare" watches it.` }
       }
       if (preparing) return { kind: "blocked", ...preparing }
@@ -499,6 +531,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       notes = room.notes
     }
     line.delete(app)
+    if (idle.length) await deps.processes.ofProject(app, await projectRoot(current.checkout))
     const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
     const fresh = !before.some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
     if (fresh && result.started.length && current.read.saved && current.read.version !== undefined)
@@ -554,6 +587,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const up = (status: RunStatus) => status.state.kind === "running" || status.state.kind === "starting"
     const picked = runs.filter((status) => names?.length ? status.kind === "process" && names.includes(status.name) : status.kind !== "check" || up(status))
     await deps.processes.stop(environment.app, picked.map((status) => runKey(status.kind, status.name)))
+    // The whole app includes an install a spare checkout handed over with this one.
+    const handed = names?.length ? undefined : await installOf(environment.app, checkout)
+    if (handed && handed.carrier !== environment.app) {
+      await deps.processes.stop(handed.carrier)
+      if (handed.status) picked.push(handed.status)
+    }
     const inLine = line.delete(environment.app)
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the prepare step" : status.name)
     const { leftovers } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
@@ -855,7 +894,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const up = processes.filter((entry) => entry.state === "running" || entry.state === "starting")
     const started = runs.filter((entry) => entry.kind === "process" && entry.startedAt !== undefined && (entry.state.kind === "running" || entry.state.kind === "starting"))
     if (started.length) view.startedAt = Math.min(...started.map((entry) => entry.startedAt!))
-    const installing = run("prepare", "checkout")
+    const installing = found.environment ? (await installOf(found.app, found.checkout)).status : undefined
     const lastStart = Math.max(0, ...runs.filter((entry) => entry.kind === "process").map((entry) => entry.startedAt ?? 0))
     if (installing?.state.kind === "running" || installing?.state.kind === "starting") {
       view.prepare = { command: installing.command, reason: await prepareReason(read.recipe, found.checkout) }
@@ -887,13 +926,95 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (outcome.kind === "elsewhere") return { problems: [`Only one copy of this app runs at a time, and ${outcome.whose} has it.`] }
     return { problems: outcome.refused.map((entry) => `${entry.name} didn't start: ${entry.reason}`) }
   }
-  const roomReport = async (app: AppKey): Promise<string> => {
-    const running = (await deps.processes.active()).length
+  /** The last look at memory, or a new one when that's older than `ms`. */
+  const recentMemory = async (ms: number): Promise<MemoryLook | undefined> => {
+    const last = deps.processes.lastMemory()
+    if (last && (deps.now ?? Date.now)() - last.at < ms) return last
+    return deps.processes.memory().catch(() => last)
+  }
+  /** About how many copies of the project's app fit: those running, and as many more as free memory holds at the median peak. */
+  const fitOf = async (root: string, freeBytes: number | undefined, running: number): Promise<RoomFit["estimate"]> => {
+    const estimate = await deps.processes.estimate(root)
+    if (estimate.kind !== "ready") return estimate
+    const fit: RoomFit["estimate"] = { ...estimate, running }
+    return freeBytes === undefined ? fit : { ...fit, atOnce: running + Math.floor(freeBytes / estimate.peakBytes) }
+  }
+  /** Said only once it's known: nothing while Mako is still learning the app's size. */
+  const fitText = (estimate: RoomFit["estimate"], freeBytes: number | undefined) => {
+    if (estimate.kind === "containers") return "this app starts containers, whose memory Mako can't see, so it can't say how many copies of it fit"
+    if (estimate.kind !== "ready" || estimate.atOnce === undefined || freeBytes === undefined) return undefined
+    return `each copy of this app peaks around ${bytes(estimate.peakBytes)} (the median of its last ${estimate.runs} runs); with ${bytes(freeBytes)} free, about ${estimate.atOnce} fit at once, counting the ${estimate.running} running now`
+  }
+  const roomReport = async (app: AppKey, checkout: string): Promise<string> => {
+    const [overview, level, free, root] = await Promise.all([deps.processes.overview(), pressure(), (deps.freeMemory ?? freeMemory)().catch(() => undefined), rootOf(checkout)])
+    const up = (entry: AppOverview, kind?: RunKind) => entry.runs.some((run) => (!kind || run.kind === kind) && (run.state.kind === "running" || run.state.kind === "starting"))
+    const running = overview.filter((entry) => up(entry)).length
+    const copies = (await Promise.all(overview.map(async (entry) =>
+      up(entry, "process") && (entry.project ?? (entry.checkout ? await rootOf(entry.checkout) : undefined)) === root))).filter(Boolean).length
     const queued = line.get(app)
     return [
-      `memory ${await pressure()}; ${running} app${running === 1 ? "" : "s"} running on this Mac`,
+      `memory ${level}; ${running} app${running === 1 ? "" : "s"} running on this Mac`,
+      fitText(await fitOf(root, free?.freeBytes, copies), free?.freeBytes),
       queued ? `waiting in line for memory since ${minutes((deps.now ?? Date.now)() - queued.since)} ago; it starts by itself once there's room` : undefined,
     ].filter(Boolean).join("; ")
+  }
+  /** Where each project's main checkout is, by checkout, for apps that ran before Mako kept their project. */
+  const roots = new Map<string, string>()
+  const rootOf = async (checkout: string) => {
+    let root = roots.get(checkout)
+    if (root === undefined) {
+      root = await projectRoot(checkout).catch(() => checkout)
+      roots.set(checkout, root)
+    }
+    return root
+  }
+  const roomApp = async (entry: AppOverview, state: AppMark["state"], look: MemoryLook | undefined): Promise<RoomApp> => {
+    const room: RoomApp = { app: entry.app, kind: entry.app.startsWith("folder-") ? "folder" : "thread", state, runs: [] }
+    let checkout = entry.checkout
+    let owner: AppKey | undefined = room.kind === "thread" ? entry.app : undefined
+    if (checkout && isSpareCheckout(checkout)) {
+      room.kind = "spare"
+      // A spare a Thread took mid-install leaves a link where it was, to the Thread's checkout.
+      if ((await lstat(checkout).catch(() => undefined))?.isSymbolicLink()) {
+        checkout = await readlink(checkout).catch(() => checkout)
+        if (checkout && deps.folder) owner = (await deps.folder(checkout, false).catch(() => undefined))?.app
+      }
+    }
+    if (checkout) room.checkout = checkout
+    const root = entry.project ?? (checkout ? await rootOf(checkout) : undefined)
+    if (root) room.project = { root, name: basename(root) }
+    const thread = owner ? deps.owner?.(owner) : undefined
+    if (thread) room.thread = thread
+    const up = entry.runs.filter((run) => run.state.kind === "running" || run.state.kind === "starting")
+    room.runs = up.map((run) => run.kind === "process" ? run.name : run.kind === "prepare" ? "install" : `${run.name} check`)
+    const port = entry.runs.find((run) => run.kind === "process" && run.state.kind === "running" && run.port !== undefined)?.port
+    if (port !== undefined) room.port = port
+    const memory = up.length ? look?.apps.get(entry.app) : undefined
+    if (memory) room.memoryBytes = memory.bytes
+    if (memory?.containers) room.containers = true
+    if (up.length && entry.upAt !== undefined) room.upAt = entry.upAt
+    if (entry.usedAt) room.usedAt = entry.usedAt
+    const queued = line.get(entry.app)
+    if (queued) room.waitingSince = queued.since
+    return room
+  }
+  const marksFrom = (overview: AppOverview[]): AppMark[] => {
+    const marks: AppMark[] = []
+    const seen = new Set<AppKey>()
+    for (const entry of overview) {
+      seen.add(entry.app)
+      const state = markState(entry.runs) ?? (line.has(entry.app) ? "waiting" : undefined)
+      if (!entry.checkout || !state) continue
+      const mark: AppMark = { checkout: entry.checkout, state }
+      const port = entry.runs.find((run) => run.kind === "process" && run.state.kind === "running" && run.port !== undefined)?.port
+      if (state === "running" && port !== undefined) mark.port = port
+      marks.push(mark)
+    }
+    for (const app of line.keys()) {
+      const checkout = seen.has(app) ? undefined : deps.processes.checkoutOf(app)
+      if (checkout) marks.push({ checkout, state: "waiting" })
+    }
+    return marks
   }
   const setupView = async (cwd: string): Promise<{ view: ProjectAppSetup; read: Read; checkout: string }> => {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
@@ -1166,7 +1287,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const empty: AppOutputChunk = { text: "", cursor: cursor ?? { file: "", offset: 0 }, reset: false }
       if (!found.environment) return empty
       const [run, step] = outputRun(key)
-      return deps.processes.readLog(found.app, run, cursor, undefined, step)
+      const app = key === "prepare" ? (await installOf(found.app, found.checkout)).carrier : found.app
+      return deps.processes.readLog(app, run, cursor, undefined, step)
     },
     async probe(cwd) {
       if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
@@ -1175,22 +1297,52 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return probe({ environment: found.environment, checkout: found.checkout })
     },
     async marks() {
-      const marks: AppMark[] = []
-      const seen = new Set<AppKey>()
-      for (const entry of await deps.processes.overview()) {
-        seen.add(entry.app)
+      return marksFrom(await deps.processes.overview())
+    },
+    async room() {
+      const [overview, level, look] = await Promise.all([
+        deps.processes.overview(),
+        pressure().catch((): MemoryPressure => "normal"),
+        recentMemory(ROOM_MEMORY_MS),
+      ])
+      const apps: RoomApp[] = []
+      const listed = new Set<AppKey>()
+      for (const entry of overview) {
+        listed.add(entry.app)
         const state = markState(entry.runs) ?? (line.has(entry.app) ? "waiting" : undefined)
-        if (!entry.checkout || !state) continue
-        const mark: AppMark = { checkout: entry.checkout, state }
-        const port = entry.runs.find((run) => run.kind === "process" && run.state.kind === "running" && run.port !== undefined)?.port
-        if (state === "running" && port !== undefined) mark.port = port
-        marks.push(mark)
+        if (state) apps.push(await roomApp(entry, state, look))
       }
       for (const app of line.keys()) {
-        const checkout = seen.has(app) ? undefined : deps.processes.checkoutOf(app)
-        if (checkout) marks.push({ checkout, state: "waiting" })
+        if (!listed.has(app)) apps.push(await roomApp({ app, checkout: deps.processes.checkoutOf(app), usedAt: 0, runs: [] }, "waiting", look))
       }
-      return marks
+      const roots = new Map(apps.flatMap((entry) => entry.project ? [[entry.project.root, entry.project.name] as const] : []))
+      const fits = await Promise.all([...roots].map(async ([root, name]): Promise<RoomFit> => {
+        const running = apps.filter((entry) => entry.project?.root === root && entry.kind !== "spare" && entry.state === "running").length
+        return { root, name, estimate: await fitOf(root, look?.freeBytes, running) }
+      }))
+      const view: RoomView = { at: (deps.now ?? Date.now)(), pressure: level, apps, fits, marks: marksFrom(overview) }
+      if (look?.freeBytes !== undefined) view.freeBytes = look.freeBytes
+      if (look?.totalBytes !== undefined) view.totalBytes = look.totalBytes
+      return view
+    },
+    async stopApps(keys) {
+      const apps = keys.map((key) => {
+        const app = AppKeySchema.safeParse(key)
+        if (!app.success) throw new Error(`${key} isn't an app Mako runs.`)
+        return app.data
+      })
+      for (const app of apps) {
+        const checkout = deps.processes.checkoutOf(app)
+        const found = checkout && deps.folder ? await deps.folder(checkout, false).catch(() => undefined) : undefined
+        // As its own Stop does, where its checkout is still its own; a spare checkout's install has no Thread to ask.
+        if (found?.environment?.app === app) {
+          await stopIn({ environment: found.environment, checkout: found.checkout })
+          continue
+        }
+        afterInstall.delete(app)
+        line.delete(app)
+        await deps.processes.stop(app)
+      }
     },
   }
   return {
@@ -1251,7 +1403,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         ]),
         prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(read.recipe, checkout) : undefined,
         packages: await packagesSummary(read, checkout),
-        room: await roomReport(environment.app),
+        room: await roomReport(environment.app, checkout),
         checks: checks.length ? Object.fromEntries(checks) : undefined,
         credentials: secrets.length
           ? granted.length === secrets.length
@@ -1289,9 +1441,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       ].filter(Boolean).join(" ")
     },
     async logs(conversationId, target, lines) {
-      const { environment } = await context(conversationId)
+      const { environment, checkout } = await context(conversationId)
       const key = "check" in target ? runKey("check", target.check) : target.process === "prepare" ? PREPARE_KEY : runKey("process", target.process)
-      return cleanOutput(await deps.processes.logs(environment.app, key, lines, "check" in target ? target.step : undefined))
+      const app = key === PREPARE_KEY ? (await installOf(environment.app, checkout)).carrier : environment.app
+      return cleanOutput(await deps.processes.logs(app, key, lines, "check" in target ? target.step : undefined))
     },
     async check(conversationId, tier, target, steps) {
       return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId, target, steps)

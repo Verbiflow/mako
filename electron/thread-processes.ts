@@ -7,6 +7,8 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
+import { belowAgents } from "./background-priority.js"
+import { FIT_RUNS } from "./contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 
 const run = promisify(execFile)
@@ -32,6 +34,22 @@ const LONG_UP_MS = 60_000
 const LOG_LIMIT_BYTES = 32 * 1024 * 1024
 const LOG_KEEP_BYTES = 1024 * 1024
 const PROCESS_TABLE_BYTES = 16 * 1024 * 1024
+/** Runs of a project's app whose peaks are kept; the estimate is their median. */
+const PEAK_RUNS = 20
+/** A run counts toward the estimate once it was measured this long after it came up, past a start that crashed or was stopped at once. */
+const PEAK_STEADY_MS = 60_000
+/** A peak is written again only once it grows by this much, so a slow climb doesn't rewrite the file on every look. */
+const PEAK_GROWTH = 1.05
+/** Reading one process's footprint takes about 40 ms, 30 ms of it CPU; a few run at once. */
+const FOOTPRINT_MS = 5_000
+const FOOTPRINT_PARALLEL = 4
+/** Footprints read in one look; the rest wait for the next, and count their resident size meanwhile. */
+const FOOTPRINT_MAX_PIDS = 48
+/** A footprint is read again once its process's resident size has moved this much, or once it's this old. */
+const FOOTPRINT_DRIFT = 0.05
+const FOOTPRINT_KEEP_MS = 5 * 60_000
+/** Their processes are clients; the containers run in the runtime's VM, outside every process tree here. */
+const CONTAINER_CLIENT = /(?:^|\/)(?:docker|docker-compose|podman|podman-compose|nerdctl|finch)(?:\s|$)/
 /**
  * Waits for `go` on stdin, so Mako can read its start time before a quick
  * command ends, and never runs the command if Mako didn't record it. Then
@@ -96,6 +114,8 @@ export interface RunSpec {
   port?: number
   /** Run in `cwd` with `env` while it starts (`readyWait`); it's running once this exits 0. */
   ready?: string
+  /** At the lowest priority, for work nobody waits on yet, such as a spare checkout's install. Nothing can raise it later. */
+  background?: true
 }
 
 export interface PortOwner {
@@ -118,6 +138,11 @@ interface Row {
 export interface AppOverview {
   app: AppKey
   checkout?: string
+  /** The main checkout of the project it last started in. */
+  project?: string
+  usedAt: number
+  /** When its processes last came up from none running. */
+  upAt?: number
   runs: Pick<RunStatus, "kind" | "name" | "state" | "startedAt" | "port">[]
 }
 
@@ -126,7 +151,7 @@ export interface ActiveApp {
   app: AppKey
   usedAt: number
   memoryBytes: number
-  runs: string[]
+  runs: { kind: RunKind; name: string }[]
   /** Its records folder, and its processes in its runs' trees. */
   folder: string
   pids: number[]
@@ -141,6 +166,43 @@ export interface Leftover {
 
 export type MemoryPressure = "normal" | "warning" | "critical"
 
+/** What an app's processes held at one look: physical footprint on macOS, as Activity Monitor counts it, else resident memory. */
+export interface AppMemory {
+  bytes: number
+  /** Its processes start containers, whose memory is in the container runtime's VM and isn't counted. */
+  containers?: true
+}
+
+export interface MemoryLook {
+  at: number
+  /** What the system could give apps now: macOS's free share of all memory, or Linux's MemAvailable. */
+  freeBytes?: number
+  totalBytes?: number
+  apps: Map<AppKey, AppMemory>
+}
+
+/** How much a copy of a project's app takes at its peak, from its earlier runs. */
+export type MemoryEstimate =
+  | { kind: "learning"; runs: number }
+  /** Its runs start containers, whose memory can't be seen. */
+  | { kind: "containers" }
+  | { kind: "ready"; runs: number; peakBytes: number }
+
+const PeaksSchema = z.object({
+  project: z.string(),
+  runs: z.array(z.object({
+    app: AppKeySchema,
+    /** The run: when its app's processes came up. */
+    up: z.number(),
+    /** The most its process runs held: each process at its own peak, as of the latest look. Installs and checks don't count. */
+    bytes: z.number(),
+    /** Measured once it had been up `PEAK_STEADY_MS`. */
+    steady: z.boolean().optional(),
+    containers: z.boolean().optional(),
+  })),
+})
+type Peaks = z.infer<typeof PeaksSchema>
+
 /** What a checkout's install steps last did, kept per checkout so it stays with the files it describes. */
 const PreparedSchema = z.object({
   /** The checkout it describes, for a person reading the file. */
@@ -149,6 +211,10 @@ const PreparedSchema = z.object({
   done: z.record(z.string(), z.string()),
   /** The digests the running prepare run will record when it passes. */
   pending: z.record(z.string(), z.string()).optional(),
+  /** The app whose prepare run carries `pending`, when it isn't the checkout's own: a spare checkout's, handed over with it. */
+  by: AppKeySchema.optional(),
+  /** Where the checkout was when that run started: a link to here until it ends, since it may write to paths it resolved there. */
+  link: z.string().optional(),
 }).strict()
 export type Prepared = z.infer<typeof PreparedSchema>
 
@@ -169,6 +235,8 @@ export interface ThreadProcessDependencies {
 
 /** Beside the apps' folders: what each checkout's install steps last did. */
 const CHECKOUTS = "checkouts"
+/** Beside them too: each project's memory peaks, one file per project. */
+const MEMORY = "memory"
 
 export function runKey(kind: RunKind, name: string): string {
   return `${kind}-${name}`
@@ -185,6 +253,13 @@ export class ThreadProcesses {
   private readonly dependencies: ThreadProcessDependencies
   private readonly now: () => number
   private readonly queues = new Map<string, Promise<unknown>>()
+  private readonly projects = new Map<AppKey, string>()
+  /** The peak written for each run, by `<app>:<up>`, so a look writes only what grew. */
+  private readonly peaks = new Map<string, { bytes: number; steady: boolean }>()
+  /** Each process's last footprint reading, by `<pid>:<start>`, with its resident size then. */
+  private readonly footprints = new Map<string, { bytes: number; peakBytes: number; rssKb: number; at: number }>()
+  private measured: MemoryLook | undefined
+  private measuring: Promise<MemoryLook> | undefined
 
   constructor(dependencies: ThreadProcessDependencies) {
     this.dependencies = dependencies
@@ -372,8 +447,7 @@ export class ThreadProcesses {
     const runs = await this.runs(app)
     const rows = await processTable()
     const pids = new Set(Object.values(runs).flatMap((record) => members(rows, record).map((row) => row.pid)))
-    const up = Number.parseInt(await readFile(join(this.folder(app), "up"), "utf8").catch(() => ""), 10)
-    const since = Number.isFinite(up) ? up : undefined
+    const since = await this.upAt(app)
     const leftovers: Leftover[] = []
     if (since !== undefined) {
       // ps gives start times to the second.
@@ -453,12 +527,12 @@ export class ThreadProcesses {
       if (!app.success) continue
       const runs = await this.runs(app.data).catch(() => ({}))
       let memoryBytes = 0
-      const alive: string[] = []
+      const alive: ActiveApp["runs"] = []
       const pids: number[] = []
       for (const record of Object.values(runs)) {
         const held = members(rows, record)
         if (!held.length) continue
-        alive.push(record.name)
+        alive.push({ kind: record.kind, name: record.name })
         pids.push(...held.map((row) => row.pid))
         memoryBytes += held.reduce((sum, row) => sum + row.rssKb * 1024, 0)
       }
@@ -469,20 +543,28 @@ export class ThreadProcesses {
 
   /** Every app on this Mac with records, from one look at the process table, for marking them all at once. */
   async overview(): Promise<AppOverview[]> {
-    const rows = await processTable()
+    const rows = await sharedProcessTable()
     const found: AppOverview[] = []
     for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
       const app = AppKeySchema.safeParse(folder)
       if (!app.success) continue
       const runs = Object.entries(await this.runs(app.data).catch(() => ({})))
       if (!runs.length) continue
-      const entry: AppOverview = { app: app.data, runs: await Promise.all(runs.map(async ([key, record]) => {
-        const run: AppOverview["runs"][number] = { kind: record.kind, name: record.name, state: await this.state(app.data, key, record, rows), startedAt: record.at }
-        if (record.port !== undefined) run.port = record.port
-        return run
-      })) }
+      const [states, usedAt, upAt, project] = await Promise.all([
+        Promise.all(runs.map(async ([key, record]) => {
+          const run: AppOverview["runs"][number] = { kind: record.kind, name: record.name, state: await this.state(app.data, key, record, rows), startedAt: record.at }
+          if (record.port !== undefined) run.port = record.port
+          return run
+        })),
+        this.usedAt(app.data),
+        this.upAt(app.data),
+        this.projectOf(app.data),
+      ])
+      const entry: AppOverview = { app: app.data, usedAt, runs: states }
       const checkout = this.checkoutOf(app.data)
       if (checkout) entry.checkout = checkout
+      if (project) entry.project = project
+      if (upAt !== undefined) entry.upAt = upAt
       found.push(entry)
     }
     return found
@@ -494,6 +576,201 @@ export class ThreadProcesses {
     const idle = (await this.active()).filter((entry) => entry.usedAt < cutoff)
     for (const entry of idle) await this.stop(entry.app)
     return idle.map((entry) => entry.app)
+  }
+
+  /** The project an app runs for, by its main checkout, so its runs' peaks count toward that project's. */
+  async ofProject(app: AppKey, project: string): Promise<void> {
+    if ((await this.projectOf(app)) === project) return
+    await mkdir(this.folder(app), { recursive: true, mode: 0o700 })
+    await writeFile(join(this.folder(app), "project"), project, { mode: 0o600 })
+    this.projects.set(app, project)
+  }
+
+  /**
+   * Stops every process the app runs while `work` moves what they work in,
+   * then lets them go on: a stopped process makes no calls, so none finds
+   * its folder half moved. Groups are stopped whole, so a child forked
+   * after the process table was read stops with its parent.
+   */
+  async paused<T>(app: AppKey, work: () => Promise<T>): Promise<T> {
+    const runs = Object.values(await this.runs(app))
+    const rows = await processTable()
+    const held = runs.flatMap((record) => members(rows, record))
+    const groups = [...new Set(runs.filter((record) => members(rows, record).length).map((record) => record.pid))]
+    const signal = (name: NodeJS.Signals) => {
+      for (const group of groups) {
+        try {
+          process.kill(-group, name)
+        } catch {
+          // The group is gone.
+        }
+      }
+      for (const row of held) {
+        try {
+          process.kill(row.pid, name)
+        } catch {
+          // Gone between the listing and the signal.
+        }
+      }
+    }
+    signal("SIGSTOP")
+    try {
+      return await work()
+    } finally {
+      signal("SIGCONT")
+    }
+  }
+
+  /** The last look at what running apps hold, however old. */
+  lastMemory(): MemoryLook | undefined {
+    return this.measured
+  }
+
+  /**
+   * What every running app holds now, with each project's peaks brought up
+   * to date. Looks under way are shared. With no process group of any app
+   * alive it reads no process table at all.
+   */
+  memory(): Promise<MemoryLook> {
+    this.measuring ??= this.measure().then((look) => {
+      this.measured = look
+      return look
+    }).finally(() => {
+      this.measuring = undefined
+    })
+    return this.measuring
+  }
+
+  /** What a copy of the project's app holds at its peak: the median of its last runs that stayed up, once there are `FIT_RUNS`. */
+  async estimate(project: string): Promise<MemoryEstimate> {
+    const counted = (await this.readPeaks(project)).runs.filter((entry) => entry.steady && entry.bytes > 0)
+    if (counted.some((entry) => entry.containers)) return { kind: "containers" }
+    if (counted.length < FIT_RUNS) return { kind: "learning", runs: counted.length }
+    const sorted = counted.map((entry) => entry.bytes).sort((a, b) => a - b)
+    const middle = Math.floor(sorted.length / 2)
+    const peakBytes = sorted.length % 2 ? sorted[middle]! : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2)
+    return { kind: "ready", runs: counted.length, peakBytes }
+  }
+
+  private async measure(): Promise<MemoryLook> {
+    const at = this.now()
+    const [system, apps] = await Promise.all([freeMemory(), this.appMemory()])
+    const look: MemoryLook = { at, apps: new Map([...apps].map(([app, entry]) => [app, entry.memory])) }
+    if (system) Object.assign(look, system)
+    const byProject = new Map<string, { app: AppKey; up: number; bytes: number; containers: boolean }[]>()
+    for (const [app, entry] of apps) {
+      const [project, up] = await Promise.all([this.projectOf(app), this.upAt(app)])
+      if (!project || up === undefined || !entry.peakBytes) continue
+      byProject.set(project, [...(byProject.get(project) ?? []), { app, up, bytes: entry.peakBytes, containers: Boolean(entry.memory.containers) }])
+    }
+    for (const [project, seen] of byProject) await this.recordPeaks(project, seen, at).catch(() => {})
+    return look
+  }
+
+  /** Each running app's memory, and the most its process runs have held. */
+  private async appMemory(): Promise<Map<AppKey, { memory: AppMemory; peakBytes: number }>> {
+    const found = new Map<AppKey, { memory: AppMemory; peakBytes: number }>()
+    const apps: { app: AppKey; runs: Run[] }[] = []
+    for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
+      const app = AppKeySchema.safeParse(folder)
+      if (!app.success) continue
+      const runs = Object.values(await this.runs(app.data).catch(() => ({})))
+      if (runs.length) apps.push({ app: app.data, runs })
+    }
+    if (!apps.some((entry) => entry.runs.some((record) => groupAlive(record.pid)))) return found
+    const rows = await sharedProcessTable()
+    const held = apps.map(({ app, runs }) => ({ app, runs: runs.map((record) => ({ record, rows: members(rows, record) })) }))
+    const footprints = await this.footprintsOf(held.flatMap((entry) => entry.runs.flatMap((one) => one.rows)))
+    const bytesOf = (row: Row) => footprints.get(row.pid)?.bytes ?? row.rssKb * 1024
+    const peakOf = (row: Row) => footprints.get(row.pid)?.peakBytes ?? bytesOf(row)
+    const sum = (runs: typeof held[number]["runs"], of: (row: Row) => number) => runs.reduce((total, one) => total + one.rows.reduce((part, row) => part + of(row), 0), 0)
+    for (const { app, runs } of held) {
+      const live = runs.filter((one) => one.rows.length)
+      if (!live.length) continue
+      const memory: AppMemory = { bytes: sum(live, bytesOf) }
+      if (live.some((one) => one.rows.some((row) => CONTAINER_CLIENT.test(row.command)))) memory.containers = true
+      found.set(app, { memory, peakBytes: sum(live.filter((one) => one.record.kind === "process"), peakOf) })
+    }
+    return found
+  }
+
+  /**
+   * Each process's footprint now and at its peak. A reading is kept while
+   * the process's resident size stays within `FOOTPRINT_DRIFT` of what it
+   * was then, for up to `FOOTPRINT_KEEP_MS`, so a steady app costs one
+   * process table a look; the largest processes are read first.
+   */
+  private async footprintsOf(rows: Row[]): Promise<Map<number, { bytes: number; peakBytes: number }>> {
+    const at = this.now()
+    const identity = (row: Row) => `${row.pid}:${row.startedMs}`
+    const current = new Set(rows.map(identity))
+    for (const key of this.footprints.keys()) if (!current.has(key)) this.footprints.delete(key)
+    const due = rows.filter((row) => {
+      const kept = this.footprints.get(identity(row))
+      return !kept || at - kept.at > FOOTPRINT_KEEP_MS || Math.abs(row.rssKb - kept.rssKb) > kept.rssKb * FOOTPRINT_DRIFT
+    }).sort((a, b) => b.rssKb - a.rssKb).slice(0, FOOTPRINT_MAX_PIDS)
+    const read = await physicalFootprints(due.map((row) => row.pid))
+    for (const row of due) {
+      const reading = read.get(row.pid)
+      if (reading) this.footprints.set(identity(row), { ...reading, rssKb: row.rssKb, at })
+    }
+    return new Map(rows.flatMap((row) => {
+      const kept = this.footprints.get(identity(row))
+      return kept ? [[row.pid, kept] as const] : []
+    }))
+  }
+
+  private async recordPeaks(project: string, seen: { app: AppKey; up: number; bytes: number; containers: boolean }[], at: number): Promise<void> {
+    const changed = seen.filter((entry) => {
+      const written = this.peaks.get(`${entry.app}:${entry.up}`)
+      return !written || entry.bytes > written.bytes * PEAK_GROWTH || (!written.steady && at - entry.up >= PEAK_STEADY_MS)
+    })
+    if (!changed.length) return
+    const peaks = await this.readPeaks(project)
+    for (const entry of changed) {
+      const steady = at - entry.up >= PEAK_STEADY_MS
+      const current = peaks.runs.find((run) => run.app === entry.app && run.up === entry.up)
+      const next = { app: entry.app, up: entry.up, bytes: Math.max(entry.bytes, current?.bytes ?? 0), steady: steady || Boolean(current?.steady) }
+      const kept = entry.containers || current?.containers ? { ...next, containers: true } : next
+      if (current) Object.assign(current, kept)
+      else peaks.runs.push(kept)
+      this.peaks.set(`${entry.app}:${entry.up}`, { bytes: kept.bytes, steady: kept.steady })
+    }
+    peaks.runs = peaks.runs.sort((a, b) => a.up - b.up).slice(-PEAK_RUNS)
+    const path = this.peaksFile(project)
+    await mkdir(join(this.dependencies.root, MEMORY), { recursive: true, mode: 0o700 })
+    const temporary = `${path}.${process.pid}.tmp`
+    await writeFile(temporary, JSON.stringify(peaks), { mode: 0o600 })
+    await rename(temporary, path)
+  }
+
+  private async readPeaks(project: string): Promise<Peaks> {
+    const text = await readFile(this.peaksFile(project), "utf8").catch(() => undefined)
+    const parsed = text === undefined ? undefined : PeaksSchema.safeParse((() => {
+      try {
+        return JSON.parse(text)
+      } catch {
+        return null
+      }
+    })())
+    return parsed?.success && parsed.data.project === project ? parsed.data : { project, runs: [] }
+  }
+
+  private peaksFile(project: string): string {
+    return join(this.dependencies.root, MEMORY, `${createHash("sha256").update(project).digest("hex").slice(0, 16)}.json`)
+  }
+
+  private async projectOf(app: AppKey): Promise<string | undefined> {
+    const known = this.projects.get(app)
+    if (known) return known
+    const text = await readFile(join(this.folder(app), "project"), "utf8").catch(() => "")
+    if (text) this.projects.set(app, text)
+    return text || undefined
+  }
+
+  private async upAt(app: AppKey): Promise<number | undefined> {
+    const up = Number.parseInt(await readFile(join(this.folder(app), "up"), "utf8").catch(() => ""), 10)
+    return Number.isFinite(up) ? up : undefined
   }
 
   async prepared(checkout: string): Promise<Prepared> {
@@ -568,7 +845,8 @@ export class ThreadProcesses {
       env = { ...spec.env, [STEPS_FOLDER_VARIABLE]: folder }
     }
     try {
-      const child = spawn("/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit], {
+      const [shell, args] = spec.background ? belowAgents("/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]) : ["/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]]
+      const child = spawn(shell, args, {
         cwd: spec.cwd,
         env: { ...env, [RUN_MARK]: app },
         detached: true,
@@ -726,6 +1004,64 @@ function processExists(pid: number): boolean {
   } catch (error) {
     return z.object({ code: z.literal("EPERM") }).safeParse(error).success
   }
+}
+
+/** Whether any process is left in a run's group: a signal to the group reaches its members after the leader has gone. */
+function groupAlive(pid: number): boolean {
+  return processExists(-pid) || processExists(pid)
+}
+
+/**
+ * Each process's physical footprint, as Activity Monitor counts it, and the
+ * most it has held since it started; resident sizes count shared framework
+ * pages in every process, so an Electron app reads high. One `footprint` per
+ * process, since one given several measures what they share, which takes
+ * seconds. macOS only, and below the agents; a process it can't read is
+ * left out.
+ */
+async function physicalFootprints(pids: number[]): Promise<Map<number, { bytes: number; peakBytes: number }>> {
+  const found = new Map<number, { bytes: number; peakBytes: number }>()
+  if (process.platform !== "darwin") return found
+  const queue = [...pids]
+  const readOne = async (pid: number) => {
+    const [command, args] = belowAgents("/usr/bin/footprint", ["--noCategories", "-f", "bytes", "-p", String(pid)])
+    const stdout = await run(command, args, { timeout: FOOTPRINT_MS }).then((result) => result.stdout, () => "")
+    const bytes = Number(/\]: [^\n]*Footprint: (\d+) B/.exec(stdout)?.[1] ?? Number.NaN)
+    const peak = Number(/phys_footprint_peak: (\d+) B/.exec(stdout)?.[1] ?? Number.NaN)
+    if (Number.isFinite(bytes)) found.set(pid, { bytes, peakBytes: Number.isFinite(peak) ? Math.max(peak, bytes) : bytes })
+  }
+  await Promise.all(Array.from({ length: Math.min(FOOTPRINT_PARALLEL, queue.length) }, async () => {
+    for (let pid = queue.shift(); pid !== undefined; pid = queue.shift()) await readOne(pid)
+  }))
+  return found
+}
+
+/** Memory the system could give apps now, and all it has. */
+export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: number } | undefined> {
+  if (process.platform === "darwin") {
+    const values = await run("sysctl", ["-n", "kern.memorystatus_level", "hw.memsize"]).then(({ stdout }) => stdout.trim().split("\n").map(Number), () => [])
+    const [level, total] = values
+    if (level === undefined || total === undefined || !Number.isFinite(level) || !Number.isFinite(total)) return undefined
+    return { freeBytes: Math.round((total * level) / 100), totalBytes: total }
+  }
+  const text = await readFile("/proc/meminfo", "utf8").catch(() => "")
+  const kb = (name: string) => Number(new RegExp(`^${name}:\\s+(\\d+) kB`, "m").exec(text)?.[1] ?? Number.NaN) * 1024
+  const [freeBytes, totalBytes] = [kb("MemAvailable"), kb("MemTotal")]
+  return Number.isFinite(freeBytes) && Number.isFinite(totalBytes) ? { freeBytes, totalBytes } : undefined
+}
+
+let sharedTable: Promise<Row[]> | undefined
+
+/**
+ * The process table for looks that only show or measure: one under way is
+ * shared, so the Room's overview and memory look read it once. Never after
+ * a spawn or a signal, which a read already under way wouldn't see.
+ */
+function sharedProcessTable(): Promise<Row[]> {
+  sharedTable ??= processTable().finally(() => {
+    sharedTable = undefined
+  })
+  return sharedTable
 }
 
 /** Every process on the machine, with when it started; `ps` is on macOS and Linux alike. */

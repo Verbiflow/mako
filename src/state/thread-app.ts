@@ -5,7 +5,7 @@ import { getMako } from "@/lib/bridge"
 import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
-import type { AppCheckStepView, AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProbeView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
+import type { AppCheckStepView, AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProbeView, AppProcessView, RoomView, ThreadAppView } from "../../electron/contracts/thread-app"
 import type { ProjectAppSetup } from "../../electron/contracts/project-app"
 
 /**
@@ -23,6 +23,9 @@ export type {
   AppPrepareView,
   AppProbeView,
   AppProcessView,
+  RoomApp,
+  RoomFit,
+  RoomView,
   ThreadAppView,
 } from "../../electron/contracts/thread-app"
 
@@ -45,6 +48,10 @@ export interface ThreadAppDriver {
   watch?(cwd: string): () => void
   /** Keep every checkout's mark current while the sidebar shows them. */
   watchMarks?(): () => void
+  /** Keep the Room current while it shows: every app on this Mac, with the marks from the same look. */
+  watchRoom?(): () => void
+  /** Stop each app, as its own Stop does. */
+  stopApps?(apps: string[]): Promise<void>
   /** A project's recipe written out, with its credentials files, for Settings. */
   setup?(root: string): Promise<ProjectAppSetup>
   /** The person's answer on those files: new Threads get all of them, or none. */
@@ -64,6 +71,8 @@ interface ThreadAppState {
   byCwd: Record<string, ThreadAppView>
   /** The sidebar's marks: every checkout whose app isn't stopped. */
   marks: Record<string, AppMark>
+  /** Every app running or waiting for memory on this Mac, while the Room is watched. */
+  room?: RoomView
   /** Folders whose view the driver keeps current now; any other view may be old. */
   followed: string[]
   /** The app output in the terminal dock instead of a shell, if any. */
@@ -106,6 +115,10 @@ export function putAppMarks(marks: readonly AppMark[]): void {
   const same = Object.keys(next).length === Object.keys(current).length &&
     marks.every((mark) => current[mark.checkout]?.state === mark.state && current[mark.checkout]?.port === mark.port)
   if (!same) threadAppStore.set({ marks: next })
+}
+
+export function putRoom(room: RoomView | undefined): void {
+  threadAppStore.set({ room })
 }
 
 /**

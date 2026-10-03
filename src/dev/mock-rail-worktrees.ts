@@ -1,7 +1,7 @@
 import { SessionIdSchema, ThreadIdSchema } from "../../electron/contracts/thread-identity"
 import type { ThreadGroup } from "../../electron/contracts/thread-groups"
 import type { ThreadRunState } from "../../electron/contracts/conversation-session"
-import type { AppMark } from "../../electron/contracts/thread-app"
+import type { AppMark, RoomApp, RoomView } from "../../electron/contracts/thread-app"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
 
@@ -36,6 +36,49 @@ export const RAIL_MARKS: AppMark[] = [
   ...MOVED.map((entry) => ({ checkout: `${ROOT}/${entry.folder}`, ...entry.mark })),
   { checkout: "/Users/you/mako", state: "running", port: 20_140 },
 ]
+
+const TITLES = ["Billing webhooks", "Set up api", "Payments queue", "Retry budget"]
+const MB = 1024 ** 2
+
+/** The Status view's Room for the same scene, with a spare checkout installing ahead and each project's fit. */
+export function railRoom(now: number): RoomView {
+  const apps: RoomApp[] = MOVED.map((entry, index) => {
+    const worktree = RAIL_WORKTREES[index]!
+    const app: RoomApp = {
+      app: worktree.thread,
+      kind: "thread",
+      state: entry.mark.state,
+      checkout: worktree.path,
+      project: { root: PROJECT, name: "api" },
+      thread: { id: worktree.thread, title: TITLES[index]! },
+      runs: entry.mark.state === "waiting" || entry.mark.state === "crashed" ? [] : ["api", "worker"],
+      usedAt: now - (index + 2) * 7 * 60_000,
+    }
+    if (entry.mark.port !== undefined) app.port = entry.mark.port
+    if (entry.mark.state === "running" || entry.mark.state === "starting") {
+      app.memoryBytes = (entry.mark.state === "running" ? 812 : 214) * MB
+      app.upAt = now - (index + 1) * 26 * 60_000
+    }
+    if (entry.mark.state === "waiting") app.waitingSince = now - 3 * 60_000
+    return app
+  })
+  apps.push(
+    { app: "folder-0f3a9c2b7d4e1a65", kind: "folder", state: "running", checkout: "/Users/you/mako", project: { root: "/Users/you/mako", name: "mako" }, runs: ["web"], port: 20_140, memoryBytes: 1_210 * MB, upAt: now - 12 * 60_000, usedAt: now - 60_000 },
+    { app: "folder-7be21d03c9a4f812", kind: "spare", state: "starting", checkout: `${ROOT}/.spare-4d55bf64`, project: { root: PROJECT, name: "api" }, runs: ["install"], memoryBytes: 388 * MB, upAt: now - 40_000 },
+  )
+  return {
+    at: now,
+    pressure: "normal",
+    freeBytes: 9.8 * 1024 * MB,
+    totalBytes: 36 * 1024 * MB,
+    apps,
+    fits: [
+      { root: PROJECT, name: "api", estimate: { kind: "ready", runs: 7, peakBytes: 860 * MB, running: 1, atOnce: 12 } },
+      { root: "/Users/you/mako", name: "mako", estimate: { kind: "learning", runs: 1 } },
+    ],
+    marks: RAIL_MARKS,
+  }
+}
 
 export const RAIL_PURPOSES: ThreadPurpose[] = MOVED.flatMap((entry, index) => {
   const worktree = RAIL_WORKTREES[index]

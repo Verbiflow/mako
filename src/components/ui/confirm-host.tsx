@@ -1,12 +1,12 @@
 import { useId, useRef, useState } from "react"
-import { FolderIcon, GitBranchIcon, GitMergeIcon, InfoIcon, Trash2Icon } from "lucide-react"
+import { AppWindowIcon, CircleStopIcon, FolderIcon, GitBranchIcon, GitMergeIcon, InfoIcon, Trash2Icon } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/state/confirm"
 
-const icons = { remove: Trash2Icon, merge: GitMergeIcon }
-const subjectIcons = { folder: FolderIcon, branch: GitBranchIcon }
+const icons = { remove: Trash2Icon, merge: GitMergeIcon, stop: CircleStopIcon }
+const subjectIcons = { folder: FolderIcon, branch: GitBranchIcon, app: AppWindowIcon }
 
 /** The one dialog `confirmAction` opens, mounted once beside the toaster. */
 export function ConfirmHost() {
@@ -57,7 +57,7 @@ export function ConfirmHost() {
               return (
                 <li key={`${subject.kind}:${subject.name}`} className="flex h-9 items-center gap-2.5 border-b border-hairline px-3 last:border-0">
                   <SubjectIcon className="size-3.5 shrink-0 text-faint" aria-label={subject.kind} />
-                  <span className="min-w-0 flex-1 truncate font-mono text-label text-foreground/90" title={subject.name}>{subject.name}</span>
+                  <span className={cn("min-w-0 flex-1 truncate text-label text-foreground/90", subject.kind !== "app" && "font-mono")} title={subject.name}>{subject.name}</span>
                   {subject.detail ? (
                     <span className={cn("shrink-0 text-label", subject.lost ? "text-negative" : "text-faint")}>{subject.detail}</span>
                   ) : null}

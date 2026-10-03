@@ -141,6 +141,56 @@ export interface AppMark {
   port?: number
 }
 
+/** An app running or waiting for memory on this Mac, as the Room lists it. */
+export interface RoomApp {
+  /** What `stopApps` takes. */
+  app: string
+  /** A Worktree Thread's checkout, a folder someone opened, or a spare checkout installing ahead of a Thread. */
+  kind: "thread" | "folder" | "spare"
+  state: AppMark["state"]
+  checkout?: string
+  /** The project's main checkout and name. */
+  project?: { root: string; name: string }
+  thread?: { id: string; title: string }
+  /** What runs: process names, "install", or a check's tier. */
+  runs: string[]
+  port?: number
+  /** Its processes' physical footprint at the last look. */
+  memoryBytes?: number
+  /** It starts containers, whose memory isn't counted. */
+  containers?: true
+  upAt?: number
+  usedAt?: number
+  waitingSince?: number
+}
+
+/** Runs of a project's app that stayed up a minute before Mako says how many copies fit. */
+export const FIT_RUNS = 3
+
+/** How many copies of a project's app fit in memory, from its earlier runs. */
+export interface RoomFit {
+  root: string
+  name: string
+  estimate:
+    /** Fewer than `FIT_RUNS` runs stayed up a minute. */
+    | { kind: "learning"; runs: number }
+    /** Its runs start containers, whose memory isn't counted. */
+    | { kind: "containers" }
+    /** `peakBytes` is the median of its runs' peaks; `atOnce` counts the copies running and as many more as free memory holds, when Mako can read that. */
+    | { kind: "ready"; runs: number; peakBytes: number; running: number; atOnce?: number }
+}
+
+export interface RoomView {
+  at: number
+  pressure: "normal" | "warning" | "critical"
+  freeBytes?: number
+  totalBytes?: number
+  apps: RoomApp[]
+  /** Projects with an app listed. */
+  fits: RoomFit[]
+  marks: AppMark[]
+}
+
 /** One output the dock can show: the install step, a process, a check, or one step of a check. */
 export type AppOutputKey = "prepare" | `process:${string}` | `check:${"quick" | "full"}` | `check:${"quick" | "full"}:${string}`
 

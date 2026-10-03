@@ -15,7 +15,7 @@ import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
-import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, ThreadAppView } from "./thread-app.js"
+import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
 import type {
   LifecycleState,
@@ -200,6 +200,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
     probeThreadApp: (cwd: string) => invokeTrustedHost<AppProbeView>("mako:thread-app-probe", cwd),
+    threadAppRoom: () => invokeTrustedHost<RoomView>("mako:thread-app-room"),
+    stopThreadApps: (apps: string[]) => invokeTrustedHost<void>("mako:thread-app-stop-apps", apps),
     projectAppSetup: (cwd: string) => invokeTrustedHost<ProjectAppSetup>("mako:project-app-setup", cwd),
     allowProjectSecrets: (cwd: string, allow: boolean) => invokeTrustedHost<ProjectAppSetup>("mako:project-app-secrets", cwd, allow),
     chatFolders: (paths: string[]) => invokeTrustedHost<ChatFolders>("mako:chat-folders", paths),

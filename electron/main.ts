@@ -53,7 +53,9 @@ import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
 import { beginTrace } from "./app-probe.js"
 import { childHistory } from "./watch-backend.js"
-import { environmentTools } from "./environment-tools.js"
+import { commandEnvironment, environmentTools } from "./environment-tools.js"
+import { spareInstaller } from "./spare-install.js"
+import { isSpareCheckout } from "./worktree-carry.js"
 import { startControlService } from "./control-service.js"
 import type { ForkInput, MessageAnchor, TransferInput } from "./shared.js"
 import { TransferInputSchema } from "./contracts/conversation-control.js"
@@ -392,10 +394,17 @@ function whoseApp(app: AppKey): string | undefined {
     return title ? `the Thread “${title}”` : undefined
   }
   const folder = threadProcesses?.checkoutOf(app)
+  if (folder && isSpareCheckout(folder)) return "the install of a checkout kept ready for a new Thread"
   return folder ? `the ${basename(folder)} folder` : undefined
 }
 /** What changed on disk while apps ran, for their probes; FSEvents keeps that history, so macOS only. */
 const fileHistory = childHistory()
+/** The Worktree Thread an app belongs to, for the Room. */
+function appOwner(app: AppKey): { id: string; title: string } | undefined {
+  const thread = ThreadIdSchema.safeParse(app)
+  const found = thread.success ? threadStore?.thread(thread.data) : undefined
+  return found ? { id: found.id, title: found.title || "Untitled Thread" } : undefined
+}
 /** And its running app's records, so any host sees and stops the processes another host started. */
 const threadProcesses = threadStore
   ? new ThreadProcesses({
@@ -412,6 +421,10 @@ if (!fixtureDesk) setInterval(() => {
     if (stopped.length) hostLog("threads", "stopped apps unused for six hours", { threads: stopped.join(", ") })
   }, (error) => hostWarn("threads", "idle apps couldn't be stopped", { error: error instanceof Error ? error.message : String(error) }))
 }, 10 * 60 * 1000).unref()
+/** Each running copy's peak counts toward its project's "about N at once"; with nothing running a look reads no process table. */
+setInterval(() => {
+  void threadProcesses?.memory().catch((error) => hostWarn("threads", "app memory couldn't be measured", { error: error instanceof Error ? error.message : String(error) }))
+}, 30_000).unref()
 /** The recipe's cleanup for a worktree about to be removed, once the app tools exist. */
 let worktreeCleanup: ((path: string) => Promise<string | undefined>) | undefined
 const threadWorktrees = threadStore
@@ -436,6 +449,12 @@ const threadWorktrees = threadStore
       grantedSecrets: async (checkout, recipe) => threadRecipes ? grantedSecrets(recipe, await readAllowedSecrets(threadRecipes, checkout)) : [],
       prepared: (checkout) => threadProcesses.prepared(checkout),
       savePrepared: (checkout, prepared) => threadProcesses.savePrepared(checkout, prepared),
+      forgetPrepared: (checkout) => threadProcesses.forgetPrepared(checkout),
+      spareInstall: spareInstaller({
+        processes: threadProcesses,
+        recipe: (checkout) => projectRecipe(checkout, threadRecipes),
+        env: (values) => ({ ...commandEnvironment(), ...values }),
+      }),
     } : undefined)
   : null
 hostLog("host", "starting", {
@@ -2315,6 +2334,7 @@ app.whenReady().then(async () => {
     recipesRoot: threadRecipes,
     whose: whoseApp,
     history: fileHistory,
+    owner: appOwner,
   }) : undefined
   conversationMcp = await startConversationMcp(
     liveConversations,

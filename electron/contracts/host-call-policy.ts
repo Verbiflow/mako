@@ -42,6 +42,7 @@ const reads = [
   "mako:thread-app-marks",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */
   "mako:thread-app-probe",
+  "mako:thread-app-room",
   "mako:project-app-setup",
   "mako:worktrees",
   "mako:worktree-ahead",
