@@ -50,6 +50,8 @@ const marked = join(root, "marked.pid")
 const decoy = join(root, "decoy.pid")
 const go = join(root, "register")
 const release = join(root, "release")
+const socket = `/tmp/mako-probe-${process.pid}.sock`
+const stranger = `/tmp/mako-probe-stranger-${process.pid}`
 
 function plist(body: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>${body}</dict></plist>\n`
@@ -72,7 +74,7 @@ const outside = await free()
 
 const app = join(root, "app.cjs")
 const settings = {
-  port, outside, servicePort, shared, inside: join(checkout, "inside.log"), deep, cache: join(cache, "blob"), escaped, marked, bundle, go, release, root,
+  port, outside, servicePort, shared, inside: join(checkout, "inside.log"), deep, cache: join(cache, "blob"), escaped, marked, bundle, go, release, root, socket,
   agent: join(agents, `${label}.agent.plist`),
   agentPlist: plist(`<key>Label</key><string>${label}.agent</string><key>ProgramArguments</key><array><string>${service}</string></array>`),
   handlers: join(handlers, "com.apple.launchservices.secure.plist"),
@@ -85,6 +87,7 @@ const s = JSON.parse(process.argv[2])
 net.createServer().listen(s.port, "127.0.0.1")
 net.createServer().listen(s.outside, "127.0.0.1")
 net.connect(s.servicePort, "127.0.0.1").on("error", () => {})
+net.createServer().listen(s.socket)
 fs.openSync(s.shared, "a")
 fs.openSync(s.inside, "a")
 fs.writeFileSync(s.deep + "/state.json", '{"changed":true}')
@@ -138,6 +141,7 @@ try {
   writeFileSync(join(support, "other-app", "x.json"), "{}")
   mkdirSync(join(support, "other-app", "x", "y"), { recursive: true })
   writeFileSync(join(support, "other-app", "x", "y", "z.txt"), "not the app")
+  writeFileSync(stranger, "another program's scratch")
 
   const running = await processes.footprint(key, [checkout])
   assert.ok(running.pids.length > 0)
@@ -190,7 +194,8 @@ try {
   const view = await until("the history to show the deep writes", async () => {
     const found = await probeApp(await inputFor())
     const entry = folder(found, join(support, "probe-app"))
-    return entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") ? found : undefined
+    return entry?.paths.includes(join("deep", "a", "b", "state.json")) && folder(found, cache)?.paths.includes("blob") &&
+      folder(found, join("/private", socket)) ? found : undefined
   })
   console.log(`probe with history: ${Math.round(performance.now() - began)} ms until the deep writes showed`)
   assert.equal(view.changedBy, "history")
@@ -202,6 +207,9 @@ try {
   const other = folder(view, join(support, "other-app"))
   assert.ok(other?.paths.includes(join("x", "y", "z.txt")), JSON.stringify(other))
   assert.match(other!.who, /what changed it is unknown/)
+  assert.match(folder(view, join("/private", socket))!.who, new RegExp(`^pid \\d+ \\(node\\) has mako-probe-${process.pid}\\.sock open now\\.$`), "the app's socket in /tmp is named by the process bound to it")
+  assert.ok(!folder(view, join("/private", stranger)), "another program's file in /tmp is left out")
+  assert.match(view.notes.join("\n"), /other entr(y|ies) in \/private\/tmp changed since the app came up and (is|are) left out/)
   assert.ok(!view.changed.entries.some((entry) => entry.folder.startsWith(checkout) || entry.folder.startsWith(records)))
   assert.deepEqual(new Set(view.writing.entries.map((entry) => entry.path)), new Set([shared, join(deep, "held.log")]))
   assert.ok(view.connectsTo.some((entry) => entry.port === servicePort))
@@ -264,4 +272,6 @@ try {
   await processes.stop(key).catch(() => [])
   listener.close()
   rmSync(root, { recursive: true, force: true })
+  rmSync(socket, { force: true })
+  rmSync(stranger, { force: true })
 }

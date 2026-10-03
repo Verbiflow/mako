@@ -96,6 +96,11 @@ export interface Open {
   commands: Map<number, string>
 }
 
+/** A socket keeps the path it was bound at; the file system's history names /tmp, /var and /etc by where macOS links them. */
+function privateLinked(path: string): string {
+  return process.platform === "darwin" ? path.replace(/^\/(tmp|var|etc)(?=\/|$)/, "/private/$1") : path
+}
+
 export async function openBy(pids: number[]): Promise<Open> {
   const found: Open = { listening: [], connected: [], files: [], cwds: new Map(), commands: new Map() }
   if (!pids.length) return found
@@ -126,6 +131,9 @@ export async function openBy(pids: number[]): Promise<Open> {
         else if (own && to === undefined && !found.listening.some((entry) => entry.port === own.port && entry.pid === pid)) found.listening.push({ port: own.port, pid })
       } else if (type === "REG" && isAbsolute(value) && !value.startsWith("/dev/"))
         found.files.push({ path: value, pid, writing: access === "w" || access === "u" })
+      // A socket bound to a path names its file; a second copy binding the same path takes it over.
+      else if (type === "unix" && isAbsolute(value))
+        found.files.push({ path: privateLinked(value), pid, writing: false })
     }
   }
   const listened = new Set(found.listening.map((entry) => entry.port))
@@ -183,10 +191,13 @@ interface Roots {
   home: string
   /** `WATCHED` under home, and /tmp: where the file system's history is read. */
   history: string[]
+  /** /tmp, resolved: every program's scratch, so a change there is the app's only when it had the entry open. */
+  scratch: string
 }
 
 async function rootsOf(home: string): Promise<Roots> {
-  return { home, history: [...WATCHED.map((name) => join(home, name)), await resolved("/tmp")] }
+  const scratch = await resolved("/tmp")
+  return { home, history: [...WATCHED.map((name) => join(home, name)), scratch], scratch }
 }
 
 /** The folder a path counts under: one level into a watched folder or /tmp, or at the top of home; and where in it. */
@@ -348,7 +359,12 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
       ? "changedFolders is read from the file system's history, so a change at any depth counts; at the top of home only what's directly there is compared."
       : `changedFolders compares modification times one or two levels down, so a change deeper in an otherwise untouched folder is missed: ${shallowReason(trace, read, input.history)}`)
   }
-  const shown = Object.entries(changed).filter(([folder]) => kept(folder)).sort(([a], [b]) => a.localeCompare(b))
+  const held = (folder: string) => open.files.some((file) => within(file.path, folder)) ||
+    [...open.cwds.values()].some((cwd) => within(cwd, folder)) || Boolean(trace?.held[folder]?.files.length)
+  const candidates = Object.entries(changed).filter(([folder]) => kept(folder))
+  const shown = candidates.filter(([folder]) => !within(folder, roots.scratch) || held(folder)).sort(([a], [b]) => a.localeCompare(b))
+  const strangers = candidates.length - shown.length
+  if (strangers) notes.push(`${strangers} other ${strangers === 1 ? "entry" : "entries"} in ${roots.scratch} changed since the app came up and ${strangers === 1 ? "is" : "are"} left out: every program on this Mac writes there, and nothing of the app had ${strangers === 1 ? "it" : "them"} open when Mako looked.`)
   const outside = [...new Set(open.connected.filter((entry) => !entry.local).map((entry) => `${entry.host}:${entry.port}`))]
   const ours = (port: number) => (port >= input.ports.first && port <= input.ports.last) || port >= picked
   const view: AppProbeView = {
