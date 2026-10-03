@@ -4,8 +4,11 @@ import { codexExecutableCandidates } from "./executable.js"
 import { codexAccessModes, CODEX_DEFAULT_MODE } from "./access.js"
 import { CODEX_PLAN_OPTION } from "@mako/sessions/model-catalog"
 import type { ProviderLiveDriver } from "../live-driver.js"
+import { fileResumeEvidence } from "../../native-continuation.js"
+import { codexProcessProbe } from "./process-probe.js"
 
 export const codexLiveDriver: ProviderLiveDriver = {
+  ...fileResumeEvidence(codexProcessProbe),
   provider: "codex",
   sessionQuestions: { encodeAnswer: codexQuestionAnswer, history: readCodexQuestionHistory },
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission"], coverage: "Native codex.tool_decision user events confirm once/session/decline/abort for a unique command or file approval. Repeated tool IDs, amendments and other request families remain unconfirmed. Normalized decisions survive reconnect; request-resolved alone is not confirmation." },
