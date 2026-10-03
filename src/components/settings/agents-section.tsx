@@ -1,6 +1,7 @@
+import { useThreads } from "@/state/thread-store"
 import { useEffect } from "react"
 import { Segmented, SettingRow } from "@/components/ui/kit"
-import { HARNESS_LABEL } from "@/components/rail/harness-meta"
+import { harnessLabels } from "@/components/rail/harness-meta"
 import { setPref, usePrefs } from "@/state/prefs"
 import { providers, useProviders } from "@/state/providers"
 import { providerConnections } from "@/state/provider-connections"
@@ -21,9 +22,11 @@ export function AgentsSection() {
   const availability = useProviders((state) => state.availability)
   const daemon = useProviders((state) => state.daemon)
   const loginStart = useProviders((state) => state.daemonLogin)
-  const harnesses = Object.keys(availability ?? HARNESS_LABEL).map((id) => ({
+  useThreads((state) => state.descriptors)
+  const labels = harnessLabels()
+  const harnesses = Object.keys(availability ?? labels).map((id) => ({
     id,
-    name: profiles[id]?.label ?? HARNESS_LABEL[id] ?? id,
+    name: profiles[id]?.label ?? labels[id] ?? id,
     how: profiles[id]?.transport === "remote" ? "Remote agent" : "Local agent",
   }))
 

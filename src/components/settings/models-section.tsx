@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useState, type DragEvent } from "react"
 import { z } from "zod"
 import { CheckIcon, ChevronDownIcon, ListPlusIcon, XIcon } from "lucide-react"
@@ -130,6 +131,7 @@ function LoadoutTile({
   onDragLeave(): void
   onDrop(event: DragEvent): void
 }) {
+  useHarnessIdentity()
   const model = useModel(entry.harness, entry.model)
   const [dragging, setDragging] = useState(false)
   return (
@@ -195,6 +197,7 @@ function useModel(harness: string, id: string): HarnessModel | undefined {
 /* ------------------------------------------------------------ defaults */
 
 function HarnessDefaults({ harness }: { harness: string }) {
+  useHarnessIdentity()
   const profile = useProviders((state) => state.profiles[harness])
   const preference = usePrefs((prefs) => prefs.providerSettings[harness])
   const loadout = usePrefs((prefs) => prefs.modelLoadout)

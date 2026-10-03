@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { useState } from "react"
 import { Action } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -20,6 +21,7 @@ export function RuntimeRow({
   provider: string
   info: HarnessUpdateInfo
 }) {
+  useHarnessIdentity()
   const [pending, setPending] = useState(false)
   const updating = useProviders((state) =>
     Object.values(state.runtimeUpdates ?? {}).some(

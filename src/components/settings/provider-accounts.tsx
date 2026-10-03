@@ -55,7 +55,8 @@ export function ProviderAccounts({
       {selectable ? (
         <p className="text-ui leading-relaxed text-faint">
           Each login stays isolated while sharing the same sessions, skills and
-          tools. New sessions use the checked account.
+          tools. New sessions use the checked account. Choose another account
+          before removing the selected login.
         </p>
       ) : hint ? (
         <p className="text-ui leading-relaxed text-faint">
@@ -77,8 +78,8 @@ export function ProviderAccounts({
               <Action
                 size="xs"
                 aria-label={`Remove ${account.email ?? account.name}`}
-                title="Remove this saved login from Mako"
-                disabled={Boolean(busy)}
+                title={account.active ? "Choose another account before removing this login" : "Remove this saved login from Mako"}
+                disabled={Boolean(busy) || account.active}
                 onClick={() =>
                   void accountActions.remove(account.harness, account.name)
                 }
