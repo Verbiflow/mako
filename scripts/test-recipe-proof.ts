@@ -169,6 +169,8 @@ try {
 
   // recipe_save with a version brings its recipe back as a new draft made from the published version, proved again before anyone gets it.
   await assert.rejects(tools.restore(conversation, 999, "Wrong number"), { message: `Not saved: the project has no version 999; it keeps versions 1 to ${latest}, and app_status lists the newest.` })
+  const prefix = `Back to version ${first}: `.length
+  await assert.rejects(tools.restore(conversation, first, "x".repeat(500)), { message: `Not saved: the history keeps this reason after "Back to version ${first}: ", so it can be at most ${500 - prefix} characters; it's 500.` })
   const back = await tools.restore(conversation, first, "Their values broke the start")
   assert.match(back, new RegExp(`^Brought back version ${first} \\(published [\\d:]+, \\d+ (?:s|min) ago: Verify by looking\\) as a new draft; the history keeps every version as it was\\.\\nSaved as draft version ${latest + 1}, made from version ${latest}\\. Only this Thread runs it; every other Thread keeps version ${latest} until it's published\\.\\nChanged from what this Thread ran:\\n`))
   assert.match(back, /\n {2}values\.MINE: removed, was "1"\n/)

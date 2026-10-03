@@ -1308,9 +1308,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (version === (await publishedVersion(file, now)))
         return `Version ${version} is the published version already, so there's nothing to go back to. ${(await save(conversationId, record.recipe, reason))}`
       const because = new RegExp(`^back to version ${version}\\b`, "i").test(reason) ? reason : `Back to version ${version}: ${reason}`
+      if (because.length > REASON_MAX)
+        throw new Error(`Not saved: the history keeps this reason after "Back to version ${version}: ", so it can be at most ${REASON_MAX - (because.length - reason.length)} characters; it's ${reason.length}.`)
       let saved: string
       try {
-        saved = await save(conversationId, record.recipe, because.slice(0, REASON_MAX))
+        saved = await save(conversationId, record.recipe, because)
       } catch (error) {
         const problem = (error instanceof Error ? error.message : String(error)).replace(/^Not saved: /, "")
         throw new Error(`Not saved: version ${version}'s recipe can't run in this checkout as it was: ${problem}. To start from it anyway, take its "recipe" from ${join(recipeVersions(file), `${version}.json`)}, fix that, and pass it to recipe_save as recipe.`, { cause: error })
