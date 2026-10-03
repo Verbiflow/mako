@@ -16,6 +16,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
 import {
+  credentialFingerprint,
   accountDir,
   accountsRoot,
   childProcessEnv,
@@ -371,9 +372,9 @@ async function accountUsage(name: string): Promise<AccountUsage> {
   const routed = (await subrouterAccounts()).find(
     (account) => account.name === name
   )
-  const dir =
-    routed?.dir ??
-    (name === "default" ? defaultHome() : accountDir("codex", name))
+  const captured = accountDir("codex", name)
+  const dir = name === "default" ? defaultHome()
+    : existsSync(join(captured, "auth.json")) ? captured : routed?.dir ?? captured
   return usageForDir(dir)
 }
 
@@ -417,5 +418,16 @@ export const codexAccountCapability: SelectableAccountCapability = {
       ? { name: selection, dir: env.CODEX_HOME }
       : { name: "default" },
   accountUsage,
+  credentialRevision: async (name) => {
+    const captured = accountDir("codex", name)
+    const routed = (await subrouterAccounts()).find((account) => account.name === name)
+    const source = name === "default" ? join(defaultHome(), "auth.json")
+      : existsSync(join(captured, "auth.json")) ? join(captured, "auth.json") : routed?.dir ?? join(captured, "auth.json")
+    const raw = await readFile(source, "utf8").catch((error) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
+      throw error
+    })
+    return credentialFingerprint([raw, name === "default" ? process.env.OPENAI_API_KEY ?? null : null])
+  },
   useResetCredit,
 }

@@ -2,6 +2,7 @@ import type { ProviderMcpSource } from "../mcp-source.js"
 
 export const codexMcpSource: ProviderMcpSource = {
   provider: "codex",
+  readFormat: "named-map-or-list",
   command: () => "codex",
   userFiles: () => [],
   workspaceFiles: () => [],

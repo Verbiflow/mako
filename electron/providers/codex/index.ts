@@ -1,6 +1,6 @@
 import { codexLiveDriver } from "./live-driver.js"
 import { emitCodexSession } from "@mako/sessions"
-import { installHarness, lacks } from "../harness-definition.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { codexAccountCapability } from "./accounts.js"
 import { codexDecoderSource } from "./decoder-source.js"
@@ -14,6 +14,12 @@ import { npmInstall } from "../update-source.js"
 
 export const installCodex: ProviderModule = (host) => installHarness(host, {
   provider: "codex",
+  presentation: { firstRunPriority: 1, icon: { id: "codex-cloud", tint: "currentColor" } },
+  hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+  commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
+  toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
+  skillEditing: { provider: "codex", route: "skill-registry", operations: ["import", "remove"] },
+  mcpEditing: { provider: "codex", route: "mcp-registry", operations: ["import"] },
   live: codexLiveDriver,
   decoder: codexDecoderSource,
   profile: codexProfileLoader,

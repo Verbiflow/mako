@@ -1,3 +1,4 @@
+import { appendPromptAttachments } from "@mako/sessions/prompt-attachments"
 import type { PromptAttachment } from "../../shared.js"
 import type { UserInput } from "./generated/v2/UserInput.js"
 
@@ -14,7 +15,7 @@ export function codexInput(
     else
       input.push({
         type: "text",
-        text: `User attachment ${attachment.name} (${attachment.mimeType}): ${attachment.path}`,
+        text: appendPromptAttachments("", [{ name: attachment.name, mimeType: attachment.mimeType, path: attachment.path }]),
         text_elements: [],
       })
   }
