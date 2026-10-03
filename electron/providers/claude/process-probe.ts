@@ -52,11 +52,11 @@ export function parseClaudeActiveSessions<Value>(
   )
 }
 
-async function registrySessions(
-  home: string,
+async function registrySessionsRoot(
+  configRoot: string,
   signal: AbortSignal
 ): Promise<ProviderActivitySession[] | null> {
-  const root = join(home, ".claude", "sessions")
+  const root = join(configRoot, "sessions")
   let files: string[]
   try {
     files = await readdir(root)
@@ -65,8 +65,9 @@ async function registrySessions(
       return null
     throw error
   }
+  if (files.length > 1_000) throw new Error("Claude activity inventory exceeds the read limit")
   const sessions: ProviderActivitySession[] = []
-  for (const file of files.slice(0, 1_000)) {
+  for (const file of files) {
     if (signal.aborted) return null
     if (!file.endsWith(".json")) continue
     const path = join(root, file)
@@ -95,10 +96,13 @@ export function claudeProcessProbeFor(home = homedir()): ProviderProcessProbe {
     provider: "claude",
     pollIntervalMs: 5_000,
     staleAfterMs: 15_000,
-    async probe(signal) {
+    async probe(signal, target) {
+      const marker = target?.path.lastIndexOf("/projects/") ?? -1
+      const configRoot = target && marker > 0 ? target.path.slice(0, marker) : join(home, ".claude")
+      if (target && marker < 0) return { kind: "unavailable", reason: "unsupported" }
       let registered: ProviderActivitySession[] | null
       try {
-        registered = await registrySessions(home, signal)
+        registered = await registrySessionsRoot(configRoot, signal)
       } catch {
         return {
           kind: "unavailable",
@@ -122,6 +126,7 @@ export function claudeProcessProbeFor(home = homedir()): ProviderProcessProbe {
           maxBuffer: 8 * 1024 * 1024,
           timeout: 4_000,
           signal,
+          env: { ...process.env, CLAUDE_CONFIG_DIR: configRoot },
         })
         return {
           kind: "available",

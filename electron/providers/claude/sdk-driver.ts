@@ -41,6 +41,8 @@ import { hostLog, hostWarn } from "../../host-log.js"
 import { claudeAuthDiagnostics } from "./auth-diagnostics.js"
 import { claudeStopReason } from "./sdk-notices.js"
 import { claudeCommandLifecycle } from "./sdk-message-kinds.js"
+import { fileResumeEvidence } from "../../native-continuation.js"
+import { claudeProcessProbe } from "./process-probe.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
 const CLAUDE_MODES: LiveSessionMode[] = [
@@ -311,6 +313,7 @@ export function createClaudeSdkDriver(
     approvalAnswerDigest: claudeApprovalAnswerDigest,
     observesNativeAgents: true,
     canResume: true,
+    ...fileResumeEvidence(claudeProcessProbe),
     forkPoint: "checkpoint",
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. Mako declares no per-task stop affordance, so an interrupt stops them too." },
     turnRecovery: {
