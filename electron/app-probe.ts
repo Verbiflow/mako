@@ -2,7 +2,6 @@ import { execFile } from "node:child_process"
 import { readdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
-import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { AppProbeView, Capped } from "./contracts/thread-app.js"
@@ -20,19 +19,20 @@ const PATHS_KEPT = 20
 /** Paths an agent's report names per folder; the desk shows them all. */
 const PATHS_SAID = 5
 /**
- * A probe waits this long for a slow read, the file system's history or
- * macOS's login items, before it says what it has; the read goes on and
- * the next probe has it.
+ * A probe waits this long for a read of the file system's history before
+ * it says what it has; the read goes on and the next probe has it.
  */
 const WAIT_MS = 2_500
 /** How often Mako looks at what running apps hold open, and so how stale a `who` from a look can be. */
 export const SAMPLE_EVERY_MS = 20_000
 /** launchd services looked up one by one; past this they are only named. */
 const SERVICES_LOOKED_UP = 10
-/** Where macOS keeps every user's login and background items; the folder can't be listed, but its files' times can be read. */
+/**
+ * Where macOS keeps every user's login and background items. The folder
+ * can't be listed and `sfltool dumpbtm` asks for an administrator's
+ * password, but its files' times can be read.
+ */
 const ITEMS_FOLDER = "/private/var/db/com.apple.backgroundtaskmanagement"
-/** `sfltool dumpbtm` takes about four seconds whatever it lists, nearly all of it waiting. */
-const ITEMS_MS = 15_000
 
 /**
  * Folders, under home, where apps keep state outside their checkout. One
@@ -54,8 +54,6 @@ const WATCHED = [
 
 /** Beside an app's records: what the probe compares against, from when the app came up. */
 const TRACE = "probe.json"
-/** Beside them too: this user's login and background items when the app came up, read after it started since reading them is slow. */
-const ITEMS = "probe-items.json"
 
 const ChangedSchema = z.object({ paths: z.array(z.string()), more: z.boolean().optional() }).strict()
 type Changed = z.infer<typeof ChangedSchema>
@@ -214,8 +212,7 @@ function note(changed: Record<string, Changed>, folder: string, inner: string): 
  * Records, beside an app's records in `folder`, what its probe compares
  * against: where the file system's history stands, this user's launchd
  * services and the default app for each URL scheme. Called as the app comes
- * up from nothing running, before its first process starts. This user's
- * login items take seconds to list, so they are read after this resolves.
+ * up from nothing running, before its first process starts.
  */
 export async function beginTrace(folder: string, up: number, history?: FileHistory, home = homedir()): Promise<void> {
   const [mark, services, handlers] = await Promise.all([history?.mark().catch(() => undefined), launchdServices(), urlHandlers(home)])
@@ -224,7 +221,6 @@ export async function beginTrace(folder: string, up: number, history?: FileHisto
   if (services) trace.services = services
   if (handlers) trace.handlers = handlers
   await saveTrace(folder, trace)
-  if (process.platform === "darwin") recordItems(folder, up)
 }
 
 /** Apps whose traces to bring up to date: each one's records folder and the processes it runs now. */
@@ -278,10 +274,6 @@ async function refresh(apps: Traced[], { history, home = homedir(), open }: { hi
       }
     }
   }
-  if (process.platform === "darwin")
-    void itemsTime().then((time) => {
-      if (traced.some((app) => time > app.trace.up)) void itemsAt(time)
-    })
   await Promise.all(traced.map(async (app) => {
     if ((await upOf(app.folder)) === app.trace.up) await saveTrace(app.folder, app.trace)
   }))
@@ -404,7 +396,7 @@ export function probeText(view: AppProbeView): string {
       [entry.pid, entry.sure ? `${entry.command} (carries the app's mark)` : `${entry.command} (works in this checkout or data folder; Mako can't read its environment to be sure it's the app's)`])),
     changedFolders: view.upSince === undefined ? undefined : Object.fromEntries(changed),
     moreChangedFolders: view.changed.more,
-    registered: view.registered.length ? view.registered.map((entry) => `${entry.name}: ${entry.detail}`) : undefined,
+    registered: view.registered.length ? view.registered.map((entry) => `${entry.name.replace(/:$/, "")}: ${entry.detail}`) : undefined,
     notes: view.notes.length ? view.notes : undefined,
   })
 }
@@ -485,7 +477,7 @@ type Registered = AppProbeView["registered"][number]
  * What was registered with macOS since `since`, against what the app's
  * trace recorded at the start: launchd services, agents written to
  * LaunchAgents, default apps for URL schemes, schemes the app bundles it
- * runs declare, and login and background items. macOS doesn't say who
+ * runs declare, and whether login and background items changed. macOS doesn't say who
  * registered any of them, so each says whether it points into the app.
  */
 async function registrations(since: number, home: string, input: ProbeInput): Promise<Registered[]> {
@@ -501,7 +493,7 @@ async function registrations(since: number, home: string, input: ProbeInput): Pr
     declaredSchemes(bundles),
   ])
   const loaded = new Set(services.flatMap((entry) => (entry.path ? [entry.path] : [])))
-  const items = await addedItems(input.folder, since, new Set([...loaded, ...agents.map((agent) => agent.file)]), whose)
+  const items = await itemsChanged(since, services.length + agents.length > 0)
   return [
     ...services.map(({ label, path, program }): Registered => ({
       kind: "service",
@@ -547,7 +539,7 @@ async function addedServices(before: string[] | undefined): Promise<{ label: str
     const found: { label: string; path?: string; program?: string } = { label }
     const path = field("path")
     const program = field("program")
-    if (path) found.path = path
+    if (path && isAbsolute(path)) found.path = path
     if (program) found.program = program
     return found
   }))
@@ -598,7 +590,7 @@ async function changedHandlers(before: Record<string, string> | undefined, since
   return Object.entries(now).filter(([scheme, app]) => before[scheme] !== app).map(([scheme, app]) => ({
     kind: "url-handler",
     name: `${scheme}:`,
-    detail: `${scheme}: links now open in ${app}${before[scheme] ? `, not ${before[scheme]} as when the app came up` : ""}; it was set while the app ran.`,
+    detail: `Links now open in ${app}${before[scheme] ? `, not ${before[scheme]} as when the app came up` : ""}; it was set while the app ran.`,
   }))
 }
 
@@ -675,18 +667,6 @@ async function handlerApps(schemes: string[]): Promise<z.infer<typeof HandlerApp
   }
 }
 
-const ItemSchema = z.object({
-  uuid: z.string(),
-  type: z.string(),
-  name: z.string().optional(),
-  identifier: z.string().optional(),
-  path: z.string().optional(),
-  executable: z.string().optional(),
-}).strict()
-type Item = z.infer<typeof ItemSchema>
-/** `at` is the time of the system's list when it was read; a later time means it changed since. */
-const ItemsSchema = z.object({ up: z.number(), at: z.number(), items: z.array(ItemSchema) }).strict()
-
 /** When the system's list of login and background items was last written, or 0 when its time can't be read. */
 async function itemsTime(): Promise<number> {
   const times = await Promise.all(Array.from({ length: 30 }, (_, index) =>
@@ -694,106 +674,19 @@ async function itemsTime(): Promise<number> {
   return Math.max(...times)
 }
 
-/** The last reading of this user's login items, by the time of the list it read: an unchanged list is never read twice. */
-let readItems: { at: number; items: Promise<Item[] | undefined> } | undefined
-
-function itemsAt(at: number): Promise<Item[] | undefined> {
-  if (readItems?.at !== at) readItems = { at, items: backgroundItems() }
-  return readItems.items
-}
-
-/** This user's login and background items, as `sfltool dumpbtm` lists them; undefined when this Mac won't list them without an administrator. */
-async function backgroundItems(): Promise<Item[] | undefined> {
-  if (process.getuid === undefined) return undefined
-  const uid = process.getuid()
-  const text = await run("sfltool", ["dumpbtm"], { timeout: ITEMS_MS, maxBuffer: LSOF_BYTES, env: { ...process.env, LC_ALL: "C" } })
-    .then(({ stdout }) => stdout, () => undefined)
-  return text === undefined ? undefined : parseItems(text, uid)
-}
-
-/** The items `sfltool dumpbtm` lists for `uid`, or undefined when it lists none for them. */
-export function parseItems(text: string, uid: number): Item[] | undefined {
-  const lines = text.split("\n")
-  const start = lines.findIndex((line) => line.trim().startsWith(`Records for UID ${uid} :`))
-  if (start < 0) return undefined
-  const items: Item[] = []
-  let fields: Map<string, string> | undefined
-  const add = () => {
-    const uuid = fields?.get("UUID")
-    const type = fields?.get("Type")?.replace(/\s*\(0x[0-9a-f]+\)$/i, "")
-    if (!fields || !uuid || !type) return
-    const item: Item = { uuid, type }
-    const name = fields.get("Name")
-    const identifier = fields.get("Identifier")?.replace(/^\d+\./, "")
-    const url = fields.get("URL")
-    const executable = fields.get("Executable Path")
-    if (name) item.name = name
-    if (identifier) item.identifier = identifier
-    if (url?.startsWith("file://")) item.path = fileURLToPath(url).replace(/(.)\/$/, "$1")
-    if (executable) item.executable = executable
-    items.push(item)
-  }
-  for (const line of lines.slice(start + 1)) {
-    if (line.trim().startsWith("Records for UID ")) break
-    if (/^\s*#\d+:\s*$/.test(line)) {
-      add()
-      fields = new Map()
-      continue
-    }
-    const field = /^\s*([A-Za-z][A-Za-z ]*): (.*)$/.exec(line)
-    if (fields && field && field[2]!.trim() !== "(null)") fields.set(field[1]!, field[2]!.trim())
-  }
-  add()
-  return items
-}
-
-/** Reads this user's login items for the app's trace, unless the list changes while it's read, which would let the app's own change in. */
-function recordItems(folder: string, up: number): void {
-  void (async () => {
-    const at = await itemsTime()
-    if (!at) return
-    const items = await itemsAt(at)
-    if (!items || (await itemsTime()) !== at || (await upOf(folder)) !== up) return
-    const path = join(folder, ITEMS)
-    const temporary = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
-    await writeFile(temporary, JSON.stringify({ up, at, items }), { mode: 0o600 })
-    await rename(temporary, path)
-  })().catch(() => {})
-}
-
 /**
- * Login and background items added since the app came up, against the list
- * read then. Legacy agents at `reported` (plists already named as agents
- * or services) and macOS's grouping entries for developers are left out.
+ * Whether macOS's login and background items changed since `since`. Only
+ * an administrator can list them, so what changed goes unnamed; `named`
+ * says a service or agent above was registered then, which macOS adds to
+ * the list.
  */
-async function addedItems(folder: string, since: number, reported: Set<string>, whose: (...paths: (string | undefined)[]) => string): Promise<Registered[]> {
-  const at = await itemsTime()
-  if (!at) return []
-  const [up, text] = await Promise.all([upOf(folder), readFile(join(folder, ITEMS), "utf8").catch(() => undefined)])
-  const parsed = text === undefined ? undefined : ItemsSchema.safeParse(tryJson(text))
-  const before = parsed?.success && parsed.data.up === up ? parsed.data : undefined
-  if (at <= (before?.at ?? since)) return []
-  const changed = (detail: string): Registered[] => [{ kind: "login-item", name: "Login items", detail: `macOS's login and background items changed while the app ran${detail}` }]
-  if (!before) return changed(", and Mako has no list of them from when it came up to say what was added. System Settings shows them under General, Login Items & Extensions.")
-  const now = await Promise.race([itemsAt(at), sleep(WAIT_MS).then(() => "waiting" as const)])
-  if (now === "waiting") return changed(". macOS takes a few seconds to list them; probe again in a moment to see what was added.")
-  if (!now) return changed(", and macOS didn't list them for Mako this time.")
-  const known = new Set(before.items.map((item) => item.uuid))
-  return now
-    .filter((item) => !known.has(item.uuid) && item.type !== "developer" && !(item.path && reported.has(item.path)))
-    .map((item): Registered => ({
-      kind: "login-item",
-      name: item.identifier ?? item.name ?? item.uuid,
-      detail: `Added to macOS's login and background items while the app ran, as ${/^[aeiou]/i.test(item.type) ? "an" : "a"} ${item.type}${item.executable ? ` that runs ${item.executable}` : item.path ? ` at ${item.path}` : ""}.${whose(item.executable, item.path)}`,
-    }))
-}
-
-function tryJson(text: string): unknown {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return undefined
-  }
+async function itemsChanged(since: number, named: boolean): Promise<Registered[]> {
+  if ((await itemsTime()) < since) return []
+  return [{
+    kind: "login-item",
+    name: "Login items",
+    detail: `macOS's login and background items changed while the app ran${named ? ", likely with the service or agent above" : ""}. macOS lists them only to an administrator, so Mako can't say what was added or by whom; System Settings shows them under General, Login Items & Extensions.`,
+  }]
 }
 
 /** A property list as JSON, or one key of it; undefined when it can't be read. */
