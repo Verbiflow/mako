@@ -59,8 +59,11 @@ export const grokProcessProbe: ProviderProcessProbe = {
   provider: "grok",
   pollIntervalMs: 3_000,
   staleAfterMs: 10_000,
-  async probe(signal) {
-    const path = join(grokHome(), "active_sessions.json")
+  async probe(signal, target) {
+    const marker = target?.path.lastIndexOf("/sessions/") ?? -1
+    if (target && marker < 0) return { kind: "unavailable", reason: "unsupported" }
+    const root = target && marker > 0 ? target.path.slice(0, marker) : grokHome()
+    const path = join(root, "active_sessions.json")
     let info
     try {
       info = await stat(path)

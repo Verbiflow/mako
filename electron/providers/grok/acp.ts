@@ -12,6 +12,8 @@ import { grokToolName } from "./tool-name.js"
 import { resolveExecutable } from "../../executable.js"
 import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
 import type { AccessTier } from "../../contracts/access.js"
+import { fileResumeEvidence } from "../../native-continuation.js"
+import { grokProcessProbe } from "./process-probe.js"
 
 /**
  * Verified 2026-09-11 against grok 1.0.25 over `agent stdio`: a second
@@ -123,6 +125,7 @@ const GrokTurnCompletedSchema = z.object({
 })
 
 export const grokAcpSource: ProviderAcpSource = {
+  ...fileResumeEvidence(grokProcessProbe),
   provider: "grok",
   approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
   planning: { via: "mode", mode: "plan", proposal: "exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request" },
