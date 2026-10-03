@@ -49,9 +49,11 @@ export function ThreadTitleSetting() {
       ? "Loading model connections"
       : lost
         ? `${chosen} is no longer connected, so threads keep the names they have. Choose another model or turn this off`
-        : connections.length
+        : chosen
           ? "After each answer, Mako sends the thread's last two exchanges to this model for a short name. A thread you rename keeps your name"
-          : "Connect a model in Settings > Commit messages, then choose it here. Until then, threads keep the names their agents give them"
+          : connections.length
+            ? "Choose a model, and after each answer Mako sends it the thread's last two exchanges for a short name. Until then, threads keep the names their agents give them"
+            : "Connect a model in Settings > Commit messages, then choose it here. Until then, threads keep the names their agents give them"
 
   return (
     <SettingRow title="Name threads automatically" description={description}>
