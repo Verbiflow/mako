@@ -1,7 +1,20 @@
-import { devinReferences, devinPromptImages, devinMcpCall } from "./devin-presentation.js"
+import { z } from "zod"
+import {
+  devinReferences,
+  devinPromptImages,
+  devinMcpCall,
+} from "./devin-presentation.js"
 import { todoDetails } from "../tool-plan.js"
-import { attachmentFromUrl, ProposedPlans, type AttachmentContent } from "../content.js"
-import { DevinPlanCallSchema, DevinPlanTracker, type DevinPlanCall } from "./devin-plans.js"
+import {
+  attachmentFromUrl,
+  ProposedPlans,
+  type AttachmentContent,
+} from "../content.js"
+import {
+  DevinPlanCallSchema,
+  DevinPlanTracker,
+  type DevinPlanCall,
+} from "./devin-plans.js"
 /**
  * devin-cli's own sessions — the ones Zed's agent panel (or any ACP host)
  * drives.
@@ -24,7 +37,7 @@ import { createHash } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { homedir } from "node:os"
-import { join, sep } from "node:path"
+import { basename, isAbsolute, join, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
@@ -75,6 +88,7 @@ interface ToolCall {
 interface ChatMessage {
   role?: string
   content?: ChatContent
+  images?: JsonValue
   thinking?: ChatContent
   tool_calls?: ToolCall[]
   tool_call_id?: string
@@ -139,6 +153,8 @@ function isoOf(value: StoredTimestamp): string | undefined {
 export class DevinCliProvider implements SessionProvider {
   harness = "devin" as const
   displayName = "Devin"
+  /** Refresh cached titles after native image/control/attachment labels are projected. */
+  peekVersion = 1
   /** One store, many sessions: a db write means re-discover, not re-stat. */
   rescanRoot = (): boolean => true
   rescanDebounceMs = 500
@@ -214,13 +230,18 @@ export class DevinCliProvider implements SessionProvider {
       const stored = db
         .prepare(
           `SELECT s.id AS id, s.last_activity_at AS activity,
-                  COALESCE(s.main_chain_id, 0) AS top,
+                  COALESCE(s.main_chain_id, -1) AS top,
                   s.title AS title, s.working_directory AS cwd
            FROM sessions s WHERE s.hidden = 0`
         )
         .all()
-      const rows = stored.map(parseDiscoveryRow).filter((row): row is DiscoveryRow => row !== null)
-      const locked = await lockedSessionIds(this.lockPath(), rows.map(row => row.id))
+      const rows = stored
+        .map(parseDiscoveryRow)
+        .filter((row): row is DiscoveryRow => row !== null)
+      const locked = await lockedSessionIds(
+        this.lockPath(),
+        rows.map((row) => row.id)
+      )
       const files: NativeFile[] = []
       for (const row of rows) {
         const at = isoOf(row.activity)
@@ -246,7 +267,8 @@ export class DevinCliProvider implements SessionProvider {
   /** Remove a session and every row that names it; the read connection is reset so it cannot serve the ghost. */
   async remove(path: string): Promise<boolean> {
     const id = idOf(path)
-    if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath()) return false
+    if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath())
+      return false
     this.resetConnection()
     return removeSessionRows(this.dbPath(), id, ["sessions"])
   }
@@ -374,12 +396,12 @@ export class DevinCliProvider implements SessionProvider {
 function mainChainId(db: DatabaseSync, sessionId: string): number {
   const stored = db
     .prepare(
-      "SELECT COALESCE(main_chain_id, 0) AS main_chain_id FROM sessions WHERE id = ?"
+      "SELECT COALESCE(main_chain_id, -1) AS main_chain_id FROM sessions WHERE id = ?"
     )
     .get(sessionId)
   return stored && isSqliteNumber(stored.main_chain_id)
     ? stored.main_chain_id
-    : 0
+    : -1
 }
 
 function mainChainRows(
@@ -387,7 +409,7 @@ function mainChainRows(
   sessionId: string,
   leafId: number
 ): MessageRow[] {
-  if (leafId <= 0) return []
+  if (leafId < 0) return []
   const metadata = db
     .prepare("PRAGMA table_info(message_nodes)")
     .all()
@@ -438,21 +460,36 @@ interface AcpToolCallState {
  * rendered text and path live; the chat messages hold only the model's own
  * arguments. Older stores have no such table.
  */
-function acpToolCalls(db: DatabaseSync, sessionId: string): Map<string, AcpToolCallState> {
+function acpToolCalls(
+  db: DatabaseSync,
+  sessionId: string
+): Map<string, AcpToolCallState> {
   const calls = new Map<string, AcpToolCallState>()
-  const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_call_state'").get()
+  const table = db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_call_state'"
+    )
+    .get()
   if (!table) return calls
   const rows = db
-    .prepare("SELECT tool_call_id, tool_call_json, tool_call_update_json FROM tool_call_state WHERE session_id = ?")
+    .prepare(
+      "SELECT tool_call_id, tool_call_json, tool_call_update_json FROM tool_call_state WHERE session_id = ?"
+    )
     .all(sessionId)
   for (const row of rows) {
     const id = sqliteText(row.tool_call_id)
-    if (id) calls.set(id, { call: planCall(row.tool_call_json), update: planCall(row.tool_call_update_json) })
+    if (id)
+      calls.set(id, {
+        call: planCall(row.tool_call_json),
+        update: planCall(row.tool_call_update_json),
+      })
   }
   return calls
 }
 
-function planCall(value: SQLOutputValue | undefined): DevinPlanCall | undefined {
+function planCall(
+  value: SQLOutputValue | undefined
+): DevinPlanCall | undefined {
   const text = sqliteText(value)
   if (!text) return undefined
   try {
@@ -468,17 +505,29 @@ function entryDigest(entry: ThreadEntry): string {
 
 /** Native lock files accumulate after sessions disappear. Only read locks for
  * the sessions this operation actually returns; recheck their PIDs every time. */
-async function lockedSessionIds(path: string, ids: string[]): Promise<Set<string>> {
+async function lockedSessionIds(
+  path: string,
+  ids: string[]
+): Promise<Set<string>> {
   const locked = new Set<string>()
   for (let offset = 0; offset < ids.length; offset += 8) {
-    await Promise.all(ids.slice(offset, offset + 8).map(async id => {
-      // Session IDs are database data, never permission to read outside locks.
-      if (id.includes("/") || id.includes("\\")) return
-      const raw = await readFile(join(path, `${id}.lock`), "utf8").catch(() => "")
-      const pid = Number(raw.trim())
-      if (!Number.isInteger(pid) || pid <= 0) return
-      try { process.kill(pid, 0); locked.add(id) } catch { /* No live lock owner. */ }
-    }))
+    await Promise.all(
+      ids.slice(offset, offset + 8).map(async (id) => {
+        // Session IDs are database data, never permission to read outside locks.
+        if (id.includes("/") || id.includes("\\")) return
+        const raw = await readFile(join(path, `${id}.lock`), "utf8").catch(
+          () => ""
+        )
+        const pid = Number(raw.trim())
+        if (!Number.isInteger(pid) || pid <= 0) return
+        try {
+          process.kill(pid, 0)
+          locked.add(id)
+        } catch {
+          /* No live lock owner. */
+        }
+      })
+    )
   }
   return locked
 }
@@ -499,7 +548,10 @@ function compactionSummary(text: string): string {
   return at === -1 ? text : text.slice(at + "\nSummary:\n".length)
 }
 
-function translator(sessionId: string, acp: ReadonlyMap<string, AcpToolCallState>): MessageTranslator {
+function translator(
+  sessionId: string,
+  acp: ReadonlyMap<string, AcpToolCallState>
+): MessageTranslator {
   const sink = new EntrySink()
   const tools = new Map<string, ToolBlock>()
   const plans = new DevinPlanTracker()
@@ -519,11 +571,23 @@ function translator(sessionId: string, acp: ReadonlyMap<string, AcpToolCallState
         const text = contentText(message.content)
         if (text.trim() === DEVIN_STOP_NOTICE) {
           running = false
-          sink.push({ kind: "event", at, label: "Interrupted" })
+          sink.push({
+            kind: "event",
+            id: String(row.rowId),
+            source: { harness: "devin", record: String(row.rowId) },
+            at,
+            label: "Interrupted",
+          })
           return
         }
         if (message.extensions?.[DEVIN_SUMMARY] !== undefined) {
-          sink.push({ kind: "event", id: String(row.rowId), at, ...compactionEvent({ summary: clip(compactionSummary(text)) }) })
+          sink.push({
+            kind: "event",
+            id: String(row.rowId),
+            source: { harness: "devin", record: String(row.rowId) },
+            at,
+            ...compactionEvent({ summary: clip(compactionSummary(text)) }),
+          })
           return
         }
         const completion = parseSubagentCompletion(text)
@@ -563,7 +627,14 @@ function translator(sessionId: string, acp: ReadonlyMap<string, AcpToolCallState
       if (message.role === "user") {
         const prompt = devinPromptImages(contentText(message.content))
         const text = prompt.text
-        const attachments = [...devinAttachments(message.content), ...prompt.attachments]
+        const images = storedImages(message.images)
+        const byPath = new Map(images.flatMap(image => image.path ? [[image.path, image.attachment] as const] : []))
+        const referenced = new Set(prompt.attachments.flatMap(item => item.source.kind === "file" ? [item.source.path] : []))
+        const attachments = [
+          ...devinAttachments(message.content),
+          ...prompt.attachments.map(item => item.source.kind === "file" ? byPath.get(item.source.path) ?? item : item),
+          ...images.filter(image => !image.path || !referenced.has(image.path)).map(image => image.attachment),
+        ]
         running = true
         if (text.trim() || attachments.length)
           sink.push({
@@ -578,12 +649,14 @@ function translator(sessionId: string, acp: ReadonlyMap<string, AcpToolCallState
       if (message.role === "assistant") {
         const blocks: EntryBlock[] = [...devinAttachments(message.content)]
         const thinking = contentText(message.thinking)
-        if (thinking.trim()) blocks.push({ type: "thinking", text: devinReferences(thinking) })
+        if (thinking.trim())
+          blocks.push({ type: "thinking", text: devinReferences(thinking) })
         running = (message.tool_calls?.length ?? 0) > 0
         for (const call of message.tool_calls ?? []) {
           const name = call.name ?? call.function?.name ?? "tool"
           const rawInput = call.arguments ?? call.function?.arguments
-          const title = name === "run_subagent" ? subagentTitle(rawInput) : undefined
+          const title =
+            name === "run_subagent" ? subagentTitle(rawInput) : undefined
           if (call.id && title) subagentCalls.set(call.id, title)
           const block: ToolBlock = {
             type: "tool",
@@ -592,16 +665,23 @@ function translator(sessionId: string, acp: ReadonlyMap<string, AcpToolCallState
             input: toolInputText(rawInput),
           }
           if (name === "todo_write") block.details = todoDetails(block.input)
-          const mcp = name === "mcp_call_tool" ? devinMcpCall(block.input) : undefined
-          if (mcp) { block.name = mcp.name; block.input = mcp.input }
+          const mcp =
+            name === "mcp_call_tool" ? devinMcpCall(block.input) : undefined
+          if (mcp) {
+            block.name = mcp.name
+            block.input = mcp.input
+          }
           blocks.push(block)
           if (call.id) tools.set(call.id, block)
-          const plan = call.id ? plans.observe(acp.get(call.id)?.call, sessionId) : undefined
+          const plan = call.id
+            ? plans.observe(acp.get(call.id)?.call, sessionId)
+            : undefined
           const card = plan && cards.propose(plan.id, plan.text)
           if (card) blocks.push(card)
         }
         const text = contentText(message.content)
-        if (text.trim()) blocks.push({ type: "text", text: devinReferences(text) })
+        if (text.trim())
+          blocks.push({ type: "text", text: devinReferences(text) })
         const usage = message.usage ?? row.usage
         if (blocks.length > 0 || usage) {
           const entry: Extract<ThreadEntry, { kind: "assistant" }> = {
@@ -619,14 +699,22 @@ function translator(sessionId: string, acp: ReadonlyMap<string, AcpToolCallState
         const block = message.tool_call_id
           ? tools.get(message.tool_call_id)
           : undefined
-        if (message.tool_call_id) plans.observe(acp.get(message.tool_call_id)?.update, sessionId)
+        if (message.tool_call_id)
+          plans.observe(acp.get(message.tool_call_id)?.update, sessionId)
         if (!block) return
         const output = contentText(message.content)
-        const title = message.tool_call_id ? subagentCalls.get(message.tool_call_id) : undefined
-        const agent = title ? /^Background subagent started with agent_id=([^\s.]+)/.exec(output)?.[1] : undefined
+        const title = message.tool_call_id
+          ? subagentCalls.get(message.tool_call_id)
+          : undefined
+        const agent = title
+          ? /^Background subagent started with agent_id=([^\s.]+)/.exec(
+              output
+            )?.[1]
+          : undefined
         if (title && agent) subagentTitles.set(agent, title)
         block.output = clip(normalizeToolOutput(output))
-        if (message.extensions?.[DEVIN_TOOL_FAILURE] !== undefined) block.error = true
+        if (message.extensions?.[DEVIN_TOOL_FAILURE] !== undefined)
+          block.error = true
         const attachments = devinAttachments(message.content)
         if (attachments.length) block.attachments = attachments
       }
@@ -724,11 +812,16 @@ function parseChatMessage(text: string): ChatMessage | null {
     return {
       role: jsonText(parsed.role),
       content: parsed.content,
+      images: parsed.images,
       thinking: parsed.thinking,
       tool_calls: parseToolCalls(parsed.tool_calls),
       tool_call_id: jsonText(parsed.tool_call_id),
       usage: usageFromMetadata(parsed.metadata),
-      extensions: isJsonObject(parsed.metadata) && isJsonObject(parsed.metadata.extensions) ? parsed.metadata.extensions : undefined,
+      extensions:
+        isJsonObject(parsed.metadata) &&
+        isJsonObject(parsed.metadata.extensions)
+          ? parsed.metadata.extensions
+          : undefined,
     }
   } catch {
     return null
@@ -877,4 +970,38 @@ function devinAttachments(
     )
   }
   return attachments
+}
+
+const StoredImage = z.object({
+  source_path: z.string().refine(isAbsolute).optional(),
+  mime_type: z.string().regex(/^image\/[\w.+-]+$/),
+  base64_data: z.string().optional(),
+})
+interface NativeStoredImage {
+  path?: string
+  attachment: AttachmentContent
+}
+
+/** Devin stores image bytes outside chat content; use them even after the staged file disappears. */
+function storedImages(value: JsonValue | undefined): NativeStoredImage[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(item => {
+    const parsed = StoredImage.safeParse(item)
+    if (!parsed.success) return []
+    const image = parsed.data
+    let source: AttachmentContent["source"]
+    if (image.base64_data)
+      source = image.base64_data.length > 28 * 1024 * 1024
+        ? { kind: "unavailable", reason: "The native image exceeds the inline preview limit; original bytes remain in the Devin store" }
+        : { kind: "inline", data: image.base64_data }
+    else if (image.source_path) source = { kind: "file", path: image.source_path }
+    else return []
+    const attachment: AttachmentContent = {
+      type: "attachment",
+      name: image.source_path ? basename(image.source_path) : "Image",
+      mimeType: image.mime_type,
+      source,
+    }
+    return [{ path: image.source_path, attachment }]
+  })
 }

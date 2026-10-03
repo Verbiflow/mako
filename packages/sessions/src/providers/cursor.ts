@@ -1,3 +1,4 @@
+import { readPromptAttachments } from "../prompt-attachments.js"
 import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
 import { cursorFailure, cursorTaskOpener } from "./cursor-presentation.js"
@@ -1420,7 +1421,10 @@ export class CursorProvider implements SessionProvider {
   ): ThreadEntry[] {
     const entries: ThreadEntry[] = []
     const prompt = this.promptBetween(database, run)
-    if (prompt) entries.push({ kind: "user", id: prompt.id, text: prompt.text })
+    if (prompt) {
+      const projected = readPromptAttachments(prompt.text)
+      entries.push({ kind: "user", id: prompt.id, text: projected.text, attachments: projected.attachments })
+    }
     const blocks: EntryBlock[] = []
     for (const part of readCursorSdkRunStream(indexPath, run.runId)) {
       if (part.type !== "tool") {
@@ -1525,13 +1529,16 @@ function parseCursorMessage(raw: string): CursorMessage | null {
   const value = parseJson(raw)
   if (!isJsonObject(value)) return null
   switch (stringValue(value["role"])) {
-    case "user":
+    case "user": {
+      const content = parseTextContent(value["content"])
+      const prompt = readPromptAttachments(plainText(content))
       return {
         role: "user",
-        content: parseTextContent(value["content"]),
-        attachments: cursorAttachments(value["content"]),
+        content: prompt.text,
+        attachments: [...cursorAttachments(value["content"]), ...prompt.attachments],
         summary: cursorOption(value["providerOptions"], "isSummary") === true,
       }
+    }
     case "assistant":
       return {
         role: "assistant",

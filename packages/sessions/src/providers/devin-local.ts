@@ -1,25 +1,12 @@
+import { z } from "zod"
 import { acpToolDetails } from "../acp-tool-details.js"
 import { acpAttachments } from "../acp-attachments.js"
 import { ProposedPlans, type AttachmentContent, type ToolDetail } from "../content.js"
 import { DevinPlanCallSchema, DevinPlanTracker } from "./devin-plans.js"
-/**
- * Devin, running locally.
- *
- * Devin's desktop app is a VS Code lineage editor driving `devin-cli` over
- * ACP, and it journals every session as append-only NDJSON — one file per
- * session under `~/Library/Application Support/Devin/User/acp-events/`,
- * each line an ACP `session/update` notification with a timestamp in
- * `_meta`. Titles, working directories, and the model in force live in the
- * editor's global `state.vscdb` (`windsurf.acp.metadataCache`, with
- * `windsurf.acp.eventLog.index` mapping session ids to journal uuids).
- *
- * Append-only NDJSON lets these sessions tail incrementally: a Devin turn
- * streams into the catalog live, byte offset by byte offset.
- *
- * SQLite comes from `node:sqlite`, loaded lazily like the Cursor provider
- * does; a runtime without it (or a machine without Devin) contributes
- * nothing rather than failing.
- */
+/** Devin IDE journals: legacy ACP NDJSON and the current per-session SQLite
+ * message store. Both reuse the ACP translator; native session identity comes
+ * from the editor's message-store index, never the database's random filename.
+ * SQLite snapshots are replaceable, not byte-tail journals. */
 
 import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -40,7 +27,7 @@ import {
   snapshotSink,
   type LineTranslator,
 } from "../jsonl.js"
-import type { NativeFile, SessionProvider } from "./types.js"
+import { SessionUnreadable, type NativeFile, type SessionProvider } from "./types.js"
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonRecord | JsonValue[]
@@ -50,6 +37,10 @@ interface JsonRecord {
 }
 
 type SqliteStatementResult = ReturnType<StatementSync["get"]>
+const StoredMessage = z.object({ position: z.number().int().nonnegative(), kind: z.string(), payload: z.string(), characters: z.number().int().nonnegative() })
+const MESSAGE_CHARACTER_LIMIT = 4_000_000
+const StoredIndex = z.object({ key: z.string(), value: z.string() })
+
 
 interface StateValueRow {
   value: string
@@ -190,11 +181,13 @@ interface TranslatorState {
 interface DevinTranslator extends LineTranslator {
   done(): ThreadEntry[]
   readonly title?: string
+  unavailable(position: number): void
 }
 
 export class DevinLocalProvider implements SessionProvider {
   harness = "devin" as const
   displayName = "Devin"
+  peekVersion = 2
 
   private userDir: string
   /** uuid (journal basename) → session metadata, refreshed by db mtime. */
@@ -208,29 +201,48 @@ export class DevinLocalProvider implements SessionProvider {
   }
 
   roots(): string[] {
-    return [join(this.userDir, "acp-events")]
+    return [join(this.userDir, "acp-events"), join(this.userDir, "acp-messages")]
+  }
+
+  observationPaths(path: string): string[] {
+    return path.endsWith(".db") ? [path, `${path}-wal`, `${path}-shm`] : [path]
+  }
+
+  watchTarget(path: string): string | null {
+    const target = path.replace(/-(?:wal|shm)$/, "")
+    return /\.(?:db|ndjson)$/.test(target) ? target : null
+  }
+
+  async stat(path: string): Promise<NativeFile | null> {
+    const stamps = await Promise.all(this.observationPaths(path).map((file) => stat(file).catch(() => null)))
+    if (!stamps[0]?.isFile()) return null
+    return {
+      path,
+      bytes: stamps.reduce((total, stamp) => total + (stamp?.size ?? 0), 0),
+      mtimeMs: Math.max(...stamps.map((stamp) => stamp?.mtimeMs ?? 0)),
+      revision: stamps.map((stamp) => stamp ? `${stamp.size}:${stamp.mtimeMs}` : "missing").join("/"),
+    }
   }
 
   async discover(): Promise<NativeFile[]> {
-    const root = this.roots()[0]!
-    const names = await readdir(root).catch(() => new Array<string>())
     const files: NativeFile[] = []
-    for (const name of names) {
-      if (!name.endsWith(".ndjson")) continue
-      const path = join(root, name)
-      const info = await stat(path).catch(() => null)
-      if (info?.isFile())
-        files.push({ path, bytes: info.size, mtimeMs: info.mtimeMs })
+    for (const root of this.roots()) {
+      const names = await readdir(root).catch(() => new Array<string>())
+      for (const name of names) {
+        if (!/\.(?:db|ndjson)$/.test(name)) continue
+        const file = await this.stat(join(root, name))
+        if (file) files.push(file)
+      }
     }
     return files
   }
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {
-    const meta = await this.metaFor(basename(file.path, ".ndjson"))
+    const meta = await this.metaFor(journalOf(file.path))
     // The IDE names sessions "acp/devin-cli/<name>"; the CLI's own store
     // says just "<name>". One session, one identity — normalized here so
     // the catalog's dedupe collapses the two views of the same thread.
-    const rawId = meta?.sessionId ?? basename(file.path, ".ndjson")
+    const rawId = meta?.sessionId ?? journalOf(file.path)
     const ref: ThreadRef = {
       harness: this.harness,
       nativeId: rawId.split("/").pop() ?? rawId,
@@ -248,11 +260,13 @@ export class DevinLocalProvider implements SessionProvider {
       // a title update and the first user words. Bounded read.
       const skim = translator(journalOf(file.path))
       let budget = 64_000
-      await readLines(file.path, 0, (line) => {
+      const consume = (line: string) => {
         budget -= line.length + 1
         skim.push(line)
         return budget > 0
-      })
+      }
+      if (file.path.endsWith(".db")) await this.readMessages(file.path, consume, true)
+      else await readLines(file.path, 0, consume)
       const entries = skim.done()
       const first = entries.find((entry) => entry.kind === "user")
       if (!ref.title && skim.title) ref.title = agentTitleFrom(skim.title)
@@ -278,23 +292,69 @@ export class DevinLocalProvider implements SessionProvider {
     })
     if (!ref) return null
     const into = translator(journalOf(path))
-    const checkpoint = await readLines(path, 0, into.push)
+    const checkpoint = path.endsWith(".db")
+      ? await this.readMessages(path, into.push, false, into.unavailable)
+      : await readLines(path, 0, into.push)
     const entries = into.done()
     if (!ref.title && into.title) ref.title = agentTitleFrom(into.title)
     return { ref, checkpoint, entries }
   }
 
   createFollower(path: string, fromByte: number) {
-    return createJsonlFollower(path, fromByte, () => translator(journalOf(path)))
+    return path.endsWith(".db") ? null : createJsonlFollower(path, fromByte, () => translator(journalOf(path)))
   }
 
   async tail(
     path: string,
     fromByte: number
   ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
+    if (path.endsWith(".db")) return { entries: [], nextByte: fromByte }
     const into = translator(journalOf(path))
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
+  }
+
+  private async readMessages(path: string, push: (raw: string) => void | boolean, skim = false, unavailable?: (position: number) => void): Promise<number> {
+    const db = await openDatabase(path)
+    if (!db) throw new SessionUnreadable(path)
+    try {
+      const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value
+      if (version !== "1" && version !== "6") throw new Error("Unsupported Devin IDE message-store schema")
+      let next = 0
+      const rows = db.prepare(`SELECT position, kind, length(payload) AS characters, substr(payload, 1, ${skim ? 64000 : MESSAGE_CHARACTER_LIMIT}) AS payload FROM messages ORDER BY position${skim ? " LIMIT 128" : ""}`)
+      for (const candidate of rows.iterate()) {
+        const row = StoredMessage.parse(candidate)
+        const raw = row.payload
+        next = row.position + 1
+        if (row.characters > (skim ? 64000 : MESSAGE_CHARACTER_LIMIT)) {
+          unavailable?.(row.position)
+          continue
+        }
+        const payload = parseJson(raw)
+        if (!isJsonRecord(payload)) continue
+        const content = payload.content
+        if (row.kind === "tool_call" && isJsonRecord(content)) {
+          if (push(JSON.stringify({ notification: { ...content, sessionUpdate: "tool_call" } })) === false) break
+          if (push(JSON.stringify({ notification: { ...content, sessionUpdate: "tool_call_update" } })) === false) break
+        } else if (isJsonArray(content)) {
+          let stopped = false
+          for (const notification of content) {
+            if (push(JSON.stringify({ notification })) === false) { stopped = true; break }
+          }
+          if (stopped) break
+        }
+      }
+      return next
+    } catch (cause) {
+      throw new SessionUnreadable(path, { cause })
+    } finally { db.close() }
+  }
+
+  async recent(path: string, bytes: number): Promise<ThreadEntry[] | null> {
+    if (path.endsWith(".db")) return null
+    const info = await stat(path).catch(() => null)
+    if (!info || info.size <= bytes) return null
+    return (await this.tail(path, info.size - bytes)).entries
   }
 
   /* ---------------------------------------------------------- metadata */
@@ -307,7 +367,9 @@ export class DevinLocalProvider implements SessionProvider {
   private async refreshMeta(): Promise<void> {
     const dbPath = join(this.userDir, "globalStorage", "state.vscdb")
     const info = await stat(dbPath).catch(() => null)
-    if (!info || info.mtimeMs === this.metaLoadedAtMs) return
+    const wal = await stat(`${dbPath}-wal`).catch(() => null)
+    const changedAt = Math.max(info?.mtimeMs ?? 0, wal?.mtimeMs ?? 0)
+    if (!info || changedAt === this.metaLoadedAtMs) return
     const db = await openDatabase(dbPath)
     if (!db) return
     try {
@@ -316,10 +378,27 @@ export class DevinLocalProvider implements SessionProvider {
         parseStateValueRow(statement.get(key))
       const indexRaw = row("windsurf.acp.eventLog.index")?.value
       const metaRaw = row("windsurf.acp.metadataCache")?.value
-      if (!indexRaw || !metaRaw) return
-      const index = parseEventLogIndex(indexRaw)
-      const cache = parseSessionCache(metaRaw)
-      if (!index || !cache) return
+      const index = (indexRaw && parseEventLogIndex(indexRaw)) || new Map<string, EventLogEntry>()
+      const cache = (metaRaw && parseSessionCache(metaRaw)) || { sessions: [] }
+      for (const candidate of db.prepare("SELECT key, value FROM ItemTable WHERE key LIKE 'windsurf.acp.messageStore.session.%'").iterate()) {
+        const fields = StoredIndex.parse(candidate)
+        const entry = parseJson(fields.value)
+        if (!isJsonRecord(entry)) continue
+        const uuid = readString(entry, "uuid")
+        const sessionId = fields.key.slice("windsurf.acp.messageStore.session.".length)
+        if (uuid) index.set(sessionId, { uuid, lastUpdated: readNumber(entry, "lastUpdated") })
+        const current = row(`windsurf.acp.sessioninfo.session.${sessionId}`)?.value
+        const record = current && parseJson(current)
+        const session = isJsonRecord(record) ? record.info : undefined
+        if (!isJsonRecord(session)) { cache.sessions.push({ sessionId }); continue }
+        cache.sessions.push({
+          sessionId,
+          title: readString(session, "title"),
+          cwd: readString(session, "cwd"),
+          createdAt: parseCreatedAt(session._meta),
+          model: parseConfiguredModel(session.configOptions),
+        })
+      }
       const bySession = new Map<string, SessionMeta>()
       for (const session of cache.sessions) {
         bySession.set(session.sessionId, {
@@ -337,7 +416,7 @@ export class DevinLocalProvider implements SessionProvider {
           meta.updatedAt = new Date(entry.lastUpdated).toISOString()
         this.metaByUuid.set(entry.uuid, meta)
       }
-      this.metaLoadedAtMs = info.mtimeMs
+      this.metaLoadedAtMs = changedAt
     } catch {
       // A malformed cache reads as no metadata; peeks fall back to the journal.
     } finally {
@@ -355,7 +434,7 @@ export class DevinLocalProvider implements SessionProvider {
  * the client message id so a multi-chunk prompt stays one entry.
  */
 function journalOf(path: string): string {
-  return basename(path, ".ndjson")
+  return basename(path).replace(/\.(?:ndjson|db)$/, "")
 }
 
 /** `journal` scopes plan cards; Mako runs no desktop session live, so they need not match a live id. */
@@ -529,6 +608,10 @@ function translator(journal: string): DevinTranslator {
 
   return {
     push,
+    unavailable: (position) => {
+      flushAssistant()
+      sink.push({ kind: "event", label: "Message unavailable", detail: "This native record exceeds the history read limit. The original remains in the IDE store.", source: { harness: "devin", record: `${journal}:messages/${position}` } })
+    },
     snapshot: () => {
       const entries = snapshotSink(sink)
       return assistant ? [...entries, assistant] : entries

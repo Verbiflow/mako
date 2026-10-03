@@ -695,7 +695,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
     }
     if (isOpenCodeInstruction(notice)) return
     if (!execution.running)
-      sink.push({ kind: "event", id: row.id, at, label: openCodeNoticeLabel(notice), opensTurn: true })
+      sink.push({ kind: "event", id: row.id, source: { harness: "opencode", record: row.id }, at, label: openCodeNoticeLabel(notice), opensTurn: true })
     execution.running = true
     return
   }
@@ -719,12 +719,12 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
     execution.context = contextTokens(row.data) ?? execution.context
     // A step that failed and was retried did not fail the turn.
     const retry = retryEvent(jsonObject(row.data.retry))
-    if (retry) pushEvent(sink, at, retry)
+    if (retry) pushEvent(sink, at, retry, row.id)
     if (isInterrupted(row.data))
-      sink.push({ kind: "event", at, label: "Interrupted" })
+      pushEvent(sink, at, { label: "Interrupted" }, row.id)
     else if (!retry) {
       const failure = failedTurn(jsonObject(row.data.error))
-      if (failure) pushEvent(sink, at, failure)
+      if (failure) pushEvent(sink, at, failure, row.id)
     }
     return
   }
@@ -748,7 +748,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
   if (type === "compaction") {
     const status = jsonText(row.data.status)
     if (status === "failed")
-      pushEvent(sink, at, compactionFailedEvent(errorText(row.data.error) || undefined))
+      pushEvent(sink, at, compactionFailedEvent(errorText(row.data.error) || undefined), row.id)
     // A running compaction has not happened yet; the row settles when it ends.
     else if (status !== "running")
       pushEvent(sink, at, compactionEvent({
@@ -756,7 +756,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
         tokensBefore: execution.context,
         summary: jsonText(row.data.summary),
         durationMs: elapsed(timeCreated(row.data) ?? row.timeCreated, row.timeUpdated),
-      }))
+      }), row.id)
     return
   }
   if (type === "model-switched") {
@@ -766,6 +766,8 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
     sink.push({
       kind: "event",
       at,
+      id: row.id,
+      source: { harness: "opencode", record: row.id },
       label: "Model changed",
       detail: modelLabel(id, provider),
     })
@@ -773,7 +775,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
   }
   if (type === "agent-switched") {
     const agent = jsonText(row.data.agent)
-    sink.push({ kind: "event", at, label: "Agent changed", detail: agent })
+    pushEvent(sink, at, { label: "Agent changed", detail: agent }, row.id)
   }
 }
 
@@ -788,7 +790,7 @@ function pushLegacy(
     (part) => jsonText(part.data.type) === "compaction"
   )
   if (compaction) {
-    pushEvent(sink, at, compactionEvent({ trigger: jsonBoolean(compaction.data.auto) === true ? "automatic" : "manual" }))
+    pushEvent(sink, at, compactionEvent({ trigger: jsonBoolean(compaction.data.auto) === true ? "automatic" : "manual" }), compaction.id)
     return
   }
   if (role === "user") {
@@ -809,13 +811,13 @@ function pushLegacy(
   }
   if (role !== "assistant") return
   const blocks: EntryBlock[] = []
-  const retries: TranscriptEvent[] = []
+  const retries: { marker: TranscriptEvent; record: string }[] = []
   let usage = usageFrom(message.data)
   for (const part of parts) {
     const type = jsonText(part.data.type)
     if (type === "retry") {
       const retry = retryEvent(part.data)
-      if (retry) retries.push(retry)
+      if (retry) retries.push({ marker: retry, record: part.id })
       continue
     }
     if (type === "file") {
@@ -846,12 +848,12 @@ function pushLegacy(
   const model = modelFromData(message.data)
   if (blocks.length > 0 || usage)
     pushAssistant(sink, at, model?.id, usage, withPlanCard(message.id, message.data, blocks))
-  for (const retry of retries) pushEvent(sink, at, retry)
+  for (const retry of retries) pushEvent(sink, at, retry.marker, retry.record)
   if (isInterrupted(message.data))
-    sink.push({ kind: "event", at, label: "Interrupted" })
+    pushEvent(sink, at, { label: "Interrupted" }, message.id)
   else {
     const failure = failedTurn(jsonObject(message.data.error))
-    if (failure) pushEvent(sink, at, failure)
+    if (failure) pushEvent(sink, at, failure, message.id)
   }
 }
 
@@ -992,8 +994,8 @@ function modelFromEntries(
   return null
 }
 
-function pushEvent(sink: EntrySink, at: string | undefined, marker: TranscriptEvent): void {
-  sink.push({ kind: "event", at, ...marker })
+function pushEvent(sink: EntrySink, at: string | undefined, marker: TranscriptEvent, record: string): void {
+  sink.push({ kind: "event", id: record, at, ...marker, source: { harness: "opencode", record } })
 }
 
 function compactionTrigger(reason: string | undefined): "automatic" | "manual" | undefined {

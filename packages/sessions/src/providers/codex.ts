@@ -1,3 +1,4 @@
+import { readPromptAttachments, legacyTextAttachment, type PromptAttachmentProjection } from "../prompt-attachments.js"
 import { existsSync, statSync, type Stats } from "node:fs"
 import {
   codexFailureEvent,
@@ -354,14 +355,16 @@ function parseResponseItem(
     case "message": {
       const text = textOf(payload["content"])
       switch (stringValue(payload["role"])) {
-        case "user":
+        case "user": {
+          const prompt = userResponse(payload["content"])
           return {
             kind: "user_response",
             id: stringValue(payload["id"]),
             at,
-            text,
-            attachments: responseAttachments(payload["content"]),
+            text: prompt.text,
+            attachments: prompt.attachments,
           }
+        }
         case "assistant":
           return {
             kind: "assistant_response",
@@ -1183,6 +1186,42 @@ function translator(): CodexTranslator {
       return needsReset
     },
   }
+}
+
+/** Native part boundaries distinguish the authored prompt from file transport. */
+function userResponse(content: JsonValue | undefined): PromptAttachmentProjection {
+  if (!Array.isArray(content)) return { text: textOf(content), attachments: [] }
+  const attachments = responseAttachments(content)
+  let text = ""
+  let authored = false
+  for (const value of content) {
+    const part = objectValue(value)
+    const valueText = stringValue(part?.["text"])
+    if (valueText === undefined) continue
+    const manifest = readPromptAttachments(valueText)
+    // Legacy metadata was always a later, whole input_text part. Never classify
+    // the first authored part or an example embedded within it as an attachment.
+    const legacy = authored && part?.["type"] === "input_text" ? legacyTextAttachment(valueText) : undefined
+    if (legacy) attachments.push(legacy)
+    else {
+      text += manifest.text
+      attachments.push(...manifest.attachments)
+    }
+    authored = true
+  }
+  const images = codexPromptImages(text)
+  let image = 0
+  for (const attachment of attachments) {
+    if (!attachment.mimeType.startsWith("image/")) continue
+    const original = images[image++]
+    if (original) {
+      attachment.name = original.name
+      // Keep native inline bytes; the wrapper's path is a fallback only.
+      if (attachment.source.kind === "unavailable") attachment.source = original.source
+    }
+  }
+  if (!attachments.length) attachments.push(...images)
+  return { text, attachments }
 }
 
 function responseAttachments(

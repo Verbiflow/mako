@@ -396,12 +396,12 @@ export class CursorDesktopStore {
         }
         const summary = bubble.conversationSummary?.summary?.trim()
         if (summary && summary !== lastSummary)
-          sink.push(desktopEvent(compactionEvent({ summary }), bubble.createdAt))
+          sink.push(desktopEvent(compactionEvent({ summary }), bubble.createdAt, bubble.bubbleId, "compaction"))
         if (summary) lastSummary = summary
         const entry = bubbleEntry(bubble, ref.model)
         if (entry) sink.push(entry)
         if (bubble.errorDetails)
-          sink.push(desktopEvent(bubbleFailure(bubble.errorDetails), bubble.createdAt))
+          sink.push(desktopEvent(bubbleFailure(bubble.errorDetails), bubble.createdAt, bubble.bubbleId, "failure"))
       }
       if (data.activeCanvas)
         sink.push({
@@ -455,8 +455,8 @@ function bubbleImages(images: z.infer<typeof Image>[]): AttachmentContent[] {
   })
 }
 
-function desktopEvent(marker: TranscriptEvent, at: string | undefined): ThreadEntry {
-  return at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
+function desktopEvent(marker: TranscriptEvent, at: string | undefined, record: string, fact: "compaction" | "failure"): ThreadEntry {
+  return { kind: "event", id: `${record}:${fact}`, at, ...marker, source: { harness: "cursor", record } }
 }
 
 /** What an error bubble says, in the words of a failed turn; a cancelled request is a stop. */

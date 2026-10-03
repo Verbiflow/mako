@@ -93,6 +93,7 @@ export function cursorTaskOpener(text: string, id: string, at?: string): ThreadE
   const entry: Extract<ThreadEntry, { kind: "event" }> = {
     kind: "event",
     id,
+    source: { harness: "cursor", record: id },
     ...event(label, undefined, task.response ?? detail),
     opensTurn: true,
   }
@@ -114,6 +115,7 @@ export function cursorSimulatedOpener(text: string, id: string, at?: string): Th
   const entry: Extract<ThreadEntry, { kind: "event" }> = {
     kind: "event",
     id,
+    source: { harness: "cursor", record: id },
     ...(plan
       ? event("Implement plan", first, text)
       : event(first.length > 120 ? `${first.slice(0, 119)}…` : first, undefined, lines.length > 1 ? text : undefined)),

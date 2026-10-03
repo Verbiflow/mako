@@ -1,12 +1,28 @@
-import { claudeCommandPrompt, claudeInterrupted } from "./claude-presentation.js"
+import { readPromptAttachments, legacyTextAttachment, type PromptAttachmentProjection } from "../prompt-attachments.js"
+import {
+  claudeCommandPrompt,
+  claudeInterrupted,
+} from "./claude-presentation.js"
 import {
   claudeApiErrorEvent,
   claudeCompactSummary,
   claudeLocalCommand,
 } from "./claude-events.js"
-import { compactionEvent, event, messageEvent, modelChangedEvent, turnFailedEvent, type Compaction, type TranscriptEvent } from "../events.js"
+import {
+  compactionEvent,
+  event,
+  messageEvent,
+  modelChangedEvent,
+  turnFailedEvent,
+  type Compaction,
+  type TranscriptEvent,
+} from "../events.js"
 import { todoDetails } from "../tool-plan.js"
-import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "../content.js"
+import {
+  attachmentFromUrl,
+  proposedPlanBlock,
+  type AttachmentContent,
+} from "../content.js"
 /**
  * Claude Code sessions.
  *
@@ -163,7 +179,10 @@ const NOT_A_PROMPT =
 function taskNotificationLabel(text: string): string | undefined {
   const trimmed = text.trimStart()
   if (!trimmed.startsWith("<task-notification>")) return undefined
-  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(trimmed)?.[1]?.replace(/\s+/g, " ").trim()
+  const summary = /<summary>([\s\S]*?)<\/summary>/
+    .exec(trimmed)?.[1]
+    ?.replace(/\s+/g, " ")
+    .trim()
   return summary ? summary.slice(0, 500) : PROVIDER_TURN_FALLBACK
 }
 
@@ -192,7 +211,14 @@ function exitPlanText(input: ClaudeJsonValue | undefined): string {
 
 /** Claude's own words on a refusal, then the API's explanation when it gave one. */
 function refusalText(record: ClaudeJsonObject): string | undefined {
-  return [stringValue(record["content"]), stringValue(record["apiRefusalExplanation"])].filter(Boolean).join("\n\n") || undefined
+  return (
+    [
+      stringValue(record["content"]),
+      stringValue(record["apiRefusalExplanation"]),
+    ]
+      .filter(Boolean)
+      .join("\n\n") || undefined
+  )
 }
 
 function parseContentBlock(value: ClaudeJsonValue): ClaudeContentBlock {
@@ -257,7 +283,11 @@ function parseContentBlock(value: ClaudeJsonValue): ClaudeContentBlock {
         isError: value["is_error"] === true,
       }
     case "fallback":
-      return { type: "fallback", from: modelName(value["from"]), to: modelName(value["to"]) }
+      return {
+        type: "fallback",
+        from: modelName(value["from"]),
+        to: modelName(value["to"]),
+      }
     default:
       return { type: "other" }
   }
@@ -312,7 +342,8 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
   return {
     type,
     title: stringValue(root["aiTitle"]) ?? stringValue(root["summary"]),
-    customTitle: type === "custom-title" ? stringValue(root["customTitle"]) : undefined,
+    customTitle:
+      type === "custom-title" ? stringValue(root["customTitle"]) : undefined,
     effort: stringValue(root["effort"]),
     uuid: stringValue(root["uuid"]),
     timestamp: stringValue(root["timestamp"]),
@@ -326,13 +357,21 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
     message: parseMessage(root["message"]),
     subtype: stringValue(root["subtype"]),
     requestId: stringValue(root["requestId"]),
-    apiError: root["isApiErrorMessage"] === true ? (stringValue(root["error"]) ?? "unknown") : undefined,
+    apiError:
+      root["isApiErrorMessage"] === true
+        ? (stringValue(root["error"]) ?? "unknown")
+        : undefined,
     system: type === "system" ? root : undefined,
-    attachment: type === "attachment" && isJsonObject(root["attachment"]) ? root["attachment"] : undefined,
+    attachment:
+      type === "attachment" && isJsonObject(root["attachment"])
+        ? root["attachment"]
+        : undefined,
   }
 }
 
-function forkedFromSession(value: ClaudeJsonValue | undefined): string | undefined {
+function forkedFromSession(
+  value: ClaudeJsonValue | undefined
+): string | undefined {
   return isJsonObject(value) ? stringValue(value["sessionId"]) : undefined
 }
 
@@ -356,6 +395,25 @@ function plainText(content: ClaudeContent | undefined): string {
   return content
     .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
     .join("")
+}
+
+/** Native user parts keep staged files separate from authored text and tool results. */
+function userContent(content: ClaudeContent | undefined): PromptAttachmentProjection {
+  if (!Array.isArray(content)) return readPromptAttachments(content ?? "")
+  const texts: string[] = []
+  const attachments = attachmentParts(content)
+  let seenText = false
+  for (const part of content) {
+    if (part.type !== "text") continue
+    const text = part.text ?? ""
+    const legacy = seenText ? legacyTextAttachment(text) : undefined
+    seenText = true
+    if (legacy) { attachments.push(legacy); continue }
+    const projected = readPromptAttachments(text)
+    texts.push(projected.text)
+    attachments.push(...projected.attachments)
+  }
+  return { text: texts.join(""), attachments }
 }
 
 export class ClaudeProvider implements SessionProvider {
@@ -382,7 +440,12 @@ export class ClaudeProvider implements SessionProvider {
    * inside Claude Code or a router sets the variable for its own store,
    * whose sessions would otherwise be listed among the fixture's.
    */
-  constructor(home?: string, configDir = home === undefined ? process.env["CLAUDE_CONFIG_DIR"] : undefined) {
+  constructor(
+    home?: string,
+    configDir = home === undefined
+      ? process.env["CLAUDE_CONFIG_DIR"]
+      : undefined
+  ) {
     this.home = home ?? homedir()
     this.root = join(this.home, ".claude", "projects")
     this.configDir = configDir
@@ -487,21 +550,25 @@ export class ClaudeProvider implements SessionProvider {
     }
     ref.settings = {}
     let lastMessageAt: string | undefined
-    await readLines(file.path, Math.max(0, file.bytes - 2 * 1024 * 1024), (raw) => {
-      const line = parseClaudeLine(raw)
-      if (line) fillClaudeRef(ref, line)
-      spoke ||= line?.type === "user" || line?.type === "assistant"
-      lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
-      const model = line ? sessionModel(line) : undefined
-      if (line && model) {
-        ref.model = model
-        const options: NonNullable<SessionSettings["options"]> = {}
-        if (line.effort) options.effort = line.effort
-        if (line.message?.usage?.speed === "standard") options.fast = false
-        if (line.message?.usage?.speed === "fast") options.fast = true
-        ref.settings = { model, options }
+    await readLines(
+      file.path,
+      Math.max(0, file.bytes - 2 * 1024 * 1024),
+      (raw) => {
+        const line = parseClaudeLine(raw)
+        if (line) fillClaudeRef(ref, line)
+        spoke ||= line?.type === "user" || line?.type === "assistant"
+        lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
+        const model = line ? sessionModel(line) : undefined
+        if (line && model) {
+          ref.model = model
+          const options: NonNullable<SessionSettings["options"]> = {}
+          if (line.effort) options.effort = line.effort
+          if (line.message?.usage?.speed === "standard") options.fast = false
+          if (line.message?.usage?.speed === "fast") options.fast = true
+          ref.settings = { model, options }
+        }
       }
-    })
+    )
     // The tail is where the newest messages are; a file whose tail holds no
     // message at all keeps the file's own time rather than claiming none.
     if (lastMessageAt !== undefined) ref.updatedAt = lastMessageAt
@@ -514,7 +581,10 @@ export class ClaudeProvider implements SessionProvider {
 
   /** Remove a session file; Claude Code keeps no index that names it. */
   async remove(path: string): Promise<boolean> {
-    if (!this.roots().some((root) => path.startsWith(`${root}/`)) || !path.endsWith(".jsonl"))
+    if (
+      !this.roots().some((root) => path.startsWith(`${root}/`)) ||
+      !path.endsWith(".jsonl")
+    )
       return false
     await rm(path, { force: true })
     return true
@@ -539,7 +609,10 @@ export class ClaudeProvider implements SessionProvider {
       if (line.customTitle?.trim()) {
         next.title = titleFrom(line.customTitle) ?? next.title
         named = true
-      } else if (line.title?.trim() && (line.type === "ai-title" || line.type === "summary")) {
+      } else if (
+        line.title?.trim() &&
+        (line.type === "ai-title" || line.type === "summary")
+      ) {
         written = line.title
       }
       const model = sessionModel(line)
@@ -598,9 +671,16 @@ function translator(): ClaudeTranslator {
   /** Fallback markers by API request: the reply's `fallback` block and Claude's notice after it are one change. */
   const fallbacks = new Map<string, EventEntry>()
 
-  const mark = (marker: TranscriptEvent, at: string | undefined, id?: string): EventEntry => {
+  const mark = (
+    marker: TranscriptEvent,
+    at: string | undefined,
+    id?: string
+  ): EventEntry => {
     const entry: EventEntry = { kind: "event", at, ...marker }
-    if (id) entry.id = id
+    if (id) {
+      entry.id = id
+      entry.source = { harness: "claude", record: id }
+    }
     sink.push(entry)
     assistant = null
     return entry
@@ -613,41 +693,77 @@ function translator(): ClaudeTranslator {
   const system = (line: ClaudeLine, record: ClaudeJsonObject): void => {
     switch (line.subtype) {
       case "compact_boundary": {
-        const metadata = isJsonObject(record["compactMetadata"]) ? record["compactMetadata"] : {}
+        const metadata = isJsonObject(record["compactMetadata"])
+          ? record["compactMetadata"]
+          : {}
         const trigger = metadata["trigger"]
         const kept: Compaction = {
-          trigger: trigger === "auto" ? "automatic" : trigger === "manual" ? "manual" : undefined,
+          trigger:
+            trigger === "auto"
+              ? "automatic"
+              : trigger === "manual"
+                ? "manual"
+                : undefined,
           tokensBefore: numberValue(metadata["preTokens"]),
           tokensAfter: numberValue(metadata["postTokens"]),
           durationMs: numberValue(metadata["durationMs"]),
         }
-        compaction = { entry: mark(compactionEvent(kept), line.timestamp, line.uuid), kept }
+        compaction = {
+          entry: mark(compactionEvent(kept), line.timestamp, line.uuid),
+          kept,
+        }
         return
       }
       case "model_refusal_fallback": {
         const from = stringValue(record["originalModel"])
         const to = stringValue(record["fallbackModel"])
         if (!from || !to) return
-        const marker = modelChangedEvent(from, to,
-          record["scope"] === "local" ? "for one reply after a refusal" : "after a refusal", refusalText(record))
-        const earlier = line.requestId ? fallbacks.get(line.requestId) : undefined
+        const marker = modelChangedEvent(
+          from,
+          to,
+          record["scope"] === "local"
+            ? "for one reply after a refusal"
+            : "after a refusal",
+          refusalText(record)
+        )
+        const earlier = line.requestId
+          ? fallbacks.get(line.requestId)
+          : undefined
         if (earlier) Object.assign(earlier, marker)
         else mark(marker, line.timestamp, line.uuid)
         return
       }
       case "model_refusal_no_fallback":
-        mark(turnFailedEvent(`${stringValue(record["originalModel"]) ?? "The model"} declined the request`,
-          refusalText(record)), line.timestamp, line.uuid)
+        mark(
+          turnFailedEvent(
+            `${stringValue(record["originalModel"]) ?? "The model"} declined the request`,
+            refusalText(record)
+          ),
+          line.timestamp,
+          line.uuid
+        )
         return
       case "local_command": {
         const local = claudeLocalCommand(stringValue(record["content"]) ?? "")
         if (local.kind === "command") {
-          command = { entry: mark(event("Notice", local.command), line.timestamp, line.uuid), name: local.command }
+          command = {
+            entry: mark(
+              event("Notice", local.command),
+              line.timestamp,
+              line.uuid
+            ),
+            name: local.command,
+          }
           return
         }
         if (!local.output) return
-        const printed = messageEvent("Notice", command ? `${command.name} · ${local.output}` : local.output)
-        const marker: TranscriptEvent = local.failed ? { ...printed, tone: "warning" } : printed
+        const printed = messageEvent(
+          "Notice",
+          command ? `${command.name} · ${local.output}` : local.output
+        )
+        const marker: TranscriptEvent = local.failed
+          ? { ...printed, tone: "warning" }
+          : printed
         if (command) Object.assign(command.entry, marker)
         else mark(marker, line.timestamp, line.uuid)
         command = null
@@ -660,16 +776,27 @@ function translator(): ClaudeTranslator {
   const queued = (line: ClaudeLine, attachment: ClaudeJsonObject): void => {
     if (attachment["type"] !== "queued_command") return
     const prompt = parseContent(attachment["prompt"])
-    const text = claudeCommandPrompt(plainText(prompt))
+    const projected = userContent(prompt)
+    const text = claudeCommandPrompt(projected.text)
     const notification = taskNotificationLabel(text)
     if (notification) {
       mark(event(notification), line.timestamp, line.uuid)
       return
     }
     if (attachment["commandMode"] !== "prompt") return
-    const attachments = attachmentParts(prompt)
-    if ((!text.trim() && !attachments.length) || NOT_A_PROMPT.test(text.trimStart())) return
-    const entry: UserEntry = { kind: "user", id: line.uuid, at: line.timestamp, text, attachments }
+    const attachments = projected.attachments
+    if (
+      (!text.trim() && !attachments.length) ||
+      NOT_A_PROMPT.test(text.trimStart())
+    )
+      return
+    const entry: UserEntry = {
+      kind: "user",
+      id: line.uuid,
+      at: line.timestamp,
+      text,
+      attachments,
+    }
     if (opener) entry.steeringFor = opener
     conversing()
     assistant = null
@@ -716,15 +843,20 @@ function translator(): ClaudeTranslator {
       }
       if (line.isCompactSummary) {
         const summary = claudeCompactSummary(plainText(content))
-        if (compaction) Object.assign(compaction.entry, compactionEvent({ ...compaction.kept, summary }))
+        if (compaction)
+          Object.assign(
+            compaction.entry,
+            compactionEvent({ ...compaction.kept, summary })
+          )
         else mark(compactionEvent({ summary }), line.timestamp, line.uuid)
         compaction = null
         return
       }
       if (line.isMeta) return
-      const text = claudeCommandPrompt(plainText(content))
+      const projected = userContent(content)
+      const text = claudeCommandPrompt(projected.text)
       if (claudeInterrupted(text)) {
-        sink.push({kind: "event", at: line.timestamp, label: "Interrupted"})
+        sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
         assistant = null
         return
       }
@@ -733,10 +865,16 @@ function translator(): ClaudeTranslator {
         assistant = null
         started = true
         opener = undefined
-        sink.push({ kind: "event", id: line.uuid, at: line.timestamp, label: notification, opensTurn: true })
+        sink.push({
+          kind: "event",
+          id: line.uuid,
+          at: line.timestamp,
+          label: notification,
+          opensTurn: true,
+        })
         return
       }
-      const attachments = attachmentParts(content)
+      const attachments = projected.attachments
       if (
         (!text.trim() && !attachments.length) ||
         NOT_A_PROMPT.test(text.trimStart())
@@ -768,16 +906,28 @@ function translator(): ClaudeTranslator {
       return
     }
     if (line.apiError !== undefined) {
-      mark(claudeApiErrorEvent(line.apiError, plainText(message.content)), line.timestamp, line.uuid)
+      mark(
+        claudeApiErrorEvent(line.apiError, plainText(message.content)),
+        line.timestamp,
+        line.uuid
+      )
       return
     }
-    if (message.model === "<synthetic>" && plainText(message.content).trim() === "No response requested.") return
+    if (
+      message.model === "<synthetic>" &&
+      plainText(message.content).trim() === "No response requested."
+    )
+      return
     for (const part of message.content) {
       if (part.type !== "fallback" || !part.from || !part.to) continue
       const entry = mark(modelChangedEvent(part.from, part.to), line.timestamp)
       if (line.requestId) fallbacks.set(line.requestId, entry)
     }
-    if (message.content.length && message.content.every((part) => part.type === "fallback")) return
+    if (
+      message.content.length &&
+      message.content.every((part) => part.type === "fallback")
+    )
+      return
     if (!assistant || (line.uuid && assistant.id !== line.uuid)) {
       conversing()
       assistant = {
@@ -811,10 +961,14 @@ function translator(): ClaudeTranslator {
               part.input === undefined ? undefined : JSON.stringify(part.input)
             ),
           }
-          if (part.name === "TodoWrite") block.details = todoDetails(block.input)
+          if (part.name === "TodoWrite")
+            block.details = todoDetails(block.input)
           if (part.id !== undefined) toolsById.set(part.id, block)
           turn.blocks.push(block)
-          const plan = part.name === "ExitPlanMode" && part.id ? proposedPlanBlock(part.id, exitPlanText(part.input)) : undefined
+          const plan =
+            part.name === "ExitPlanMode" && part.id
+              ? proposedPlanBlock(part.id, exitPlanText(part.input))
+              : undefined
           if (plan) turn.blocks.push(plan)
           break
         }
@@ -903,7 +1057,11 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   if (line.isSidechain) return
   if (!ref.nativeId && line.sessionId !== undefined)
     ref.nativeId = line.sessionId
-  if (!ref.parentNativeId && line.forkedFrom && line.forkedFrom !== ref.nativeId)
+  if (
+    !ref.parentNativeId &&
+    line.forkedFrom &&
+    line.forkedFrom !== ref.nativeId
+  )
     ref.parentNativeId = line.forkedFrom
   if (!ref.cwd && line.cwd !== undefined) ref.cwd = line.cwd
   followCurrentCwd(ref, line.cwd)
@@ -923,7 +1081,10 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   // Claude Code names the session itself (`ai-title`, once `summary`) and
   // rewrites that name as the conversation moves on, so the latest one wins.
   // The first prompt only stands in until a written title exists.
-  if (line.title?.trim() && (line.type === "ai-title" || line.type === "summary")) {
+  if (
+    line.title?.trim() &&
+    (line.type === "ai-title" || line.type === "summary")
+  ) {
     if (customTitles.has(ref)) return
     ref.title = titleFrom(line.title)
     storedTitles.add(ref)
@@ -936,9 +1097,8 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
     !line.isSidechain &&
     !line.isMeta
   ) {
-    const text = claudeCommandPrompt(plainText(line.message?.content))
+    const text = claudeCommandPrompt(userContent(line.message?.content).text)
     if (text.trim() && !NOT_A_PROMPT.test(text.trimStart()))
       ref.title = titleFrom(text)
   }
 }
-
