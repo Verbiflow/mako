@@ -11,8 +11,16 @@ import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 const run = promisify(execFile)
 
 /** Stop asks nicely this long before it kills. */
-const STOP_GRACE_MS = 5_000
+/**
+ * How long a stopped run may take to exit before SIGKILL. Longer than the
+ * 10 s a container runtime gives a container to stop: a `docker compose up`
+ * killed sooner leaves its containers running.
+ */
+const STOP_GRACE_MS = 15_000
 const POLL_MS = 100
+const READY_POLL_MS = 500
+/** One try of a readiness command that hangs is stopped after this. */
+const READY_TRY_MS = 10_000
 const LOCK_WAIT_MS = 30_000
 /** How long a process must stay up after its port answers before it counts as running. */
 const STEADY_MS = 2_000
@@ -38,6 +46,8 @@ const RunSchema = z.object({
   command: z.string(),
   cwd: z.string(),
   port: z.number().int().optional(),
+  /** A command that passes once it can serve; it's running only once that has passed (`<key>.ready`). */
+  ready: z.string().optional(),
   pid: z.number().int().positive(),
   /** The start time the process table gives; with the pid it can't match a later process. */
   startedMs: z.number(),
@@ -59,6 +69,8 @@ export interface RunStatus {
   name: string
   command: string
   port?: number
+  /** Its readiness command, which decides when it's running instead of its port. */
+  ready?: string
   pid?: number
   state: RunState
   startedAt?: number
@@ -74,6 +86,8 @@ export interface RunSpec {
   cwd: string
   env: NodeJS.ProcessEnv
   port?: number
+  /** Run in `cwd` with `env` every `READY_POLL_MS` while it starts; it's running once this exits 0. */
+  ready?: string
 }
 
 export interface PortOwner {
@@ -194,6 +208,7 @@ export class ThreadProcesses {
       for (const [key] of chosen) {
         delete runs[key]
         await rm(this.file(app, key, "exit"), { force: true })
+        await rm(this.file(app, key, "ready"), { force: true })
       }
       await this.save(app, runs)
       return chosen.map(([, record]) => record.name)
@@ -215,6 +230,7 @@ export class ThreadProcesses {
         log: this.file(app, key, "log"),
       }
       if (record.port !== undefined) status.port = record.port
+      if (record.ready !== undefined) status.ready = record.ready
       const held = members(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
       if (held) status.memoryBytes = held
       return status
@@ -456,6 +472,7 @@ export class ThreadProcesses {
 
   private async state(app: AppKey, key: string, record: Run, rows: Row[]): Promise<RunState> {
     if (members(rows, record).length) {
+      if (record.ready !== undefined) return (await stat(this.file(app, key, "ready")).catch(() => undefined)) ? { kind: "running" } : { kind: "starting" }
       if (record.port === undefined || (await this.dependencies.listening(record.port))) return { kind: "running" }
       return { kind: "starting" }
     }
@@ -474,6 +491,7 @@ export class ThreadProcesses {
     const log = this.file(app, key, "log")
     const exit = this.file(app, key, "exit")
     await rm(exit, { force: true })
+    await rm(this.file(app, key, "ready"), { force: true })
     await rename(log, `${log}.1`).catch(() => {})
     const output = await open(log, "a", 0o600)
     try {
@@ -495,8 +513,10 @@ export class ThreadProcesses {
         if (!row) throw new Error(`${spec.name} ended before it started, stopped by something outside Mako; see ${log}`)
         const run: Run = { kind: spec.kind, name: spec.name, command: spec.command, cwd: spec.cwd, pid, startedMs: row.startedMs, at: this.now() }
         if (spec.port !== undefined) run.port = spec.port
+        if (spec.ready !== undefined) run.ready = spec.ready
         await record(run)
         release.end("go\n")
+        if (spec.ready !== undefined) void this.watchReady(app, key, spec.ready, spec, pid)
       } finally {
         if (!release.writableEnded) release.destroy()
       }
@@ -513,7 +533,50 @@ export class ThreadProcesses {
     return join(this.dependencies.root, CHECKOUTS, `${createHash("sha256").update(checkout).digest("hex").slice(0, 16)}.json`)
   }
 
-  private file(app: AppKey, key: string, extension: "log" | "exit"): string {
+  /**
+   * Runs a process's readiness command until it passes, then marks it ready
+   * for every host; gives up once the process is gone. Only the host that
+   * started it knows its environment, so a start cut short by that host
+   * ending stays "starting" until the app is restarted.
+   */
+  private async watchReady(app: AppKey, key: string, ready: string, spec: RunSpec, pid: number): Promise<void> {
+    const alive = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    while (alive()) {
+      const passed = await new Promise<boolean>((done) => {
+        const child = spawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: "ignore", detached: true })
+        const timer = setTimeout(() => {
+          try {
+            process.kill(-child.pid!, "SIGKILL")
+          } catch {
+            // Over already.
+          }
+        }, READY_TRY_MS)
+        child.once("error", () => {
+          clearTimeout(timer)
+          done(false)
+        })
+        child.once("exit", (code) => {
+          clearTimeout(timer)
+          done(code === 0)
+        })
+      })
+      if (passed) {
+        const runs = await this.runs(app)
+        if (runs[key]?.pid === pid) await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
+        return
+      }
+      await sleep(READY_POLL_MS)
+    }
+  }
+
+  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready"): string {
     if (!/^(process|check|prepare)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
     return join(this.folder(app), `${key}.${extension}`)
   }

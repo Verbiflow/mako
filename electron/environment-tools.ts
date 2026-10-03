@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises"
+import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
@@ -24,15 +24,27 @@ import {
   processPort,
   processValues,
   projectRoot,
+  appDraft,
+  expandTemplate,
+  pinRunning,
+  publishDraft,
   readRecipe,
-  recipeHistory,
+  readVersion,
   recipeValues,
+  recipeVersions,
   RECIPE_PATH,
   recipeIssues,
   RecipeSchema,
-  saveRecipe,
+  recordProof,
+  runningVersion,
+  saveDraft,
+  StaleDraftError,
+  versionCount,
   type CheckTier,
   type Recipe,
+  type RecipeProofStep,
+  type RecipeRead,
+  type RecipeVerify,
 } from "./thread-recipe.js"
 
 /** Under the minute most harnesses' MCP clients give a tool call; longer waits come back as "still starting". */
@@ -49,6 +61,11 @@ const PREPARE_KEY = runKey("prepare", "checkout")
 /** How often a start waiting in line looks at memory again. */
 const LINE_MS = 5_000
 const INSTALL_POLL_MS = 1_000
+/** How long a proof waits for the draft's processes to come up, and for each of its verify commands. */
+const PROOF_START_MS = 5 * 60_000
+const PROOF_VERIFY_MS = 30 * 60_000
+/** A recipe's cleanup that takes longer than this is stopped, and the worktree goes anyway. */
+const CLEANUP_MS = 2 * 60_000
 
 interface Deps {
   cwd(conversationId: string): string | undefined
@@ -73,17 +90,22 @@ interface Deps {
 
 export interface EnvironmentTools {
   status(conversationId: string): Promise<string>
-  start(conversationId: string, names?: string[]): Promise<string>
+  start(conversationId: string, names?: string[], target?: string): Promise<string>
   stop(conversationId: string, names?: string[]): Promise<string>
-  restart(conversationId: string, names?: string[]): Promise<string>
+  restart(conversationId: string, names?: string[], target?: string): Promise<string>
   logs(conversationId: string, target: { process: string } | { check: CheckTier }, lines: number): Promise<string>
   /** What the Thread's app touches outside its checkout and ports, for finding what two copies would fight over. */
   probe(conversationId: string): Promise<string>
   /** Linked package folders made the checkout's own, so an install there can't write into the main checkout. */
   ownPackages(conversationId: string): Promise<string>
-  check(conversationId: string, tier: CheckTier): Promise<string>
+  check(conversationId: string, tier: CheckTier, target?: string): Promise<string>
   port(conversationId: string, port: number): Promise<string>
-  save(conversationId: string, recipe: Recipe): Promise<string>
+  /** Saves the recipe as a draft only this Thread runs. */
+  save(conversationId: string, recipe: Recipe, reason?: string): Promise<string>
+  /** Proves this Thread's draft, then publishes it to every Thread; `checked` is how the agent's own checks went. */
+  publish(conversationId: string, checked?: AgentCheck[]): Promise<string>
+  /** Runs the recipe's cleanup for a worktree about to be removed; what happened, or nothing when there's none to run. */
+  cleanup(checkout: string): Promise<string | undefined>
   /** How to set up the recipe; the project shows as being set up by this conversation until its checks pass or its turn ends with one saved. */
   guide(conversationId: string): Promise<string>
   /** The same app, for a person at the desk, by folder. */
@@ -119,7 +141,38 @@ interface Context {
   checkout: string
 }
 
-type Read = Awaited<ReturnType<typeof readRecipe>>
+type Read = RecipeRead
+type Ready = Context & { recipe: Recipe; read: Extract<Read, { kind: "ready" }> }
+
+/** How one of the recipe's `check` verifications went, in the publishing agent's words. */
+export interface AgentCheck {
+  target?: string
+  passed: boolean
+  how: string
+}
+
+/** One of a recipe's verifications: the recipe's own, or a target's. */
+interface Verification {
+  /** In a proof's steps: `verify`, or `verify web`. */
+  label: string
+  /** The run it's kept as: `verify`, or `verify-web`. */
+  run: string
+  target?: string
+  verify: RecipeVerify
+}
+
+type ProofOutcome =
+  | { kind: "failed" | "published"; text: string }
+  | { kind: "checking"; text: string; checks: Verification[]; steps: RecipeProofStep[]; up: Record<string, number>; startedAt: number }
+
+interface ProofRun {
+  version: number
+  startedAt: number
+  /** What it's doing now, for a call that finds it still going. */
+  step: string
+  done: Promise<ProofOutcome>
+  outcome?: ProofOutcome
+}
 
 interface InLine {
   since: number
@@ -200,6 +253,22 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const setups = new Map<string, Setup>()
   /** The conversation whose setup's turn ended before a recipe was saved, by main checkout: it may be asking something. */
   const stoppedSetups = new Map<string, string>()
+  const appUp = async (app: AppKey) =>
+    (await deps.processes.status(app)).some((run) => run.kind === "process" && (run.state.kind === "running" || run.state.kind === "starting"))
+  /**
+   * The recipe an app runs: its draft if it has one, else the version its
+   * running processes started with, else the published one. A version
+   * published while the app runs reaches it at its next start.
+   */
+  const readFor = async (checkout: string, environment: ThreadEnvironment): Promise<Read> => {
+    const read = await readRecipe(checkout, environment, deps.recipesRoot)
+    if (read.kind !== "ready" || read.draft || read.version === undefined || !read.saved) return read
+    const pinned = await runningVersion(read.saved, environment.app)
+    if (pinned === undefined || pinned === read.version || !(await appUp(environment.app))) return read
+    const record = await readVersion(read.saved, pinned)
+    if (!record) return read
+    return { ...read, recipe: record.recipe, version: pinned, from: join(recipeVersions(read.saved), `${pinned}.json`), newer: read.version }
+  }
   const context = async (conversationId: string): Promise<Context & { read: Read }> => {
     const cwd = deps.cwd(conversationId)
     if (!cwd) throw new Error("Mako isn't running this conversation.")
@@ -207,25 +276,32 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (!environment) throw new Error("This conversation isn't in a Thread yet, so it has no app or ports of its own.")
     const checkout = await checkoutOf(cwd)
     await deps.processes.touch(environment.app, checkout)
-    return { environment, checkout, read: await readRecipe(checkout, environment, deps.recipesRoot) }
+    return { environment, checkout, read: await readFor(checkout, environment) }
   }
   const folderContext = async (cwd: string): Promise<Context & { read: Read }> => {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
     const found = await deps.folder(cwd, true)
     const environment = found.environment!
     await deps.processes.touch(environment.app, found.checkout)
-    return { environment, checkout: found.checkout, read: await readRecipe(found.checkout, environment, deps.recipesRoot) }
+    return { environment, checkout: found.checkout, read: await readFor(found.checkout, environment) }
   }
-  const withRecipe = async (conversationId: string): Promise<Context & { recipe: Recipe }> => ready(await context(conversationId))
-  const ready = ({ read, ...rest }: Context & { read: Read }): Context & { recipe: Recipe } => {
+  const withRecipe = async (conversationId: string): Promise<Ready> => ready(await context(conversationId))
+  const ready = ({ read, ...rest }: Context & { read: Read }): Ready => {
     if (read.kind === "none")
       throw new Error("This project has no recipe yet, so Mako has nothing to start or check. Run what you need yourself on this Thread's ports. recipe_guide says how to set one up, which gives every Thread this; do that when the user asks.")
     if (read.kind === "invalid") throw new Error(`The project's recipe is broken, so nothing can start: ${read.message}`)
-    return { ...rest, recipe: read.recipe }
+    return { ...rest, recipe: read.recipe, read }
   }
-  const chosen = (recipe: Recipe, names?: string[]) => {
+  /** The processes to run: those named, a target's, or with neither the first target's, or every process when the recipe has no targets. */
+  const chosen = (recipe: Recipe, names?: string[], target?: string) => {
     const all = Object.keys(recipe.processes)
-    if (!names?.length) return all
+    if (target !== undefined) {
+      const found = recipe.targets?.[target]
+      if (!found) throw new Error(`The recipe has no target named ${target}; it has ${Object.keys(recipe.targets ?? {}).join(", ") || "none"}.`)
+      if (names?.length) throw new Error("Name processes or a target, not both.")
+      return found.processes
+    }
+    if (!names?.length) return Object.values(recipe.targets ?? {})[0]?.processes ?? all
     const unknown = names.filter((name) => !all.includes(name))
     if (unknown.length) throw new Error(`The recipe has no process named ${unknown.join(", ")}; it has ${all.join(", ") || "none"}.`)
     return names
@@ -250,6 +326,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       }
       const port = processPort(spec, context.environment)
       if (port !== undefined) run.port = port
+      if (spec.ready) run.ready = spec.ready
       return run
     }))
   /**
@@ -361,7 +438,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     return found
   }
   /** Starts the named processes, or all; under critical memory it joins the line with `again`, unless `anyway`. */
-  const startIn = async (current: Context & { recipe: Recipe }, names: string[] | undefined, again: () => Promise<StartOutcome>, anyway = false): Promise<StartOutcome> => {
+  const startIn = async (current: Ready, names: string[] | undefined, again: () => Promise<StartOutcome>, anyway = false): Promise<StartOutcome> => {
     const picked = chosen(current.recipe, names)
     if (!picked.length) return { kind: "nothing" }
     const { app } = current.environment
@@ -395,8 +472,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     line.delete(app)
     const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
+    const fresh = !before.some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
+    if (fresh && result.started.length && current.read.saved && current.read.version !== undefined)
+      await pinRunning(current.read.saved, app, current.read.version)
     const statuses = await deps.processes.settle(app, picked.map((name) => runKey("process", name)), settleMs)
-    if (Object.keys(current.recipe.processes).every((name) => statuses.find((entry) => entry.name === name)?.state.kind === "running"))
+    if (picked.every((name) => statuses.find((entry) => entry.kind === "process" && entry.name === name)?.state.kind === "running"))
       for (const setup of setups.values()) {
         const cwd = deps.cwd(setup.conversation)
         if (cwd && (await deps.environment(setup.conversation, cwd).catch(() => undefined))?.app === app) setup.appStarted = true
@@ -428,9 +508,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     return startIn(current, names, again(conversationId, names))
   }
   const deskAgain = (cwd: string) => async (): Promise<StartOutcome> => startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd))
-  const start = async (conversationId: string, names?: string[]) => {
+  const start = async (conversationId: string, names?: string[], target?: string) => {
     const current = await withRecipe(conversationId)
-    return startText(await startIn(current, names, again(conversationId, names)))
+    const picked = chosen(current.recipe, names, target)
+    return startText(await startIn(current, picked, again(conversationId, picked)))
   }
   /** Stops the named processes, or the whole app with its install step and any check under way; finished checks keep their results. */
   const stopIn = async ({ environment, checkout, read }: Context & { read?: Read }, names?: string[]) => {
@@ -528,9 +609,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (conversation !== undefined) owed.delete(owedKey(app, tier, conversation))
     return (await checkReport(app, tier, status, command)) + (joinedNote ? `\n${joinedNote.trim()}` : "")
   }
-  const checkIn = async (current: Context & { recipe: Recipe }, tier: CheckTier, again: () => Promise<StartOutcome>, conversation?: string): Promise<string> => {
-    const command = current.recipe.checks[tier]
-    if (!command) throw new Error(`The recipe has no ${tier} check.`)
+  const checkIn = async (current: Ready, tier: CheckTier, again: () => Promise<StartOutcome>, conversation?: string, target?: string): Promise<string> => {
+    if (target !== undefined && !current.recipe.targets?.[target])
+      throw new Error(`The recipe has no target named ${target}; it has ${Object.keys(current.recipe.targets ?? {}).join(", ") || "none"}.`)
+    const aimed = target ?? Object.keys(current.recipe.targets ?? {})[0]
+    const command = (tier === "full" && aimed !== undefined ? current.recipe.targets?.[aimed]?.full : undefined) ?? current.recipe.checks[tier]
+    if (!command) throw new Error(`The recipe has no ${tier} check${aimed !== undefined && tier === "full" ? ` for ${aimed}` : ""}.`)
     const { app } = current.environment
     const mine = conversation === undefined ? undefined : owedKey(app, tier, conversation)
     const waiting = mine === undefined ? undefined : owed.get(mine)
@@ -545,7 +629,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return `The ${tier} check your last app_check left running was stopped before it finished, so it has no result. Call app_check again to run it.`
     }
     if (tier === "full") {
-      const names = Object.keys(current.recipe.processes)
+      const names = chosen(current.recipe, undefined, aimed)
       if (names.length) {
         const running = startText(await startIn(current, names, again))
         const statuses = await deps.processes.status(app)
@@ -709,6 +793,171 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     return { view, read, checkout: found.checkout }
   }
+  /** Proofs of drafts, by app: the one under way or last finished, which a later recipe_publish waits for or finishes. */
+  const proofs = new Map<AppKey, ProofRun>()
+  const whoIs = (conversationId: string) => {
+    const thread = deps.conversation?.(conversationId)
+    return thread ? `the Thread "${thread.title}" (${thread.harness})` : undefined
+  }
+  const stepsLine = (steps: RecipeProofStep[]) =>
+    steps.map((step) => `${step.name} ${step.passed ? "passed" : "failed"}${step.ms === undefined ? "" : ` in ${elapsed(step.ms)}`}`).join(", ")
+  const proofRecord = (current: Ready, steps: RecipeProofStep[], by: string | undefined) => {
+    const proof = { at: (deps.now ?? Date.now)(), on: "this Mac", checkout: current.checkout, steps }
+    return by ? { ...proof, by } : proof
+  }
+  /** Publishes the draft Mako proved, unless the app saved another since or another version was published meanwhile. */
+  const publishProved = async (current: Ready, version: number, steps: RecipeProofStep[], by: string | undefined, started: number): Promise<ProofOutcome> => {
+    const file = current.read.saved!
+    const { app } = current.environment
+    if ((await appDraft(file, app))?.version !== version)
+      return { kind: "failed", text: `Draft ${version} wasn't published: this Thread saved another draft while it was being proven. Call recipe_publish to prove that one.` }
+    try {
+      await publishDraft(file, app, version, proofRecord(current, steps, by), (deps.now ?? Date.now)())
+    } catch (error) {
+      if (!(error instanceof StaleDraftError)) throw error
+      await recordProof(file, version, proofRecord(current, steps, by))
+      const parent = current.read.draft?.parent === undefined ? undefined : await readVersion(file, current.read.draft.parent)
+      const since = error.published && parent ? recipeChanges(parent.recipe, error.published.recipe) : []
+      return {
+        kind: "failed",
+        text: [
+          `Draft ${version} passed its proof but wasn't published: ${error.message} Publishing it would undo that version's changes.`,
+          error.published?.by ? `${error.published.by} published it${error.published.reason ? `: ${error.published.reason}` : ""}.` : undefined,
+          since.length ? `What it changed:\n${since.map((change) => `  ${change}`).join("\n")}` : undefined,
+          "Make your change on top of it: take the recipe from app_status after app_stop (or the published file it names), apply your change, recipe_save, and recipe_publish again.",
+        ].filter(Boolean).join("\n"),
+      }
+    }
+    await pinRunning(file, app, version)
+    proofs.delete(app)
+    return {
+      kind: "published",
+      text: `Published version ${version} in ${elapsed((deps.now ?? Date.now)() - started)}: ${stepsLine(steps)}. Every Thread of this project uses it from its next app start; apps already running keep the version they started with until then.`,
+    }
+  }
+  /**
+   * Mako's part of a draft's proof: stop the app, install what's due, start
+   * every process the recipe's targets need, wait until each is running, and
+   * run each `verify.run`. Then either the agent's checks are what's left,
+   * or the draft is published.
+   */
+  const prove = async (current: Ready, run: ProofRun, by: string | undefined): Promise<ProofOutcome> => {
+    const { app } = current.environment
+    const { recipe } = current
+    const version = run.version
+    const file = current.read.saved!
+    const now = deps.now ?? Date.now
+    const steps: RecipeProofStep[] = []
+    const fail = async (why: string): Promise<ProofOutcome> => {
+      await recordProof(file, version, proofRecord(current, steps, by))
+      return { kind: "failed", text: `Draft ${version} wasn't published: ${why}\n\nIt stays this Thread's draft, and every other Thread keeps the published version. Fix it, recipe_save, then recipe_publish again.` }
+    }
+    const names = [...new Set(recipe.targets ? Object.values(recipe.targets).flatMap((target) => target.processes) : Object.keys(recipe.processes))]
+    run.step = "stopping the app to start it fresh"
+    await deps.processes.stop(app, Object.keys(recipe.processes).map((name) => runKey("process", name)))
+    if (recipe.prepare.length) {
+      run.step = "installing"
+      const began = now()
+      for (;;) {
+        const preparing = await prepare(current)
+        if (!preparing) break
+        if (!preparing.installing) {
+          steps.push({ name: "install", passed: false, ms: now() - began })
+          return fail(preparing.message)
+        }
+        await deps.processes.settle(app, [PREPARE_KEY], PROOF_START_MS)
+      }
+      steps.push({ name: "install", passed: true, ms: now() - began })
+    }
+    else await bringCheckoutFiles(current)
+    if (names.length) {
+      run.step = `starting ${names.join(", ")}`
+      const began = now()
+      const outcome = await startIn(current, names, async () => ({ kind: "nothing" }), true)
+      if (outcome.kind !== "started") {
+        steps.push({ name: "start", passed: false, ms: now() - began })
+        return fail(startText(outcome))
+      }
+      const statuses = await deps.processes.settle(app, names.map((name) => runKey("process", name)), PROOF_START_MS)
+      const down = statuses.filter((status) => status.kind === "process" && status.state.kind !== "running")
+      if (down.length || statuses.length < names.length) {
+        steps.push({ name: "start", passed: false, ms: now() - began })
+        const lines = await Promise.all(names.map(async (name) => {
+          const status = statuses.find((entry) => entry.kind === "process" && entry.name === name)
+          return `${name}: ${describe(status)}${await failureTail(deps.processes, app, status)}`
+        }))
+        return fail(`not every process came up within ${elapsed(PROOF_START_MS)}:\n${lines.join("\n")}`)
+      }
+      steps.push({ name: "start", passed: true, ms: now() - began })
+    }
+    const verifications = recipeVerifications(recipe)
+    for (const verification of verifications) {
+      if (!("run" in verification.verify)) continue
+      const command = verification.verify.run
+      const key = runKey("check", verification.run)
+      run.step = `running ${verification.label} (${command})`
+      await deps.processes.stop(app, [key])
+      await deps.processes.start(app, [{ kind: "check", name: verification.run, command, cwd: current.checkout, env: env(current, recipe) }])
+      const [status] = await deps.processes.settle(app, [key], PROOF_VERIFY_MS)
+      if (status?.state.kind === "running" || status?.state.kind === "starting") {
+        await deps.processes.stop(app, [key])
+        steps.push({ name: verification.label, passed: false, ms: PROOF_VERIFY_MS, command })
+        return fail(`${verification.label} (${command}) didn't finish within ${elapsed(PROOF_VERIFY_MS)}, so Mako stopped it. A verification proves the recipe works; it isn't a test suite.`)
+      }
+      const passed = status?.state.kind === "exited" && status.state.code === 0
+      steps.push({ name: verification.label, passed, ms: status?.state.kind === "exited" && status.startedAt !== undefined ? status.state.at - status.startedAt : 0, command })
+      if (!passed) return fail(`${verification.label} (${command}) ${checkResult(status)}${took(status)}.\n\n${await runOutput(deps.processes, app, key)}`)
+    }
+    const checks = verifications.filter((verification) => "check" in verification.verify)
+    if (!checks.length) return publishProved(current, version, steps, by, run.startedAt)
+    const up = Object.fromEntries((await deps.processes.status(app))
+      .filter((status) => status.kind === "process" && names.includes(status.name))
+      .map((status) => [status.name, status.startedAt ?? 0]))
+    const address = appAddress(recipe, current.environment, await deps.processes.status(app))
+    return {
+      kind: "checking",
+      checks,
+      steps,
+      up,
+      startedAt: run.startedAt,
+      text: [
+        `Draft ${version} is up for your checks: ${steps.length ? stepsLine(steps) : "nothing to install or start"}${address ? `, at ${address}` : ""}. Now check what the recipe asks, yourself:`,
+        ...checks.map((check) => `- ${check.target ? `${check.target}: ` : ""}${"check" in check.verify ? expandTemplate(check.verify.check, current.environment) : ""}`),
+        "Use whatever shows it: the running app through Mako's computer control, app_logs, a request from your shell. Don't restart the app or save the recipe in between; Mako publishes only the copy it started.",
+        `Then call recipe_publish with checked: for each${checks.some((check) => check.target) ? " target" : ""}, whether it passed and, in a sentence or two, how you saw it. That's kept with the version.`,
+      ].join("\n"),
+    }
+  }
+  /** The processes that stopped or restarted since a proof started them. */
+  const movedSince = async (app: AppKey, up: Record<string, number>) => {
+    const statuses = await deps.processes.status(app)
+    return Object.entries(up).filter(([name, at]) => {
+      const status = statuses.find((entry) => entry.kind === "process" && entry.name === name)
+      return status?.state.kind !== "running" || status.startedAt !== at
+    }).map(([name]) => name)
+  }
+  /** Finishes a proof that waits on the agent's checks, with how they went. */
+  const finishChecks = async (current: Ready, run: ProofRun | undefined, checked: AgentCheck[], by: string | undefined): Promise<string> => {
+    const version = current.read.version!
+    const outcome = run?.version === version ? run.outcome : undefined
+    if (outcome?.kind !== "checking")
+      throw new Error(`Mako hasn't started draft ${version} for your checks yet. Call recipe_publish without checked first: it installs and starts the draft, runs what Mako can, then says what to check.`)
+    const moved = await movedSince(current.environment.app, outcome.up)
+    if (moved.length)
+      throw new Error(`${moved.join(", ")} stopped or restarted after Mako started draft ${version}, so what you checked isn't the copy Mako proved. Call recipe_publish without checked to start it again.`)
+    const unknown = checked.filter((check) => !outcome.checks.some((wanted) => wanted.target === check.target))
+    if (unknown.length) throw new Error(`The recipe asks for no check ${unknown.map((check) => check.target ?? "without a target").join(", ")}; it asks for ${outcome.checks.map((check) => check.target ?? "one without a target").join(", ")}.`)
+    const missing = outcome.checks.filter((wanted) => !checked.some((check) => check.target === wanted.target))
+    if (missing.length) throw new Error(`Say how every check went; missing: ${missing.map((check) => check.target ?? "the recipe's check").join(", ")}.`)
+    const steps = [...outcome.steps, ...checked.map((check) => ({ name: check.target ? `check ${check.target}` : "check", passed: check.passed, how: check.how }))]
+    const failed = checked.filter((check) => !check.passed)
+    if (failed.length) {
+      await recordProof(current.read.saved!, version, proofRecord(current, steps, by))
+      proofs.delete(current.environment.app)
+      return `Draft ${version} wasn't published: ${failed.map((check) => check.target ?? "the check").join(", ")} didn't pass. It stays this Thread's draft, and every other Thread keeps the published version. Fix the recipe, recipe_save, and recipe_publish again.`
+    }
+    return (await publishProved(current, version, steps, by, outcome.startedAt)).text
+  }
   const desk: DeskApp = {
     view: deskView,
     async setup(cwd) {
@@ -728,9 +977,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       await stopIn(await folderContext(cwd))
     },
     async restart(cwd) {
-      const current = ready(await folderContext(cwd))
-      await stopIn(current)
-      return deskOutcome(await startIn(current, undefined, deskAgain(cwd)))
+      await stopIn(ready(await folderContext(cwd)))
+      return deskOutcome(await startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd)))
     },
     async check(cwd, tier) {
       await checkIn(ready(await folderContext(cwd)), tier, deskAgain(cwd))
@@ -840,11 +1088,14 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     },
     start,
     stop,
-    async restart(conversationId, names) {
+    async restart(conversationId, names, target) {
       const current = await withRecipe(conversationId)
-      const picked = chosen(current.recipe, names)
+      const picked = chosen(current.recipe, names, target)
       await deps.processes.stop(current.environment.app, picked.map((name) => runKey("process", name)))
-      return startText(await startIn(current, picked, again(conversationId, picked)))
+      // With nothing left running, the app is no longer held to the version it started with.
+      const next = (await appUp(current.environment.app)) ? current : await withRecipe(conversationId)
+      const restarted = next === current ? picked : chosen(next.recipe, names, target)
+      return startText(await startIn(next, restarted, again(conversationId, restarted)))
     },
     async probe(conversationId) {
       return probe(await context(conversationId))
@@ -867,8 +1118,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const key = "check" in target ? runKey("check", target.check) : target.process === "prepare" ? PREPARE_KEY : runKey("process", target.process)
       return cleanOutput(await deps.processes.logs(environment.app, key, lines))
     },
-    async check(conversationId, tier) {
-      return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId)
+    async check(conversationId, tier, target) {
+      return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId, target)
     },
     async port(conversationId, port) {
       const { environment } = await context(conversationId)
@@ -876,31 +1127,77 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (!owner) return `Nothing on this Mac listens on port ${port}.`
       return deps.processes.describeHolder(port, environment.app)
     },
-    async save(conversationId, recipe) {
+    async save(conversationId, recipe, reason) {
       if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
       const { environment, checkout, read } = await context(conversationId)
       const granted = grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
       const carried = await carryReport(recipe, await projectRoot(checkout), granted)
-      const saved = await saveRecipe(deps.recipesRoot, checkout, recipe, environment)
+      const saved = await saveDraft(deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
       const after = await readRecipe(checkout, environment, deps.recipesRoot)
-      if (after.kind !== "ready") throw new Error(`Saved to ${saved.file}, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
-      const running = (await deps.processes.status(environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
+      if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
+      const running = await appUp(environment.app)
       const changes = read.kind === "ready" ? recipeChanges(read.recipe, after.recipe) : []
+      const { version } = saved
+      if (version.state === "published")
+        return `That's version ${version.version}, the published recipe, so this Thread has no draft any more and runs version ${version.version} like every other Thread.${running ? " Its processes still run as they were started; app_restart runs them with it." : ""}`
       return [
-        `Saved as this project's recipe in Mako, ${saved.file}. Every Thread of this project uses it from now on, on every branch; nothing needs committing or merging for that.`,
+        read.kind === "ready" && read.draft && read.version === version.version
+          ? `That's this Thread's draft already, version ${version.version}; nothing changed.`
+          : `Saved as draft version ${version.version}${version.parent === undefined ? ", the project's first recipe" : `, made from version ${version.parent}`}. Only this Thread runs it; every other Thread keeps ${saved.published === undefined ? (after.ignored ? `the committed ${RECIPE_PATH}` : "running without a recipe") : `version ${saved.published}`} until it's published.`,
         read.kind === "none"
-          ? "It's the project's first recipe."
+          ? undefined
           : read.kind === "invalid"
-            ? "The recipe it replaced couldn't be read, so there's nothing to compare it with."
+            ? "The recipe it replaces here couldn't be read, so there's nothing to compare it with."
             : changes.length
-              ? `Changed from the version it replaced:\n${changes.map((change) => `  ${change}`).join("\n")}`
-              : "It's the same as the version it replaced.",
-        saved.previous ? `The version it replaced is kept at ${saved.previous}.` : undefined,
-        after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; Mako's saved recipe comes first, so that file is ignored while this one exists.` : undefined,
+              ? `Changed from what this Thread ran:\n${changes.map((change) => `  ${change}`).join("\n")}`
+              : undefined,
+        after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; once this is published, Mako's recipe comes first and that file is ignored.` : undefined,
         ...carried,
-        running ? "This Thread's processes are still running as they were started; app_restart runs them with this recipe." : undefined,
-        "Agents already running keep the values their shell started with; their next Session gets these. Prove it now: app_restart, then app_check quick and full.",
+        running ? "This Thread's processes still run as they were started; app_restart runs them with the draft." : undefined,
+        "Iterate with app_restart and app_check as you need. Once it works, recipe_publish proves it and publishes it to every Thread.",
       ].filter(Boolean).join("\n")
+    },
+    async publish(conversationId, checked) {
+      if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes.")
+      const current = await withRecipe(conversationId)
+      const { app } = current.environment
+      const version = current.read.version
+      if (!current.read.draft || version === undefined || !current.read.saved)
+        return version === undefined
+          ? "This Thread has no draft to publish. recipe_save makes one."
+          : `This Thread has no draft to publish; it runs version ${version}${current.read.newer ? `, and version ${current.read.newer} is published` : ", the published one"}. recipe_save makes a draft.`
+      const by = whoIs(conversationId)
+      const earlier = proofs.get(app)
+      if (checked?.length) return finishChecks(current, earlier, checked, by)
+      const reuse = earlier?.version === version
+        && (!earlier.outcome || (earlier.outcome.kind === "checking" && !(await movedSince(app, earlier.outcome.up)).length))
+      const run: ProofRun = reuse ? earlier : { version, startedAt: (deps.now ?? Date.now)(), step: "starting", done: Promise.resolve({ kind: "failed", text: "" }) }
+      if (!reuse) {
+        run.done = prove(current, run, by).catch((error: Error) => ({ kind: "failed" as const, text: `Draft ${version} wasn't published: the proof broke off (${error.message}).` }))
+        void run.done.then((outcome) => { run.outcome = outcome })
+        proofs.set(app, run)
+      }
+      const waited = await Promise.race([run.done, new Promise<undefined>((done) => setTimeout(() => done(undefined), checkWait(conversationId)).unref?.())])
+      if (waited) return waited.text
+      return `The proof of draft ${version} is still running (${run.step}), ${elapsed((deps.now ?? Date.now)() - run.startedAt)} in, and keeps going. Call recipe_publish again to wait for this same proof; it doesn't start another.`
+    },
+    async cleanup(checkout) {
+      if (!deps.folder) return undefined
+      const found = await deps.folder(checkout, false)
+      if (!found.environment) return undefined
+      const read = await readFor(found.checkout, found.environment)
+      if (read.kind !== "ready" || !read.recipe.cleanup) return undefined
+      const { app } = found.environment
+      const command = read.recipe.cleanup
+      const key = runKey("check", "cleanup")
+      await deps.processes.start(app, [{ kind: "check", name: "cleanup", command, cwd: found.checkout, env: env({ environment: found.environment, checkout: found.checkout }, read.recipe) }])
+      const [status] = await deps.processes.settle(app, [key], CLEANUP_MS)
+      if (status?.state.kind === "running" || status?.state.kind === "starting") {
+        await deps.processes.stop(app, [key])
+        return `cleanup (${command}) didn't finish within ${elapsed(CLEANUP_MS)}, so Mako stopped it`
+      }
+      const passed = status?.state.kind === "exited" && status.state.code === 0
+      return passed ? `cleanup (${command}) passed${took(status)}` : `cleanup (${command}) ${checkResult(status)}${took(status)}: ${cleanOutput((await deps.processes.output(app, key).catch(() => ({ text: "" }))).text)}`
     },
   }
 }
@@ -972,6 +1269,8 @@ function checkView(tier: CheckTier, command: string, status: RunStatus | undefin
 }
 
 interface RecipeSummary {
+  /** Which version this app runs, and whether it's published. */
+  version?: string
   /** Set only for a recipe that can't be used, with why. */
   broken?: string
   /** The file in use, or the one that's broken. */
@@ -988,6 +1287,12 @@ function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSumm
   if (read.kind === "invalid") summary.broken = read.message
   if (read.from) summary.file = read.from
   if (read.saved && read.saved !== read.from) summary.savedIn = read.saved
+  if (read.kind === "ready" && read.version !== undefined)
+    summary.version = read.draft
+      ? `${read.version}, this Thread's draft${read.draft.parent === undefined ? "" : `, made from version ${read.draft.parent}`}; only this Thread runs it until recipe_publish proves and publishes it`
+      : read.newer !== undefined
+        ? `${read.version}, which this app's processes started with; version ${read.newer} is published, and app_restart of the whole app runs it`
+        : `${read.version}, published`
   if (read.kind === "ready") {
     if (read.ignored) summary.ignored = `${read.ignored}: committed with the project, but the recipe saved in Mako comes first`
     summary.contents = read.recipe
@@ -1000,12 +1305,12 @@ async function recipeState(read: Read): Promise<ProjectRecipeState> {
   if (read.kind === "none") return { kind: "none" }
   if (read.kind === "invalid") return read.from ? { kind: "invalid", message: read.message, file: read.from } : { kind: "invalid", message: read.message }
   const { recipe } = read
-  const saved = read.from === read.saved
+  const saved = read.from === read.saved || read.version !== undefined
   const state: ProjectRecipeState = {
     kind: "ready",
     source: saved ? "mako" : "committed",
     file: read.from,
-    earlier: saved ? (await readdir(recipeHistory(read.from)).catch(() => [])).filter((name) => name.endsWith(".json")).length : 0,
+    earlier: read.saved ? Math.max(0, (await versionCount(read.saved)) - 1) : 0,
     recipe: {
       values: recipe.values,
       processes: Object.entries(recipe.processes).map(([name, spec]) => {
@@ -1022,6 +1327,8 @@ async function recipeState(read: Read): Promise<ProjectRecipeState> {
   }
   const savedAt = (await stat(read.from).catch(() => undefined))?.mtimeMs
   if (savedAt !== undefined) state.savedAt = Math.round(savedAt)
+  if (read.version !== undefined) state.version = read.version
+  if (read.draft) state.draft = true
   if (read.ignored) state.ignored = read.ignored
   return state
 }
@@ -1043,7 +1350,7 @@ function describe(status: RunStatus | undefined): string {
   const state = status.state
   const where = status.port === undefined ? "" : ` on port ${status.port}`
   if (state.kind === "running") return `running${where}`
-  if (state.kind === "starting") return `starting; port ${status.port} doesn't answer yet`
+  if (state.kind === "starting") return status.ready === undefined ? `starting; port ${status.port} doesn't answer yet` : `starting; its ready command (${status.ready}) hasn't passed yet`
   if (state.kind === "exited") return state.code === 0 ? "finished (exit 0)" : `crashed (exit ${state.code})`
   if (state.kind === "ended") return "ended without an exit code (something outside Mako stopped it, or the Mac restarted)"
   return "stopped"
@@ -1097,19 +1404,32 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     if (value !== undefined) found.set(path, JSON.stringify(value))
   }
   // A field added to the recipe fails to compile here until it's listed below.
-  const { $schema, values, processes, checks, prepare, carry, secrets, oneAtATime, ...unlisted } = recipe
+  const { $schema, values, processes, targets, checks, prepare, carry, secrets, oneAtATime, verify, cleanup, ...unlisted } = recipe
   const none: Record<string, never> = unlisted
   void none
   put("$schema", $schema)
   for (const [name, value] of Object.entries(values)) put(`values.${name}`, value)
   for (const [name, spec] of Object.entries(processes)) {
-    const { command, cwd, port, values: own, ...unlistedProcess } = spec
+    const { command, cwd, port, values: own, ready, ...unlistedProcess } = spec
     const noneInProcess: Record<string, never> = unlistedProcess
     void noneInProcess
     put(`processes.${name}.command`, command)
     put(`processes.${name}.cwd`, cwd)
     put(`processes.${name}.port`, port)
+    put(`processes.${name}.ready`, ready)
     for (const [key, value] of Object.entries(own ?? {})) put(`processes.${name}.values.${key}`, value)
+  }
+  const putVerify = (path: string, given: RecipeVerify | undefined) => {
+    if (given && "run" in given) put(`${path}.run`, given.run)
+    if (given && "check" in given) put(`${path}.check`, given.check)
+  }
+  for (const [name, target] of Object.entries(targets ?? {})) {
+    const { processes: runs, full, verify: own, ...unlistedTarget } = target
+    const noneInTarget: Record<string, never> = unlistedTarget
+    void noneInTarget
+    put(`targets.${name}.processes`, runs)
+    put(`targets.${name}.full`, full)
+    putVerify(`targets.${name}.verify`, own)
   }
   put("checks.quick", checks.quick)
   put("checks.full", checks.full)
@@ -1124,6 +1444,8 @@ function recipeFields(recipe: Recipe): Map<string, string> {
   put("carry", carry)
   put("secrets", secrets)
   put("oneAtATime", oneAtATime)
+  putVerify("verify", verify)
+  put("cleanup", cleanup)
   return found
 }
 
@@ -1139,6 +1461,14 @@ function recipeChanges(before: Recipe, after: Recipe): string[] {
     if (is === undefined) return [`${path}: removed, was ${was}`]
     return [`${path}: was ${was}, now ${is}`]
   })
+}
+
+/** Every verification a recipe asks for before a version is published: its own, then each target's. */
+function recipeVerifications(recipe: Recipe): Verification[] {
+  return [
+    ...(recipe.verify ? [{ label: "verify", run: "verify", verify: recipe.verify }] : []),
+    ...Object.entries(recipe.targets ?? {}).flatMap(([name, target]) => target.verify ? [{ label: `verify ${name}`, run: `verify-${name}`, target: name, verify: target.verify }] : []),
+  ]
 }
 
 async function runOutput(processes: ThreadProcesses, app: AppKey, key: string): Promise<string> {
@@ -1170,6 +1500,10 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
   const names = z.object({
     processes: z.array(z.string().min(1).max(32)).max(20).optional().describe("The recipe's process names; all of them when left out."),
   }).strict()
+  const aimed = z.object({
+    processes: z.array(z.string().min(1).max(32)).max(20).optional().describe("The recipe's process names; when left out, the target's, or the first target's, or all of them if the recipe has no targets."),
+    target: z.string().min(1).max(32).optional().describe("One of the recipe's targets, such as web or desktop, to run the processes it needs."),
+  }).strict()
   server.registerTool(
     "app_status",
     {
@@ -1184,11 +1518,11 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_start",
     {
       description:
-        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes on this Thread's ports and waits up to about 25 seconds for their ports to answer. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log.",
-      inputSchema: names,
+        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes (or one target's, such as web or desktop) on this Thread's ports and waits up to about 25 seconds for each to be ready: its port answering, or its ready command passing. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log.",
+      inputSchema: aimed,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ processes }) => reply(() => tools.start(conversationId(), processes))
+    ({ processes, target }) => reply(() => tools.start(conversationId(), processes, target))
   )
   server.registerTool(
     "app_stop",
@@ -1203,10 +1537,10 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_restart",
     {
       description: "Stop, then start, this Thread's app: after changing configuration, the recipe's values or dependencies that a running dev server doesn't reload, or after recipe_save changed how its processes start.",
-      inputSchema: names,
+      inputSchema: aimed,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    ({ processes }) => reply(() => tools.restart(conversationId(), processes))
+    ({ processes, target }) => reply(() => tools.restart(conversationId(), processes, target))
   )
   server.registerTool(
     "app_logs",
@@ -1245,11 +1579,14 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_check",
     {
       description:
-        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app first, then checks it while it runs. After recipe_save, both must pass before you report the recipe. Returns the result and how long it took, and for a failure the run's whole output. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
-      inputSchema: z.object({ tier: z.enum(["quick", "full"]) }).strict(),
+        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app (or a target's processes) first, then checks it while it runs. Returns the result and how long it took, and for a failure the run's whole output. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
+      inputSchema: z.object({
+        tier: z.enum(["quick", "full"]),
+        target: z.string().min(1).max(32).optional().describe("For a recipe with targets: whose full check, and whose processes it starts; the first target's when left out."),
+      }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    ({ tier }) => reply(() => tools.check(conversationId(), tier))
+    ({ tier, target }) => reply(() => tools.check(conversationId(), tier, target))
   )
   server.registerTool(
     "recipe_guide",
@@ -1265,17 +1602,38 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "recipe_save",
     {
       description:
-        "Replace this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run; the version it replaces is kept. Mako keeps it for the project, so every Thread on every branch uses it at once and nothing needs committing. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more. Prove it in the same turn: app_restart, then app_check quick and full.",
+        "Save a new version of this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run. It's saved as a draft only this Thread runs, so you can iterate with app_restart and app_check; recipe_publish then proves it and publishes it to every Thread. Returns what changed. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more.",
       inputSchema: z.object({
-        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and carry, secrets and oneAtATime when it needs them."),
+        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and targets, verify, carry, secrets, cleanup and oneAtATime when it needs them."),
+        reason: z.string().trim().min(1).max(500).describe("Why, in a line, for the project's version history, such as \"Run the API on its own port\"."),
       }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ recipe }) => reply(async () => {
+    ({ recipe, reason }) => reply(async () => {
       const parsed = RecipeSchema.safeParse(recipe)
       if (!parsed.success) throw new Error(`Not saved: ${recipeIssues(parsed.error)}`)
-      return tools.save(conversationId(), parsed.data)
+      return tools.save(conversationId(), parsed.data, reason)
     })
+  )
+  server.registerTool(
+    "recipe_publish",
+    {
+      description:
+        "Publish this Thread's draft of the recipe to every Thread of the project, once it works. Mako proves it first, on this Thread's copy: it stops the app, installs what's due, starts every process and waits until each is ready, then runs the recipe's verify commands. A failure leaves it a draft and returns the failing step with its whole output. When the recipe asks for checks you make yourself (verify.check), this call starts the draft and says what to check; call again with checked, how each went, to publish. A proof that outlasts the call keeps going, and calling again waits for the same one. The version and its proof are kept in the project's history.",
+      inputSchema: z.object({
+        checked: z.array(z.object({
+          target: z.string().min(1).max(32).optional().describe("The target the check is for; left out for the recipe's own verify."),
+          passed: z.boolean(),
+          how: z.string().trim().min(1).max(2_000).describe("What you did and saw, in a sentence or two, such as \"Opened the URL through computer control, signed in as the seeded user, the inbox listed 3 threads\"."),
+        }).strict()).max(20).optional().describe("Only after recipe_publish said what to check: how each check went."),
+      }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    ({ checked }) => reply(() => tools.publish(conversationId(), checked?.map((check) => {
+      return check.target === undefined
+        ? { passed: check.passed, how: check.how }
+        : { passed: check.passed, how: check.how, target: check.target }
+    })))
   )
   server.registerTool(
     "port_holder",

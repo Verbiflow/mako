@@ -47,8 +47,8 @@ export function createContinuationPlanner<Snapshot>(
     if (owner?.kind === "unavailable") return { transport: "unavailable", reason: owner.reason }
     const live = dependencies.live(ref.harness)
     const running = dependencies.running(path)
-    const assessment = !ref.archived && !ref.resumeUnavailable && live?.available && live.canResume && ref.liveResume !== false && !running
-      ? await dependencies.assessResume?.(ref) : undefined
+    const assessment = !ref.archived && !ref.resumeUnavailable && (live?.canResume || dependencies.nativeInstalled(ref.harness)) && !running
+      ? await dependencies.assessResume?.(ref) ?? { kind: "unavailable" as const, reason: "Native session recovery evidence is unavailable. Reconnect the host before replying." } : undefined
     if (assessment?.kind === "held") return { transport: "refused", reason: `This session is open in ${assessment.by}. Wait for it to finish before replying.` }
     if (assessment?.kind === "unavailable") return { transport: "unavailable", reason: assessment.reason }
     if (assessment?.kind === "closed") return { transport: "handoff", provider: ref.harness, reason: assessment.reason }

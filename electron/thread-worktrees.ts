@@ -152,6 +152,8 @@ async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value
 /** A Worktree Thread's running app ends with its worktree: its processes stop before the folder goes, and its data after. */
 export interface ThreadEnvironmentEnd {
   stop(thread: ThreadId): Promise<void>
+  /** Runs the recipe's cleanup in the worktree, while it's still there under its own name. */
+  cleanup?(thread: ThreadId, path: string): Promise<void>
   discard(thread: ThreadId, path: string): Promise<void>
 }
 
@@ -488,7 +490,10 @@ export class ThreadWorktreeService {
     if (existsSync(path)) {
       const blocker = await removalBlocker(path)
       if (blocker) throw new Error(blocker)
-      if (attached) await this.environment?.stop(attached.thread)
+      if (attached) {
+        await this.environment?.stop(attached.thread)
+        await this.environment?.cleanup?.(attached.thread, path)
+      }
       await setAside(repoRoot, path, this.trash())
     } else {
       if (attached) await this.environment?.stop(attached.thread)

@@ -67,7 +67,7 @@ function recipeInstructions(environment: ThreadEnvironment): string | undefined 
     recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with app_check, when one covers what you changed.` : undefined,
     recipe.linked?.length ? `This checkout's ${recipe.linked.join(", ")} link each package to the main checkout's, so it needed no install. An install here would write through the links into the main checkout's packages: before you install, add, remove or upgrade any dependency, call app_own_packages, which gives this checkout its own copy in a few seconds, then install as usual.` : undefined,
     "port_holder names whoever holds a port.",
-    "If your change alters how the project installs, starts or is checked, update the recipe in the same turn with recipe_save.",
+    "If your change alters how the project installs, starts or is checked, update the recipe in the same turn: recipe_save, then recipe_publish once it works.",
   ].filter(Boolean).join(" ")
 }
 

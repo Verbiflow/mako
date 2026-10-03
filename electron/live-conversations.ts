@@ -1295,8 +1295,10 @@ export class LiveConversations {
     let startedSession: LiveSessionState | undefined
     try {
       const verdict = await this.dependencies.resumeVerdict?.(binding)
-      if (verdict && !resumable(verdict, "moved"))
+      if (!verdict || !resumable(verdict, "moved"))
         throw new Error(reconnectRefusal(verdict))
+      if (resident.generation !== generation || resident.closing) return
+      if (!this.moves.executes(resident)) throw new Error("Execution ownership changed while preparing native recovery.")
       this.dependencies.memory?.hold(
         binding.provider,
         binding.nativeId,
@@ -1311,6 +1313,18 @@ export class LiveConversations {
         )?.tuning ??
         resident.snapshot.session.settings ??
         binding.tuning
+      const conversationTools = await this.dependencies.tools?.(binding.id, resident.snapshot.session.id)
+      const threadEnvironment = await this.dependencies.threadEnvironment?.(
+        resident.snapshot.session.id, resident.snapshot.session.title, resident.snapshot.session.cwd
+      )
+      // Close or an ownership move may have happened during asynchronous preparation.
+      // Keep this check and start in the same event-loop turn.
+      if (resident.generation !== generation || resident.closing) {
+        if (held) this.releaseHold(binding.provider, binding.nativeId, resident.snapshot.session.id)
+        held = false
+        return
+      }
+      if (!this.moves.executes(resident)) throw new Error("Execution ownership changed while preparing native recovery.")
       const session = await driver.start(resident.snapshot.session.cwd, {
         conversationId: binding.id,
         resume: binding.nativeId,
@@ -1326,15 +1340,8 @@ export class LiveConversations {
           ? () =>
               this.dependencies.mcpSnapshot!(resident.snapshot.session.cwd)
           : undefined,
-        conversationTools: await this.dependencies.tools?.(
-          binding.id,
-          resident.snapshot.session.id
-        ),
-        threadEnvironment: await this.dependencies.threadEnvironment?.(
-          resident.snapshot.session.id,
-          resident.snapshot.session.title,
-          resident.snapshot.session.cwd
-        ),
+        conversationTools,
+        threadEnvironment,
       })
       startedSession = session
       if (resident.generation !== generation) {

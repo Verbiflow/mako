@@ -17,7 +17,9 @@ import { ControlPreviews } from "./control-previews.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import type { DesktopNotification } from "./contracts/notifications.js"
 import { RelayConversations } from "./relay-conversations.js"
-import { nativeCheckpoint, resumeVerdict } from "./native-continuation.js"
+import { assessProviderResume } from "./provider-recovery.js"
+import { randomUUID } from "node:crypto"
+import type { ProviderBinding, ResumeVerdict } from "./contracts/conversation-control.js"
 import { nativePathForSession } from "./threads.js"
 import { createContinuationPlanner } from "./continuation.js"
 import { NativeRequests } from "./native-requests.js"
@@ -399,6 +401,8 @@ setInterval(() => {
     if (stopped.length) hostLog("threads", "stopped apps unused for six hours", { threads: stopped.join(", ") })
   }, (error) => hostWarn("threads", "idle apps couldn't be stopped", { error: error instanceof Error ? error.message : String(error) }))
 }, 10 * 60 * 1000).unref()
+/** The recipe's cleanup for a worktree about to be removed, once the app tools exist. */
+let worktreeCleanup: ((path: string) => Promise<string | undefined>) | undefined
 const threadWorktrees = threadStore
   ? new ThreadWorktreeService(join(realpathSync(dirname(threadStore.path)), "worktrees"), threadStore, async (path) => {
       const shells = (await terminalClients?.runningShells().catch(() => []) ?? [])
@@ -407,6 +411,10 @@ const threadWorktrees = threadStore
       return [...conversationsIn(path, (status) => status !== "closed"), ...shells]
     }, async (path) => conversationsIn(path, (status) => status === "running"), threadProcesses && threadEnvironments ? {
       stop: async (thread) => { await threadProcesses.stop(AppKeySchema.parse(thread)) },
+      cleanup: async (thread, path) => {
+        const done = await worktreeCleanup?.(path).catch((error: Error) => `cleanup couldn't run: ${error.message}`)
+        if (done) hostLog("threads", "worktree cleanup", { thread, path, result: done })
+      },
       discard: async (thread, path) => {
         await threadProcesses.discard(AppKeySchema.parse(thread))
         await threadProcesses.forgetPrepared(path)
@@ -1183,6 +1191,18 @@ async function openPreviewWindow(): Promise<void> {
   }
 }
 
+async function assessResume(binding: ProviderBinding): Promise<ResumeVerdict> {
+  // Closed native records may be relocated; neither path grants a reopen.
+  const current = binding.nativeId
+    ? nativePathForSession({ harness: binding.provider, nativeId: binding.nativeId, nativePath: binding.path })
+    : undefined
+  const closed = [binding.path, current]
+    .map((path) => path ? catalogRef(path) : undefined)
+    .find((ref) => ref?.harness === binding.provider && ref.resumeUnavailable)
+  if (closed?.resumeUnavailable) return { kind: "closed", reason: closed.resumeUnavailable }
+  return assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider))
+}
+
 function bindIpc() {
   installSessionIpc({
     liveSummaries: () => liveConversations.summaries(),
@@ -1306,7 +1326,7 @@ function bindIpc() {
     ]),
   ]
   const continuation = createContinuationPlanner({
-    assessResume: async (ref) => providerHost.liveDrivers.get(ref.harness)?.resumeVerdict?.({
+    assessResume: async (ref) => assessResume({
       id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
       coveredBlocks: 0, includesBase: false,
     }),
@@ -2166,36 +2186,18 @@ app.whenReady().then(async () => {
       join(app.getPath("userData"), "workspace-snapshots")
     ),
     checkpoint: (path, provider) => {
-      const driver = provider
-        ? providerHost.liveDrivers.get(provider)
+      const sourceProvider = provider ?? catalogRef(path)?.harness
+      const driver = sourceProvider
+        ? providerHost.liveDrivers.get(sourceProvider)
         : undefined
-      return driver?.checkpoint
-        ? driver.checkpoint(path)
-        : nativeCheckpoint(path)
+      return driver?.checkpoint?.(path) ?? Promise.resolve(undefined)
     },
     nativePath: nativePathForSession,
     emitSession: async (provider, thread) => {
       const emitter = providerHost.sessionEmitters.get(provider)
       return emitter ? emitter.emit(thread) : null
     },
-    resumeVerdict: async (binding) => {
-      // The catalog knows which records their harness keeps closed; the
-      // binding's path may predate a move, such as Codex archiving its rollout.
-      const current = binding.nativeId
-        ? nativePathForSession({ harness: binding.provider, nativeId: binding.nativeId, nativePath: binding.path })
-        : undefined
-      const closed = [binding.path, current]
-        .map((path) => (path ? catalogRef(path) : undefined))
-        .find((ref) => ref?.harness === binding.provider && ref.resumeUnavailable)
-      if (closed?.resumeUnavailable) return { kind: "closed", reason: closed.resumeUnavailable }
-      const driver = providerHost.liveDrivers.get(binding.provider)
-      return driver?.resumeVerdict
-        ? driver.resumeVerdict(binding)
-        : resumeVerdict(
-            binding,
-            providerHost.processProbes.get(binding.provider)
-          )
-    },
+    resumeVerdict: assessResume,
     appPath: app.getAppPath(),
     root: join(app.getPath("userData"), "conversations"),
     tools: async (bindingId, conversationId) => {
@@ -2351,7 +2353,10 @@ app.whenReady().then(async () => {
   // Spares a project stopped wanting go after a day even while the host keeps running.
   setInterval(tidyWorktrees, 60 * 60_000).unref()
   installCheckoutHeadsIpc(checkoutHeads)
-  if (appTools) installThreadAppIpc(appTools.desk)
+  if (appTools) {
+    installThreadAppIpc(appTools.desk)
+    worktreeCleanup = (path) => appTools.cleanup(path)
+  }
   application = installApplicationIpc({
     live: liveConversations,
     native: nativeRequests,
@@ -2450,6 +2455,17 @@ app.whenReady().then(async () => {
   installThreads(emit)
   trace("catalog starting")
   bindDrivers(emit, {
+    assessResume: (ref) => assessResume({
+      id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
+      coveredBlocks: 0, includesBase: false,
+    }),
+    claimSession: (ref) => {
+      const memory = sessionMemory
+      if (!memory) throw new Error("Native session ownership is unavailable. Retry after the host reconnects.")
+      const owner = randomUUID()
+      memory.hold(ref.harness, ref.nativeId, owner)
+      return () => memory.release(ref.harness, ref.nativeId, owner)
+    },
     // A native reply runs with exactly these settings; the ledger keeps them
     // for a store that records none, the way a live session's report is kept.
     prepared: (ref, settings) =>

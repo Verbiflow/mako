@@ -151,6 +151,8 @@ interface Live {
   changingMode?: boolean
   /** The tier the process was launched with, for providers that read it at start. */
   launchAccess: AccessTier | null
+  /** Re-read the admitted store after native persistence, never on token updates. */
+  locateNativePath(): string | undefined
 }
 
 /** Output that begins a turn. A tool update can still belong to the turn before. */
@@ -329,6 +331,7 @@ async function startAcp(
     mcpServers: [],
     turn: null,
     launchAccess: runAccess,
+    locateNativePath: () => located(),
     emit: send,
   }
   sessions.set(id, live)
@@ -517,7 +520,7 @@ async function startAcp(
   function refusedUpdate({ params, kind, known }: RefusedSessionUpdate): void {
     const decoded = known ? undefined : source?.decodeNotification?.("session/update", params)
     if (decoded) applyNotification(decoded, { method: "session/update", params })
-    else engine.unknown(live, known ? `session/update/${kind}/invalid` : `session/update/${kind}`, "unreadable", { method: "session/update", params })
+    else engine.unknown(live, known ? `session/update/${kind}/invalid` : `session/update/${kind}`, known ? "unreadable" : "unknown", { method: "session/update", params })
   }
   /** The SDK kept this update but not all of it; each lost place is logged once. */
   function lossyUpdate({ params, kind, paths }: LossySessionUpdate): void {
@@ -543,7 +546,7 @@ async function startAcp(
     if (!live.providerTurn) return true
     live.providerTurn = false
     if (live.state.status === "running")
-      update(live, { status: "ready", lastStop: ended.interrupted ? "interrupted" : "completed" })
+      update(live, { status: "ready", nativePath: located(), lastStop: ended.interrupted ? "interrupted" : "completed" })
     return true
   }
   function reportBackground(report: AcpBackgroundReport | undefined): void {
@@ -861,7 +864,7 @@ export async function livePrompt(
         stop: verdict.lastStop,
         error: verdict.error,
       })
-    update(live, verdict)
+    update(live, { ...verdict, nativePath: live.locateNativePath() })
   })
   live.turn = turn
   live.turnReceipt = () => {

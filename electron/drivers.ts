@@ -29,7 +29,9 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { accountEnv, switchSuggestion } from "./accounts.js"
+import { resolveAccountLaunch, switchSuggestion } from "./accounts.js"
+import { resumable, type ResumeVerdict } from "./contracts/conversation-control.js"
+import { reconnectRefusal } from "./live-transfers.js"
 import { providerHost } from "./providers/index.js"
 import {
   dropUncarried,
@@ -37,7 +39,7 @@ import {
   type NativeRunOptions,
   type NativeRunner,
 } from "./providers/native-runner.js"
-import { hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "./host-log.js"
 import type { HostEvent, ThreadRunState } from "./shared.js"
 import {
   environmentForExecutable,
@@ -68,6 +70,7 @@ export interface NativeRunResult {
 }
 
 interface Run {
+  releaseSession?: () => void
   cwd: string
   token: string
   child: ChildProcess
@@ -84,6 +87,10 @@ const MAX_REMEMBERED_RUNS = 600
 let emit: (event: HostEvent) => void = () => {}
 
 export interface NativeRunHooks {
+  /** Same assessment owner as live reconnect; evaluated after preparing the actual launch environment. */
+  assessResume?(ref: ThreadRef): Promise<ResumeVerdict>
+  /** Atomic cooperating-host ownership claim; release when the native process settles. */
+  claimSession?(ref: ThreadRef): () => void
   /** A reply to `ref` is about to run with exactly these settings. */
   prepared?(ref: ThreadRef, settings: SessionSettings): void
 }
@@ -174,11 +181,9 @@ export async function resumeNative(
     ref.cwd,
     runner,
     options,
-    (prepared, env) => {
-      hooks.prepared?.(ref, preparedSettings(prepared))
-      return runner.resume(ref.nativeId, prompt, prepared, env)
-    },
-    tuning?.captureOutput ?? false
+    (prepared, env) => runner.resume(ref.nativeId, prompt, prepared, env),
+    tuning?.captureOutput ?? false,
+    ref
   )
 }
 
@@ -218,19 +223,25 @@ async function launch(
   runner: NativeRunner,
   options: NativeRunOptions,
   build: (options: NativeRunOptions, env: NodeJS.ProcessEnv) => NativeCommand | Promise<NativeCommand>,
-  captureOutput: boolean
+  captureOutput: boolean,
+  ref?: ThreadRef
 ): Promise<ThreadRunState> {
   const cwd = workingDir && existsSync(workingDir) ? workingDir : homedir()
   // The selected account decides who pays for this run, and what the
   // command line may name: Cursor's model list is the account's own.
   assertLifecycleAdmission()
+  // Reserve before the first await. Concurrent native replies must not build or spawn a second writer.
+  if (preparingRuns.has(key) || runs.get(key)?.state.status === "running")
+    throw new Error("This native session already has an active or preparing writer")
   preparingRuns.set(key, { id: `preparing:${key}`, token: key, title: "Starting a native agent", provider: harness, cwd, status: "finishing", stoppable: false })
   let env: NodeJS.ProcessEnv
   let command: string
   let args: string[]
   let commandEnv: Record<string, string> | undefined
+  let releaseSession: (() => void) | undefined
   try {
-    env = await accountEnv(harness, process.env)
+    const launch = await resolveAccountLaunch(harness, process.env)
+    env = launch.env
     const prepared = runner.prepare
       ? await runner.prepare(options, env)
       : dropUncarried(options, runner.carries)
@@ -246,18 +257,35 @@ async function launch(
       })
     }
     ;({ command, args, env: commandEnv } = await build(prepared.options, env))
+    if (ref) {
+      const verdict = await hooks.assessResume?.(ref)
+      if (!verdict || !resumable(verdict)) throw new Error(reconnectRefusal(verdict))
+      if (!hooks.claimSession) throw new Error("Native session ownership is unavailable. Retry after the host reconnects.")
+      releaseSession = hooks.claimSession(ref)
+      hooks.prepared?.(ref, preparedSettings(prepared.options))
+    }
+    hostLog("native", "launch context prepared", { harness, key, account: launch.account.name, operation: ref ? "resume" : "fresh" })
+  } catch (error) {
+    releaseSession?.()
+    throw error
   } finally {
     preparingRuns.delete(key)
   }
   if (commandEnv) env = { ...env, ...commandEnv }
   const executable = resolveExecutable(command, env)
-  if (!executable) throw new Error(`${harness} is not installed`)
-  assertLifecycleAdmission()
-  const child = spawn(executable, args, {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: environmentForExecutable(executable, env),
-  })
+  let child: ChildProcess
+  try {
+    if (!executable) throw new Error(`${harness} is not installed`)
+    assertLifecycleAdmission()
+    child = spawn(executable, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: environmentForExecutable(executable, env),
+    })
+  } catch (error) {
+    releaseSession?.()
+    throw error
+  }
 
   const state: ThreadRunState = { path: key, harness, status: "running" }
   let resolveRun: (result: NativeRunResult) => void = () => {}
@@ -275,6 +303,7 @@ async function launch(
     resolve: resolveRun,
     state,
     stdout: "",
+    releaseSession,
   }
   runs.set(key, run)
   push(state)
@@ -351,6 +380,9 @@ export function stopDrivers(): void {
 }
 
 function finish(run: Run, next: Partial<ThreadRunState>): void {
+  const release = run.releaseSession
+  run.releaseSession = undefined
+  release?.()
   run.state = { ...run.state, ...next }
   runs.delete(run.state.path)
   runs.set(run.state.path, run)
