@@ -13,6 +13,7 @@ import type {
   UsageWindow,
 } from "../../account-types.js"
 import {
+  credentialFileFingerprint,
   childProcessEnv,
   jsonFields,
   parseUsageReset,
@@ -158,6 +159,7 @@ export const grokAccountCapability: ObservedAccountCapability = {
   },
   accountEnv: async (_selection, base) => ({ ...base }),
   selectedAccount: () => ({ name: "default" }),
+  credentialRevision: () => credentialFileFingerprint(authPath(process.env)),
   async accountUsage() {
     const env = childProcessEnv(process.env)
     if (!resolveExecutable("grok", env))

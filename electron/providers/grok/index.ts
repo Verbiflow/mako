@@ -1,7 +1,7 @@
 import { acpLiveDriver } from "../acp-live-driver.js"
 import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitGrokSession } from "@mako/sessions"
-import { installHarness, lacks } from "../harness-definition.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { grokAcpSource } from "./acp.js"
 import { grokMcpSource } from "./mcp.js"
@@ -19,6 +19,12 @@ import {
 
 export const installGrok: ProviderModule = (host) => installHarness(host, {
   provider: "grok",
+  presentation: { firstRunPriority: 4, icon: { id: "grok-ring", tint: "currentColor" } },
+  hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+  commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
+  toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
+  skillEditing: { provider: "grok", route: "skill-registry", operations: ["import", "remove"] },
+  mcpEditing: { provider: "grok", route: "mcp-registry", operations: ["import"] },
   live: acpLiveDriver(grokAcpSource),
   decoder: acpDecoderSource(grokAcpSource),
   profile: grokProfileLoader,

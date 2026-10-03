@@ -5,6 +5,7 @@ import {
 
 export const grokMcpSource: ProviderMcpSource = {
   provider: "grok",
+  readFormat: "named-map-or-list",
   command: () => "grok",
   userFiles: () => [],
   workspaceFiles: () => [],
