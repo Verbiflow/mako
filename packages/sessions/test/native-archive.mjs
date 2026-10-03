@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import { SessionCatalog } from "../dist/catalog.js"
@@ -193,6 +194,54 @@ try {
   await openCatalog.stop()
   openDb.close()
   console.log("Native archive: an OpenCode archive marks the row archived there, still resumable, each archive stamped with its time")
+
+  // Retirement needs more than an archive flag: saved legacy contents must
+  // open after a restart without either the native store or its reader.
+  const legacyAsset = join(openRoot, "legacy-proof.md")
+  const legacyBytes = Buffer.from("# Retained legacy attachment\nOriginal bytes survive retirement.\n")
+  await writeFile(legacyAsset, legacyBytes)
+  const legacyDbPath = join(openRoot, "opencode.db")
+  const legacyDb = new DatabaseSync(legacyDbPath)
+  const insertMessage = legacyDb.prepare("INSERT INTO message VALUES (?, 'ses_a', ?, ?, ?)")
+  const insertPart = legacyDb.prepare("INSERT INTO part VALUES (?, ?, 'ses_a', ?, ?, ?)")
+  insertMessage.run("legacy_user", 1000, 1000, JSON.stringify({ role: "user", time: { created: 1000 } }))
+  insertPart.run("legacy_question", "legacy_user", 1000, 1000, JSON.stringify({ type: "text", text: "Read the retained document" }))
+  insertPart.run("legacy_file", "legacy_user", 1001, 1001, JSON.stringify({ type: "file", filename: "legacy-proof.md", mime: "text/markdown", url: pathToFileURL(legacyAsset).href }))
+  insertMessage.run("legacy_assistant", 2000, 2000, JSON.stringify({ role: "assistant", time: { created: 2000, completed: 2500 }, error: { name: "MessageAbortedError", data: { message: "Interrupted" } } }))
+  insertPart.run("legacy_answer", "legacy_assistant", 2000, 2000, JSON.stringify({ type: "text", text: "The original document is retained." }))
+  legacyDb.close()
+  const legacyArchive = join(home, "opencode-legacy-archive")
+  const capturing = new SessionCatalog([new OpenCodeProvider(home, {})], { archivePath: legacyArchive })
+  const [legacyRef] = await capturing.scan()
+  const original = await capturing.open(legacyRef.path)
+  assert.equal(original.entries[0].text, "Read the retained document")
+  assert.ok(original.entries.some((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "text" && block.text === "The original document is retained.")))
+  const nativeMarker = original.entries.find((entry) => entry.kind === "event")
+  assert.deepEqual(nativeMarker.source, { harness: "opencode", record: "legacy_assistant" })
+  await capturing.stop() // Flush the catalog's scheduled archive capture.
+  await rm(legacyDbPath)
+  await rm(legacyAsset)
+  const readerless = new SessionCatalog([], { archivePath: legacyArchive })
+  try {
+    const [savedRef] = await readerless.scan()
+    assert.equal(savedRef.archived, true)
+    assert.equal(savedRef.nativeId, legacyRef.nativeId)
+    const saved = await readerless.open(savedRef.path)
+    assert.equal(saved.entries[0].text, original.entries[0].text)
+    assert.deepEqual(saved.entries.slice(1), original.entries.slice(1), "answers and native marker IDs survive without any registered reader")
+    const retained = saved.entries[0].attachments[0]
+    assert.equal(retained.name, "legacy-proof.md")
+    assert.equal(retained.mimeType, "text/markdown")
+    assert.equal(retained.source.kind, "file")
+    assert.notEqual(retained.source.path, legacyAsset)
+    assert.deepEqual(await readFile(retained.source.path), legacyBytes)
+    const page = await readerless.page(savedRef.path, undefined, 1)
+    assert.equal(page.total, saved.entries.length)
+    assert.equal(page.hasEarlier, true)
+  } finally {
+    await readerless.stop()
+  }
+  console.log("Native archive: legacy OpenCode prompts, replies, marker IDs and attachment bytes remain readable and pageable after store removal and a restart with no native readers")
 
   // Cursor's Archive sets a header flag and moves no timestamp.
   const cursorRoot = join(home, process.platform === "darwin" ? "Library/Application Support/Cursor/User/globalStorage" : ".config/Cursor/User/globalStorage")

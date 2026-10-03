@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { appendPromptAttachments, readPromptAttachments } from "../dist/prompt-attachments.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 
 const home = await mkdtemp(join(tmpdir(), "mako-codex-events-"))
@@ -106,5 +107,33 @@ assert.deepEqual(plannedBlocks, [
   { type: "proposed-plan", id: "codex:t1:t1-plan", text: "# Parser\n\n1. Move parsing to the boundary.", status: "proposed" },
 ], "a saved plan is the card the live turn showed, and the reply does not repeat it")
 
+const attached = join(sessions, "rollout-mixed-assets.jsonl")
+const literal = "User attachment example.pdf (application/pdf): /example.pdf"
+const imagePath = join(home, "sample.png")
+const reference = { name: "report.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", path: join(home, "report.docx") }
+const manifest = appendPromptAttachments("", [reference])
+await writeFile(attached,
+  line("session_meta", { id: "mixed", cwd: home }) +
+  line("response_item", { type: "message", role: "user", content: [
+    { type: "input_text", text: literal },
+    { type: "input_text", text: `<image name=[Image #1] path="${imagePath}">` },
+    { type: "input_image", image_url: "data:image/png;base64,cHJvb2Y=" },
+    { type: "input_text", text: "</image>" },
+    { type: "input_text", text: "User attachment two pages.pdf (application/pdf): /tmp/two pages.pdf" },
+    { type: "input_text", text: manifest },
+  ] })
+)
+const mixed = (await new CodexProvider(home).read(attached)).entries.find(entry => entry.kind === "user")
+assert.equal(mixed.text, literal, "the first authored part remains literal; later carrier parts are metadata")
+assert.deepEqual(mixed.attachments, [
+  { type: "attachment", name: "sample.png", mimeType: "image/png", source: { kind: "inline", data: "cHJvb2Y=" } },
+  { type: "attachment", name: "two pages.pdf", mimeType: "application/pdf", source: { kind: "file", path: "/tmp/two pages.pdf" } },
+  { type: "attachment", name: reference.name, mimeType: reference.mimeType, source: { kind: "file", path: reference.path } },
+], "mixed files retain names, MIME and real native image bytes")
+for (const sample of [manifest.replace('"version":1', '"version":2'), manifest.replace('</mako-attachments>', ''), "```json" + manifest])
+  assert.deepEqual(readPromptAttachments(sample), { text: sample, attachments: [] }, "unknown, truncated and fenced manifests stay readable")
+assert.deepEqual(readPromptAttachments(appendPromptAttachments("Inspect these", [reference])).text, "Inspect these")
+assert.throws(() => appendPromptAttachments("", [{ ...reference, path: "relative/path" }]))
+assert.throws(() => appendPromptAttachments("", Array.from({ length: 129 }, () => reference)))
 await rm(home, { recursive: true, force: true })
 console.log("Codex history markers: compactions, failed turns, review boundaries and plans read as Mako events.")

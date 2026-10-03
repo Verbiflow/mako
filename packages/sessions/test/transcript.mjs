@@ -70,6 +70,8 @@ assert.equal(titleFrom("<div>\nVisible HTML prompt"), "Visible HTML prompt")
 assert.equal(titleFrom("[Image #1]"), undefined)
 assert.equal(titleFrom("[Image #1]\nWhy is this layout clipped?"), "Why is this layout clipped?")
 assert.equal(titleFrom("## PE/VC campaign discussion"), "PE/VC campaign discussion")
+assert.equal(titleFrom("[Attachment 28] [Attachment 29] [Attachment 30]\nInspect the supplied files"), "Inspect the supplied files")
+assert.equal(titleFrom("[Attachment 28] needs fixing"), "[Attachment 28] needs fixing", "ordinary text next to a label stays meaningful")
 
 const thread = {
   ref: {

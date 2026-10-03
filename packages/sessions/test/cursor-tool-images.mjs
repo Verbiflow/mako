@@ -3,6 +3,7 @@ import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {DatabaseSync} from 'node:sqlite'
+import {appendPromptAttachments} from '../dist/prompt-attachments.js'
 import {CursorProvider} from '../dist/providers/cursor.js'
 
 const home = await mkdtemp(join(tmpdir(), 'mako-cursor-tool-images-'))
@@ -15,7 +16,7 @@ try {
   try {
     db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)')
     const messages = [
-      {role: 'user', content: [{type: 'text', text: '<user_query>inspect screenshot</user_query>'}]},
+      {role: 'user', content: [{type: 'text', text: appendPromptAttachments('<user_query>inspect screenshot</user_query>', [{name: 'data.har', mimeType: 'application/json', path: '/tmp/data.har'}])}]},
       {role: 'assistant', content: [{type: 'tool-call', toolCallId: 'capture', toolName: 'screenshot', args: {}}]},
       {role: 'tool', content: [{
         type: 'tool-result', toolCallId: 'capture', result: {width: 10, height: 10},
@@ -38,6 +39,9 @@ try {
     db.close()
   }
   const thread = await new CursorProvider(home).read(path)
+  const user = thread.entries.find(entry => entry.kind === 'user')
+  assert.equal(user.text, 'inspect screenshot')
+  assert.deepEqual(user.attachments, [{type: 'attachment', name: 'data.har', mimeType: 'application/json', source: {kind: 'file', path: '/tmp/data.har'}}])
   const tool = thread?.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : []).find(block => block.type === 'tool')
   assert.equal(tool?.name, 'screenshot')
   assert.deepEqual(tool?.attachments, [{

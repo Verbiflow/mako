@@ -561,9 +561,11 @@ try {
         { type: "text", text: "legacy answer" },
       ],
     },
-    { kind: "event", at: "1970-01-01T00:33:20.000Z", label: "Interrupted" },
+    { kind: "event", id: "msg_legacy_assistant", source: { harness: "opencode", record: "msg_legacy_assistant" }, at: "1970-01-01T00:33:20.000Z", label: "Interrupted" },
     {
       kind: "event",
+      id: "prt_020",
+      source: { harness: "opencode", record: "prt_020" },
       at: "1970-01-01T00:50:00.000Z",
       label: "Context compacted",
       detail: "Automatic",
@@ -597,6 +599,8 @@ try {
     },
     {
       kind: "event",
+      id: "msg_current_compaction",
+      source: { harness: "opencode", record: "msg_current_compaction" },
       at: "1970-01-01T01:56:40.000Z",
       label: "Context compacted",
       detail: "Manual · from 360 tokens · took 42s",
@@ -608,7 +612,7 @@ try {
       model: "gpt-current",
       blocks: [{ type: "text", text: "partial answer" }],
     },
-    { kind: "event", at: "1970-01-01T02:13:20.000Z", label: "Interrupted" },
+    { kind: "event", id: "msg_current_interrupted", source: { harness: "opencode", record: "msg_current_interrupted" }, at: "1970-01-01T02:13:20.000Z", label: "Interrupted" },
   ])
   const currentSerialized = JSON.stringify(currentThread)
   assert.ok(!currentSerialized.includes("CURRENT_SYSTEM_SECRET"))
@@ -849,12 +853,12 @@ try {
     assert.deepEqual(markers?.entries, [
       { kind: "user", id: "m_user", at: at(0), text: "go", attachments: [] },
       { kind: "assistant", at: at(1), usage: { input: 1000, output: 10, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "partial" }] },
-      { kind: "event", at: at(1), label: "Retried", detail: "attempt 2 · The provider response ended with an unknown finish reason.", tone: "warning" },
+      { kind: "event", id: "m_retried", source: { harness: "opencode", record: "m_retried" }, at: at(1), label: "Retried", detail: "attempt 2 · The provider response ended with an unknown finish reason.", tone: "warning" },
       { kind: "assistant", at: at(3), usage: { input: 1500, output: 20, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "done" }] },
-      { kind: "event", at: at(4), label: "Context compacted", detail: "Automatic · from 2k tokens", body: "Worked on the task." },
-      { kind: "event", at: at(5), label: "Compaction failed", detail: "The model could not summarize", tone: "warning" },
+      { kind: "event", id: "m_compacted", source: { harness: "opencode", record: "m_compacted" }, at: at(4), label: "Context compacted", detail: "Automatic · from 2k tokens", body: "Worked on the task." },
+      { kind: "event", id: "m_compaction_failed", source: { harness: "opencode", record: "m_compaction_failed" }, at: at(5), label: "Compaction failed", detail: "The model could not summarize", tone: "warning" },
       { kind: "user", id: "m_again", at: at(7), text: "again", attachments: [] },
-      { kind: "event", at: at(8), label: "Turn failed", detail: "Request rejected", body: "Invalid request: context too long\nsee provider logs", tone: "error" },
+      { kind: "event", id: "m_failed", source: { harness: "opencode", record: "m_failed" }, at: at(8), label: "Turn failed", detail: "Request rejected", body: "Invalid request: context too long\nsee provider logs", tone: "error" },
     ], "a retried step continues its turn, so OpenCode's continue notice opens none; a running compaction and system rows show nothing")
     assert.ok(!JSON.stringify(markers).includes("RECENT_SECRET"))
   }
@@ -870,8 +874,8 @@ try {
     const at = new Date(13_000 * 1000).toISOString()
     assert.deepEqual(failed?.entries, [
       { kind: "assistant", at, blocks: [{ type: "text", text: "partial" }] },
-      { kind: "event", at, label: "Retried", detail: "attempt 1 · Overloaded", tone: "warning" },
-      { kind: "event", at, label: "Turn failed", detail: "Provider error", body: "Overloaded", tone: "error" },
+      { kind: "event", id: "prt_legacy_retry", source: { harness: "opencode", record: "prt_legacy_retry" }, at, label: "Retried", detail: "attempt 1 · Overloaded", tone: "warning" },
+      { kind: "event", id: "msg_legacy_failed", source: { harness: "opencode", record: "msg_legacy_failed" }, at, label: "Turn failed", detail: "Provider error", body: "Overloaded", tone: "error" },
     ], "OpenCode 1 retries within one message; an error after them failed the turn")
   }
   console.log("OpenCode markers: retried steps, completed, failed and running compactions, failed turns in both stores")

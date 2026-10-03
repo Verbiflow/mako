@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeProvider } from "../dist/index.js"
+import { appendPromptAttachments } from "../dist/prompt-attachments.js"
 
 // Claude Code's own records in a saved session read as the markers the live
 // session shows: one per fact, with its long text kept to open on demand.
@@ -111,6 +112,25 @@ try {
   assert.equal(update.replaceFrom, 1)
   assert.deepEqual(update.entries.map((entry) => [entry.kind, entry.body]), [["event", "Summary:\n1. The user asked for a parser."]])
   console.log("PASS: Claude history reads compaction, queued prompts, task results, API errors, fallbacks and local commands as markers")
+
+  const restoredFiles = join(home, "mixed-files.jsonl")
+  const literal = "User attachment literal.pdf (application/pdf): /literal.pdf"
+  const file = { name: "notes.md", mimeType: "text/markdown", path: "/fixture/notes.md" }
+  await writeFile(restoredFiles, [
+    record({ type: "user", uuid: "old-files", message: { role: "user", content: [text(literal), text("User attachment report.pdf (application/pdf): /fixture/report.pdf"), { type: "image", source: { type: "base64", media_type: "image/png", data: "image-bytes" } }] } }),
+    record({ type: "user", uuid: "new-files", message: { role: "user", content: [text(appendPromptAttachments("Read notes", [file]))] } }),
+    queued("queued-files", [text(appendPromptAttachments("Also read notes", [file]))], "prompt"),
+    assistant("tool-owner", [{ type: "tool_use", id: "literal-tool", name: "Read", input: {} }]),
+    record({ type: "user", uuid: "tool-output", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "literal-tool", content: [text(appendPromptAttachments("Literal tool output", [file]))] }] } }),
+  ].join("\n") + "\n")
+  const restored = await new ClaudeProvider(home).read(restoredFiles)
+  const prompts = restored.entries.filter(entry => entry.kind === "user")
+  assert.equal(prompts[0].text, literal, "first authored native part stays literal")
+  assert.deepEqual(prompts[0].attachments.map(item => [item.name, item.source.kind]), [["image", "inline"], ["report.pdf", "file"]])
+  assert.deepEqual(prompts.slice(1).map(entry => [entry.text, entry.attachments[0].name]), [["Read notes", "notes.md"], ["Also read notes", "notes.md"]])
+  const tool = restored.entries.flatMap(entry => entry.kind === "assistant" ? entry.blocks : []).find(block => block.type === "tool")
+  assert.equal(tool.output, appendPromptAttachments("Literal tool output", [file]), "user-role tool outputs are not attachment transport")
+  console.log("PASS: Claude native mixed files, queued manifests, literal user examples and tool output boundaries")
 
   const planned = join(home, "planned.jsonl")
   await writeFile(planned, `${[

@@ -99,6 +99,23 @@ try {
   assert.equal(file.bytes, 2)
   assert.equal(file.locked, true)
 
+  const imageDb = new DatabaseSync(join(dir, "sessions.db"))
+  imageDb.prepare("INSERT INTO sessions (id, hidden, last_activity_at, working_directory, model, title, created_at, main_chain_id) VALUES (?, 0, ?, ?, ?, ?, ?, ?)")
+    .run("native-images", 1, "/work", "swe", 'functions.js:0{"code":"internal"}', 1, 0)
+  imageDb.prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(700, "native-images", 0, null, JSON.stringify({role: "user", content: "[Image 1: /staged/sample.png]\n\n<mako-local-control>\nPrivate setup metadata\n</mako-local-control>\n\n[Attachment 28] [Attachment 29]\nInspect supplied files", images: [{source_path: "/staged/sample.png", mime_type: "image/png", base64_data: "retained-native-bytes"}, {source_path: "/staged/extra.webp", mime_type: "image/webp", base64_data: "extra-bytes"}]}), 1)
+  imageDb.close()
+  const restoredImages = await provider.read(join(dir, "sessions.db") + "#native-images")
+  assert.equal(restoredImages.ref.title, "Inspect supplied files")
+  assert.equal(restoredImages.entries[0].text.includes("Private setup metadata"), false)
+  assert.deepEqual(restoredImages.entries[0].attachments.map(a => [a.name, a.source.kind]), [["sample.png", "inline"], ["extra.webp", "inline"]], "native bytes replace the referenced image once and retain unreferenced stored images")
+  assert.equal(restoredImages.entries[0].attachments[0].source.data, "retained-native-bytes")
+  // Keep subsequent catalog assertions scoped to their original fixture.
+  const removeImageFixture = new DatabaseSync(join(dir, "sessions.db"))
+  removeImageFixture.prepare("DELETE FROM message_nodes WHERE session_id = ?").run("native-images")
+  removeImageFixture.prepare("DELETE FROM sessions WHERE id = ?").run("native-images")
+  removeImageFixture.close()
+
   const opened = await provider.read(file.path)
   assert.ok(opened)
   assert.equal(opened.ref.model, "gpt-5-6-sol-high-priority")
@@ -334,7 +351,7 @@ try {
   const failedTool = compacted.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).find((block) => block.type === "tool")
   assert.equal(failedTool?.error, true, "a failed tool result reads as failed")
   const markers = compacted.entries.filter((entry) => entry.kind === "event")
-  assert.deepEqual(markers, [{ kind: "event", id: "1014", at: new Date(14_000).toISOString(), label: "Context compacted", body: "## 1. Request and Intent\n\nMake the build faster." }],
+  assert.deepEqual(markers, [{ kind: "event", id: "1014", source: { harness: "devin", record: "1014" }, at: new Date(14_000).toISOString(), label: "Context compacted", body: "## 1. Request and Intent\n\nMake the build faster." }],
     "the compaction reads as a marker carrying its summary; a mode change is not shown")
   assert.ok(!compacted.entries.some((entry) => entry.kind === "user" && /continuing work/.test(entry.text)))
   console.log("Devin compaction summaries read as markers and failed tool results as failed")

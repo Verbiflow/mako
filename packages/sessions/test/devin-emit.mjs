@@ -74,6 +74,21 @@ const store = async (version) => {
 }
 
 {
+  const { home } = await store(DEVIN_STORE_VERSION)
+  const reader = new DevinCliProvider(home)
+  try {
+    const emitted = await emitDevinSession({ ...thread, entries: [thread.entries[0]] }, { home })
+    const read = await reader.read(emitted.path)
+    assert.deepEqual(read.entries.map(entry => entry.kind), ["user"], "node zero is a valid one-message main chain")
+    assert.equal(read.entries[0].text, thread.entries[0].text)
+    assert.deepEqual((await reader.createFollower(emitted.path, read.ref.bytes).next()).entries, [], "following node zero must not replay it")
+  } finally {
+    reader.close()
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+{
   const { home, path } = await store(DEVIN_STORE_VERSION + 1)
   try {
     await assert.rejects(emitDevinSession(thread, { home }), /version 18; Mako writes version 17/)
