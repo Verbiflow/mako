@@ -1708,7 +1708,12 @@ function describe(status: RunStatus | undefined): string {
   const state = status.state
   const where = status.port === undefined ? "" : ` on port ${status.port}`
   if (state.kind === "running") return `running${where}`
-  if (state.kind === "starting") return status.ready === undefined ? `starting; port ${status.port} doesn't answer yet` : `starting; its ready command (${status.ready}) hasn't passed yet`
+  if (state.kind === "starting") {
+    if (status.ready === undefined) return `starting; port ${status.port} doesn't answer yet`
+    const failure = status.readyFailure
+    if (!failure) return `starting; its ready command (${status.ready}) hasn't passed yet`
+    return `starting; its ready command (${status.ready}) hasn't passed yet: its latest try ${failure.code === null ? "was stopped or couldn't run" : `exited ${failure.code}`}`
+  }
   if (state.kind === "exited") return state.code === 0 ? "finished (exit 0)" : `crashed (exit ${state.code})`
   if (state.kind === "ended") return "ended without an exit code (something outside Mako stopped it, or the Mac restarted)"
   return "stopped"
@@ -1954,7 +1959,11 @@ async function runOutput(processes: ThreadProcesses, app: AppKey, key: string): 
 }
 
 async function failureTail(processes: ThreadProcesses, app: AppKey, status: RunStatus | undefined): Promise<string> {
-  if (!status || status.state.kind === "running" || status.state.kind === "starting") return ""
+  if (status?.state.kind === "starting") {
+    const said = status.readyFailure?.output.trim()
+    return said ? `\n\nIts ready command's latest try printed:\n${said}` : ""
+  }
+  if (!status || status.state.kind === "running") return ""
   if (status.state.kind === "exited" && status.state.code === 0) return ""
   return `\n\n${await runOutput(processes, app, runKey(status.kind, status.name))}`
 }
@@ -1995,7 +2004,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_start",
     {
       description:
-        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes (or one target's, such as web or desktop) on this Thread's ports and waits up to about 25 seconds for each to be ready: its port answering, or its ready command passing. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log.",
+        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes (or one target's, such as web or desktop) on this Thread's ports and waits up to about 25 seconds for each to be ready: its port answering, or its ready command passing. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log; for one whose ready command hasn't passed, what its latest try printed.",
       inputSchema: aimed,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

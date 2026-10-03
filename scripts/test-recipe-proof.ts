@@ -75,8 +75,12 @@ try {
   await tools.stop(conversation)
   const waiting = toolsFor(mine, 2_000)
   const tries = join(mine.dataDir, "ready-tries")
-  await waiting.save(conversation, recipe({ processes: { web: { ...web, ready: "echo >> \"$MAKO_THREAD_DATA_DIR/ready-tries\"; exit 1" } } }), "Never ready")
-  assert.match(await waiting.start(conversation), /^web: starting; its ready command \(echo >> "\$MAKO_THREAD_DATA_DIR\/ready-tries"; exit 1\) hasn't passed yet/)
+  await waiting.save(conversation, recipe({ processes: { web: { ...web, ready: "echo >> \"$MAKO_THREAD_DATA_DIR/ready-tries\"; echo \"window not open at $PORT\" >&2; exit 3" } } }), "Never ready")
+  assert.match(
+    await waiting.start(conversation),
+    new RegExp(`^web: starting; its ready command \\(.+\\) hasn't passed yet: its latest try exited 3\\n\\nIts ready command's latest try printed:\\nwindow not open at ${mine.port}$`, "m"),
+    "a start still waiting says what its ready command printed, so the agent sees why",
+  )
   await waiting.stop(conversation)
   const triedBy = readFileSync(tries, "utf8").length
   await sleep(1_500)

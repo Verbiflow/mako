@@ -25,6 +25,8 @@ const POLL_MS = 100
 const readyWait = (elapsedMs: number) => (elapsedMs < 30_000 ? 500 : elapsedMs < 300_000 ? 2_000 : 10_000)
 /** One try of a readiness command that hangs is stopped after this. */
 const READY_TRY_MS = 10_000
+/** How much of a failed readiness try's output is kept to say why it isn't ready. */
+const READY_OUTPUT_CHARS = 2_000
 const LOCK_WAIT_MS = 30_000
 /** How long a process must stay up after its port answers before it counts as running. */
 const STEADY_MS = 2_000
@@ -82,6 +84,10 @@ const RunSchema = z.object({
 const RunsSchema = z.object({ runs: z.record(z.string(), RunSchema) }).strict()
 type Run = z.infer<typeof RunSchema>
 
+/** A ready command's failed try: its exit code (null when it was killed or couldn't start) and the end of what it printed. */
+const ReadyFailureSchema = z.object({ code: z.number().nullable(), output: z.string() }).strict()
+export type ReadyFailure = z.infer<typeof ReadyFailureSchema>
+
 export type RunState =
   | { kind: "stopped" }
   | { kind: "starting" }
@@ -97,6 +103,8 @@ export interface RunStatus {
   port?: number
   /** Its readiness command, which decides when it's running instead of its port. */
   ready?: string
+  /** While it starts, how that command's latest try failed. */
+  readyFailure?: ReadyFailure
   pid?: number
   state: RunState
   startedAt?: number
@@ -311,6 +319,7 @@ export class ThreadProcesses {
         delete runs[key]
         await rm(this.file(app, key, "exit"), { force: true })
         await rm(this.file(app, key, "ready"), { force: true })
+        await rm(this.file(app, key, "unready"), { force: true })
       }
       await this.save(app, runs)
       return chosen.map(([, record]) => record.name)
@@ -333,6 +342,10 @@ export class ThreadProcesses {
       }
       if (record.port !== undefined) status.port = record.port
       if (record.ready !== undefined) status.ready = record.ready
+      if (record.ready !== undefined && status.state.kind === "starting") {
+        const failure = ReadyFailureSchema.safeParse(await readFile(this.file(app, key, "unready"), "utf8").then((text) => JSON.parse(text), () => undefined))
+        if (failure.success) status.readyFailure = failure.data
+      }
       const held = members(rows, record).reduce((sum, row) => sum + row.rssKb * 1024, 0)
       if (held) status.memoryBytes = held
       return status
@@ -836,6 +849,7 @@ export class ThreadProcesses {
     const exit = this.file(app, key, "exit")
     await rm(exit, { force: true })
     await rm(this.file(app, key, "ready"), { force: true })
+    await rm(this.file(app, key, "unready"), { force: true })
     await rename(log, `${log}.1`).catch(() => {})
     const output = await open(log, "a", 0o600)
     let env = spec.env
@@ -902,8 +916,14 @@ export class ThreadProcesses {
     const began = this.now()
     const ours = async () => alive() && (await this.runs(app))[key]?.pid === pid
     while (await ours()) {
-      const passed = await new Promise<boolean>((done) => {
-        const child = spawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: "ignore", detached: true })
+      const tried = await new Promise<ReadyFailure | undefined>((done) => {
+        const child = spawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
+        let output = ""
+        const keep = (chunk: Buffer) => {
+          output = (output + chunk.toString()).slice(-READY_OUTPUT_CHARS)
+        }
+        child.stdout?.on("data", keep)
+        child.stderr?.on("data", keep)
         const timer = setTimeout(() => {
           try {
             process.kill(-child.pid!, "SIGKILL")
@@ -911,25 +931,29 @@ export class ThreadProcesses {
             // Over already.
           }
         }, READY_TRY_MS)
-        child.once("error", () => {
+        child.once("error", (error) => {
           clearTimeout(timer)
-          done(false)
+          done({ code: null, output: error.message })
         })
-        child.once("exit", (code) => {
+        child.once("close", (code) => {
           clearTimeout(timer)
-          done(code === 0)
+          done(code === 0 ? undefined : { code, output })
         })
       })
-      if (passed) {
-        if (await ours()) await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
+      if (!tried) {
+        if (await ours()) {
+          await writeFile(this.file(app, key, "ready"), String(this.now()), { mode: 0o600 })
+          await rm(this.file(app, key, "unready"), { force: true })
+        }
         return
       }
+      if (await ours()) await writeFile(this.file(app, key, "unready"), JSON.stringify(tried), { mode: 0o600 })
       await sleep(readyWait(this.now() - began))
     }
   }
 
   /** `steps` is the folder a check run of steps keeps each step's records in. */
-  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready" | "steps"): string {
+  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready" | "unready" | "steps"): string {
     if (!/^(process|check|prepare)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
     return join(this.folder(app), `${key}.${extension}`)
   }
