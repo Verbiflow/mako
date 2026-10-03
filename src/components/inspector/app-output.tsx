@@ -26,7 +26,7 @@ import { dockButton, dockTab } from "./terminal/dock-tab-style"
 export function AppOutputTabs({ cwd, shown }: { cwd: string | undefined; shown: AppOutputKey | undefined }) {
   const view = useThreadApp((state) => (cwd ? state.byCwd[cwd] : undefined))
   if (!cwd || view?.kind !== "ready") return null
-  const outputs = outputsOf(view)
+  const outputs = outputsOf(view, shown)
   if (!outputs.length) return null
   return (
     <div role="tablist" aria-label="The app's output" className="flex h-full shrink-0 items-stretch">
@@ -141,7 +141,7 @@ function Failure({ cwd, failure }: { cwd: string; failure: ShownFailure }) {
         className={dockButton("plain")}
         onClick={() => {
           if ("process" in failure) threadAppDriver()?.restart(cwd)
-          else if ("check" in failure) threadAppDriver()?.runCheck(cwd, failure.check.tier)
+          else if ("check" in failure) threadAppDriver()?.runCheck(cwd, failure.check.tier, failure.step ? [failure.step.name] : undefined)
           else threadAppDriver()?.start(cwd)
         }}
       >
@@ -200,8 +200,14 @@ function failureOf(view: ThreadAppView | undefined, key: AppOutputKey): ShownFai
     return { prepare: view.prepare, at: exit.at, title: "Install failed", detail: `with code ${exit.code}, so the app didn't start` }
   }
   if (key.startsWith("check:")) {
-    const check = view.checks.find((entry) => `check:${entry.tier}` === key)
-    if (check?.state !== "failed") return undefined
+    const [, tier, name] = key.split(":")
+    const check = view.checks.find((entry) => entry.tier === tier)
+    const step = name === undefined ? undefined : check?.steps?.find((entry) => entry.name === name)
+    if (check && step) {
+      if (step.state !== "failed") return undefined
+      return { check, step, at: step.at, title: `${step.name} failed`, detail: `in the ${checkTitle(check.tier).toLowerCase()}${step.at ? `, ${formatAgo(step.at, Date.now())}` : ""}` }
+    }
+    if (name !== undefined || check?.state !== "failed") return undefined
     return { check, at: check.at, title: `${checkTitle(check.tier)} failed`, detail: check.at ? formatAgo(check.at, Date.now()) : "" }
   }
   return undefined

@@ -1,6 +1,8 @@
 // The fixture desk's stand-in for a Thread's app: `?mock&app=<scenario>`.
 // Scenarios: none, invalid, setting-up, stopped, first-run (no ports yet),
 // installing, install-failed, running, crashed, check-failed, waiting,
+// check-steps (a quick check of named steps, one of which failed),
+// targets (stopped, with a recipe of two targets for Run to pick from),
 // elsewhere (one copy at a time, running in another Thread: it reads as
 // stopped, and Run asks first), and
 // demo (a start that installs and runs, then crashes soon after its log is
@@ -216,10 +218,20 @@ export function installMockThreadApp(): void {
           file: "/Users/you/.mako/recipes/mako-3f9a1c2e.json",
           savedAt: minutes(60 * 50),
           earlier: 3,
+          version: 4,
+          versions: [
+            { version: 4, state: "published", current: true, savedAt: minutes(60 * 50 + 4), publishedAt: minutes(60 * 50), parent: 2, by: "the Thread \"Fix the dev server\" (claude)", reason: "Back to version 2: the separate API process left the web server without its sessions", proof: { at: minutes(60 * 50), passed: true }, readable: true },
+            { version: 3, state: "published", current: false, savedAt: minutes(60 * 75), publishedAt: minutes(60 * 74), parent: 2, by: "the Thread \"Split the API\" (codex)", reason: "Run the API on its own port", proof: { at: minutes(60 * 74), passed: true }, readable: true },
+            { version: 2, state: "published", current: false, savedAt: minutes(60 * 24 * 6), publishedAt: minutes(60 * 24 * 6), parent: 1, by: "the Thread \"Faster checks\" (cursor)", reason: "Typecheck and lint at the same time", proof: { at: minutes(60 * 24 * 6), passed: true }, readable: true },
+            { version: 1, state: "published", current: false, savedAt: minutes(60 * 24 * 9), publishedAt: minutes(60 * 24 * 9), reason: "Published before Mako kept versions", readable: true },
+          ],
           recipe: {
             values: { PORT: "{port}", MAKO_HOME: "{data}/home", MAKO_DEV_URL: "{url}" },
             processes: [{ name: "web", command: "npm run web", port: "{port}" }],
-            checks: { quick: "npm run typecheck && npm run lint", full: "npm run test:dev-live" },
+            checks: {
+              quick: [{ name: "typecheck", command: "npm run typecheck", parallel: true }, { name: "lint", command: "npm run lint", parallel: true }],
+              full: [{ command: "npm run test:dev-live" }],
+            },
             prepare: [{ command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: true }],
             carry: ["config/dev.local.json"],
             oneAtATime: false,
@@ -237,6 +249,7 @@ export function installMockThreadApp(): void {
           file: "/Users/you/api/.mako/recipe.json",
           savedAt: minutes(60 * 24 * 9),
           earlier: 0,
+          versions: [],
           recipe: {
             values: { PORT: "{port}", DB_NAME: "api_{thread}", DATABASE_URL: "postgres://localhost:5432/api_{thread}", TEMPORAL_NAMESPACE: "api-{thread}" },
             processes: [
@@ -244,7 +257,7 @@ export function installMockThreadApp(): void {
               { name: "worker", command: "uv run python -m app.worker" },
               { name: "temporal", command: "temporal server start-dev --ui-port 8233", port: "7233" },
             ],
-            checks: { quick: "uv run ruff check && uv run pytest -q tests/unit" },
+            checks: { quick: [{ command: "uv run ruff check && uv run pytest -q tests/unit" }] },
             prepare: [
               { command: "uv sync", inputs: ["uv.lock"], outputs: [], link: false },
               { command: "uv run python -m app.db ensure", inputs: ["migrations"], outputs: [], link: false },
@@ -438,6 +451,31 @@ export function installMockThreadApp(): void {
       emit("prepare", INSTALL.slice(0, 3))
       emit("check:quick", QUICK_PASS)
       putThreadApp(CWD, { ...ready("preparing"), prepare: { command: "npm install", reason: "package-lock.json changed" } })
+      break
+    case "targets":
+      putThreadApp(CWD, { ...ready("stopped"), targets: ["web", "desktop"] })
+      emit("check:quick", QUICK_PASS)
+      break
+    case "check-steps":
+      emit("check:quick", QUICK_FAIL)
+      emit("check:quick:typecheck", QUICK_FAIL.slice(2))
+      emit("check:quick:lint", QUICK_PASS.slice(5, 9))
+      putThreadApp(CWD, {
+        ...ready("stopped"),
+        checks: [
+          {
+            tier: "quick",
+            command: "typecheck: npm run typecheck; lint: npm run lint",
+            state: "failed",
+            at: minutes(1),
+            steps: [
+              { name: "typecheck", command: "npm run typecheck", state: "failed", ms: 38_000, at: minutes(1) },
+              { name: "lint", command: "npm run lint", state: "passed", ms: 12_000, at: minutes(1) },
+            ],
+          },
+          { tier: "full", command: "npm run test:dev-live", state: "never" },
+        ],
+      })
       break
     case "running":
     case "check-failed":

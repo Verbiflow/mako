@@ -1,6 +1,6 @@
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
-import { installThreadAppDriver, putAppMarks, putThreadApp, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
+import { installThreadAppDriver, putAppMarks, putThreadApp, targetOf, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
 import type { AppActionOutcome, AppOutputCursor } from "../../electron/contracts/thread-app"
 
 /** While something is changing, the control follows it closely; otherwise it looks now and then. */
@@ -43,7 +43,7 @@ export function installHostThreadApp(): void {
     const current = () => watched.get(cwd) === entry && entry.look === look
     let view: ThreadAppView | undefined
     try {
-      view = await mako.threadApp(cwd)
+      view = await mako.threadApp(cwd, aim(cwd))
     } catch {
       if (!current()) return
       putThreadApp(cwd, undefined)
@@ -59,6 +59,8 @@ export function installHostThreadApp(): void {
     putThreadApp(cwd, view)
     schedule(cwd, document.visibilityState === "hidden" ? HIDDEN_MS : busy(view) ? BUSY_MS : SETTLED_MS)
   }
+
+  const aim = (cwd: string) => targetOf(threadAppStore.get(), cwd)
 
   /** Shows the phase a click leads to at once, then carries it out and says what went wrong, if anything. */
   const act = (cwd: string, to: AppPhase | undefined, run: () => Promise<AppActionOutcome | void>) => {
@@ -107,16 +109,16 @@ export function installHostThreadApp(): void {
   }
 
   installThreadAppDriver({
-    start: (cwd) => act(cwd, "starting", () => mako.startThreadApp(cwd)),
+    start: (cwd) => act(cwd, "starting", () => mako.startThreadApp(cwd, aim(cwd))),
     stop: (cwd) => act(cwd, "stopped", () => mako.stopThreadApp(cwd)),
-    restart: (cwd) => act(cwd, "starting", () => mako.restartThreadApp(cwd)),
-    makeRoom: (cwd) => act(cwd, "starting", () => mako.makeRoomForThreadApp(cwd)),
-    takeTurn: (cwd) => act(cwd, "starting", () => mako.takeTurnForThreadApp(cwd)),
-    runCheck: (cwd, tier) => {
+    restart: (cwd) => act(cwd, "starting", () => mako.restartThreadApp(cwd, aim(cwd))),
+    makeRoom: (cwd) => act(cwd, "starting", () => mako.makeRoomForThreadApp(cwd, aim(cwd))),
+    takeTurn: (cwd) => act(cwd, "starting", () => mako.takeTurnForThreadApp(cwd, aim(cwd))),
+    runCheck: (cwd, tier, steps) => {
       const view = threadAppStore.get().byCwd[cwd]
       if (view?.kind === "ready")
-        putThreadApp(cwd, { ...view, checks: view.checks.map((check) => (check.tier === tier ? { ...check, state: "running" } : check)) })
-      act(cwd, undefined, () => mako.checkThreadApp(cwd, tier))
+        putThreadApp(cwd, { ...view, checks: view.checks.map((check) => (check.tier === tier ? running(check, steps) : check)) })
+      act(cwd, undefined, () => mako.checkThreadApp(cwd, tier, aim(cwd), steps))
     },
     readOutput: async (cwd, key) => (await mako.threadAppOutput(cwd, key)).text,
     subscribeOutput: (cwd, key, listener) => {
@@ -183,6 +185,13 @@ export function installHostThreadApp(): void {
     for (const cwd of watched.keys()) schedule(cwd, 0)
     if (markWatchers) void refreshMarks()
   })
+}
+
+/** A check as it looks the moment it's asked to run: the steps it runs wait their turn, and the others keep their results. */
+function running(check: Extract<ThreadAppView, { kind: "ready" }>["checks"][number], steps: string[] | undefined) {
+  const next = { ...check, state: "running" as const }
+  if (check.steps) next.steps = check.steps.map((step) => (!steps || steps.includes(step.name) ? { name: step.name, command: step.command, state: "waiting" as const } : step))
+  return next
 }
 
 function busy(view: ThreadAppView): boolean {

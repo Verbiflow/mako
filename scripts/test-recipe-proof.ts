@@ -10,14 +10,15 @@ import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thre
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, type Recipe } from "../electron/thread-recipe.js"
+import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, versionHistory, type Recipe } from "../electron/thread-recipe.js"
 
 /**
  * A recipe version's life on real processes: a draft only its Thread runs,
  * proven by Mako (start, ready, verify commands) and by the agent's own
  * checks before it's published; a failed proof leaving it a draft; a draft
  * made from an older version refused; a running app keeping the version it
- * started with; targets choosing processes; and a worktree's cleanup.
+ * started with; targets choosing processes; going back to an earlier
+ * version through the same proof; and a worktree's cleanup.
  */
 
 async function freeBlock(from: number): Promise<number> {
@@ -95,6 +96,14 @@ try {
   await assert.rejects(tools.start(conversation, ["web"], "desktop"), /Name processes or a target, not both\./)
   assert.match(await tools.check(conversation, "full", "desktop"), /^The full check passed in /, "a target's own full check")
   await tools.stop(conversation)
+  const deskView = await tools.desk!.view(project, "desktop")
+  assert.deepEqual(deskView.kind === "ready" && [deskView.targets, deskView.checks.find((check) => check.tier === "full")?.command], [["web", "desktop"], "exit 0"], "the desk sees the targets, and the picked one's full check")
+  const firstView = await tools.desk!.view(project, "gone")
+  assert.equal(firstView.kind === "ready" && firstView.checks.find((check) => check.tier === "full"), undefined, "a target the recipe doesn't have reads as its first")
+  assert.deepEqual((await tools.desk!.start(project, "desktop")).problems, [])
+  const deskStarted = parseYaml(await tools.status(conversation)).processes
+  assert.ok(deskStarted.desktop?.startsWith("running") && !deskStarted.web?.startsWith("running"), "the desk starts the picked target's processes")
+  await tools.stop(conversation)
 
   // A verify command that fails leaves the version a draft, with its output; nobody else gets it.
   await tools.save(conversation, recipe({ verify: { run: "echo the home page was blank; exit 3" } }), "Verify by command")
@@ -148,6 +157,60 @@ try {
   await tools.stop(conversation)
   await other.stop(conversation)
 
+  // Going back: app_status lists this Thread's draft and the newest published versions, newest first.
+  const latest = third + 2
+  const history = parseYaml(await tools.status(conversation)).recipe
+  assert.match(history.versions[1], new RegExp(`^${third + 1}: this Thread's draft, saved \\d+ (?:s|min) ago, made from ${third}; passed its proof, but wasn't published\\. My change$`))
+  assert.match(history.versions[0], new RegExp(`^${latest}: published \\d+ (?:s|min) ago, what every Thread runs; proved\\. Their second change$`))
+  assert.match(history.versions.at(-1), new RegExp(`^${first}: published \\d+ (?:s|min) ago; proved\\. Verify by looking$`))
+  assert.equal(history.versions.length, 5, "the draft and the four published versions")
+  assert.match(history.goBack, new RegExp(`^${latest} versions kept; listed are this Thread's draft and the newest published\\. recipe_save with a version number instead of a recipe`))
+  assert.ok(Object.keys(history).indexOf("goBack") < Object.keys(history).indexOf("contents"), "before the recipe itself")
+
+  // recipe_save with a version brings its recipe back as a new draft made from the published version, proved again before anyone gets it.
+  await assert.rejects(tools.restore(conversation, 999, "Wrong number"), { message: `Not saved: the project has no version 999; it keeps versions 1 to ${latest}, and app_status lists the newest.` })
+  const back = await tools.restore(conversation, first, "Their values broke the start")
+  assert.match(back, new RegExp(`^Brought back version ${first} \\(published [\\d:]+, \\d+ (?:s|min) ago: Verify by looking\\) as a new draft; the history keeps every version as it was\\.\\nSaved as draft version ${latest + 1}, made from version ${latest}\\. Only this Thread runs it; every other Thread keeps version ${latest} until it's published\\.\\nChanged from what this Thread ran:\\n`))
+  assert.match(back, /\n {2}values\.MINE: removed, was "1"\n/)
+  const theirsBefore = await readRecipe(project, theirs, recipesRoot)
+  assert.equal(theirsBefore.kind === "ready" && theirsBefore.version, latest, "nobody else has it before it's proved")
+  assert.match(await tools.publish(conversation), new RegExp(`^Draft ${latest + 1} is up for your checks`), "proved like any other draft, its verify included")
+  assert.match(await tools.publish(conversation, [{ passed: true, how: "Fetched it again" }]), new RegExp(`^Published version ${latest + 1} in `))
+  const restored = await readVersion(file, latest + 1)
+  assert.deepEqual(restored && [restored.state, restored.parent, restored.reason], ["published", latest, `Back to version ${first}: Their values broke the start`])
+  assert.deepEqual(restored?.recipe, (await readVersion(file, first))?.recipe, "the earlier version's recipe as it was")
+  assert.equal((await readVersion(file, first))?.reason, "Verify by looking", "history isn't rewritten")
+  const theirsNow = await readRecipe(project, theirs, recipesRoot)
+  assert.equal(theirsNow.kind === "ready" && theirsNow.version, latest + 1)
+  await tools.stop(conversation)
+
+  // Going back to what's published already only drops this Thread's draft; a reason that says where it goes back to isn't said twice.
+  assert.equal(await tools.restore(conversation, latest + 1, "Already there"), `Version ${latest + 1} is the published version already, so there's nothing to go back to. That's version ${latest + 1}, the published recipe, so this Thread has no draft any more and runs version ${latest + 1} like every other Thread.`)
+  await tools.restore(conversation, second, `Back to version ${second}, for its values`)
+  assert.equal((await readVersion(file, latest + 2))?.reason, `Back to version ${second}, for its values`)
+
+  // Settings lists the same versions for a person, read-only.
+  const setup = await tools.desk!.setup(project)
+  assert.ok(setup.recipe.kind === "ready")
+  assert.deepEqual(setup.recipe.versions.map((entry) => [entry.version, entry.state, entry.current, entry.proof?.passed]), [
+    [latest + 2, "draft", false, undefined],
+    [latest + 1, "published", true, true],
+    [latest, "published", false, true],
+    [third, "published", false, true],
+    [second, "published", false, true],
+    [first, "published", false, true],
+  ], "this folder's draft and the five newest published")
+  assert.deepEqual((await versionHistory(file, mine.app, 2)).entries.map((entry) => entry.version), [latest + 2, latest + 1, latest], "only as many published as asked for")
+  assert.deepEqual((await versionHistory(file, theirs.app, 1)).entries.map((entry) => entry.version), [latest + 1], "another Thread's draft isn't listed")
+
+  // A version whose recipe this checkout can't run any more is refused with why, and where to start from it.
+  mkdirSync(join(project, "site"))
+  await tools.save(conversation, recipe({ processes: { web: { ...web, cwd: "site" } } }), "Serve from site")
+  rmSync(join(project, "site"), { recursive: true })
+  await assert.rejects(tools.restore(conversation, latest + 3, "Serve from site again"), {
+    message: `Not saved: version ${latest + 3}'s recipe can't run in this checkout as it was: processes.web.cwd: site doesn't exist in this checkout. To start from it anyway, take its "recipe" from ${join(recipeVersions(file), `${latest + 3}.json`)}, fix that, and pass it to recipe_save as recipe.`,
+  })
+
   // A worktree's cleanup runs with its Thread's values.
   await tools.save(conversation, recipe({ cleanup: "touch \"$MAKO_THREAD_DATA_DIR/cleaned\"" }), "Clean up")
   assert.match(await tools.cleanup(project) ?? "", /^cleanup \(touch "\$MAKO_THREAD_DATA_DIR\/cleaned"\) passed in [\d.]+ s$/)
@@ -157,7 +220,7 @@ try {
   await tools.save(conversation, recipe(), "No cleanup")
   assert.equal(await tools.cleanup(project), undefined, "nothing to run, nothing said")
 
-  console.log("recipe proof: a ready command decides when a process runs; targets pick processes and full checks; a failed verify keeps the draft; the agent's own check publishes once it says how it went, refused after a restart; a running app keeps its version until a whole restart; a draft from a replaced version is refused with what changed; cleanup runs with the Thread's values")
+  console.log("recipe proof: a ready command decides when a process runs; targets pick processes and full checks; a failed verify keeps the draft; the agent's own check publishes once it says how it went, refused after a restart; a running app keeps its version until a whole restart; a draft from a replaced version is refused with what changed; app_status and Settings list the versions, and going back to one saves it as a new draft that's proved and published like any other, refused with why when it can't run here; cleanup runs with the Thread's values")
 } finally {
   await processes.stop(mine.app).catch(() => {})
   await processes.stop(theirs.app).catch(() => {})

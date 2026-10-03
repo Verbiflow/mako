@@ -31,4 +31,10 @@ const capped = presentOutput(errors, "/tmp/run.log")
 assert.match(capped.split("\n")[0]!, /^50000 lines of output, more errors than fit in a reply: these are the first; \d+ more lines naming errors or the run's end are in \/tmp\/run\.log\.$/)
 assert.ok(capped.length <= OUTPUT_BUDGET.chars + 400)
 
-console.log("Run output: noise removed, whole output when it fits, errors and the end kept when it doesn't, with the log named")
+// A smaller budget, as when failed steps share one reply, holds to its share and still ends with the run's end.
+const share = { lines: Math.floor(OUTPUT_BUDGET.lines / 3), chars: Math.floor(OUTPUT_BUDGET.chars / 3) }
+const shared = presentOutput(long, "/tmp/step.log", share)
+assert.ok(shared.split("\n").length <= share.lines + 2 && shared.length <= share.chars + 400, `${shared.split("\n").length} lines, ${shared.length} characters`)
+assert.ok(shared.includes("src/app.ts:12:5 - error TS2345: wrong type") && shared.endsWith("passed case 9999"))
+
+console.log("Run output: noise removed, whole output when it fits, errors and the end kept when it doesn't, with the log named, within a smaller share too")

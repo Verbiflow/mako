@@ -34,7 +34,7 @@ export function TerminalPanel() {
     const key = state.shown?.cwd === cwd ? state.shown?.key : undefined
     if (!key || view?.kind !== "ready") return undefined
     // An output that ended (an install that finished) gives way to the app's first process.
-    const outputs = outputsOf(view)
+    const outputs = outputsOf(view, key)
     return outputs.some((output) => output.key === key) ? key : outputs.find((output) => output.key.startsWith("process:"))?.key
   })
   const active = sessions.find((session) => session.id === activeId)

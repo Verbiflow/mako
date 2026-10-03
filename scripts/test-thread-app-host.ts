@@ -5,7 +5,8 @@ import type { AppMark, AppOutputChunk, AppOutputCursor, ThreadAppView } from "..
  * The strip's app control and the dock's output, driven by a host: a click
  * shows its phase at once and holds it until the host catches up, output
  * follows a cursor and starts over on a new run, a host that can't answer
- * hides the control, and a folder nothing shows stops being asked about.
+ * hides the control, a folder nothing shows stops being asked about, and
+ * the target a folder picked is the one its starts, checks and view are of.
  */
 
 const CWD = "/work/shop"
@@ -33,6 +34,10 @@ let views = 0
 let heldView: Promise<ThreadAppView> | undefined
 let releaseStart: (() => void) | undefined
 const WORKTREE = "/work/shop-worktree"
+const viewTargets: (string | undefined)[] = []
+const startTargets: (string | undefined)[] = []
+const checks: unknown[][] = []
+let holdStart = true
 let hostMarks: AppMark[] = [{ checkout: CWD, state: "crashed" }, { checkout: WORKTREE, state: "running", port: 20_020 }]
 let markLooks = 0
 const reads: (AppOutputCursor | undefined)[] = []
@@ -42,16 +47,23 @@ const chunks: AppOutputChunk[] = [
   { text: "listening again\n", cursor: { file: "2:2", offset: 16 }, reset: true },
 ]
 const bridge = {
-  threadApp: async (cwd: string) => {
+  threadApp: async (cwd: string, target?: string) => {
     assert.equal(cwd, CWD)
     views += 1
+    viewTargets.push(target)
     if (heldView) { const pending = heldView; heldView = undefined; return pending }
     if (failing) throw new Error("No handler for mako:thread-app")
     return hostView
   },
-  startThreadApp: () => new Promise<{ problems: string[] }>((resolve) => {
-    releaseStart = () => resolve({ problems: [] })
+  startThreadApp: (_cwd: string, target?: string) => new Promise<{ problems: string[] }>((resolve) => {
+    startTargets.push(target)
+    if (holdStart) releaseStart = () => resolve({ problems: [] })
+    else resolve({ problems: [] })
   }),
+  checkThreadApp: async (...args: unknown[]) => {
+    checks.push(args)
+    return { problems: [] }
+  },
   stopThreadApp: async () => {},
   threadAppMarks: async (): Promise<AppMark[]> => {
     markLooks += 1
@@ -81,7 +93,7 @@ Object.defineProperty(globalThis, "document", { configurable: true, value: {
 } })
 
 const { installHostThreadApp } = await import("../src/state/thread-app-host")
-const { appMarkOf, threadAppDriver, threadAppStore } = await import("../src/state/thread-app")
+const { appMarkOf, pickTarget, targetOf, threadAppDriver, threadAppStore } = await import("../src/state/thread-app")
 installHostThreadApp()
 const driver = threadAppDriver()!
 const phase = () => {
@@ -165,4 +177,34 @@ const looked = markLooks
 await wait(1_500)
 assert.equal(markLooks, looked, "once the rail goes, nothing asks")
 
-console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled; the sidebar's marks come from one look while the rail shows them, the strip's view of its folder wins, and nothing is asked once the rail goes")
+// Targets: Run starts the recipe's first until the folder picks another, which it remembers and the view follows.
+holdStart = false
+const steps = [{ name: "typecheck", command: "tsc", state: "passed" as const, ms: 900, at: 1 }, { name: "lint", command: "eslint .", state: "failed" as const, ms: 400, at: 1 }]
+hostView = { ...ready("stopped"), targets: ["web", "desktop"], checks: [{ tier: "quick", command: "typecheck: tsc; lint: eslint .", state: "failed", at: 1, steps }] }
+const unwatchTargets = driver.watch!(CWD)
+await until(() => phase() === "stopped", "a view with targets")
+assert.equal(targetOf(threadAppStore.get(), CWD), "web", "the first target is the default")
+driver.start(CWD)
+await until(() => startTargets.length === 2, "a start")
+assert.equal(startTargets.at(-1), "web")
+pickTarget(CWD, "desktop")
+assert.equal(storage.get("mako.thread-app-target.v1"), JSON.stringify({ [CWD]: "desktop" }), "the pick is remembered for the folder")
+driver.start(CWD)
+await until(() => startTargets.length === 3, "a start of the picked target")
+assert.equal(startTargets.at(-1), "desktop")
+await until(() => viewTargets.at(-1) === "desktop", "the view of the picked target")
+
+// A rerun of one step marks only it as running; the others keep their results until the host says.
+driver.runCheck(CWD, "quick", ["lint"])
+const optimistic = threadAppStore.get().byCwd[CWD]
+assert.deepEqual(optimistic?.kind === "ready" && optimistic.checks[0]?.steps?.map((step) => step.state), ["passed", "waiting"])
+await until(() => checks.length === 1, "the check call")
+assert.deepEqual(checks[0], [CWD, "quick", "desktop", ["lint"]])
+
+// A pick the recipe no longer has falls back to its first target.
+hostView = { ...ready("stopped"), targets: ["web", "ios"] }
+driver.stop(CWD)
+await until(() => targetOf(threadAppStore.get(), CWD) === "web", "the first target again")
+unwatchTargets()
+
+console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled; the sidebar's marks come from one look while the rail shows them, the strip's view of its folder wins, and nothing is asked once the rail goes; a folder's picked target is what it starts, checks and views, and the first target stands in once the recipe drops it")

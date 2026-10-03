@@ -42,8 +42,8 @@ export function recipeChangeContext(setup: ProjectAppSetup): AppContext | null {
   const { recipe } = setup.recipe
   const checks: [string, string][] = []
   for (const tier of ["quick", "full"] as const) {
-    const command = recipe.checks[tier]
-    if (command) checks.push([tier, command])
+    const steps = recipe.checks[tier]
+    if (steps) checks.push([tier, steps.map((step) => (step.name ? `${step.name}: ${step.command}` : step.command)).join("; ")])
   }
   return attachment(setup.project, changeBody(setup.project, recipe.processes.map((entry) => (entry.port ? `${entry.name} on ${entry.port}` : entry.name)), checks))
 }

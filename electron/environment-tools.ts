@@ -8,14 +8,15 @@ import { childProcessEnv } from "./accounts-common.js"
 import { applyControlEnvironment } from "./control-launch.js"
 import type { AppKey, ThreadEnvironment } from "./contracts/thread-environments.js"
 import { THREAD_PORT_COUNT, THREAD_PORT_FIRST } from "./contracts/thread-environments.js"
-import type { AppActionOutcome, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
-import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView } from "./contracts/project-app.js"
+import type { AppActionOutcome, AppCheckStepView, AppCheckView, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProcessView, SetupProgress, SetupStep, ThreadAppView } from "./contracts/thread-app.js"
+import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView, RecipeVersionView } from "./contracts/project-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
 import { bringFiles, carryReport, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
-import { listed, toolText, when } from "./tool-text.js"
-import { cleanOutput, presentOutput } from "./run-output.js"
+import { ago, listed, toolText, when } from "./tool-text.js"
+import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
+import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type StepRecord, type StepState } from "./check-steps.js"
 import { memoryPressure, runKey, type AppOverview, type MemoryPressure, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import {
   checkoutOf,
@@ -28,8 +29,11 @@ import {
   expandTemplate,
   pinRunning,
   publishDraft,
+  publishedVersion,
   readRecipe,
   readVersion,
+  REASON_MAX,
+  recipePath,
   recipeValues,
   recipeVersions,
   RECIPE_PATH,
@@ -41,8 +45,12 @@ import {
   StaleDraftError,
   unpinRunning,
   versionCount,
+  versionHistory,
+  versionNumbers,
+  type VersionHistory,
   type CheckTier,
   type Recipe,
+  type RecipeCheck,
   type RecipeProofStep,
   type RecipeRead,
   type RecipeVerify,
@@ -65,6 +73,10 @@ const INSTALL_POLL_MS = 1_000
 /** How long a proof waits for the draft's processes to come up, and for each of its verify commands. */
 const PROOF_START_MS = 5 * 60_000
 const PROOF_VERIFY_MS = 30 * 60_000
+/** As many steps as a proof keeps; other hosts read proofs with this limit too. */
+const PROOF_STEPS = 50
+/** How many published versions app_status and Settings list, to go back to one. */
+const HISTORY_LISTED = 5
 /** A recipe's cleanup that takes longer than this is stopped, and the worktree goes anyway. */
 const CLEANUP_MS = 2 * 60_000
 
@@ -94,15 +106,18 @@ export interface EnvironmentTools {
   start(conversationId: string, names?: string[], target?: string): Promise<string>
   stop(conversationId: string, names?: string[]): Promise<string>
   restart(conversationId: string, names?: string[], target?: string): Promise<string>
-  logs(conversationId: string, target: { process: string } | { check: CheckTier }, lines: number): Promise<string>
+  logs(conversationId: string, target: { process: string } | { check: CheckTier; step?: string }, lines: number): Promise<string>
   /** What the Thread's app touches outside its checkout and ports, for finding what two copies would fight over. */
   probe(conversationId: string): Promise<string>
   /** Linked package folders made the checkout's own, so an install there can't write into the main checkout. */
   ownPackages(conversationId: string): Promise<string>
-  check(conversationId: string, tier: CheckTier, target?: string): Promise<string>
+  /** `steps` reruns only those of a check's named steps. */
+  check(conversationId: string, tier: CheckTier, target?: string, steps?: string[]): Promise<string>
   port(conversationId: string, port: number): Promise<string>
   /** Saves the recipe as a draft only this Thread runs. */
   save(conversationId: string, recipe: Recipe, reason?: string): Promise<string>
+  /** Saves an earlier version's recipe as a new draft made from the published version, to be proved and published like any other. */
+  restore(conversationId: string, version: number, reason: string): Promise<string>
   /** Proves this Thread's draft, then publishes it to every Thread; `checked` is how the agent's own checks went. */
   publish(conversationId: string, checked?: AgentCheck[]): Promise<string>
   /** Runs the recipe's cleanup for a worktree about to be removed; what happened, or nothing when there's none to run. */
@@ -119,15 +134,16 @@ export interface EnvironmentTools {
  * a caller that shouldn't wait doesn't await it and reads `view` instead.
  */
 export interface DeskApp {
-  view(cwd: string): Promise<ThreadAppView>
-  start(cwd: string): Promise<AppActionOutcome>
+  /** `target` is the one the person picked to run, whose full check the view shows. */
+  view(cwd: string, target?: string): Promise<ThreadAppView>
+  start(cwd: string, target?: string): Promise<AppActionOutcome>
   stop(cwd: string): Promise<void>
-  restart(cwd: string): Promise<AppActionOutcome>
-  check(cwd: string, tier: CheckTier): Promise<AppActionOutcome>
+  restart(cwd: string, target?: string): Promise<AppActionOutcome>
+  check(cwd: string, tier: CheckTier, target?: string, steps?: string[]): Promise<AppActionOutcome>
   /** Stops every other app on this Mac, then starts this one whatever the memory. */
-  makeRoom(cwd: string): Promise<AppActionOutcome>
+  makeRoom(cwd: string, target?: string): Promise<AppActionOutcome>
   /** For a recipe that runs one copy at a time: stops the copy another checkout runs, then starts this one. */
-  takeTurn(cwd: string): Promise<AppActionOutcome>
+  takeTurn(cwd: string, target?: string): Promise<AppActionOutcome>
   output(cwd: string, key: AppOutputKey, cursor?: AppOutputCursor): Promise<AppOutputChunk>
   /** Every checkout on this Mac whose app isn't stopped, for the sidebar. */
   marks(): Promise<AppMark[]>
@@ -512,7 +528,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const current = await withRecipe(conversationId)
     return startIn(current, names, again(conversationId, names))
   }
-  const deskAgain = (cwd: string) => async (): Promise<StartOutcome> => startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd))
+  /** A desk start of `target`, or of the first target's processes when there's none or the recipe no longer has it. */
+  const deskStart = (current: Ready, cwd: string, target: string | undefined, anyway = false) => {
+    const known = knownTarget(current.recipe, target)
+    return startIn(current, known === undefined ? undefined : chosen(current.recipe, undefined, known), deskAgain(cwd, known), anyway)
+  }
+  const deskAgain = (cwd: string, target?: string) => async (): Promise<StartOutcome> => deskStart(ready(await folderContext(cwd)), cwd, target)
   const start = async (conversationId: string, names?: string[], target?: string) => {
     const current = await withRecipe(conversationId)
     const picked = chosen(current.recipe, names, target)
@@ -583,54 +604,130 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const owed = new Map<string, { startedAt: number; result?: string }>()
   const owedKey = (app: AppKey, tier: CheckTier, conversation: string) => `${app}\0${tier}\0${conversation}`
   const checkRun = async (app: AppKey, tier: CheckTier) => (await deps.processes.status(app)).find((entry) => entry.kind === "check" && entry.name === tier)
-  const checkReport = async (app: AppKey, tier: CheckTier, status: RunStatus | undefined, command: string) => {
-    const actual = status?.command ?? command
-    const stale = actual !== command ? ` It ran ${actual}, and the recipe now names a different ${tier} check, so this run doesn't prove it. Call app_check again to run the current recipe.` : ""
-    const passed = status?.state.kind === "exited" && status.state.code === 0
-    if (passed) return `The ${tier} check passed${took(status)}.${stale}`
-    return `The ${tier} check ${checkResult(status)}${took(status)}.${stale || ` It ran: ${actual}`}\n\n${await runOutput(deps.processes, app, runKey("check", tier))}`
+  /** Each step of a run of steps as that run has it so far. */
+  const runSteps = async (app: AppKey, status: RunStatus, read?: Map<string, StepRecord>): Promise<StepResult[]> => {
+    const steps = stepsOf(status.command) ?? []
+    const records = read ?? await deps.processes.steps(app, runKey("check", status.name))
+    return runStepStates(steps, records, { startedAt: status.startedAt, up: isUp(status) }).map((state, index) => ({ step: steps[index]!, state }))
+  }
+  /** Each step of the check as it stands: the run under way's state for the steps it runs, and every other step's last result. */
+  const checkStepsNow = async (app: AppKey, plan: CheckPlan, status: RunStatus | undefined): Promise<StepResult[]> => {
+    const records = await deps.processes.steps(app, runKey("check", plan.run))
+    const running = status && isUp(status) && status.name === plan.run ? await runSteps(app, status, records) : []
+    return (plan.steps ?? []).map((step) => {
+      const inRun = running.find((entry) => entry.step.name === step.name && entry.step.command === step.command)
+      return inRun ?? { step, state: recordState(records.get(step.name), step.command) }
+    })
+  }
+  /** A check as the desk shows it; a check of steps passes once every step's last result is a pass of the recipe's command. */
+  const checkViewOf = async (app: AppKey, tier: CheckTier, check: RecipeCheck, status: RunStatus | undefined): Promise<AppCheckView> => {
+    const plan = checkPlan(tier, `${tier} check`, check)
+    if (!plan.steps) return checkView(tier, plan.command, status)
+    const results = await checkStepsNow(app, plan, status)
+    const view: AppCheckView = { tier, command: plan.steps.map((step) => `${step.name}: ${step.command}`).join("; "), state: stepsState(results, status), steps: results.map(stepView) }
+    const ends = results.flatMap(({ state }) => ("at" in state ? [state.at] : []))
+    if ((view.state === "passed" || view.state === "failed") && ends.length) view.at = Math.max(...ends)
+    return view
+  }
+  /** A check's last result in one line for app_status; a check of steps says each step's. */
+  const checkSummary = async (app: AppKey, tier: CheckTier, check: RecipeCheck | undefined, status: RunStatus | undefined, now: number): Promise<string> => {
+    if (!Array.isArray(check)) return checkLine(check, status, now)
+    const results = await checkStepsNow(app, checkPlan(tier, `${tier} check`, check), status)
+    const state = stepsState(results, status)
+    const ends = results.flatMap((entry) => ("at" in entry.state ? [entry.state.at] : []))
+    const head = state === "running" ? "running"
+      : state === "never" ? (results.some((entry) => entry.state.kind !== "never") ? "not every step has run yet" : "not run yet")
+      : `${state} ${when(Math.max(...ends), now)}`
+    return `${head}: ${resultsLine(results, now)}`
+  }
+  /** Each failed step's own output, sharing one reply's room between them. */
+  const failedOutputs = async (app: AppKey, run: string, results: StepResult[]): Promise<string[]> => {
+    const failed = results.filter((entry) => entry.state.kind === "failed")
+    const share = { lines: Math.floor(OUTPUT_BUDGET.lines / Math.max(1, failed.length)), chars: Math.floor(OUTPUT_BUDGET.chars / Math.max(1, failed.length)) }
+    return Promise.all(failed.map(async ({ step, state }) => {
+      const output = await deps.processes.output(app, runKey("check", run), step.name).catch(() => undefined)
+      return `${step.name} ${stepWords(state, 0)}. It ran: ${step.command}\n\n${output ? presentOutput(output.text, output.log, share) : "(its output couldn't be read)"}`
+    }))
+  }
+  const checkReport = async (app: AppKey, tier: CheckTier, status: RunStatus | undefined, plan: CheckPlan) => {
+    const actual = status?.command ?? plan.command
+    const ran = stepsOf(actual)
+    if (!plan.steps && !ran) {
+      const stale = actual !== plan.command ? ` It ran ${actual}, and the recipe now names a different ${tier} check, so this run doesn't prove it. Call app_check again to run the current recipe.` : ""
+      const passed = status?.state.kind === "exited" && status.state.code === 0
+      if (passed) return `The ${tier} check passed${took(status)}.${stale}`
+      return `The ${tier} check ${checkResult(status)}${took(status)}.${stale || ` It ran: ${actual}`}\n\n${await runOutput(deps.processes, app, runKey("check", tier))}`
+    }
+    if (!status || !ran) {
+      const stale = ` It ran ${describeRun(actual)}, and the recipe now names a different ${tier} check, so this run doesn't prove it. Call app_check again to run the current recipe.`
+      return `The ${tier} check ${checkResult(status)}${took(status)}.${status ? stale : ""}`
+    }
+    const results = await runSteps(app, status)
+    const verdict = status.state.kind === "exited" ? (status.state.code === 0 ? "passed" : "failed") : checkResult(status)
+    const only = plan.steps && ran.length < plan.steps.length ? ` (only ${ran.map((step) => step.name).join(", ")})` : ""
+    const stale = changedSteps(ran, plan.steps).length
+      ? ` The recipe's ${tier} check changed after this run started (${changedSteps(ran, plan.steps).join(", ")}), so this run doesn't prove it. Call app_check again to run the current recipe.`
+      : ""
+    const others = (plan.steps ?? []).filter((step) => !ran.some((entry) => entry.name === step.name))
+    const records = others.length ? await deps.processes.steps(app, runKey("check", plan.run)) : new Map<string, StepRecord>()
+    const failed = results.filter((entry) => entry.state.kind === "failed").map((entry) => entry.step.name)
+    const now = (deps.now ?? Date.now)()
+    const last = (step: CheckStep) => {
+      const state = recordState(records.get(step.name), step.command)
+      return `${step.name} ${stepWords(state, now)}${"at" in state ? ` (${when(state.at, now)})` : ""}`
+    }
+    return [
+      `The ${tier} check${only} ${verdict}${took(status)}: ${resultsLine(results, now)}.${stale}`,
+      ...await failedOutputs(app, plan.run, results),
+      others.length ? `Not in this run, with their last results: ${others.map(last).join("; ")}.` : undefined,
+      failed.length && failed.length < (plan.steps ?? ran).length ? `Once you've fixed it, app_check with steps ${JSON.stringify(failed)} runs only ${failed.length === 1 ? "that step" : "those steps"}.` : undefined,
+    ].filter(Boolean).join("\n\n")
   }
   /** Before a new run replaces a finished one, keeps its result for each conversation still owed it. */
-  const keepOwedResults = async (app: AppKey, tier: CheckTier, command: string) => {
+  const keepOwedResults = async (app: AppKey, tier: CheckTier, plan: CheckPlan) => {
     const status = await checkRun(app, tier)
     if (!status || status.state.kind === "running" || status.state.kind === "starting") return
     const waiting = [...owed.entries()].filter(([key, entry]) => key.startsWith(`${app}\0${tier}\0`) && entry.result === undefined && entry.startedAt === status.startedAt)
     if (!waiting.length) return
-    const result = await checkReport(app, tier, status, command)
+    const result = await checkReport(app, tier, status, plan)
     for (const [, entry] of waiting) entry.result = result
   }
   const checkWait = (conversation?: string) =>
     deps.settleMs ?? (conversation === undefined ? undefined : CHECK_WAIT_MS.get(deps.conversation?.(conversation)?.harness ?? "")) ?? SETTLE_MS
   /** Waits for the check under way, and returns its result or says it's still running. */
-  const awaitCheck = async (app: AppKey, tier: CheckTier, command: string, conversation: string | undefined, joined: boolean): Promise<string> => {
+  const awaitCheck = async (app: AppKey, tier: CheckTier, plan: CheckPlan, conversation: string | undefined, joined: boolean): Promise<string> => {
     const [status] = await deps.processes.settle(app, [runKey("check", tier)], checkWait(conversation))
     const now = (deps.now ?? Date.now)()
     const joinedNote = joined && status?.startedAt ? ` This call joined a run already under way, started ${when(status.startedAt, now)}.` : ""
     if (status?.state.kind === "running" || status?.state.kind === "starting") {
       const actual = status.command
-      const stale = actual !== command ? ` The recipe now names a different ${tier} check; this run doesn't prove it.` : ""
-      return `The ${tier} check (${actual}) is still running, ${elapsed(now - (status.startedAt ?? now))} in, and keeps going.${joinedNote} Your next app_check with tier "${tier}" waits for this same run and returns its result, rather than starting another; app_logs with check "${tier}" shows its output so far.${stale}`
+      const ran = stepsOf(actual)
+      const stale = (ran ? changedSteps(ran, plan.steps).length > 0 : actual !== plan.command) ? ` The recipe now names a different ${tier} check; this run doesn't prove it.` : ""
+      const progress = ran ? `: ${resultsLine(await runSteps(app, status), now)}.` : "."
+      const logs = ran ? `app_logs with check "${tier}" shows its output so far, and with a step too, that step's alone` : `app_logs with check "${tier}" shows its output so far`
+      return `The ${tier} check${ran ? "" : ` (${actual})`} is still running, ${elapsed(now - (status.startedAt ?? now))} in, and keeps going${progress}${joinedNote} Your next app_check with tier "${tier}" waits for this same run and returns its result, rather than starting another; ${logs}.${stale}`
     }
     if (conversation !== undefined) owed.delete(owedKey(app, tier, conversation))
-    return (await checkReport(app, tier, status, command)) + (joinedNote ? `\n${joinedNote.trim()}` : "")
+    return (await checkReport(app, tier, status, plan)) + (joinedNote ? `\n${joinedNote.trim()}` : "")
   }
-  const checkIn = async (current: Ready, tier: CheckTier, again: () => Promise<StartOutcome>, conversation?: string, target?: string): Promise<string> => {
+  const checkIn = async (current: Ready, tier: CheckTier, again: () => Promise<StartOutcome>, conversation?: string, target?: string, only?: string[]): Promise<string> => {
     if (target !== undefined && !current.recipe.targets?.[target])
       throw new Error(`The recipe has no target named ${target}; it has ${Object.keys(current.recipe.targets ?? {}).join(", ") || "none"}.`)
     const aimed = target ?? Object.keys(current.recipe.targets ?? {})[0]
-    const command = (tier === "full" && aimed !== undefined ? current.recipe.targets?.[aimed]?.full : undefined) ?? current.recipe.checks[tier]
-    if (!command) throw new Error(`The recipe has no ${tier} check${aimed !== undefined && tier === "full" ? ` for ${aimed}` : ""}.`)
+    const check = tierCheck(current.recipe, tier, aimed)
+    if (!check) throw new Error(`The recipe has no ${tier} check${aimed !== undefined && tier === "full" ? ` for ${aimed}` : ""}.`)
+    const plan = checkPlan(tier, `${tier} check`, check, only)
     const { app } = current.environment
     const mine = conversation === undefined ? undefined : owedKey(app, tier, conversation)
     const waiting = mine === undefined ? undefined : owed.get(mine)
     if (mine !== undefined && waiting) {
       const status = await checkRun(app, tier)
       const up = status?.state.kind === "running" || status?.state.kind === "starting"
-      if (waiting.result === undefined && up && status?.startedAt === waiting.startedAt) return awaitCheck(app, tier, command, conversation, false)
+      if (waiting.result === undefined && up && status?.startedAt === waiting.startedAt) return awaitCheck(app, tier, plan, conversation, false)
       owed.delete(mine)
       const earlier = "This is the run your last app_check left running. If you've changed files since it started, call app_check again for a new run."
       if (waiting.result !== undefined) return `${waiting.result}\n${earlier}`
-      if (status?.startedAt === waiting.startedAt) return `${await checkReport(app, tier, status, command)}\n${earlier}`
+      if (status?.startedAt === waiting.startedAt) return `${await checkReport(app, tier, status, plan)}\n${earlier}`
       return `The ${tier} check your last app_check left running was stopped before it finished, so it has no result. Call app_check again to run it.`
     }
     if (tier === "full") {
@@ -648,11 +745,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const preparing = await prepare(current)
       if (preparing) return preparing.message
     }
-    await keepOwedResults(app, tier, command)
-    const { started } = await deps.processes.start(app, [{ kind: "check", name: tier, command, cwd: current.checkout, env: env(current, current.recipe) }])
+    await keepOwedResults(app, tier, plan)
+    const { started } = await deps.processes.start(app, [{ kind: "check", name: tier, command: plan.command, cwd: current.checkout, env: env(current, current.recipe) }])
     const run = await checkRun(app, tier)
     if (mine !== undefined && run?.startedAt !== undefined) owed.set(mine, { startedAt: run.startedAt })
-    return awaitCheck(app, tier, command, conversation, !started.includes(tier))
+    return awaitCheck(app, tier, plan, conversation, !started.includes(tier))
   }
   /** Why the install step runs now: the first step due, in words. */
   const prepareReason = async (recipe: Recipe, checkout: string): Promise<string> => {
@@ -683,16 +780,24 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       : processes.some((entry) => entry && failed(entry)) ? "failed"
       : processes.some((entry) => entry && working(entry)) ? "running"
       : "waiting"
-    const checks = (["quick", "full"] as const).filter((tier) => read.recipe.checks[tier]).map((tier) => runs.find((entry) => entry.kind === "check" && entry.name === tier && entry.command === read.recipe.checks[tier]))
-    const passed = (entry: RunStatus | undefined) => entry?.state.kind === "exited" && entry.state.code === 0
-    const checkStep: SetupStep = checks.length && checks.every(passed) ? "done"
-      : checks.some((entry) => entry && working(entry)) ? "running"
-      : checks.some((entry) => entry && failed(entry)) ? "failed"
-      : checks.some(passed) ? "running"
+    const checks = await Promise.all((["quick", "full"] as const).flatMap((tier) => {
+      const check = read.recipe.checks[tier]
+      if (check === undefined) return []
+      const status = runs.find((entry) => entry.kind === "check" && entry.name === tier)
+      if (!Array.isArray(check)) {
+        const run = status?.command === check ? status : undefined
+        return [Promise.resolve(run?.state.kind === "exited" && run.state.code === 0 ? "passed" : run && working(run) ? "running" : run && failed(run) ? "failed" : "never")]
+      }
+      return [checkViewOf(environment.app, tier, check, status).then((view) => view.state)]
+    }))
+    const checkStep: SetupStep = checks.length && checks.every((state) => state === "passed") ? "done"
+      : checks.includes("running") ? "running"
+      : checks.includes("failed") ? "failed"
+      : checks.includes("passed") ? "running"
       : "waiting"
     return { recipe: "done", app, checks: checkStep }
   }
-  const deskView = async (cwd: string): Promise<ThreadAppView> => {
+  const deskView = async (cwd: string, target?: string): Promise<ThreadAppView> => {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
     const found = await deps.folder(cwd, false)
     const environment = found.environment ?? placeholder(found.app)
@@ -730,11 +835,14 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const runs = found.environment ? await deps.processes.status(found.app) : []
     const run = (kind: RunStatus["kind"], name: string) => runs.find((entry) => entry.kind === kind && entry.name === name)
     const processes = Object.entries(read.recipe.processes).map(([name, spec]) => processView(name, found.environment && processPort(spec, found.environment), run("process", name)))
-    const checks = (["quick", "full"] as const).flatMap((tier) => {
-      const command = read.recipe.checks[tier]
-      return command ? [checkView(tier, command, run("check", tier))] : []
-    })
+    const targets = Object.keys(read.recipe.targets ?? {})
+    const aimed = knownTarget(read.recipe, target) ?? targets[0]
+    const checks = await Promise.all((["quick", "full"] as const).flatMap((tier) => {
+      const check = tierCheck(read.recipe, tier, aimed)
+      return check ? [checkViewOf(found.app, tier, check, run("check", tier))] : []
+    }))
     const view: ThreadAppView = { kind: "ready", project: found.project, phase: "stopped", processes, checks }
+    if (targets.length) view.targets = targets
     const browser = processes.find((entry) => entry.name === "web" && entry.state === "running" && entry.port !== undefined)
       ?? processes.find((entry) => entry.state === "running" && entry.port !== undefined)
     if (found.environment && browser?.port !== undefined) view.address = { host: found.environment.host, port: browser.port }
@@ -788,7 +896,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
     const found = await deps.folder(cwd, false)
     const read = await readRecipe(found.checkout, found.environment ?? placeholder(found.app), deps.recipesRoot)
-    const view: ProjectAppSetup = { project: found.project, root: found.root, recipe: await recipeState(read) }
+    const view: ProjectAppSetup = { project: found.project, root: found.root, recipe: await recipeState(read, found.app) }
     const patterns = read.kind === "ready" ? read.recipe.secrets ?? [] : []
     if (read.kind === "ready" && patterns.length) {
       const allowed = deps.recipesRoot ? await readAllowedSecrets(deps.recipesRoot, found.checkout) : undefined
@@ -803,6 +911,36 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const whoIs = (conversationId: string) => {
     const thread = deps.conversation?.(conversationId)
     return thread ? `the Thread "${thread.title}" (${thread.harness})` : undefined
+  }
+  const save = async (conversationId: string, recipe: Recipe, reason?: string): Promise<string> => {
+    if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
+    const { environment, checkout, read } = await context(conversationId)
+    const granted = grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
+    const carried = await carryReport(recipe, await projectRoot(checkout), granted)
+    const saved = await saveDraft(deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
+    const after = await readRecipe(checkout, environment, deps.recipesRoot)
+    if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
+    const running = await appUp(environment.app)
+    const changes = read.kind === "ready" ? recipeChanges(read.recipe, after.recipe) : []
+    const { version } = saved
+    if (version.state === "published")
+      return `That's version ${version.version}, the published recipe, so this Thread has no draft any more and runs version ${version.version} like every other Thread.${running ? " Its processes still run as they were started; app_restart runs them with it." : ""}`
+    return [
+      read.kind === "ready" && read.draft && read.version === version.version
+        ? `That's this Thread's draft already, version ${version.version}; nothing changed.`
+        : `Saved as draft version ${version.version}${version.parent === undefined ? ", the project's first recipe" : `, made from version ${version.parent}`}. Only this Thread runs it; every other Thread keeps ${saved.published === undefined ? (after.ignored ? `the committed ${RECIPE_PATH}` : "running without a recipe") : `version ${saved.published}`} until it's published.`,
+      read.kind === "none"
+        ? undefined
+        : read.kind === "invalid"
+          ? "The recipe it replaces here couldn't be read, so there's nothing to compare it with."
+          : changes.length
+            ? `Changed from what this Thread ran:\n${changes.map((change) => `  ${change}`).join("\n")}`
+            : undefined,
+      after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; once this is published, Mako's recipe comes first and that file is ignored.` : undefined,
+      ...carried,
+      running ? "This Thread's processes still run as they were started; app_restart runs them with the draft." : undefined,
+      "Iterate with app_restart and app_check as you need. Once it works, recipe_publish proves it and publishes it to every Thread.",
+    ].filter(Boolean).join("\n")
   }
   const stepsLine = (steps: RecipeProofStep[]) =>
     steps.map((step) => `${step.name} ${step.passed ? "passed" : "failed"}${step.ms === undefined ? "" : ` in ${elapsed(step.ms)}`}`).join(", ")
@@ -896,22 +1034,39 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       steps.push({ name: "start", passed: true, ms: now() - began })
     }
     const verifications = recipeVerifications(recipe)
-    for (const verification of verifications) {
+    for (const [index, verification] of verifications.entries()) {
       if (!("run" in verification.verify)) continue
-      const command = verification.verify.run
+      const plan = checkPlan(verification.run, verification.label, verification.verify.run)
+      const shown = describeRun(plan.command)
       const key = runKey("check", verification.run)
-      run.step = `running ${verification.label} (${command})`
+      run.step = `running ${verification.label} (${shown})`
       await deps.processes.stop(app, [key])
-      await deps.processes.start(app, [{ kind: "check", name: verification.run, command, cwd: current.checkout, env: env(current, recipe) }])
+      await deps.processes.start(app, [{ kind: "check", name: verification.run, command: plan.command, cwd: current.checkout, env: env(current, recipe) }])
       const [status] = await deps.processes.settle(app, [key], PROOF_VERIFY_MS)
+      const results = status && plan.steps ? await runSteps(app, status) : []
+      const stepRecords = (timedOut: boolean): RecipeProofStep[] => {
+        const records = results.flatMap(({ step, state }): RecipeProofStep[] => {
+          if (state.kind === "passed" || state.kind === "failed") return [{ name: `${verification.label}: ${step.name}`, passed: state.kind === "passed", ms: state.at - state.startedAt, command: step.command }]
+          return timedOut && state.kind === "running" ? [{ name: `${verification.label}: ${step.name}`, passed: false, ms: now() - state.startedAt, command: step.command }] : []
+        })
+        if (steps.length + records.length + (verifications.length - index - 1) <= PROOF_STEPS) return records
+        const ms = status?.startedAt === undefined ? 0 : (status.state.kind === "exited" ? status.state.at : now()) - status.startedAt
+        return [{ name: verification.label, passed: !timedOut && status?.state.kind === "exited" && status.state.code === 0, ms, command: shown.slice(0, 4_000) }]
+      }
       if (status?.state.kind === "running" || status?.state.kind === "starting") {
         await deps.processes.stop(app, [key])
-        steps.push({ name: verification.label, passed: false, ms: PROOF_VERIFY_MS, command })
-        return fail(`${verification.label} (${command}) didn't finish within ${elapsed(PROOF_VERIFY_MS)}, so Mako stopped it. A verification proves the recipe works; it isn't a test suite.`)
+        steps.push(...(plan.steps ? stepRecords(true) : [{ name: verification.label, passed: false, ms: PROOF_VERIFY_MS, command: plan.command }]))
+        return fail(`${verification.label} (${shown}) didn't finish within ${elapsed(PROOF_VERIFY_MS)}, so Mako stopped it${plan.steps ? `: ${resultsLine(results, now())}` : ""}. A verification proves the recipe works; it isn't a test suite.`)
       }
       const passed = status?.state.kind === "exited" && status.state.code === 0
-      steps.push({ name: verification.label, passed, ms: status?.state.kind === "exited" && status.startedAt !== undefined ? status.state.at - status.startedAt : 0, command })
-      if (!passed) return fail(`${verification.label} (${command}) ${checkResult(status)}${took(status)}.\n\n${await runOutput(deps.processes, app, key)}`)
+      if (plan.steps) {
+        steps.push(...stepRecords(false))
+        const verdict = status?.state.kind === "exited" ? "failed" : checkResult(status)
+        if (!passed) return fail([`${verification.label} ${verdict}${took(status)}: ${resultsLine(results, now())}.`, ...await failedOutputs(app, verification.run, results)].join("\n\n"))
+        continue
+      }
+      steps.push({ name: verification.label, passed, ms: status?.state.kind === "exited" && status.startedAt !== undefined ? status.state.at - status.startedAt : 0, command: plan.command })
+      if (!passed) return fail(`${verification.label} (${plan.command}) ${checkResult(status)}${took(status)}.\n\n${await runOutput(deps.processes, app, key)}`)
     }
     const checks = verifications.filter((verification) => "check" in verification.verify)
     if (!checks.length) return publishProved(current, version, steps, by, run.startedAt)
@@ -975,37 +1130,40 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       await writeAllowedSecrets(deps.recipesRoot, checkout, allow ? read.recipe.secrets : [], (deps.now ?? Date.now)())
       return (await setupView(cwd)).view
     },
-    async start(cwd) {
-      return deskOutcome(await startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd)))
+    async start(cwd, target) {
+      return deskOutcome(await deskStart(ready(await folderContext(cwd)), cwd, target))
     },
     async stop(cwd) {
       await stopIn(await folderContext(cwd))
     },
-    async restart(cwd) {
+    async restart(cwd, target) {
       await stopIn(ready(await folderContext(cwd)))
-      return deskOutcome(await startIn(ready(await folderContext(cwd)), undefined, deskAgain(cwd)))
+      return deskOutcome(await deskStart(ready(await folderContext(cwd)), cwd, target))
     },
-    async check(cwd, tier) {
-      await checkIn(ready(await folderContext(cwd)), tier, deskAgain(cwd))
+    async check(cwd, tier, target, steps) {
+      const current = ready(await folderContext(cwd))
+      const known = knownTarget(current.recipe, target)
+      await checkIn(current, tier, deskAgain(cwd, known), undefined, known, steps)
       return { problems: [] }
     },
-    async makeRoom(cwd) {
+    async makeRoom(cwd, target) {
       const current = ready(await folderContext(cwd))
       const others = (await deps.processes.active()).filter((entry) => entry.app !== current.environment.app)
       for (const other of others) await deps.processes.stop(other.app)
-      return deskOutcome(await startIn(current, undefined, deskAgain(cwd), true))
+      return deskOutcome(await deskStart(current, cwd, target, true))
     },
-    async takeTurn(cwd) {
+    async takeTurn(cwd, target) {
       const current = ready(await folderContext(cwd))
       for (const other of await copiesElsewhere(current)) await deps.processes.stop(other)
-      return deskOutcome(await startIn(current, undefined, deskAgain(cwd)))
+      return deskOutcome(await deskStart(current, cwd, target))
     },
     async output(cwd, key, cursor) {
       if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
       const found = await deps.folder(cwd, false)
       const empty: AppOutputChunk = { text: "", cursor: cursor ?? { file: "", offset: 0 }, reset: false }
       if (!found.environment) return empty
-      return deps.processes.readLog(found.app, outputRun(key), cursor)
+      const [run, step] = outputRun(key)
+      return deps.processes.readLog(found.app, run, cursor, undefined, step)
     },
     async marks() {
       const marks: AppMark[] = []
@@ -1056,16 +1214,19 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         : []
       const now = (deps.now ?? Date.now)()
       const recipeProcesses = read.kind === "ready" ? read.recipe.processes : {}
-      const checks = (["quick", "full"] as const).flatMap((tier) => {
-        const command = read.kind === "ready" ? read.recipe.checks[tier] : undefined
+      const targetChecks = read.kind === "ready" ? Object.entries(read.recipe.targets ?? {}).flatMap(([name, target]) => (target.full === undefined ? [] : [[`full for ${name}`, "full", target.full] as const])) : []
+      const checks = await Promise.all([
+        ...(["quick", "full"] as const).map((tier) => [tier, tier, read.kind === "ready" ? read.recipe.checks[tier] : undefined] as const),
+        ...targetChecks,
+      ].flatMap(([label, tier, check]) => {
         const status = runs.find((entry) => entry.kind === "check" && entry.name === tier)
-        return command || status ? [[tier, checkLine(command, status, now)] as const] : []
-      })
+        return check !== undefined || (status && label === tier) ? [checkSummary(environment.app, tier, check, status, now).then((line) => [label, line] as const)] : []
+      }))
       const report = {
         app: read.kind === "ready" ? appAddress(read.recipe, environment, runs) : `http://${environment.host}:${environment.port}`,
         ports: `${environment.port}-${environment.port + environment.ports - 1}`,
         dataFolder: environment.dataDir,
-        recipe: recipeSummary(read),
+        recipe: recipeSummary(read, read.saved ? await versionHistory(read.saved, environment.app, HISTORY_LISTED) : undefined, now),
         values: Object.keys(values).length ? values : undefined,
         yourShell: launched === undefined
           ? "Mako didn't start this agent process with this Thread's values."
@@ -1121,10 +1282,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async logs(conversationId, target, lines) {
       const { environment } = await context(conversationId)
       const key = "check" in target ? runKey("check", target.check) : target.process === "prepare" ? PREPARE_KEY : runKey("process", target.process)
-      return cleanOutput(await deps.processes.logs(environment.app, key, lines))
+      return cleanOutput(await deps.processes.logs(environment.app, key, lines, "check" in target ? target.step : undefined))
     },
-    async check(conversationId, tier, target) {
-      return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId, target)
+    async check(conversationId, tier, target, steps) {
+      return checkIn(await withRecipe(conversationId), tier, again(conversationId), conversationId, target, steps)
     },
     async port(conversationId, port) {
       const { environment } = await context(conversationId)
@@ -1132,35 +1293,32 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (!owner) return `Nothing on this Mac listens on port ${port}.`
       return deps.processes.describeHolder(port, environment.app)
     },
-    async save(conversationId, recipe, reason) {
+    save,
+    async restore(conversationId, version, reason) {
       if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
-      const { environment, checkout, read } = await context(conversationId)
-      const granted = grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
-      const carried = await carryReport(recipe, await projectRoot(checkout), granted)
-      const saved = await saveDraft(deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
-      const after = await readRecipe(checkout, environment, deps.recipesRoot)
-      if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
-      const running = await appUp(environment.app)
-      const changes = read.kind === "ready" ? recipeChanges(read.recipe, after.recipe) : []
-      const { version } = saved
-      if (version.state === "published")
-        return `That's version ${version.version}, the published recipe, so this Thread has no draft any more and runs version ${version.version} like every other Thread.${running ? " Its processes still run as they were started; app_restart runs them with it." : ""}`
-      return [
-        read.kind === "ready" && read.draft && read.version === version.version
-          ? `That's this Thread's draft already, version ${version.version}; nothing changed.`
-          : `Saved as draft version ${version.version}${version.parent === undefined ? ", the project's first recipe" : `, made from version ${version.parent}`}. Only this Thread runs it; every other Thread keeps ${saved.published === undefined ? (after.ignored ? `the committed ${RECIPE_PATH}` : "running without a recipe") : `version ${saved.published}`} until it's published.`,
-        read.kind === "none"
-          ? undefined
-          : read.kind === "invalid"
-            ? "The recipe it replaces here couldn't be read, so there's nothing to compare it with."
-            : changes.length
-              ? `Changed from what this Thread ran:\n${changes.map((change) => `  ${change}`).join("\n")}`
-              : undefined,
-        after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; once this is published, Mako's recipe comes first and that file is ignored.` : undefined,
-        ...carried,
-        running ? "This Thread's processes still run as they were started; app_restart runs them with the draft." : undefined,
-        "Iterate with app_restart and app_check as you need. Once it works, recipe_publish proves it and publishes it to every Thread.",
-      ].filter(Boolean).join("\n")
+      const file = await recipePath(deps.recipesRoot, (await context(conversationId)).checkout)
+      const record = await readVersion(file, version)
+      if (!record) {
+        const kept = await versionNumbers(file)
+        throw new Error(kept.includes(version)
+          ? `Not saved: this Mako can't read version ${version}'s recipe (a newer Mako may have saved it), so it can't bring it back.`
+          : `Not saved: the project has no version ${version}${kept.length ? `; it keeps ${numberList(kept)}, and app_status lists the newest` : ""}.`)
+      }
+      const now = (deps.now ?? Date.now)()
+      if (version === (await publishedVersion(file, now)))
+        return `Version ${version} is the published version already, so there's nothing to go back to. ${(await save(conversationId, record.recipe, reason))}`
+      const because = new RegExp(`^back to version ${version}\\b`, "i").test(reason) ? reason : `Back to version ${version}: ${reason}`
+      let saved: string
+      try {
+        saved = await save(conversationId, record.recipe, because.slice(0, REASON_MAX))
+      } catch (error) {
+        const problem = (error instanceof Error ? error.message : String(error)).replace(/^Not saved: /, "")
+        throw new Error(`Not saved: version ${version}'s recipe can't run in this checkout as it was: ${problem}. To start from it anyway, take its "recipe" from ${join(recipeVersions(file), `${version}.json`)}, fix that, and pass it to recipe_save as recipe.`, { cause: error })
+      }
+      const was = record.state === "published"
+        ? `published ${when(record.publishedAt ?? record.savedAt, now)}`
+        : `a draft saved ${when(record.savedAt, now)} and never published`
+      return `Brought back version ${version} (${was}${record.by ? ` by ${record.by}` : ""}${record.reason ? `: ${record.reason}` : ""}) as a new draft; the history keeps every version as it was.\n${saved}`
     },
     async publish(conversationId, checked) {
       if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes.")
@@ -1212,10 +1370,14 @@ function placeholder(app: AppKey): ThreadEnvironment {
   return { app, host: "localhost", port: THREAD_PORT_FIRST, ports: THREAD_PORT_COUNT, dataDir: "" }
 }
 
-function outputRun(key: AppOutputKey): string {
-  if (key === "prepare") return PREPARE_KEY
-  if (key.startsWith("check:")) return runKey("check", key.slice("check:".length))
-  return runKey("process", key.slice("process:".length))
+/** The run an output is of, and the step of it for one step's output. */
+function outputRun(key: AppOutputKey): [string, string | undefined] {
+  if (key === "prepare") return [PREPARE_KEY, undefined]
+  if (key.startsWith("check:")) {
+    const [tier, step] = key.slice("check:".length).split(":")
+    return [runKey("check", tier!), step]
+  }
+  return [runKey("process", key.slice("process:".length)), undefined]
 }
 
 /** The desk view's phase from an app's runs alone, as `deskView` orders it; nothing for a stopped app. */
@@ -1276,6 +1438,10 @@ function checkView(tier: CheckTier, command: string, status: RunStatus | undefin
 interface RecipeSummary {
   /** Which version this app runs, and whether it's published. */
   version?: string
+  /** This Thread's draft and the newest published versions, one line each, newest first. */
+  versions?: string[]
+  /** How to go back to one of them. */
+  goBack?: string
   /** Set only for a recipe that can't be used, with why. */
   broken?: string
   /** The file in use, or the one that's broken. */
@@ -1286,7 +1452,7 @@ interface RecipeSummary {
   contents?: Recipe
 }
 
-function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSummary | string {
+function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>, history: VersionHistory | undefined, now: number): RecipeSummary | string {
   if (read.kind === "none") return "none: agents run things themselves on this Thread's ports; recipe_guide says how to set one up"
   const summary: RecipeSummary = {}
   if (read.kind === "invalid") summary.broken = read.message
@@ -1298,6 +1464,12 @@ function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSumm
       : read.newer !== undefined
         ? `${read.version}, which this app's processes started with; version ${read.newer} is published, and app_restart of the whole app runs it`
         : `${read.version}, published`
+  if (history && history.kept.length > 1) {
+    summary.versions = history.entries.map((entry) => versionLine(entry, now))
+    const draft = history.entries.some((entry) => entry.state === "draft")
+    const unlisted = history.kept.length > history.entries.length ? `; listed are ${draft ? "this Thread's draft and " : ""}the newest published` : ""
+    summary.goBack = `${history.kept.length} versions kept${unlisted}. recipe_save with a version number instead of a recipe saves that version's recipe as this Thread's draft; recipe_publish proves it again before every Thread gets it.`
+  }
   if (read.kind === "ready") {
     if (read.ignored) summary.ignored = `${read.ignored}: committed with the project, but the recipe saved in Mako comes first`
     summary.contents = read.recipe
@@ -1305,8 +1477,21 @@ function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>): RecipeSumm
   return summary
 }
 
+/** A version in one line for app_status: what it is, when and by whom, whether it was proved, and why it was saved. */
+function versionLine(entry: RecipeVersionView, now: number): string {
+  const by = entry.by ? ` by ${entry.by}` : ""
+  const what = entry.state === "draft"
+    ? `this Thread's draft, saved ${ago(now - entry.savedAt)}${by}${entry.parent === undefined ? "" : `, made from ${entry.parent}`}`
+    : `published ${ago(now - (entry.publishedAt ?? entry.savedAt))}${by}${entry.current ? ", what every Thread runs" : ""}`
+  const proof = !entry.proof ? (entry.state === "draft" ? "not proved yet" : "never proved")
+    : !entry.proof.passed ? `its last proof failed at ${entry.proof.failed}`
+    : entry.state === "draft" ? "passed its proof, but wasn't published" : "proved"
+  const parts = [`${entry.version}: ${what}`, proof, entry.readable ? undefined : "this Mako can't read its recipe"]
+  return `${parts.filter(Boolean).join("; ")}${entry.reason ? `. ${entry.reason}` : ""}`
+}
+
 /** The recipe in use, written out for a person: where it's kept, when it was saved, and what it runs. */
-async function recipeState(read: Read): Promise<ProjectRecipeState> {
+async function recipeState(read: Read, app: AppKey): Promise<ProjectRecipeState> {
   if (read.kind === "none") return { kind: "none" }
   if (read.kind === "invalid") return read.from ? { kind: "invalid", message: read.message, file: read.from } : { kind: "invalid", message: read.message }
   const { recipe } = read
@@ -1324,11 +1509,15 @@ async function recipeState(read: Read): Promise<ProjectRecipeState> {
         if (spec.cwd) written.cwd = spec.cwd
         return written
       }),
-      checks: recipe.checks,
+      checks: Object.fromEntries((["quick", "full"] as const).flatMap((tier) => {
+        const check = recipe.checks[tier]
+        return check === undefined ? [] : [[tier, Array.isArray(check) ? check : [{ command: check }]]]
+      })),
       prepare: recipe.prepare.map((step) => ({ command: step.command, inputs: step.inputs, outputs: step.outputs ?? [], link: step.link === true })),
       carry: recipe.carry ?? [],
       oneAtATime: recipe.oneAtATime ?? false,
     },
+    versions: read.saved ? (await versionHistory(read.saved, app, HISTORY_LISTED)).entries : [],
   }
   const savedAt = (await stat(read.from).catch(() => undefined))?.mtimeMs
   if (savedAt !== undefined) state.savedAt = Math.round(savedAt)
@@ -1402,6 +1591,115 @@ function checkResult(status: RunStatus | undefined): string {
   return "not run yet"
 }
 
+function isUp(status: RunStatus): boolean {
+  return status.state.kind === "running" || status.state.kind === "starting"
+}
+
+/** Version numbers with runs written as ranges, as "versions 1 to 4, 7 and 9". */
+function numberList(numbers: readonly number[]): string {
+  const runs: [number, number][] = []
+  for (const number of numbers) {
+    const last = runs.at(-1)
+    if (last && number === last[1] + 1) last[1] = number
+    else runs.push([number, number])
+  }
+  const words = runs.map(([first, last]) => (first === last ? String(first) : `${first} to ${last}`))
+  const listed = words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words.at(-1)}` : words.join("")
+  return `${numbers.length === 1 ? "version" : "versions"} ${listed}`
+}
+
+/** A check as Mako runs it: the run it's kept as, the command that run runs, and for a check of steps, which. */
+interface CheckPlan {
+  /** Such as `quick`, `full` or `verify-web`. */
+  run: string
+  /** Every step the recipe names for it; none for a check of one command. */
+  steps?: CheckStep[]
+  /** One command, or the script for the steps this run is for: all of them, or those asked for. */
+  command: string
+}
+
+interface StepResult {
+  step: CheckStep
+  state: StepState
+}
+
+/** A target a person picked at the desk, while the recipe still has it; their pick may be older than the recipe. */
+function knownTarget(recipe: Recipe, target: string | undefined): string | undefined {
+  return target !== undefined && recipe.targets?.[target] ? target : undefined
+}
+
+/** The check a tier runs: a target's own full check, or the recipe's. */
+function tierCheck(recipe: Recipe, tier: CheckTier, target: string | undefined): RecipeCheck | undefined {
+  return (tier === "full" && target !== undefined ? recipe.targets?.[target]?.full : undefined) ?? recipe.checks[tier]
+}
+
+/** `only` names the steps to run; every step when it's empty. */
+function checkPlan(run: string, what: string, check: RecipeCheck, only?: readonly string[]): CheckPlan {
+  if (!Array.isArray(check)) {
+    if (only?.length) throw new Error(`The ${what} is one command (${check}), with no named steps to choose from; call it without steps.`)
+    return { run, command: check }
+  }
+  const steps = check
+  const unknown = (only ?? []).filter((name) => !steps.some((step) => step.name === name))
+  if (unknown.length) throw new Error(`The ${what} has no step named ${unknown.join(", ")}; its steps are ${steps.map((step) => step.name).join(", ")}.`)
+  return { run, steps, command: stepsCommand(only?.length ? steps.filter((step) => only.includes(step.name)) : steps) }
+}
+
+/** The steps of a run that the recipe now names differently or not at all. */
+function changedSteps(ran: readonly CheckStep[], current: readonly CheckStep[] | undefined): string[] {
+  return ran.filter((step) => current?.find((entry) => entry.name === step.name)?.command !== step.command).map((step) => step.name)
+}
+
+/** What a run ran, for a person: its command, or its steps with theirs. */
+function describeRun(command: string): string {
+  const steps = stepsOf(command)
+  return steps ? `the steps ${steps.map((step) => `${step.name} (${step.command})`).join(", ")}` : command
+}
+
+function stepWords(state: StepState, now: number, afterFailure = false): string {
+  switch (state.kind) {
+    case "waiting":
+      return "waiting for the steps before it"
+    case "running":
+      return `running, ${elapsed(now - state.startedAt)} in`
+    case "passed":
+      return `passed in ${elapsed(state.at - state.startedAt)}`
+    case "failed":
+      return `failed (exit ${state.code}) in ${elapsed(state.at - state.startedAt)}`
+    case "stopped":
+      return "stopped before it finished"
+    case "skipped":
+      return afterFailure ? "didn't run, since a step before it failed" : "didn't run"
+    default:
+      return "not run yet"
+  }
+}
+
+/** A check of steps as a whole: running while its run is, passed once every step's last result passed. */
+function stepsState(results: readonly StepResult[], status: RunStatus | undefined): AppCheckView["state"] {
+  if (status && isUp(status)) return "running"
+  if (results.every((entry) => entry.state.kind === "passed")) return "passed"
+  if (results.some((entry) => entry.state.kind === "failed")) return "failed"
+  return "never"
+}
+
+function stepView({ step, state }: StepResult): AppCheckStepView {
+  const view: AppCheckStepView = { name: step.name, command: step.command, state: "never" }
+  if (state.kind === "waiting" || state.kind === "running") view.state = state.kind
+  if (state.kind === "passed" || state.kind === "failed") {
+    view.state = state.kind
+    view.ms = state.at - state.startedAt
+    view.at = state.at
+  }
+  return view
+}
+
+/** A run's steps in one line, as "typecheck passed in 38 s; lint failed (exit 1) in 12 s". */
+function resultsLine(results: readonly StepResult[], now: number): string {
+  const failed = results.some((entry) => entry.state.kind === "failed")
+  return results.map(({ step, state }) => `${step.name} ${stepWords(state, now, failed)}`).join("; ")
+}
+
 /** Every field of a recipe by its path, such as `checks.quick` or `prepare[0].link`, written as JSON. */
 function recipeFields(recipe: Recipe): Map<string, string> {
   const found = new Map<string, string>()
@@ -1424,8 +1722,18 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     put(`processes.${name}.ready`, ready)
     for (const [key, value] of Object.entries(own ?? {})) put(`processes.${name}.values.${key}`, value)
   }
+  const putCheck = (path: string, given: RecipeCheck | undefined) => {
+    if (!Array.isArray(given)) return put(path, given)
+    put(path, given.map((step) => step.name))
+    for (const { name, command, parallel, ...unlistedStep } of given) {
+      const noneInStep: Record<string, never> = unlistedStep
+      void noneInStep
+      put(`${path}.${name}.command`, command)
+      put(`${path}.${name}.parallel`, parallel)
+    }
+  }
   const putVerify = (path: string, given: RecipeVerify | undefined) => {
-    if (given && "run" in given) put(`${path}.run`, given.run)
+    if (given && "run" in given) putCheck(`${path}.run`, given.run)
     if (given && "check" in given) put(`${path}.check`, given.check)
   }
   for (const [name, target] of Object.entries(targets ?? {})) {
@@ -1433,11 +1741,11 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     const noneInTarget: Record<string, never> = unlistedTarget
     void noneInTarget
     put(`targets.${name}.processes`, runs)
-    put(`targets.${name}.full`, full)
+    putCheck(`targets.${name}.full`, full)
     putVerify(`targets.${name}.verify`, own)
   }
-  put("checks.quick", checks.quick)
-  put("checks.full", checks.full)
+  putCheck("checks.quick", checks.quick)
+  putCheck("checks.full", checks.full)
   prepare.forEach(({ command, inputs, outputs, link, ...unlistedStep }, index) => {
     const noneInStep: Record<string, never> = unlistedStep
     void noneInStep
@@ -1513,7 +1821,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_status",
     {
       description:
-        "Call first when you need this Thread's app running or checked, when a start or check went wrong, or before changing the recipe. Returns this Thread's address, ports and data folder; the project's recipe (where it's kept, all of it, the values it sets for this Thread and whether your shell has them); each process's state (running, starting, stopped, or crashed with its exit code); and the last quick and full check results.",
+        "Call first when you need this Thread's app running or checked, when a start or check went wrong, or before changing the recipe. Returns this Thread's address, ports and data folder; the project's recipe (where it's kept, its recent versions, all of it, the values it sets for this Thread and whether your shell has them); each process's state (running, starting, stopped, or crashed with its exit code); and the last quick and full check results.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -1550,15 +1858,18 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
   server.registerTool(
     "app_logs",
     {
-      description: "Read the end of an app process's or a check's output, stdout and stderr together, when one crashed, failed or isn't answering. Name either a process or a check.",
+      description: "Read the end of an app process's or a check's output, stdout and stderr together, when one crashed, failed or isn't answering. Name either a process or a check, and for a check of named steps, a step for that step's output alone.",
       inputSchema: z.object({
         process: z.string().min(1).max(32).optional(),
         check: z.enum(["quick", "full"]).optional(),
+        step: z.string().min(1).max(32).optional().describe("One of the check's named steps, such as lint."),
         lines: z.number().int().min(1).max(1_000).default(100),
-      }).strict().refine((input) => (input.process === undefined) !== (input.check === undefined), "Name a process or a check, not both"),
+      }).strict()
+        .refine((input) => (input.process === undefined) !== (input.check === undefined), "Name a process or a check, not both")
+        .refine((input) => input.step === undefined || input.check !== undefined, "A step belongs to a check: name the check too"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ process, check, lines }) => reply(() => tools.logs(conversationId(), process === undefined ? { check: check! } : { process }, lines))
+    ({ process, check, step, lines }) => reply(() => tools.logs(conversationId(), process === undefined ? (step === undefined ? { check: check! } : { check: check!, step }) : { process }, lines))
   )
   server.registerTool(
     "app_probe",
@@ -1584,14 +1895,15 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_check",
     {
       description:
-        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app (or a target's processes) first, then checks it while it runs. Returns the result and how long it took, and for a failure the run's whole output. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
+        "Run one of the recipe's checks in this Thread's checkout, with this Thread's values, when it covers what you changed. \"quick\" needs no running app (such as typecheck and lint); \"full\" starts the app (or a target's processes) first, then checks it while it runs. Returns the result and how long it took, and for a failure the run's whole output; a check of named steps says how each step went and how long it took, and gives each failed step's own output. A check that outlasts the call keeps going, and your next app_check with that tier returns that same run's result instead of starting another. Long one-off runs, such as a package build or a whole test suite, belong in your own shell, not here.",
       inputSchema: z.object({
         tier: z.enum(["quick", "full"]),
         target: z.string().min(1).max(32).optional().describe("For a recipe with targets: whose full check, and whose processes it starts; the first target's when left out."),
+        steps: z.array(z.string().min(1).max(32)).min(1).max(20).optional().describe("For a check of named steps: run only these, such as [\"lint\"] after fixing what lint found. Every step when left out."),
       }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    ({ tier, target }) => reply(() => tools.check(conversationId(), tier, target))
+    ({ tier, target, steps }) => reply(() => tools.check(conversationId(), tier, target, steps))
   )
   server.registerTool(
     "recipe_guide",
@@ -1607,14 +1919,16 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "recipe_save",
     {
       description:
-        "Save a new version of this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run. It's saved as a draft only this Thread runs, so you can iterate with app_restart and app_check; recipe_publish then proves it and publishes it to every Thread. Returns what changed. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more.",
+        "Save a new version of this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run. It's saved as a draft only this Thread runs, so you can iterate with app_restart and app_check; recipe_publish then proves it and publishes it to every Thread. Returns what changed. To go back to an earlier version, pass its number as version instead of a recipe (app_status lists the recent ones): its recipe becomes a new draft, proved again by recipe_publish like any other. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more.",
       inputSchema: z.object({
-        recipe: z.record(z.string(), z.unknown()).describe("The whole recipe: values, processes, checks, prepare, and targets, verify, carry, secrets, cleanup and oneAtATime when it needs them."),
-        reason: z.string().trim().min(1).max(500).describe("Why, in a line, for the project's version history, such as \"Run the API on its own port\"."),
-      }).strict(),
+        recipe: z.record(z.string(), z.unknown()).optional().describe("The whole recipe: values, processes, checks, prepare, and targets, verify, carry, secrets, cleanup and oneAtATime when it needs them."),
+        version: z.number().int().positive().optional().describe("Instead of recipe: an earlier version's number, to save its recipe as a new draft."),
+        reason: z.string().trim().min(1).max(REASON_MAX).describe("Why, in a line, for the project's version history, such as \"Run the API on its own port\", or for a version, why go back to it."),
+      }).strict().refine((input) => (input.recipe === undefined) !== (input.version === undefined), "Pass a recipe or a version number, not both"),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ recipe, reason }) => reply(async () => {
+    ({ recipe, version, reason }) => reply(async () => {
+      if (version !== undefined) return tools.restore(conversationId(), version, reason)
       const parsed = RecipeSchema.safeParse(recipe)
       if (!parsed.success) throw new Error(`Not saved: ${recipeIssues(parsed.error)}`)
       return tools.save(conversationId(), parsed.data, reason)

@@ -1,10 +1,25 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { useEffect, useState, type ReactNode } from "react"
+import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { CheckIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
 import type { SetupStep } from "../../../electron/contracts/thread-app"
 import { environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuSub,
+  MenuSubContent,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
@@ -28,13 +43,18 @@ import {
   formatBytes,
   formatDuration,
   hideSetupFor,
+  pickTarget,
   processKey,
   processMark,
   sendToAgent,
   showAppOutput,
   showSetupFor,
+  stepKey,
+  stepMark,
+  targetOf,
   threadAppDriver,
   useThreadApp,
+  type AppCheckStepView,
   type AppCheckView,
   type AppFailure,
   type AppProcessView,
@@ -88,6 +108,7 @@ function useNow(): number {
 export function AppControl({ cwd, focused }: { cwd: string | undefined; focused: boolean }) {
   const view = useThreadApp((state) => (cwd ? state.byCwd[cwd] : undefined))
   const hidden = useThreadApp((state) => view?.kind === "none" && state.hidden.includes(view.root))
+  const target = useThreadApp((state) => (cwd ? targetOf(state, cwd) : undefined))
   useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
   if (!cwd || !view || hidden) return null
   const state = view.kind === "ready" ? view.phase : view.kind
@@ -115,11 +136,22 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
   }
   if (view.kind === "ready" && view.phase === "stopped") {
     const run = () => threadAppDriver()?.start(cwd)
+    const shown = picking(view) ? target : undefined
+    const button = (
+      <button type="button" data-app-control="stopped" className={cn(trigger, shown ? "rounded-r-none pr-1.5" : "mr-0.5", triggerTone(view))} onClick={run}>
+        <TriggerLabel view={view} target={shown} />
+      </button>
+    )
     return (
-      <WithSetup project={project} run={run} credentialsWaiting={view.credentialsWaiting}>
-        <button type="button" data-app-control="stopped" className={cn(trigger, "mr-0.5", triggerTone(view))} onClick={run}>
-          <TriggerLabel view={view} />
-        </button>
+      <WithSetup project={project} run={run} runLabel={shown ? `Run ${shown}` : undefined} credentialsWaiting={view.credentialsWaiting}>
+        {shown ? (
+          <span className="mr-0.5 flex shrink-0 items-center">
+            {button}
+            <TargetPicker cwd={cwd} targets={view.targets!} target={shown} />
+          </span>
+        ) : (
+          button
+        )}
       </WithSetup>
     )
   }
@@ -140,7 +172,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
         ) : view.kind === "setting-up" ? (
           <SettingUpMenu view={view} />
         ) : (
-          <ReadyMenu cwd={cwd} view={view} />
+          <ReadyMenu cwd={cwd} view={view} target={target} />
         )}
         {view.kind === "ready" || view.kind === "invalid" ? <SetupItem project={project} view={view} /> : null}
       </MenuContent>
@@ -152,7 +184,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
  * Right-click on the control, in any state: the project's app in Settings,
  * and Run when a click would run it.
  */
-function WithSetup({ project, run, credentialsWaiting, children }: { project: string; run?: () => void; credentialsWaiting?: boolean; children: ReactNode }) {
+function WithSetup({ project, run, runLabel = "Run app", credentialsWaiting, children }: { project: string; run?: () => void; runLabel?: string; credentialsWaiting?: boolean; children: ReactNode }) {
   return (
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>
@@ -161,7 +193,7 @@ function WithSetup({ project, run, credentialsWaiting, children }: { project: st
       <ContextMenuContent className="min-w-52">
         {run ? (
           <>
-            <MenuItem data-app-action="run" onSelect={run}>Run app</MenuItem>
+            <MenuItem data-app-action="run" onSelect={run}>{runLabel}</MenuItem>
             <MenuSeparator />
           </>
         ) : null}
@@ -198,8 +230,8 @@ function triggerTone(view: ThreadAppView): string {
   return "text-muted-foreground hover:text-foreground data-[state=open]:text-foreground"
 }
 
-function TriggerLabel({ view }: { view: ThreadAppView }) {
-  const [label, working] = triggerParts(view)
+function TriggerLabel({ view, target }: { view: ThreadAppView; target?: string }) {
+  const [label, working] = triggerParts(view, target)
   return (
     <span key={label} className="changing-label">
       <span className="flex items-center gap-1.5">
@@ -231,13 +263,13 @@ function TriggerIcon({ view }: { view: ThreadAppView }) {
 }
 
 /** The words on the control, and whether they name work still under way. */
-function triggerParts(view: ThreadAppView): [string, boolean] {
+function triggerParts(view: ThreadAppView, target?: string): [string, boolean] {
   if (view.kind === "none") return ["Run app", false]
   if (view.kind === "invalid") return ["Can't run app", false]
   if (view.kind === "setting-up") return ["Setting up", true]
   switch (view.phase) {
     case "stopped":
-      return ["Run app", false]
+      return [target ? `Run ${target}` : "Run app", false]
     case "preparing":
       return ["Installing", true]
     case "starting":
@@ -397,7 +429,7 @@ async function openConversation(id: string): Promise<void> {
   if (!acp.activate(id)) toast("That Thread isn't open in this window")
 }
 
-function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
+function ReadyMenu({ cwd, view, target }: { cwd: string; view: Ready; target: string | undefined }) {
   const now = useNow()
   const driver = threadAppDriver()
   const crashed = view.processes.find((process) => process.exit && process.exit.code !== 0)
@@ -432,6 +464,17 @@ function ReadyMenu({ cwd, view }: { cwd: string; view: Ready }) {
           <Action data-app-action="restart" onSelect={() => driver?.restart(cwd)}>
             Restart
           </Action>
+          {picking(view) && target ? (
+            <MenuSub>
+              <MenuSubTrigger data-app-action="restart-as">
+                <span className="min-w-0 flex-1 truncate">Restart as</span>
+                <span className="shrink-0 text-label text-faint">{target}</span>
+              </MenuSubTrigger>
+              <MenuSubContent className="w-48">
+                <TargetChoices targets={view.targets!} target={target} onPick={(next) => { pickTarget(cwd, next); driver?.restart(cwd) }} />
+              </MenuSubContent>
+            </MenuSub>
+          ) : null}
           <Action data-app-action="stop" onSelect={() => driver?.stop(cwd)}>
             Stop
           </Action>
@@ -518,23 +561,36 @@ function Rows({ cwd, view, now }: { cwd: string; view: Ready; now: number }) {
         <ProcessRow key={process.name} process={process} onSelect={() => showAppOutput(cwd, processKey(process.name))} />
       ))}
       {view.checks.map((check) => (
-        <CheckRow
-          key={check.tier}
-          check={check}
-          now={now}
-          onSelect={() => {
-            if (check.state === "never") threadAppDriver()?.runCheck(cwd, check.tier)
-            showAppOutput(cwd, `check:${check.tier}`)
-          }}
-        />
+        <Fragment key={check.tier}>
+          <CheckRow
+            check={check}
+            now={now}
+            onSelect={() => {
+              if (check.state === "never") threadAppDriver()?.runCheck(cwd, check.tier)
+              showAppOutput(cwd, `check:${check.tier}`)
+            }}
+          />
+          {check.steps?.some((step) => step.state !== "never")
+            ? check.steps.map((step) => (
+                <StepRow
+                  key={step.name}
+                  step={step}
+                  onSelect={() => {
+                    if (step.state === "never") threadAppDriver()?.runCheck(cwd, check.tier, [step.name])
+                    showAppOutput(cwd, stepKey(check.tier, step.name))
+                  }}
+                />
+              ))
+            : null}
+        </Fragment>
       ))}
     </>
   )
 }
 
-function Row({ mark, title, detail, hint, onSelect }: { mark: Mark; title: string; detail?: ReactNode; hint?: ReactNode; onSelect: () => void }) {
+function Row({ mark, title, detail, hint, inset, onSelect }: { mark: Mark; title: string; detail?: ReactNode; hint?: ReactNode; inset?: boolean; onSelect: () => void }) {
   return (
-    <MenuItem onSelect={onSelect} data-app-row={title} className="group">
+    <MenuItem onSelect={onSelect} data-app-row={title} className={cn("group", inset && "min-h-7 pl-7 text-label")}>
       <AppMark mark={mark} />
       <span className="min-w-0 flex-1 truncate">{title}</span>
       <span className="grid shrink-0 justify-items-end text-label text-faint tabular-nums">
@@ -572,4 +628,52 @@ function CheckRow({ check, now, onSelect }: { check: AppCheckView; now: number; 
           : undefined
   const hint = check.state === "never" ? "Run" : "Show output"
   return <Row mark={checkMark(check)} title={checkTitle(check.tier)} detail={detail} hint={hint} onSelect={onSelect} />
+}
+
+/** One of a check's named steps, under its check: how long it took, or where it is. */
+function StepRow({ step, onSelect }: { step: AppCheckStepView; onSelect: () => void }) {
+  const detail =
+    step.state === "never" ? "Not run" : step.state === "waiting" ? "Waiting" : step.state === "running" ? "Running" : step.ms !== undefined ? formatDuration(step.ms) : undefined
+  const hint = step.state === "never" ? "Run" : "Show output"
+  return <Row inset mark={stepMark(step)} title={step.name} detail={detail} hint={hint} onSelect={onSelect} />
+}
+
+/** A recipe with more than one target offers a pick of what Run starts. */
+function picking(view: Ready): boolean {
+  return (view.targets?.length ?? 0) > 1
+}
+
+/** The other half of the Run button: which of the recipe's targets it runs. Picking one runs it. */
+function TargetPicker({ cwd, targets, target }: { cwd: string; targets: string[]; target: string }) {
+  return (
+    <Menu modal={false}>
+      <MenuTrigger asChild>
+        <button
+          type="button"
+          data-app-control="pick-target"
+          aria-label="Choose what to run"
+          className={cn(trigger, "rounded-l-none px-1 text-faint hover:text-foreground data-[state=open]:text-foreground")}
+        >
+          <ChevronDownIcon aria-hidden className="size-3" strokeWidth={2.5} />
+        </button>
+      </MenuTrigger>
+      <MenuContent align="end" className="w-48" onCloseAutoFocus={(event) => event.preventDefault()}>
+        <MenuLabel>Run</MenuLabel>
+        <TargetChoices targets={targets} target={target} onPick={(next) => { pickTarget(cwd, next); threadAppDriver()?.start(cwd) }} />
+      </MenuContent>
+    </Menu>
+  )
+}
+
+/** Picking the target already checked runs it too, so each item acts on select rather than on a change of value. */
+function TargetChoices({ targets, target, onPick }: { targets: string[]; target: string; onPick: (target: string) => void }) {
+  return (
+    <MenuRadioGroup value={target}>
+      {targets.map((name) => (
+        <MenuRadioItem key={name} value={name} data-app-target={name} onSelect={() => onPick(name)}>
+          <span className="min-w-0 flex-1 truncate">{name}</span>
+        </MenuRadioItem>
+      ))}
+    </MenuRadioGroup>
+  )
 }

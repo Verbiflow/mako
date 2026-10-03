@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
-import type { ProjectAppSetup, RecipeView } from "../../../electron/contracts/project-app"
+import type { ProjectAppSetup, RecipeVersionView, RecipeView } from "../../../electron/contracts/project-app"
 import { environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
 import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow, Toggle } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -322,9 +322,21 @@ function Recipe({ setup, state, saving, onAllow }: { setup: ProjectAppSetup; sta
 
       {checks.length ? (
         <Part title="Checks">
-          {checks.map((check) => (
-            <Line key={check.tier} name={check.tier === "quick" ? "Quick check" : "Full check"}>
-              <Command>{check.command}</Command>
+          {checks.map(({ tier, command: steps }) => (
+            <Line key={tier} name={tier === "quick" ? "Quick check" : "Full check"} aside={steps.length > 1 ? plural(steps.length, "step") : undefined}>
+              {steps.length === 1 && !steps[0]!.name ? (
+                <Command>{steps[0]!.command}</Command>
+              ) : (
+                <ol className="flex flex-col gap-1">
+                  {steps.map((step) => (
+                    <li key={step.name} className="flex items-baseline gap-2">
+                      <span className="shrink-0 text-foreground">{step.name}</span>
+                      <Command className="min-w-0">{step.command}</Command>
+                      {step.parallel ? <span className="shrink-0 text-faint">at the same time as its neighbors</span> : null}
+                    </li>
+                  ))}
+                </ol>
+              )}
             </Line>
           ))}
         </Part>
@@ -363,9 +375,51 @@ function Recipe({ setup, state, saving, onAllow }: { setup: ProjectAppSetup; sta
         </Part>
       ) : null}
 
+      {state.versions.length > 1 ? <Versions versions={state.versions} /> : null}
+
       <RecipeSource state={state} />
     </>
   )
+}
+
+/** What an agent could go back to: read-only, since going back is a new version proved like any other. */
+function Versions({ versions }: { versions: RecipeVersionView[] }) {
+  return (
+    <Part title="Versions" hint="An agent can bring an earlier one back; Mako proves it again before every Thread gets it.">
+      {versions.map((entry) => <VersionRow key={entry.version} entry={entry} />)}
+    </Part>
+  )
+}
+
+function VersionRow({ entry }: { entry: RecipeVersionView }) {
+  const credit = [entry.by ? `By ${entry.by}` : undefined, entry.state === "draft" && entry.parent !== undefined ? `made from version ${entry.parent}` : undefined]
+    .filter(Boolean)
+    .join(", ")
+  return (
+    <ListCardRow>
+      <div className="flex items-baseline gap-3">
+        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="shrink-0 text-ui font-medium text-foreground">Version {entry.version}</span>
+          {entry.current ? <Chip>Every Thread runs it</Chip> : entry.state === "draft" ? <Chip>This folder’s draft</Chip> : null}
+        </span>
+        <span className="shrink-0 text-label text-faint tabular-nums">
+          {entry.state === "draft" ? `Saved ${ago(entry.savedAt)}` : `Published ${ago(entry.publishedAt ?? entry.savedAt)}`}
+        </span>
+      </div>
+      {entry.reason ? <p className="mt-1 text-label leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{entry.reason}</p> : null}
+      <p className="mt-0.5 text-label text-faint [overflow-wrap:anywhere]">
+        {credit ? `${credit} · ` : null}
+        <VersionProof entry={entry} />
+      </p>
+    </ListCardRow>
+  )
+}
+
+function VersionProof({ entry }: { entry: RecipeVersionView }) {
+  if (!entry.readable) return <span className="text-caution">This Mako can’t read its recipe</span>
+  if (!entry.proof) return <>{entry.state === "draft" ? "Not proved yet" : "Never proved"}</>
+  if (!entry.proof.passed) return <span className="text-caution">Its last proof failed at {entry.proof.failed}</span>
+  return <>{entry.state === "draft" ? "Passed its proof, not published" : "Proved"}</>
 }
 
 function Credentials({ setup, secrets, saving, onAllow }: {

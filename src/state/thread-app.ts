@@ -5,7 +5,7 @@ import { getMako } from "@/lib/bridge"
 import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
-import type { AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
+import type { AppCheckStepView, AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProcessView, ThreadAppView } from "../../electron/contracts/thread-app"
 import type { ProjectAppSetup } from "../../electron/contracts/project-app"
 
 /**
@@ -15,6 +15,7 @@ import type { ProjectAppSetup } from "../../electron/contracts/project-app"
  */
 
 export type {
+  AppCheckStepView,
   AppCheckView,
   AppMark,
   AppOutputKey,
@@ -24,11 +25,13 @@ export type {
   ThreadAppView,
 } from "../../electron/contracts/thread-app"
 
+/** Starts, restarts and full checks run the folder's picked target (`targetOf`), for a recipe with targets. */
 export interface ThreadAppDriver {
   start(cwd: string): void
   stop(cwd: string): void
   restart(cwd: string): void
-  runCheck(cwd: string, tier: "quick" | "full"): void
+  /** `steps` runs only those of a check's named steps. */
+  runCheck(cwd: string, tier: "quick" | "full", steps?: string[]): void
   /** Stop the other apps counted in `room`, then start this one. */
   makeRoom(cwd: string): void
   /** Stop the copy named in `elsewhere`, then start this one. */
@@ -57,9 +60,21 @@ interface ThreadAppState {
   shown?: { cwd: string; key: AppOutputKey }
   /** Projects whose people said the strip shouldn't offer setup, by root. */
   hidden: string[]
+  /** The target each folder last picked to run, for a recipe with targets. */
+  targets: Record<string, string>
 }
 
 const HIDDEN_KEY = "mako.thread-app-hidden.v1"
+const TARGETS_KEY = "mako.thread-app-target.v1"
+
+function readTargets(): Record<string, string> {
+  try {
+    const parsed = z.record(z.string(), z.string()).safeParse(JSON.parse(localStorage.getItem(TARGETS_KEY) ?? "{}"))
+    return parsed.success ? parsed.data : {}
+  } catch {
+    return {}
+  }
+}
 
 function readHidden(): string[] {
   try {
@@ -70,7 +85,7 @@ function readHidden(): string[] {
   }
 }
 
-export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, marks: {}, followed: [], hidden: readHidden() })
+export const threadAppStore = createStore<ThreadAppState>({ byCwd: {}, marks: {}, followed: [], hidden: readHidden(), targets: readTargets() })
 export const useThreadApp = createHook(threadAppStore)
 
 export function putAppMarks(marks: readonly AppMark[]): void {
@@ -126,6 +141,21 @@ function saveHidden(hidden: string[]): void {
   threadAppStore.set({ hidden })
 }
 
+/** The target a folder runs: the one last picked there while the recipe still has it, else the recipe's first. */
+export function targetOf(state: ThreadAppState, cwd: string): string | undefined {
+  const view = state.byCwd[cwd]
+  const targets = view?.kind === "ready" ? view.targets : undefined
+  if (!targets?.length) return view ? undefined : state.targets[cwd]
+  const picked = state.targets[cwd]
+  return picked !== undefined && targets.includes(picked) ? picked : targets[0]
+}
+
+export function pickTarget(cwd: string, target: string): void {
+  const targets = { ...threadAppStore.get().targets, [cwd]: target }
+  localStorage.setItem(TARGETS_KEY, JSON.stringify(targets))
+  threadAppStore.set({ targets })
+}
+
 /** Put one of the app's outputs in the terminal dock, opening it if needed. */
 export function showAppOutput(cwd: string, key: AppOutputKey): void {
   threadAppStore.set({ shown: { cwd, key } })
@@ -140,15 +170,25 @@ export function processKey(name: string): AppOutputKey {
   return `process:${name}`
 }
 
-export function outputsOf(view: Extract<ThreadAppView, { kind: "ready" }>): { key: AppOutputKey; label: string; mark: Mark }[] {
+export function stepKey(tier: "quick" | "full", step: string): AppOutputKey {
+  return `check:${tier}:${step}`
+}
+
+/** The tabs: every output there is, and of a check's steps, those that failed and the one shown. */
+export function outputsOf(view: Extract<ThreadAppView, { kind: "ready" }>, shown?: AppOutputKey): { key: AppOutputKey; label: string; mark: Mark }[] {
   return [
     ...(view.prepare ? [{ key: "prepare" as const, label: "Install", mark: view.prepare.exit ? ("failed" as const) : ("running" as const) }] : []),
     ...view.processes
       .filter((process) => process.state !== "stopped" || process.exit)
       .map((process) => ({ key: processKey(process.name), label: process.name, mark: processMark(process) })),
     ...view.checks
-      .filter((check) => check.state !== "never")
-      .map((check) => ({ key: `check:${check.tier}` as const, label: checkTitle(check.tier), mark: checkMark(check) })),
+      .filter((check) => check.state !== "never" || check.steps?.some((step) => step.state !== "never"))
+      .flatMap((check) => [
+        { key: `check:${check.tier}` as const, label: checkTitle(check.tier), mark: checkMark(check) },
+        ...(check.steps ?? [])
+          .filter((step) => step.state !== "never" && (step.state === "failed" || stepKey(check.tier, step.name) === shown))
+          .map((step) => ({ key: stepKey(check.tier, step.name), label: step.name, mark: stepMark(step) })),
+      ]),
   ]
 }
 
@@ -164,6 +204,10 @@ export function processMark(process: AppProcessView): Mark {
 
 export function checkMark(check: AppCheckView): Mark {
   return check.state === "passed" ? "done" : check.state === "failed" ? "failed" : check.state === "running" ? "running" : "waiting"
+}
+
+export function stepMark(step: AppCheckStepView): Mark {
+  return step.state === "passed" ? "done" : step.state === "failed" ? "failed" : step.state === "running" ? "running" : "waiting"
 }
 
 export function formatBytes(bytes: number): string {
@@ -188,17 +232,18 @@ export function checkTitle(tier: "quick" | "full"): string {
   return tier === "quick" ? "Quick check" : "Full check"
 }
 
-export type AppFailure = { process: AppProcessView } | { check: AppCheckView } | { prepare: AppPrepareView }
+/** A check's failure is the whole check's, or with `step`, that step's alone. */
+export type AppFailure = { process: AppProcessView } | { check: AppCheckView; step?: AppCheckStepView } | { prepare: AppPrepareView }
 
 function failureKey(failed: AppFailure): AppOutputKey {
   if ("process" in failed) return processKey(failed.process.name)
-  if ("check" in failed) return `check:${failed.check.tier}`
+  if ("check" in failed) return failed.step ? stepKey(failed.check.tier, failed.step.name) : `check:${failed.check.tier}`
   return "prepare"
 }
 
 function failureName(failed: AppFailure): string {
   if ("process" in failed) return failed.process.name
-  if ("check" in failed) return checkTitle(failed.check.tier)
+  if ("check" in failed) return failed.step ? `${checkTitle(failed.check.tier)} ${failed.step.name}` : checkTitle(failed.check.tier)
   return "Install"
 }
 
@@ -219,8 +264,14 @@ async function failureReport(cwd: string, failed: AppFailure) {
   } else if ("prepare" in failed) {
     what = `Installing before the app starts (\`${failed.prepare.command}\`) failed${failed.prepare.exit ? ` with code ${failed.prepare.exit.code}` : ""}, so the app didn't start.`
     ask = "Find out why, fix it, and start the app again to show it installs and stays up."
+  } else if (failed.step) {
+    what = `The ${failed.step.name} step of the ${checkTitle(failed.check.tier).toLowerCase()} (\`${failed.step.command}\`) failed.`
+    ask = "Fix what it found and run that step again to show it passes."
   } else {
-    what = `The ${name.toLowerCase()} (\`${failed.check.command}\`) failed.`
+    const steps = failed.check.steps?.filter((step) => step.state === "failed")
+    what = steps?.length
+      ? `The ${name.toLowerCase()} failed at ${steps.map((step) => `${step.name} (\`${step.command}\`)`).join(" and ")}.`
+      : `The ${name.toLowerCase()} (\`${failed.check.command}\`) failed.`
     ask = "Fix what it found and run the check again to show it passes."
   }
   return {

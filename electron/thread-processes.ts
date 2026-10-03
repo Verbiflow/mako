@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
+import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 
 const run = promisify(execFile)
@@ -263,29 +264,54 @@ export class ThreadProcesses {
     }
   }
 
-  /** Everything a run wrote, stdout and stderr together, and the log it's in. */
-  async output(app: AppKey, key: string): Promise<{ text: string; log: string }> {
-    const log = this.file(app, key, "log")
+  /** Everything a run, or one of its steps, wrote, stdout and stderr together, and the log it's in. */
+  async output(app: AppKey, key: string, step?: string): Promise<{ text: string; log: string }> {
+    const log = this.logFile(app, key, step)
     const text = await readTail(log, LOG_LIMIT_BYTES).catch(() => undefined)
-    if (text === undefined) throw new Error(`Nothing has run as ${key} in this app yet.`)
+    if (text === undefined) throw new Error(`Nothing has run as ${step ? `the step ${step} of ` : ""}${key} in this app yet.`)
     return { text, log }
   }
 
-  /** The last `lines` lines a run wrote, stdout and stderr together. */
-  async logs(app: AppKey, key: string, lines: number): Promise<string> {
-    const path = this.file(app, key, "log")
+  /** The last `lines` lines a run, or one of its steps, wrote, stdout and stderr together. */
+  async logs(app: AppKey, key: string, lines: number, step?: string): Promise<string> {
+    const path = this.logFile(app, key, step)
     const text = await readTail(path, Math.max(64 * 1024, lines * 400)).catch(() => undefined)
-    if (text === undefined) throw new Error(`Nothing has run as ${key} in this app yet.`)
+    if (text === undefined) throw new Error(`Nothing has run as ${step ? `the step ${step} of ` : ""}${key} in this app yet.`)
     return text.split("\n").slice(-lines - 1).join("\n")
   }
 
   /**
-   * What a run wrote since `cursor`, or its last `maxBytes` without one. A
-   * new run writes a new file, and a trimmed log starts over, so either
-   * comes back as a reset. Never splits a character.
+   * What each step of a check run of steps (`stepsCommand`) last left, by
+   * name: a step keeps its result from whichever run last ran it, so a run
+   * of some steps leaves the others' results as they were.
    */
-  async readLog(app: AppKey, key: string, cursor?: { file: string; offset: number }, maxBytes = 256 * 1024): Promise<{ text: string; cursor: { file: string; offset: number }; reset: boolean }> {
-    const path = this.file(app, key, "log")
+  async steps(app: AppKey, key: string): Promise<Map<string, StepRecord>> {
+    const folder = this.stepsFolder(app, key)
+    const names = (await readdir(folder).catch((): string[] => [])).flatMap((name) => /^([a-z][a-z0-9-]*)\.start$/.exec(name)?.[1] ?? [])
+    const records = await Promise.all(names.map(async (name): Promise<StepRecord | undefined> => {
+      const [started, command, ended, code] = await Promise.all([
+        stat(join(folder, `${name}.start`)).catch(() => undefined),
+        readFile(join(folder, `${name}.cmd`), "utf8").catch(() => undefined),
+        stat(join(folder, `${name}.exit`)).catch(() => undefined),
+        readFile(join(folder, `${name}.exit`), "utf8").catch(() => undefined),
+      ])
+      if (!started) return undefined
+      const record: StepRecord = { name, startedAt: started.mtimeMs }
+      if (command !== undefined) record.command = command
+      const exit = code === undefined ? Number.NaN : Number.parseInt(code, 10)
+      if (ended && Number.isInteger(exit)) record.exit = { code: exit, at: ended.mtimeMs }
+      return record
+    }))
+    return new Map(records.flatMap((record) => (record ? [[record.name, record] as const] : [])))
+  }
+
+  /**
+   * What a run, or one of its steps, wrote since `cursor`, or its last
+   * `maxBytes` without one. A new run writes a new file, and a trimmed log
+   * starts over, so either comes back as a reset. Never splits a character.
+   */
+  async readLog(app: AppKey, key: string, cursor?: { file: string; offset: number }, maxBytes = 256 * 1024, step?: string): Promise<{ text: string; cursor: { file: string; offset: number }; reset: boolean }> {
+    const path = this.logFile(app, key, step)
     const info = await stat(path).catch(() => undefined)
     if (!info) return { text: "", cursor: { file: "", offset: 0 }, reset: Boolean(cursor?.file) }
     const file = `${info.ino}:${Math.round(info.birthtimeMs)}`
@@ -497,10 +523,16 @@ export class ThreadProcesses {
     await rm(this.file(app, key, "ready"), { force: true })
     await rename(log, `${log}.1`).catch(() => {})
     const output = await open(log, "a", 0o600)
+    let env = spec.env
+    if (spec.kind === "check" && stepsOf(spec.command)) {
+      const folder = this.stepsFolder(app, key)
+      await mkdir(folder, { recursive: true, mode: 0o700 })
+      env = { ...spec.env, [STEPS_FOLDER_VARIABLE]: folder }
+    }
     try {
       const child = spawn("/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit], {
         cwd: spec.cwd,
-        env: spec.env,
+        env,
         detached: true,
         stdio: ["pipe", output.fd, output.fd],
       })
@@ -580,9 +612,20 @@ export class ThreadProcesses {
     }
   }
 
-  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready"): string {
+  /** `steps` is the folder a check run of steps keeps each step's records in. */
+  private file(app: AppKey, key: string, extension: "log" | "exit" | "ready" | "steps"): string {
     if (!/^(process|check|prepare)-[a-z][a-z0-9-]*$/.test(key)) throw new Error(`Not a run name: ${key}`)
     return join(this.folder(app), `${key}.${extension}`)
+  }
+
+  private stepsFolder(app: AppKey, key: string): string {
+    return this.file(app, key, "steps")
+  }
+
+  private logFile(app: AppKey, key: string, step: string | undefined): string {
+    if (step === undefined) return this.file(app, key, "log")
+    if (!/^[a-z][a-z0-9-]*$/.test(step)) throw new Error(`Not a step name: ${step}`)
+    return join(this.stepsFolder(app, key), `${step}.log`)
   }
 
   private async runs(app: AppKey): Promise<Record<string, Run>> {

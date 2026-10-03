@@ -91,6 +91,7 @@ The fields:
   app_start, app_restart and app_check take a target. The first target is what a start without one runs, so put the one most work needs first. A project that builds one thing has no targets.
 - checks.quick: what an agent runs after an edit, with no running app: typecheck and lint, and unit tests if they take seconds. About a minute at most.
 - checks.full: that the running app works, such as a smoke test or a short end-to-end test against it. Mako starts the app first. A few minutes at most.
+- Steps: a check that runs several tools names each as a step instead of chaining them with &&, such as "quick": [{ "name": "typecheck", "command": "npm run typecheck" }, { "name": "lint", "command": "npm run lint" }]. Mako runs them in order, times each, and stops at the first that fails; the result names that step and gives its output alone, and app_check with steps ["lint"] runs only that one again. Steps that don't depend on each other can each say "parallel": true to run at the same time as the steps beside them that say so too, which makes the check as long as its slowest step. Steps don't give a check more time: the limits above are for the whole check. A check of one tool stays one command. A target's full check and verify.run take steps too.
 - Never in a check, unless the user asks: packaging or release builds, installing the app, a test suite that takes many minutes, or anything only one change or one Session needs. An agent runs those in its own shell when its work needs them. A check is shared by every Thread, so never change it for one task.
 - Checks and prepare steps run in the checkout's root. For a subfolder, start the command with cd <folder> &&, and give a step's inputs and outputs from the root too.
 - prepare: install in a new worktree, and catch up after the branch moves. Each step runs again only when one of its inputs changes. Only add it if a new worktree can't start without it.
@@ -128,6 +129,8 @@ Never run the app with & or nohup in your own shell. Use the tools, so it stays 
 ### Publish it
 
 Call recipe_publish. Mako proves the draft on your Thread's copy: it stops the app, installs what's due, starts every process the recipe (or every target) needs and waits until each is ready, then runs each verify.run. If the recipe has a verify.check, Mako then says what to check; you check it on the running copy, and call recipe_publish again with checked: whether it passed and, in a sentence or two, how you saw it. A pass publishes the version. A failure leaves it your draft, with the failing step and its whole output; every other Thread keeps the published version. The proof runs once per version, never again until the recipe changes. If another version was published after yours was made, Mako says what it changed; make your change on top of it and save again.
+
+To go back to an earlier version, such as when a published change broke the app, app_status lists the recent versions with why each was saved and whether it was proved. Call recipe_save with that version's number as version instead of a recipe, and a reason, then recipe_publish. It comes back as a new draft with the next number and is proved like any other; the history keeps every version as it was.
 
 ### What verify is for
 

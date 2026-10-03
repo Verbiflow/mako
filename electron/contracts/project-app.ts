@@ -11,13 +11,40 @@ export interface RecipeProcessView {
   cwd?: string
 }
 
+/** One step of a check; a check of one command is one step without a name. */
+export interface RecipeCheckStepView {
+  name?: string
+  command: string
+  /** Runs at the same time as the steps beside it that say so too. */
+  parallel?: boolean
+}
+
 export interface RecipeView {
   values: Record<string, string>
   processes: RecipeProcessView[]
-  checks: { quick?: string; full?: string }
+  checks: { quick?: RecipeCheckStepView[]; full?: RecipeCheckStepView[] }
   prepare: { command: string; inputs: string[]; outputs: string[]; link: boolean }[]
   carry: string[]
   oneAtATime: boolean
+}
+
+/** One of a project's recipe versions, as its history lists it. */
+export interface RecipeVersionView {
+  version: number
+  state: "draft" | "published"
+  /** The version every Thread of the project runs now. */
+  current: boolean
+  savedAt: number
+  /** The published version a draft was made from. */
+  parent?: number
+  /** Who saved it, such as `the Thread "Fix login" (codex)`. */
+  by?: string
+  reason?: string
+  publishedAt?: number
+  /** How its last proof went, and the first step that didn't pass. */
+  proof?: { at: number; passed: boolean; failed?: string }
+  /** False for a version whose recipe this Mako can't read, such as one a newer Mako saved. */
+  readable: boolean
 }
 
 export type ProjectRecipeState =
@@ -38,6 +65,8 @@ export type ProjectRecipeState =
       /** A committed recipe that Mako's saved one replaces. */
       ignored?: string
       recipe: RecipeView
+      /** The newest published versions and this folder's draft, newest first, to see what an agent could go back to. */
+      versions: RecipeVersionView[]
     }
 
 /** The files the recipe names as holding credentials, and the person's answer. */

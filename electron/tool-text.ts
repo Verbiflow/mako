@@ -19,7 +19,8 @@ export function when(at: number, now = Date.now()): string {
   return `${shown}, ${ago(now - at)}`
 }
 
-function ago(ms: number): string {
+/** How long ago, from the milliseconds since: `7 min ago`, `3 days ago`. */
+export function ago(ms: number): string {
   if (ms < 0) return "in the future"
   const seconds = Math.round(ms / 1000)
   if (seconds < 60) return `${seconds} s ago`

@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto"
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { z } from "zod"
+import { STEPS_FOLDER_VARIABLE, type CheckStep } from "./check-steps.js"
+import type { RecipeVersionView } from "./contracts/project-app.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironment } from "./contracts/thread-environments.js"
 import { git } from "./worktree-git.js"
 
@@ -16,7 +18,7 @@ const RECIPE_MAX_BYTES = 64 * 1024
 const SHELL_OWNED = new Set(["PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "PWD"])
 const PLACEHOLDER = /\{([a-z][a-z0-9 +]*)\}/g
 /** What Mako itself sets on agents and processes; a project's own MAKO_ names, such as Mako's `MAKO_PROFILE`, are the project's. */
-const MAKO_OWNED = ["MAKO_THREAD_", "MAKO_CONTROL_", "MAKO_CONVERSATIONS_TOKEN"]
+const MAKO_OWNED = ["MAKO_THREAD_", "MAKO_CONTROL_", "MAKO_CONVERSATIONS_TOKEN", STEPS_FOLDER_VARIABLE]
 
 const template = z.string().max(2_000)
 const command = z.string().trim().min(1).max(4_000)
@@ -60,25 +62,56 @@ const processSchema = z.object({
   ready: command.optional(),
 }).strict()
 
+const processName = /^[a-z][a-z0-9-]{0,31}$/
+
+const stepSchema = z.object({
+  /** Such as `typecheck` or `lint`: what the step's result is reported as, and how a rerun names it. */
+  name: z.string().regex(processName, "a step name is lowercase letters, digits and hyphens, such as typecheck"),
+  command,
+  /** Runs at the same time as the steps next to it that also say so; any other step waits for those before it. */
+  parallel: z.boolean().optional(),
+}).strict()
+
+const stepsSchema = z.array(stepSchema).min(1).max(20).superRefine((steps, context) => {
+  const seen = new Set<string>()
+  steps.forEach((step, index) => {
+    if (seen.has(step.name)) context.addIssue({ code: "custom", path: [index, "name"], message: `${step.name} names two steps; each step needs its own name` })
+    seen.add(step.name)
+  })
+})
+
+/**
+ * A check: one command, or named steps Mako runs, times and reports one by
+ * one. Read by its shape first, so a refusal names what's wrong inside the
+ * shape that was meant rather than saying it matches neither.
+ */
+const checkSchema = z.unknown().transform((value, context): string | CheckStep[] => {
+  const parsed = Array.isArray(value) ? stepsSchema.safeParse(value) : command.safeParse(value)
+  if (parsed.success) return parsed.data
+  for (const issue of parsed.error.issues)
+    context.addIssue({ code: "custom", path: issue.path, message: Array.isArray(value) || z.string().safeParse(value).success ? issue.message : "a command, or a list of named steps such as [{ \"name\": \"lint\", \"command\": \"npm run lint\" }]" })
+  return z.NEVER
+})
+export type RecipeCheck = z.infer<typeof checkSchema>
+
 /**
  * How Mako proves a new version of the recipe before it reaches every
- * Thread: `run` is a command Mako runs against the started app, passing on
- * exit 0; `check` is what the agent publishing it goes and sees for itself,
- * by any means (the app, its logs, Mako's computer control), and reports.
+ * Thread: `run` is a command (or steps) Mako runs against the started app,
+ * passing on exit 0; `check` is what the agent publishing it goes and sees
+ * for itself, by any means (the app, its logs, Mako's computer control),
+ * and reports.
  */
 const verifySchema = z.union([
-  z.object({ run: command }).strict(),
+  z.object({ run: checkSchema }).strict(),
   z.object({ check: z.string().trim().min(1).max(2_000) }).strict(),
 ])
 export type RecipeVerify = z.infer<typeof verifySchema>
-
-const processName = /^[a-z][a-z0-9-]{0,31}$/
 
 const targetSchema = z.object({
   /** The recipe's processes this target runs, such as the API and the desktop app. */
   processes: z.array(z.string().regex(processName, "a process name")).min(1).max(20),
   /** Its own full check, in place of the recipe's. */
-  full: command.optional(),
+  full: checkSchema.optional(),
   verify: verifySchema.optional(),
 }).strict()
 
@@ -123,9 +156,9 @@ export const RecipeSchema = z.object({
   targets: named(targetSchema, (name) => processName.test(name) ? undefined : "a target name is lowercase letters, digits and hyphens").optional(),
   checks: z.object({
     /** No running app: typecheck, lint, unit tests. */
-    quick: command.optional(),
+    quick: checkSchema.optional(),
     /** With the app running: end-to-end and integration tests. */
-    full: command.optional(),
+    full: checkSchema.optional(),
   }).strict().default({}),
   /** Install in a fresh copy, and catch up after the branch moves: each step only when its inputs changed. */
   prepare: z.array(prepareSchema).max(10).default([]),
@@ -276,17 +309,20 @@ function commandPlaceholder(command: string): string | undefined {
 /** Why this checkout and Thread can't run `recipe`, if they can't. */
 export async function recipeProblem(recipe: Recipe, checkout: string, environment: ThreadEnvironment): Promise<string | undefined> {
   const optionalCommand = (path: string, command: string | undefined): [string, string][] => command ? [[path, command]] : []
-  const verifyRun = (path: string, verify: RecipeVerify | undefined): [string, string][] => verify && "run" in verify ? [[`${path}.run`, verify.run]] : []
+  const check = (path: string, given: RecipeCheck | undefined): [string, string][] =>
+    given === undefined ? [] : Array.isArray(given) ? given.map((step, index): [string, string] => [`${path}.${index}.command`, step.command]) : [[path, given]]
+  const verifyRun = (path: string, verify: RecipeVerify | undefined): [string, string][] => verify && "run" in verify ? check(`${path}.run`, verify.run) : []
   const commands: [string, string][] = [
     ...Object.entries(recipe.processes).flatMap(([name, spec]): [string, string][] => [
       [`processes.${name}.command`, spec.command],
       ...optionalCommand(`processes.${name}.ready`, spec.ready),
     ]),
-    ...Object.entries(recipe.checks).flatMap(([tier, command]): [string, string][] => command ? [[`checks.${tier}`, command]] : []),
+    ...check("checks.quick", recipe.checks.quick),
+    ...check("checks.full", recipe.checks.full),
     ...recipe.prepare.map((step, index): [string, string] => [`prepare.${index}.command`, step.command]),
     ...verifyRun("verify", recipe.verify),
     ...Object.entries(recipe.targets ?? {}).flatMap(([name, target]): [string, string][] => [
-      ...optionalCommand(`targets.${name}.full`, target.full),
+      ...check(`targets.${name}.full`, target.full),
       ...verifyRun(`targets.${name}.verify`, target.verify),
     ]),
     ...optionalCommand("cleanup", recipe.cleanup),
@@ -353,6 +389,9 @@ const ProofSchema = z.object({
 export type RecipeProof = z.infer<typeof ProofSchema>
 export type RecipeProofStep = z.infer<typeof ProofStepSchema>
 
+/** The longest reason a version keeps; a longer one makes the version unreadable. */
+export const REASON_MAX = 500
+
 const VersionSchema = z.object({
   version: z.number().int().positive(),
   /** The published version it was made from; none for a project's first. */
@@ -361,7 +400,7 @@ const VersionSchema = z.object({
   savedAt: z.number(),
   /** Who saved it, such as `the Thread "Fix login" (codex)`. */
   by: z.string().max(300).optional(),
-  reason: z.string().max(500).optional(),
+  reason: z.string().max(REASON_MAX).optional(),
   /** The app that saved it, the only one that runs it while it's a draft. */
   app: AppKeySchema.optional(),
   recipe: z.unknown(),
@@ -427,7 +466,7 @@ async function writeVersion(file: string, record: RecipeVersion, flag?: "wx"): P
   else await writeAtomic(path, text)
 }
 
-async function versionNumbers(file: string): Promise<number[]> {
+export async function versionNumbers(file: string): Promise<number[]> {
   const names = await readdir(recipeVersions(file)).catch(() => [])
   return names.flatMap((name) => /^(\d+)\.json$/.exec(name)?.[1] ?? []).map(Number).sort((a, b) => a - b)
 }
@@ -579,6 +618,58 @@ export async function unpinRunning(file: string, app: AppKey): Promise<void> {
 /** How many versions a project has kept. */
 export async function versionCount(file: string): Promise<number> {
   return (await versionNumbers(file)).length
+}
+
+export interface VersionHistory {
+  /** Newest first: `app`'s draft, when it has one, and the newest published versions. */
+  entries: RecipeVersionView[]
+  /** Every version kept, oldest first, drafts of other apps among them. */
+  kept: number[]
+}
+
+async function versionEntry(file: string, version: number, published: number | undefined): Promise<RecipeVersionView | undefined> {
+  const read = await readJson(join(recipeVersions(file), `${version}.json`)).catch((): JsonRead => ({ kind: "absent" }))
+  if (read.kind !== "json") return undefined
+  const parsed = VersionSchema.safeParse(read.value)
+  if (!parsed.success) return undefined
+  const { state, savedAt, parent, by, reason, publishedAt, recipe, proof } = parsed.data
+  const entry: RecipeVersionView = { version, state, current: version === published, savedAt, readable: RecipeSchema.safeParse(recipe).success }
+  if (parent !== undefined) entry.parent = parent
+  if (by) entry.by = by
+  if (reason) entry.reason = reason
+  if (publishedAt !== undefined) entry.publishedAt = publishedAt
+  if (proof) {
+    const failed = proof.steps.find((step) => !step.passed)
+    entry.proof = failed ? { at: proof.at, passed: false, failed: failed.name } : { at: proof.at, passed: true }
+  }
+  return entry
+}
+
+/**
+ * The versions to choose from when going back: `app`'s draft and the newest
+ * `limit` published ones. Other apps' drafts are another Thread's work in
+ * progress, so they're counted in `kept` but not listed. Reads from the
+ * newest down and stops once it has them, however long the history.
+ */
+export async function versionHistory(file: string, app: AppKey | undefined, limit: number): Promise<VersionHistory> {
+  const kept = await versionNumbers(file)
+  const folder = recipeVersions(file)
+  const [published, draft] = await Promise.all([
+    pointer(join(folder, "published.json")),
+    app === undefined ? undefined : pointer(appFile(folder, "drafts", app)),
+  ])
+  const entries: RecipeVersionView[] = []
+  let left = limit
+  for (const version of [...kept].reverse()) {
+    if (!left && (draft === undefined || version < draft)) break
+    const entry = await versionEntry(file, version, published)
+    if (entry?.state === "published" && left) {
+      entries.push(entry)
+      left -= 1
+    }
+    else if (entry?.state === "draft" && version === draft) entries.push(entry)
+  }
+  return { entries, kept }
 }
 
 /** `{port}`, `{port+N}`, `{host}`, `{url}`, `{data}` and `{thread}`; other braces are left as written. */

@@ -18,8 +18,21 @@ export interface AppProcessView {
 
 export interface AppCheckView {
   tier: "quick" | "full"
+  /** Its command, or for a check of steps, each step's in order. */
   command: string
   state: "never" | "running" | "passed" | "failed"
+  at?: number
+  /** For a check of named steps: each step as it stands, from the run under way or the last run of it. */
+  steps?: AppCheckStepView[]
+}
+
+export interface AppCheckStepView {
+  name: string
+  command: string
+  state: "never" | "waiting" | "running" | "passed" | "failed"
+  /** How long it took, once it has finished. */
+  ms?: number
+  /** When it finished. */
   at?: number
 }
 
@@ -66,7 +79,10 @@ export type ThreadAppView =
       address?: { host: string; port: number }
       startedAt?: number
       processes: AppProcessView[]
+      /** The full check is the target's that the view was asked about, or the first target's. */
       checks: AppCheckView[]
+      /** The recipe's targets in order, when it has them: what Run can start, the first by default. */
+      targets?: string[]
       prepare?: AppPrepareView
       /** Set while waiting: the other apps that stopping would free. */
       room?: { apps: number; bytes: number }
@@ -88,14 +104,15 @@ export interface AppMark {
   port?: number
 }
 
-/** One output the dock can show: the install step, a process, or a check. */
-export type AppOutputKey = "prepare" | `process:${string}` | `check:${"quick" | "full"}`
+/** One output the dock can show: the install step, a process, a check, or one step of a check. */
+export type AppOutputKey = "prepare" | `process:${string}` | `check:${"quick" | "full"}` | `check:${"quick" | "full"}:${string}`
 
 export const AppOutputKeySchema = z.union([
   z.literal("prepare"),
   z.templateLiteral(["process:", z.string().regex(/^[a-z][a-z0-9-]*$/)]),
   z.literal("check:quick"),
   z.literal("check:full"),
+  z.templateLiteral(["check:", z.enum(["quick", "full"]), ":", z.string().regex(/^[a-z][a-z0-9-]*$/)]),
 ])
 
 /** Where a read of an output left off: the log file it read, and how far. */

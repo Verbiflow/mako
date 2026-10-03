@@ -50,26 +50,28 @@ function printable(line: string): string {
   }).join("")
 }
 
-function fits(lines: string[]): boolean {
-  return lines.length <= OUTPUT_BUDGET.lines && lines.reduce((sum, line) => sum + line.length + 1, 0) <= OUTPUT_BUDGET.chars
+function fits(lines: string[], budget: typeof OUTPUT_BUDGET): boolean {
+  return lines.length <= budget.lines && lines.reduce((sum, line) => sum + line.length + 1, 0) <= budget.chars
 }
 
 /**
  * The output for a tool reply: all of it when it fits, otherwise every
  * error line with its surroundings and the run's last lines, each gap marked
- * with what it left out, and the path of the whole log.
+ * with what it left out, and the path of the whole log. Several outputs in
+ * one reply share it by each taking a smaller `budget`.
  */
-export function presentOutput(raw: string, log: string): string {
+export function presentOutput(raw: string, log: string, budget = OUTPUT_BUDGET): string {
   const text = cleanOutput(raw)
   if (!text) return "(no output)"
   const lines = text.split("\n")
-  if (fits(lines)) return text
+  if (fits(lines, budget)) return text
+  const tail = Math.min(TAIL_LINES, Math.floor(budget.lines / 2))
   const shown = new Set<number>()
   lines.forEach((line, index) => {
     if (!ERROR_LINE.test(line)) return
     for (let near = Math.max(0, index - AROUND); near <= Math.min(lines.length - 1, index + AROUND); near += 1) shown.add(near)
   })
-  for (let index = Math.max(0, lines.length - TAIL_LINES); index < lines.length; index += 1) shown.add(index)
+  for (let index = Math.max(0, lines.length - tail); index < lines.length; index += 1) shown.add(index)
   const out: string[] = []
   let chars = 0
   let gap = 0
@@ -80,7 +82,7 @@ export function presentOutput(raw: string, log: string): string {
       continue
     }
     const line = lines[index]!
-    if (out.length >= OUTPUT_BUDGET.lines || chars + line.length + 1 > OUTPUT_BUDGET.chars) {
+    if (out.length >= budget.lines || chars + line.length + 1 > budget.chars) {
       unshown = [...shown].filter((at) => at >= index).length
       break
     }
@@ -91,6 +93,6 @@ export function presentOutput(raw: string, log: string): string {
   }
   const note = unshown
     ? `${lines.length} lines of output, more errors than fit in a reply: these are the first; ${unshown} more lines naming errors or the run's end are in ${log}.`
-    : `${lines.length} lines of output; shown are every line naming an error or a file location, with ${AROUND} lines around each, and the last ${TAIL_LINES}. All of it is in ${log}.`
+    : `${lines.length} lines of output; shown are every line naming an error or a file location, with ${AROUND} lines around each, and the last ${tail}. All of it is in ${log}.`
   return [note, ...out].join("\n")
 }
