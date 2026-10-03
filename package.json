@@ -112,8 +112,8 @@
     "test:live": "npm run test:live-prompt-delivery && tsx scripts/test-live-conversations.ts && tsx scripts/test-live-markers.ts && tsx scripts/test-replay-setup-notices.ts && tsx scripts/test-interrupted-turn.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
     "verify:sessions": "npm run typecheck && npm test --workspace @mako/sessions && npm run test:live && npm run test:codex-protocol && npm run test:providers && npm run test:host && npm run test:stage && npm run test:performance && npm run lint && npm run build",
     "test:transfer-scheduling": "node --import tsx scripts/test-transfer-scheduling.ts",
-    "test:conversation-control": "node scripts/test-catalog-readiness.mjs && npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts && npm run test:thread-store",
-    "test:thread-store": "tsx scripts/test-thread-store.ts && tsx scripts/test-thread-environment.ts && tsx scripts/test-thread-processes.ts && tsx scripts/test-run-output.ts && tsx scripts/test-app-probe.ts && tsx scripts/test-thread-store-hosts.ts && tsx scripts/test-thread-migration.ts && tsx scripts/test-thread-execution.ts && tsx scripts/test-thread-execution-host.ts && tsx scripts/test-thread-groups-host.ts && npm run test:thread-worktrees && npm run test:checkout-heads",
+    "test:conversation-control": "node scripts/test-catalog-readiness.mjs && npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts && npm run test:thread-store && npm run test:recovery-admission",
+    "test:thread-store": "tsx scripts/test-thread-store.ts && tsx scripts/test-thread-environment.ts && tsx scripts/test-thread-processes.ts && tsx scripts/test-recipe-proof.ts && tsx scripts/test-run-output.ts && tsx scripts/test-app-probe.ts && tsx scripts/test-thread-store-hosts.ts && tsx scripts/test-thread-migration.ts && tsx scripts/test-thread-execution.ts && tsx scripts/test-thread-execution-host.ts && tsx scripts/test-thread-groups-host.ts && npm run test:thread-worktrees && npm run test:checkout-heads",
     "test:thread-worktrees": "tsx scripts/test-thread-worktrees.ts && tsx scripts/test-package-links.ts && tsx scripts/test-chat-folders.ts && tsx scripts/test-workspace-moves.ts && tsx --tsconfig tsconfig.app.json scripts/test-thread-moves.ts",
     "test:tree-watcher": "tsx scripts/test-tree-watcher.ts && tsx scripts/test-watch-backend.ts && tsx scripts/test-host-background-watch.ts && tsx scripts/test-tree-poll.ts && tsx scripts/test-tree-watcher-fallback.ts",
     "test:thread-app": "tsx --tsconfig tsconfig.app.json scripts/test-thread-app-host.ts && tsx --tsconfig tsconfig.app.json scripts/test-project-setup.ts",
@@ -165,7 +165,11 @@
     "test:control-packages": "npm run build:control-runtime && node packages/control-runtime/test/lifecycle.mjs && node packages/control-runtime/test/media.mjs && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node scripts/test-control-package-consumer.mjs && node scripts/test-control-runtime-package.mjs && node scripts/linux-control/test-acceptance-payload.mjs",
     "probe:plan-turn": "node scripts/probe-plan-turn.mjs",
     "test:file-previews": "tsx scripts/test-diagnostic-preview.ts && tsx scripts/test-file-open.ts && tsx scripts/test-file-response.ts && tsx scripts/test-office-preview.ts",
-    "test:native-authoring": "tsx scripts/test-native-authoring.ts && tsx scripts/test-native-authoring-claude.ts"
+    "test:native-authoring": "tsx scripts/test-native-authoring.ts && tsx scripts/test-native-authoring-claude.ts",
+    "test:recovery-admission": "tsx scripts/test-recovery-probe-scope.ts && tsx scripts/test-native-admission.ts && tsx scripts/test-cursor-native-runner.ts",
+    "test:native-wake": "npm run build:electron && node scripts/test-native-wake-acceptance.mjs",
+    "benchmark:recovery-checkpoint": "tsx scripts/benchmark-recovery-checkpoint.ts",
+    "test:native-uncertain": "npm run build:electron && MAKO_WAKE_SCENARIO=uncertain node scripts/test-native-wake-acceptance.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
@@ -273,7 +277,7 @@
     "appId": "dev.mako.app",
     "productName": "Mako",
     "artifactName": "${productName}-${arch}.${ext}",
-    "copyright": "Copyright \u00a9 2026 Verbiflow",
+    "copyright": "Copyright © 2026 Verbiflow",
     "directories": {
       "output": "release",
       "buildResources": "build"
