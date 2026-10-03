@@ -1,18 +1,24 @@
 import { retryTransfer } from "@/state/live-transfers"
 import { viewer } from "@/state/viewer"
 import { useAcp, activeLiveAcp, acp } from "@/state/acp"
-import { harnessLabel } from "@/components/rail/harness-meta"
+import { useHarnessLabels } from "@/components/rail/harness-meta"
 import { Notice, NoticeAction, type NoticeTone } from "@/components/ui/notice"
 import { describeTransferRecovery } from "../../../electron/contracts/operation-recovery"
 
 /** Only transfer changes wake this row; token updates retain control identity. */
 export function TransferStatus({ history = false }: { history?: boolean }) {
+  const labels = useHarnessLabels()
+  const harnessLabel = (harness: string) => labels[harness] ?? harness
   const bindings = useAcp((state) => activeLiveAcp(state)?.control?.bindings)
   const id = useAcp((state) => state.activeKey)
   const transfer = useAcp((state) =>
     activeLiveAcp(state)?.control?.transfers.at(-1)
   )
-  const request = useAcp((state) => activeLiveAcp(state)?.requests?.find((item) => item.id === transfer?.input.id))
+  const request = useAcp((state) =>
+    activeLiveAcp(state)?.requests?.find(
+      (item) => item.id === transfer?.input.id
+    )
+  )
   if (!transfer) return null
   if (!history && transfer.state.kind === "accepted") return null
   const provider = harnessLabel(transfer.input.provider)
@@ -42,7 +48,12 @@ export function TransferStatus({ history = false }: { history?: boolean }) {
             <NoticeAction
               quiet
               onClick={() =>
-                void viewer.open(state.manifest.file, undefined, undefined, id ?? undefined)
+                void viewer.open(
+                  state.manifest.file,
+                  undefined,
+                  undefined,
+                  id ?? undefined
+                )
               }
             >
               Inspect transferred context
@@ -53,7 +64,9 @@ export function TransferStatus({ history = false }: { history?: boolean }) {
                 <NoticeAction
                   key={binding.id}
                   quiet
-                  onClick={() => binding.path && acp.viewProviderHistory(binding.path)}
+                  onClick={() =>
+                    binding.path && acp.viewProviderHistory(binding.path)
+                  }
                 >
                   {harnessLabel(binding.provider)} history
                 </NoticeAction>
@@ -76,7 +89,9 @@ export function TransferStatus({ history = false }: { history?: boolean }) {
               : state.manifest.fromBlock > 0
                 ? "Prepared context added since this provider last ran."
                 : "Prepared the captured conversation as context."}{" "}
-            {state.fallback ? `Session import did not work, so it went as a transcript. ${state.fallback} ` : ""}
+            {state.fallback
+              ? `Session import did not work, so it went as a transcript. ${state.fallback} `
+              : ""}
             {state.carried === "native" ? "" : state.manifest.losses.join(" ")}
           </p>
         ) : troubled ? (

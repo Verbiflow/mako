@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { latestPendingQuestion } from "../../../electron/contracts/live-questions"
 import { ApprovalStatus } from "./approval-status"
 import { promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "@/state/prompt-delivery"
@@ -662,11 +663,13 @@ function interruptedLabel(reason: InterruptionReason, provider: string): string 
 }
 
 function RequestRecovery({ request, expanded = false }: { request: LiveRequest; expanded?: boolean }) {
+  useHarnessIdentity()
   const text = request.displayText ?? request.text
   const { copy, copied } = useCopy(text)
   const conversationId = useAcp((state) => activeLiveAcp(state)?.key ?? null)
   const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
   const [resent, setResent] = useState<"sending" | "sent" | null>(null)
+  const [restored, setRestored] = useState(false)
   const continued = useAcp((state) => {
     const requests = activeLiveAcp(state)?.requests ?? []
     const index = requests.findIndex((item) => item.id === request.id)
@@ -699,7 +702,7 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
     setResent(accepted ? "sent" : null)
   }
   // A new thread opens in the same folder over the same transport, so it can't escape these.
-  const freshThread = request.status === "failed" && request.failure !== "transport-limit" && request.failure !== "missing-folder" && request.failure !== "launch-failed"
+  const freshThread = request.status === "failed" && request.failure !== "auth" && request.failure !== "transport-limit" && request.failure !== "missing-folder" && request.failure !== "launch-failed"
   return (
     <RecoveryBody expanded={expanded} summary={`${continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message`} request={request}>
       {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
@@ -709,6 +712,13 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
       {request.status === "failed" && request.failure === "context-exhausted" ? <CompactionControl requestId={request.id} /> : null}
       {recovered && request.failure === "context-exhausted" ? <p className="mt-2">Compaction completed. You can send the saved message again.</p> : null}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {request.status === "failed" && request.failure === "auth" && conversationId ? (
+          <button type="button" disabled={restored} className="pressable h-6 rounded-md bg-fill-hover px-2 text-foreground hover:bg-fill-selected disabled:opacity-45"
+            onClick={() => {
+              const event = new CustomEvent("mako:restore-saved-message", { cancelable: true, detail: { conversationId, requestId: request.id } })
+              if (!window.dispatchEvent(event)) setRestored(true)
+            }}>{restored ? "Restored to composer" : "Restore to composer"}</button>
+        ) : null}
         {recovery.resendLabel && conversationId ? (
           <button type="button" onClick={() => void resend()} disabled={resent !== null || !idle} className="pressable h-6 rounded-md bg-fill-hover px-2 text-foreground hover:bg-fill-selected disabled:opacity-45">
             {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : recovery.resendLabel}
@@ -730,6 +740,7 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
         <button type="button" onClick={() => void copy()} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
       </div>
       {freshThread ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
+      {request.status === "failed" && request.failure === "auth" ? <p className="mt-2 text-faint">Fix sign-in or choose an available model in Agents settings, then review and send the restored draft. Restoring does not send a message.</p> : null}
     </RecoveryBody>
   )
 }

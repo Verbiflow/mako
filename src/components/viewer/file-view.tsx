@@ -1,3 +1,11 @@
+import { DiagnosticPreview } from "./diagnostic-preview"
+import {
+  diagnosticFormat,
+  officeFormat,
+} from "../../../electron/contracts/file-preview"
+import { OfficePreview } from "./office-preview"
+import { PdfPreview } from "./pdf-preview"
+import { resolveMarkdownMedia } from "@/lib/markdown-media"
 import { ArtifactPreview } from "./artifact-preview"
 import { useEffect, useRef } from "react"
 import { File, Virtualizer } from "@pierre/diffs/react"
@@ -39,12 +47,14 @@ export function FileView({
    * rather than spinning if the file is shorter than the line asked for.
    */
   useEffect(() => {
-    if (!line || mode !== "source") return
+    if (!line) return
     let frames = 0
     let raf = 0
     const look = () => {
       const row = host.current?.querySelector<HTMLElement>(
-        `[data-line="${line}"]`
+        mode === "source"
+          ? `[data-line="${line}"]`
+          : `[data-source-line="${line}"]`
       )
       if (row) {
         row.scrollIntoView({ block: "center" })
@@ -56,6 +66,25 @@ export function FileView({
     raf = requestAnimationFrame(look)
     return () => cancelAnimationFrame(raf)
   }, [file, line, mode])
+
+  const diagnostic = file.diagnostic ?? diagnosticFormat(file.path)
+  if (mode === "preview" && diagnostic && file.previewUrl)
+    return (
+      <DiagnosticPreview
+        key={file.previewUrl}
+        url={viewerFileUrl(file.previewUrl)}
+        format={diagnostic}
+      />
+    )
+  const office = officeFormat(file.path, file.mimeType)
+  if (mode === "preview" && office && file.previewUrl)
+    return (
+      <OfficePreview
+        url={viewerFileUrl(file.previewUrl)}
+        name={file.path.split("/").at(-1) ?? file.path}
+        format={office}
+      />
+    )
 
   if (file.binary) return <MediaPreview file={file} />
 
@@ -73,11 +102,13 @@ export function FileView({
 
   if (mode === "preview" && isMarkdownPath(file.path)) {
     return (
-      <Prose
-        text={resolveMarkdownMedia(file.contents, file.path)}
-        className="mx-auto max-w-4xl p-5 sm:p-7"
-        urlTransform={workspaceUrlTransform}
-      />
+      <div ref={host}>
+        <Prose
+          text={resolveMarkdownMedia(file.contents, file.path)}
+          className="mx-auto max-w-4xl p-5 sm:p-7"
+          urlTransform={workspaceUrlTransform}
+        />
+      </div>
     )
   }
 
@@ -114,30 +145,6 @@ function workspaceUrlTransform(url: string): string {
   return /^[a-z]+:/i.test(url) ? "" : url
 }
 
-function resolveMarkdownMedia(contents: string, path: string): string {
-  const folder = path.includes("/")
-    ? path.slice(0, path.lastIndexOf("/") + 1)
-    : ""
-  return contents.replace(
-    /(!\[[^\]]*\]\()([^\s)]+)(\))/g,
-    (match, before: string, source: string, after: string) => {
-      if (/^(?:[a-z]+:|#|\/)/i.test(source)) return match
-      const joined = `${folder}${source}`
-      const parts: string[] = []
-      for (const part of joined.split("/")) {
-        if (!part || part === ".") continue
-        if (part === "..") parts.pop()
-        else parts.push(part)
-      }
-      const encoded = parts.map((part) => encodeURIComponent(part)).join("/")
-      // A file opened by absolute path keeps its images beside it: the extra
-      // slash marks the resolved path as absolute rather than workspace-relative.
-      const prefix = path.startsWith("/") ? "/" : ""
-      return `${before}mako-file://workspace/${prefix}${encoded}${after}`
-    }
-  )
-}
-
 function MediaPreview({ file }: { file: FileContents }) {
   if (file.previewUrl && file.media === "image") {
     return (
@@ -152,13 +159,7 @@ function MediaPreview({ file }: { file: FileContents }) {
     )
   }
   if (file.previewUrl && file.media === "pdf") {
-    return (
-      <iframe
-        src={viewerFileUrl(file.previewUrl)}
-        title={file.path}
-        className="h-full min-h-[32rem] w-full border-0 bg-surface"
-      />
-    )
+    return <PdfPreview url={viewerFileUrl(file.previewUrl)} name={file.path} />
   }
   if (file.previewUrl && file.media === "audio") {
     return (

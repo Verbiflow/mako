@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { ListTodoIcon, XIcon } from "lucide-react"
 import {
   Dialog,
@@ -17,6 +18,7 @@ const EMPTY_CHILDREN: never[] = []
  * child tasks delegated before Delegate was retired.
  */
 export function ConversationRelations() {
+  useHarnessIdentity()
   const ancestry = useAcp((state) => activeLiveAcp(state)?.control?.ancestry)
   const pendingMerges = useAcp(
     (state) =>

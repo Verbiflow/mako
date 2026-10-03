@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { NativeRequestNotice } from "./native-request-notice"
 import { useConversationScope } from "@/state/conversation-scope"
 import { useEffect, useMemo, useState } from "react"
@@ -292,6 +293,7 @@ function ThreadLoadingShell({
  * conversation here.
  */
 function Conversation({ thread, held }: { thread: ViewedThread; held: boolean }) {
+  useHarnessIdentity()
   const scope = useScopedHistory()
   const globalRun = useThreads((state) => state.run)
   // The run in the store belongs to the thread being opened, not the one held.
