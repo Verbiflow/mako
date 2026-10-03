@@ -175,7 +175,7 @@ function FileMediaPreview({
           src={url}
           alt={name}
           onError={() => { setFailed(true); onPreviewError?.() }}
-          className={actualSize ? "max-w-none" : `mx-auto block w-full object-contain ${expanded ? "h-full" : "max-h-[32rem]"}`}
+          className={actualSize ? "asset-surface max-w-none" : `asset-surface mx-auto block w-full object-contain ${expanded ? "h-full" : "max-h-[32rem]"}`}
         />
         </button>
       </div>
