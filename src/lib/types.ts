@@ -1,4 +1,9 @@
 export type {
+  NativeAuthoringTarget,
+  NativeAuthoringCatalog,
+  NativeAuthoringDocument,
+  NativeAuthoringWrite,
+  NativeAuthoringRemove,
   CommitAnalysisMode,
   CommitGenerationInput,
   CommitGenerationResult,

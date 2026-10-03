@@ -1,3 +1,4 @@
+import { remarkHeadingAnchors } from "./markdown-headings"
 import { unified, type Plugin, type PluggableList } from "unified"
 import remarkParse from "remark-parse"
 import remarkGfm from "remark-gfm"
@@ -11,8 +12,8 @@ export function prosePlugins(
   references?: Parameters<typeof remarkPromptReferences>[0] | null
 ): PluggableList {
   return references
-    ? [remarkGfm, [remarkPromptReferences, references], remarkFileCitations]
-    : [remarkGfm, remarkFileCitations]
+    ? [remarkGfm, [remarkPromptReferences, references], remarkFileCitations, remarkHeadingAnchors]
+    : [remarkGfm, remarkFileCitations, remarkHeadingAnchors]
 }
 
 export function parseProse(text: string): Root {

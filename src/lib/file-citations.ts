@@ -1,9 +1,13 @@
+import { markdownAnchorLine } from "./markdown-headings"
 import { z } from "zod"
+import { filePreviewFormat } from "../../electron/contracts/file-preview"
 
 export interface FileCitation {
   path: string
   line?: number
   endLine?: number
+  /** A heading anchor from a `path#section` link, resolved to a line on open. */
+  anchor?: string
   purpose?: string
 }
 
@@ -16,6 +20,7 @@ const FileCitationSchema = z.object({
   line: z.number().int().positive().optional(),
   endLine: z.number().int().positive().optional(),
   purpose: z.string().max(256).optional(),
+  anchor: z.string().max(16_384).optional(),
 })
 
 function citationHref(citation: FileCitation): string {
@@ -99,23 +104,40 @@ export function markdownFileTarget(
       /[\\/]/.test(target) ||
       /\.[A-Za-z0-9_-]+(?::|#|$)/.test(target))
   if (local) {
+    // A trailing `#fragment` that isn't the `#L<line>` form is a heading
+    // anchor, not part of the filename. Peel it off so `notes.md#setup` opens
+    // `notes.md` and scrolls, instead of looking for a file by that whole name.
+    let anchor: string | undefined
+    const hash = /#([^#]+)$/.exec(target)
+    if (hash && !/^L\d+(?:-L?\d+)?$/.test(hash[1])) {
+      anchor = decodePath(hash[1])
+      target = target.slice(0, hash.index)
+    }
     const match = /^(.*?)(?:(?:#L|:)(\d+)(?:-L?(\d+)|:\d+)?)?$/.exec(target)
     if (!match?.[1]) return null
-    return {
+    const citation: FileCitation = {
       path: decodePath(match[1]),
       line: match[2] ? Number(match[2]) : undefined,
       endLine: match[3] ? Number(match[3]) : undefined,
     }
+    if (anchor && citation.line === undefined) citation.anchor = anchor
+    return citation
   }
   return null
 }
 
+/**
+ * The line a `path#section` anchor points at: the first Markdown heading whose
+ * GitHub-style slug matches. Returns `undefined` when nothing matches, so the
+ * file still opens at the top rather than failing.
+ */
+export const anchorLine = markdownAnchorLine
 
 /** Inline code becomes a file action only when the whole span is a recognizable path. */
 export function inlineFileTarget(text: string): FileCitation | null {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /[\n\r`<>|;&=]/.test(text)) return null
   const target = markdownFileTarget(text)
-  if (!target || !/\.(?:[cm]?[jt]sx?|json[cl]?|mdx?|markdown|py|rs|go|java|swift|kt|c|cpp|h|hpp|css|scss|sass|less|html?|vue|svelte|sh|bash|zsh|ya?ml|toml|ini|cfg|conf|sql|graphql|proto|txt|csv|tsv|xml|log|png|jpe?g|gif|webp|svg|pdf|mp[34]|wav|mov|webm)$/i.test(target.path)) return null
+  if (!target || /[*?[\]{}]/.test(target.path) || !filePreviewFormat(target.path)) return null
   if (!/^(?:\.{0,2}\/|~\/|[A-Za-z]:[\\/])/.test(target.path) && /\s/.test(target.path)) return null
   return target
 }

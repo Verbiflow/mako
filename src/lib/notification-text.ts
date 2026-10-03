@@ -44,19 +44,31 @@ export function excerpt(text: string, limit = NOTIFICATION_BODY_LIMIT): string {
 
 export type NotificationKind = "ready" | "ask" | "failed"
 
-/** What happened, as the subtitle under a thread's name. */
+/**
+ * What happened, as the subtitle under a thread's name. `alongside` names the
+ * Thread's other Sessions still working, so one agent finishing doesn't read
+ * as the Thread being done: "Codex finished · Claude still working".
+ */
 export function notificationHeadline(
   kind: NotificationKind,
-  agent: string
+  agent: string,
+  alongside: readonly string[] = []
 ): string {
-  switch (kind) {
-    case "ready":
-      return `${agent} finished`
-    case "ask":
-      return `${agent} needs you`
-    case "failed":
-      return `${agent} failed`
+  const happened =
+    kind === "ready" ? `${agent} finished`
+    : kind === "ask" ? `${agent} needs you`
+    : `${agent} failed`
+  return alongside.length ? `${happened} · ${stillWorking(agent, alongside)}` : happened
+}
+
+function stillWorking(agent: string, others: readonly string[]): string {
+  const names = [...new Set(others)]
+  if (names.length === 1) {
+    const [name] = names
+    if (others.length > 1) return `${others.length} ${name} sessions still working`
+    return name === agent ? `another ${name} session still working` : `${name} still working`
   }
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)} still working`
 }
 
 export function notificationFallbackBody(kind: NotificationKind): string {

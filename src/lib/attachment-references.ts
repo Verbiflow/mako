@@ -1,3 +1,4 @@
+import { classify } from "./attachment-kind"
 import type { Attachment, AttachmentFileReference } from "./attachments"
 import { tokenize, type Segment } from "./mentions"
 import type { AttachmentContent } from "@mako/sessions"
@@ -268,8 +269,7 @@ export function reusablePromptAttachments(
       ),
       name: file.name,
       mimeType,
-      size: 0,
-      kind: mimeType.startsWith("image/") ? "image" : "binary",
+      kind: classify({ type: mimeType, name: file.name }),
       stagedPath: file.path,
       contextPath: file.contextPath,
     })

@@ -10,7 +10,7 @@ export const SavedAttachmentSchema = z.object({
   contextLabel: z.string().optional(),
   origin: z.enum(["terminal", "git-conflicts"]).optional(),
   mimeType: z.string(),
-  size: z.number(),
+  size: z.number().nonnegative().optional(),
   kind: z.enum(["image", "text", "binary"]),
   stagedPath: z.string().optional(),
   contextPath: z.string().optional(),

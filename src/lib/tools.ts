@@ -36,14 +36,15 @@ export function cachedToolIdentity(owner: Block | EntryBlock, source: ToolSource
 /**
  * A live call's identity. The title stands in for a target only when the
  * harness put something in it besides the name, as Grok's server-side search
- * does with `Web search: <query>`.
+ * does with `Web search: <query>`; Codex's `mako: app_logs` is the name again.
  */
 export function liveToolIdentity(block: Extract<LiveBlock, { type: "tool" }>, harness: string | undefined): ToolIdentity {
   const cached = identities.get(block)
   if (cached) return cached
   const identity = identifyTool({ harness, name: block.name, acpKind: block.toolKind, title: block.title, input: block.input })
   const title = block.title.trim()
-  if (!identity.target && title && title !== identity.name && title !== identity.label) identity.target = title
+  const named = [identity.name, identity.label, identity.server && identity.tool ? `${identity.server}: ${identity.tool}` : undefined]
+  if (!identity.target && title && !named.includes(title)) identity.target = title
   identities.set(block, identity)
   return identity
 }

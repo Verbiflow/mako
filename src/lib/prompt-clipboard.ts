@@ -10,7 +10,7 @@ const ClipboardDraftSchema = z.object({
   attachments: z.array(SavedAttachmentSchema.extend({
     index: z.number().int().positive(),
     stagedPath: z.string().min(1),
-    size: z.number().nonnegative(),
+    size: z.number().nonnegative().optional(),
   })).max(256),
 }).refine(({ attachments }) =>
   new Set(attachments.map(item => item.id)).size === attachments.length &&

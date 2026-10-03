@@ -1,3 +1,5 @@
+import { classify } from "./attachment-kind"
+export { classify } from "./attachment-kind"
 import { mediaTypeForPath } from "./transcript-media"
 import {
   readAttachmentDrafts,
@@ -52,7 +54,8 @@ export interface Attachment {
   index: number
   name: string
   mimeType: string
-  size: number
+  /** Native history may retain a file path without its original byte count. */
+  size?: number
   kind: AttachmentKind
   /** Base64, for images. */
   data?: string
@@ -101,68 +104,6 @@ interface PendingAttachment {
 const MAX_INLINE_TEXT = 200_000
 const MAX_BYTES = 256 * 1024 * 1024
 const EMPTY_ATTACHMENTS: Attachment[] = []
-
-const TEXT_EXTENSIONS = new Set([
-  "txt",
-  "md",
-  "mdx",
-  "rst",
-  "csv",
-  "tsv",
-  "json",
-  "jsonl",
-  "yaml",
-  "yml",
-  "toml",
-  "ini",
-  "env",
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mjs",
-  "cjs",
-  "py",
-  "rs",
-  "go",
-  "rb",
-  "java",
-  "kt",
-  "swift",
-  "c",
-  "h",
-  "cpp",
-  "hpp",
-  "cs",
-  "php",
-  "sh",
-  "bash",
-  "zsh",
-  "sql",
-  "html",
-  "css",
-  "scss",
-  "svg",
-  "xml",
-  "patch",
-  "diff",
-  "log",
-  "lock",
-  "gradle",
-  "make",
-  "dockerfile",
-])
-
-export function classify(file: File): AttachmentKind {
-  const mime = file.type || mediaTypeForPath(file.name) || "application/octet-stream"
-  if (mime.startsWith("image/") && mime !== "image/svg+xml")
-    return "image"
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? ""
-  if (file.type.startsWith("text/") || TEXT_EXTENSIONS.has(ext)) return "text"
-  if (file.type === "application/json" || file.type === "application/xml")
-    return "text"
-  return "binary"
-}
 
 export function useAttachments(key = "default") {
   const [buckets, setBuckets] =
@@ -251,7 +192,7 @@ export function useAttachments(key = "default") {
             size: file.size,
             kind,
             context,
-            preview: /^(image|video|audio)\//.test(mimeType) ? URL.createObjectURL(file) : undefined,
+            preview: (/^(image|video|audio)\//.test(mimeType) || mimeType === "application/pdf") ? URL.createObjectURL(file) : undefined,
             pending: true,
           },
           file,
@@ -603,7 +544,8 @@ export function parseAttachmentAppendix(
   }
 }
 
-export function formatBytes(bytes: number) {
+export function formatBytes(bytes: number | undefined) {
+  if (bytes === undefined) return "Size unknown"
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   if (bytes < 1024 * 1024 * 1024)
@@ -619,7 +561,7 @@ export function useAttachmentPreview(item: Attachment) {
   } | null>(null)
   useEffect(() => {
     const path = item.stagedPath
-    if (!/^(image|video|audio)\//.test(item.mimeType) || item.preview || !path) return
+    if ((!/^(image|video|audio)\//.test(item.mimeType) && item.mimeType !== "application/pdf") || item.preview || !path) return
     let current = true
     void getMako()
       .readFile(path)

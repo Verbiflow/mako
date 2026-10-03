@@ -2,28 +2,10 @@ import type { AttachmentContent } from "@mako/sessions"
 import { attachmentFromUrl } from "@mako/sessions/content"
 import { markdownFileTarget } from "./file-citations"
 
-const mediaTypes = new Map([
-  ["png", "image/png"],
-  ["jpg", "image/jpeg"],
-  ["jpeg", "image/jpeg"],
-  ["gif", "image/gif"],
-  ["webp", "image/webp"],
-  ["avif", "image/avif"],
-  ["svg", "image/svg+xml"],
-  ["mp3", "audio/mpeg"],
-  ["wav", "audio/wav"],
-  ["m4a", "audio/mp4"],
-  ["ogg", "audio/ogg"],
-  ["flac", "audio/flac"],
-  ["mp4", "video/mp4"],
-  ["mov", "video/quicktime"],
-  ["webm", "video/webm"],
-  ["pdf", "application/pdf"],
-])
-
-export function mediaTypeForPath(path: string): string | undefined {
-  return mediaTypes.get(path.split(/[?#]/)[0]?.split(".").at(-1)?.toLowerCase() ?? "")
-}
+// Preserve the public helper while sharing maintained MIME lookup with composer
+// and preview routing. No renderer-owned list of media extensions.
+export { fileMimeTypeForPath as mediaTypeForPath } from "../../electron/contracts/file-preview"
+import { fileMimeTypeForPath as mediaTypeForPath } from "../../electron/contracts/file-preview"
 
 export function markdownMedia(
   source: string,

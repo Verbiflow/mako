@@ -66,7 +66,7 @@ export function threadToMessages(
         blocks: [{ type: "text", text: eventText(entry) }],
       }
       if (!entry.opensTurn)
-        message.note = { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone }
+        message.note = { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, source: entry.source }
       if (entry.opensTurn) {
         message.opensTurn = true
         if (entry.at) message.timestamp = Date.parse(entry.at) || undefined
