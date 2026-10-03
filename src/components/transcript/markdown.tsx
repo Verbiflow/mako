@@ -1,3 +1,4 @@
+import { rehypeAssetGroups } from "@/lib/markdown-asset-groups"
 import { ListItem } from "./list-item"
 import { DiagramPreview, HighlightedCode } from "./code-preview"
 import { TranscriptAttachment } from "./attachment"
@@ -153,7 +154,7 @@ export const Prose = memo(function Prose({
   )
   const rehypePlugins = useMemo<
     Parameters<typeof Markdown>[0]["rehypePlugins"]
-  >(() => (tree ? [[reuseParsedProse, tree]] : undefined), [tree])
+  >(() => (tree ? [[reuseParsedProse, tree], rehypeAssetGroups] : [rehypeAssetGroups]), [tree])
 
   const settled = !streaming && !referenceInput && !urlTransform && !hasTree
   const rendered = useMemo(() => {

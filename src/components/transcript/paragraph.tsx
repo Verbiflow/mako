@@ -1,4 +1,10 @@
-import { InlineFilePreview } from "./file-preview"
+import { fileMimeTypeForPath } from "../../../electron/contracts/file-preview"
+import { z } from "zod"
+import { TranscriptAttachments } from "./attachment-collection"
+import { markdownMedia } from "@/lib/transcript-media"
+import { markdownFileTarget } from "@/lib/file-citations"
+import type { AttachmentContent } from "@mako/sessions"
+import { FilePreviewCollection } from "./attachment-collection"
 import { inlineFileLinks } from "@/lib/inline-file-links"
 import { useContext, useEffect, useRef, type ComponentProps } from "react"
 import type { ExtraProps } from "react-markdown"
@@ -79,6 +85,24 @@ export function Paragraph({
       element.removeAttribute("data-estimated-paragraph")
     }
   }, [streaming, text])
+  if (node?.properties.dataAssetGroup) {
+    const attachments: AttachmentContent[] = []
+    const seen = new Set<string>()
+    for (const entry of node.children) {
+      if (entry.type !== "element") continue
+      const properties = z.object({ src: z.string().optional(), href: z.string().optional(), alt: z.string().optional() }).safeParse(entry.properties)
+      if (!properties.success) continue
+      const href = entry.tagName === "img" ? properties.data.src : properties.data.href
+      if (!href || seen.has(href)) continue
+      seen.add(href)
+      if (entry.tagName === "img") attachments.push(markdownMedia(href, properties.data.alt))
+      else {
+        const target = markdownFileTarget(href)
+        if (target) attachments.push({ type: "attachment", id: target.path, name: target.path.split("/").at(-1) ?? target.path, mimeType: fileMimeTypeForPath(target.path) ?? "application/octet-stream", source: { kind: "file", path: target.path } })
+      }
+    }
+    return <TranscriptAttachments attachments={attachments} />
+  }
   const targets = inlineFileLinks(node)
   if (targets.length)
     return (
@@ -86,13 +110,7 @@ export function Paragraph({
         {child?.type === "element" && child.tagName === "a" ? null : (
           <p>{children}</p>
         )}
-        {targets.map((path) => (
-          <InlineFilePreview
-            key={path}
-            path={path}
-            name={path.split("/").at(-1) ?? path}
-          />
-        ))}
+        <FilePreviewCollection paths={targets} />
       </div>
     )
   if (

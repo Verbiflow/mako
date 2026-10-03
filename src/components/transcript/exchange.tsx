@@ -11,7 +11,7 @@ import { copyPromptSelection } from "./prompt-clipboard"
 import { acp, useAcp } from "@/state/acp"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { PlanSummary } from "./tool-details"
-import { TranscriptAttachment } from "./attachment"
+import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useMemo, useState } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { ToolRow } from "@/components/transcript/tool-row"
@@ -349,7 +349,7 @@ function Prompt({ message }: { message: ChatMessage }) {
       <div onCopy={event => copyPromptSelection(event, reusable)} className="max-w-[min(82%,64ch)] rounded-xl rounded-br-md bg-raised px-3.5 py-2.5">
         <Prose text={text} references={referenceFiles} skills={sentSkills} threads={titledThreads} className="prompt-prose whitespace-normal" />
         <PlanContextChips plans={plans} />
-        {message.blocks
+        <TranscriptAttachments attachments={message.blocks
           .filter((block) => block.type === "attachment")
           .filter(
             (block) =>
@@ -357,11 +357,7 @@ function Prompt({ message }: { message: ChatMessage }) {
               /^(?:image|audio|video)\//i.test(block.mimeType) ||
               !inlinePaths.has(block.source.path)
           )
-          .map((attachment, index) => (
-            <div key={attachment.id ?? index} data-copy-file={attachment.source.kind === "file" ? attachment.source.path : undefined}>
-              <TranscriptAttachment attachment={attachment} />
-            </div>
-          ))}
+        } />
         {files.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {files
@@ -676,12 +672,7 @@ function Response({
         </div>
       ) : null}
 
-      {attachments.map((attachment, index) => (
-        <TranscriptAttachment
-          key={attachment.id ?? index}
-          attachment={attachment}
-        />
-      ))}
+      <TranscriptAttachments attachments={attachments} />
       {proposals.map((plan) => (
         <ProposedPlanCard
           key={plan.id}

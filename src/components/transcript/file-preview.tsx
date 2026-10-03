@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState, useContext } from "react"
 import { ChevronDownIcon, ExpandIcon, RotateCwIcon } from "lucide-react"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
@@ -7,6 +7,7 @@ import { viewer } from "@/state/viewer"
 import { formatBytes } from "@/lib/attachments"
 import { filePreviewFormat } from "../../../electron/contracts/file-preview"
 import type { FileContents } from "@/lib/types"
+import { AssetPreviewContext, useAssetPreview } from "@/components/viewer/asset-preview-context"
 import { useTranscriptSource } from "./source-context"
 
 const RichFilePreview = lazy(
@@ -32,16 +33,18 @@ export function InlineFilePreview({
   onPreviewError?: () => void
 }) {
   const context = useTranscriptSource()
+  const galleryOpen = useContext(AssetPreviewContext)?.enlarged
   const host = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null)
   const [inlineHeight, setInlineHeight] = useState(0)
   const [open, setOpen] = useState(initiallyOpen)
   const [mode, setMode] = useState<"preview" | "source">("preview")
   const [attempt, setAttempt] = useState(0)
-  const [enlarged, setEnlarged] = useState(false)
+  const [localEnlarged, setEnlarged] = useState(false)
   const changeEnlarged = (value: boolean) => {
     if (value) setInlineHeight(body.current?.getBoundingClientRect().height ?? 0)
-    setEnlarged(value)
+    if (collection) collection.setEnlarged(value)
+    else setEnlarged(value)
   }
   const key = JSON.stringify([
     path,
@@ -56,12 +59,9 @@ export function InlineFilePreview({
   }>()
   useEffect(() => {
     const element = host.current
-    if (!element || resolvedFile) return
+    if (!element || resolvedFile || loaded?.key === key) return
     let current = true
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return
-        observer.disconnect()
+    const read = () => {
         void readTranscriptFile({
           path,
           liveId: context.liveId,
@@ -84,28 +84,38 @@ export function InlineFilePreview({
               })
           }
         )
-      },
-      { rootMargin: "240px" }
-    )
+    }
+    // Gallery navigation must load even if the selected inline owner is offscreen.
+    if (galleryOpen) {
+      read()
+      return () => { current = false }
+    }
+    const observer = new IntersectionObserver(entries => {
+      if (!entries.some(entry => entry.isIntersecting)) return
+      observer.disconnect()
+      read()
+    }, { rootMargin: "240px" })
     observer.observe(element)
     return () => {
       current = false
       observer.disconnect()
     }
-  }, [path, context.liveId, context.threadPath, key, resolvedFile])
+  }, [path, context.liveId, context.threadPath, key, resolvedFile, galleryOpen, loaded?.key])
   const result = loaded?.key === key ? loaded : undefined
   const file = resolvedFile ?? result?.file
+  const collection = useAssetPreview(file, mode, result?.error)
+  const enlarged = collection?.enlarged ?? localEnlarged
   const format =
     file?.media ?? filePreviewFormat(path, file?.mimeType ?? mimeType)
   const automatic =
     format === "image" || format === "video" || format === "audio"
-  const expanded = open || (automatic && mode !== "source")
+  const expanded = !!collection || open || (automatic && mode !== "source")
   const showSource = file && !file.binary
   return (
     <div
       ref={host}
       data-inline-file-preview={path}
-      className="not-prose my-3 overflow-hidden rounded-xl border border-hairline bg-surface text-ui"
+      className="not-prose my-3 overflow-hidden asset-surface border border-hairline bg-surface text-ui"
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
         <FileTypeIcon path={name} mimeType={file?.mimeType ?? mimeType} className="size-4 shrink-0 text-muted-foreground" />
@@ -191,7 +201,7 @@ export function InlineFilePreview({
           </Suspense>
         </div>
       ) : enlarged && expanded ? <div aria-hidden style={{ height: inlineHeight }} /> : null}
-      {file ? <ExpandedFilePreview file={file} name={name} mode={mode} open={enlarged} onOpenChange={changeEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>('button[title="Expand preview"]') ?? null} /> : null}
+      {file && !collection ? <ExpandedFilePreview file={file} name={name} mode={mode} open={enlarged} onOpenChange={changeEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>('button[title="Expand preview"]') ?? null} /> : null}
     </div>
   )
 }

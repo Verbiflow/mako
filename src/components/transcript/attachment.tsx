@@ -1,3 +1,6 @@
+import { useAssetPreview } from "@/components/viewer/asset-preview-context"
+import type { ReactNode } from "react"
+import { useMemo } from "react"
 import { InlineFilePreview } from "./file-preview"
 import { InlineDocumentAttachment } from "./inline-document-attachment"
 import {
@@ -14,6 +17,7 @@ export function TranscriptAttachment({
   attachment: AttachmentContent
 }) {
   const { source, name, mimeType } = attachment
+  const binaryFile = useMemo(() => ({ path: name, contents: "", previewUrl: source.kind === "inline" ? `data:${mimeType};base64,${source.data}` : source.kind === "url" ? source.url : undefined, mimeType, binary: true, truncated: false, size: 0 }), [source, name, mimeType])
   if (source.kind === "unavailable")
     return <MediaUnavailable name={name} reason={source.reason} />
 
@@ -47,10 +51,7 @@ export function TranscriptAttachment({
   const office = officeFormat(name, mimeType)
   if (office && (source.kind === "inline" || /^https?:/i.test(url)))
     return (
-      <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} resolvedFile={{
-        path: name, contents: "", previewUrl: url, mimeType,
-        binary: true, truncated: false, size: 0,
-      }} />
+      <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} resolvedFile={binaryFile} />
     )
   const safe =
     /^(?:https?:|data:(?:image|audio|video)\/|data:application\/pdf;base64,)/i.test(
@@ -58,6 +59,7 @@ export function TranscriptAttachment({
     )
   if (source.kind === "inline" && !safe)
     return (
+      <AttachmentDownload>
       <button
         className="pressable text-ui underline"
         onClick={() => {
@@ -76,13 +78,11 @@ export function TranscriptAttachment({
       >
         Download {name}
       </button>
+      </AttachmentDownload>
     )
   if (mimeType === "application/pdf" && safe)
     return (
-      <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} resolvedFile={{
-        path: name, contents: "", previewUrl: url, mimeType,
-        binary: true, truncated: false, size: 0,
-      }} />
+      <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} resolvedFile={binaryFile} />
     )
   if (!safe)
     return (
@@ -92,6 +92,7 @@ export function TranscriptAttachment({
       />
     )
   return (
+    <AttachmentDownload>
     <a
       href={url}
       download={name}
@@ -101,5 +102,11 @@ export function TranscriptAttachment({
     >
       {name}
     </a>
+    </AttachmentDownload>
   )
+}
+
+function AttachmentDownload({ children }: { children: ReactNode }) {
+  useAssetPreview(undefined, "preview", "No inline preview for this format. Close the gallery to open or download the file.")
+  return children
 }

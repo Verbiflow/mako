@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { z } from "zod"
+import { useAssetPreview } from "@/components/viewer/asset-preview-context"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ImageOffIcon, RotateCwIcon } from "lucide-react"
 import { readTranscriptMedia } from "@/state/transcript-media"
 import { viewer } from "@/state/viewer"
@@ -150,9 +152,11 @@ export function MediaUnavailable({
   onRetry?: () => void
   onOpen?: () => void
 }) {
+  const message = z.string().safeParse(reason)
+  useAssetPreview(undefined, "preview", message.success ? message.data : "This attachment is unavailable")
   return (
     <span
-      className="inline-flex max-w-full items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-2.5 text-ui [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
+      className="inline-flex max-w-full items-center gap-2 asset-surface py-1.5 pr-1.5 pl-2.5 text-ui [box-shadow:inset_0_0_0_0.5px_var(--hairline)]"
       data-media-unavailable
     >
       <ImageOffIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
@@ -193,8 +197,6 @@ export function MediaContent({
   mimeType: string
   onError: () => void
 }) {
-  return <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} onPreviewError={onError} resolvedFile={{
-    path: name, contents: "", previewUrl: url, mimeType,
-    binary: true, truncated: false, size: 0,
-  }} />
+  const file = useMemo(() => ({ path: name, contents: "", previewUrl: url, mimeType, binary: true, truncated: false, size: 0 }), [name, url, mimeType])
+  return <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} onPreviewError={onError} resolvedFile={file} />
 }

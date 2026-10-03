@@ -1,7 +1,8 @@
-import { lazy, Suspense, useMemo, useState, useRef } from "react"
+import { lazy, Suspense, useMemo, useState, useRef, useContext } from "react"
 import { ChevronDownIcon, ExpandIcon } from "lucide-react"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
+import { AssetPreviewContext, useAssetPreview } from "@/components/viewer/asset-preview-context"
 import { toast } from "sonner"
 import { downloadInlineDocument, inlineDocument } from "@/lib/inline-document"
 import { formatBytes } from "@/lib/attachments"
@@ -18,15 +19,17 @@ export function InlineDocumentAttachment({
   mimeType: string
   data: string
 }) {
+  const collection = useContext(AssetPreviewContext)
   const host = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null)
   const [inlineHeight, setInlineHeight] = useState(0)
   const changeEnlarged = (value: boolean) => {
     if (value) setInlineHeight(body.current?.getBoundingClientRect().height ?? 0)
-    setEnlarged(value)
+    if (collection) collection.setEnlarged(value)
+    else setEnlarged(value)
   }
-  const [open, setOpen] = useState(false)
-  const [enlarged, setEnlarged] = useState(false)
+  const [open, setOpen] = useState(!!collection)
+  const [localEnlarged, setEnlarged] = useState(false)
   const [mode, setMode] = useState<"preview" | "source">("preview")
   const result = useMemo(() => {
     if (!open) return undefined
@@ -41,10 +44,12 @@ export function InlineDocumentAttachment({
       }
     }
   }, [open, name, mimeType, data])
+  useAssetPreview(result?.file, mode, result?.error)
+  const enlarged = collection?.enlarged ?? localEnlarged
   return (
     <div
       ref={host}
-      className="not-prose my-3 overflow-hidden rounded-xl border border-hairline bg-surface text-ui"
+      className="not-prose my-3 overflow-hidden asset-surface border border-hairline bg-surface text-ui"
       data-inline-document={name}
     >
       <div className="flex items-center gap-2 px-3 py-2.5">
@@ -123,7 +128,7 @@ export function InlineDocumentAttachment({
           ) : null}
         </div>
       ) : null}
-      {result?.file ? <ExpandedFilePreview file={result.file} name={name} mode={mode} open={enlarged} onOpenChange={changeEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>('button[title="Expand preview"]') ?? null} /> : null}
+      {result?.file && !collection ? <ExpandedFilePreview file={result.file} name={name} mode={mode} open={enlarged} onOpenChange={changeEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>('button[title="Expand preview"]') ?? null} /> : null}
     </div>
   )
 }
