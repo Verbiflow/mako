@@ -31,6 +31,10 @@ export type ProjectRecipeState =
       savedAt?: number
       /** Earlier versions Mako keeps of a saved recipe. */
       earlier: number
+      /** Its number among the project's versions. */
+      version?: number
+      /** A draft only this folder's app runs, not yet published to every Thread. */
+      draft?: boolean
       /** A committed recipe that Mako's saved one replaces. */
       ignored?: string
       recipe: RecipeView
