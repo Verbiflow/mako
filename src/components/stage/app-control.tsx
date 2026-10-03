@@ -21,6 +21,7 @@ import {
   MenuTrigger,
 } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
+import { AppProbeMenu } from "@/components/stage/app-probe"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -453,6 +454,7 @@ function ReadyMenu({ cwd, view, target }: { cwd: string; view: Ready; target: st
         </MenuItem>
       ) : null}
       {view.phase === "waiting" ? null : <Rows cwd={cwd} view={view} now={now} />}
+      {view.phase === "waiting" || !driver?.probe ? null : <AppProbeMenu cwd={cwd} now={now} />}
       <MenuSeparator />
       {view.phase === "running" ? (
         <>

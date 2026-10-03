@@ -779,6 +779,7 @@ export const hostCallInputs = {
   ]),
   "mako:thread-app-make-room": z.tuple([z.string(), z.string().optional()]),
   "mako:thread-app-marks": z.tuple([]),
+  "mako:thread-app-probe": z.tuple([z.string()]),
   "mako:thread-app-output": z.tuple([
     z.string(),
     z.string(),
