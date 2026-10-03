@@ -1,3 +1,5 @@
+/* eslint-disable react-refresh/only-export-components -- This isolated acceptance entry exports controlled inputs; the application never imports it. */
+import { fixtureHarnesses } from "./harness-fixtures"
 import {
   preserveSendingDraft,
   interruptSendingDraft,
@@ -131,25 +133,7 @@ const snapshot: LiveSnapshot = {
 }
 threadsStore.set({
   composerHarness: "claude",
-  descriptors: [
-    {
-      provider: "claude",
-      displayName: "Claude Code",
-      resumable: true,
-      live: true,
-      canResume: true,
-      canSteer: true,
-      recovery: { compaction: { kind: "supported" } },
-      observesNativeAgents: true,
-    },
-    {
-      provider: "codex",
-      displayName: "Codex",
-      resumable: true,
-      live: true,
-      canResume: true,
-    },
-  ],
+  descriptors: fixtureHarnesses.map((entry) => ({ ...entry, canSteer: entry.provider === "claude" })),
 })
 store.set({ messages: [], stream: null })
 acpStore.set({ activeKey: id })
@@ -161,6 +145,28 @@ snapshot.blocks.push({
 })
 mock.setLiveSnapshot(snapshot)
 applyLiveSnapshot(snapshot)
+
+/** No authentication, native launch or prompt delivery occurs in this fixture. */
+export function fixtureAuthRecovery(harness: string) {
+  if (!fixtureHarnesses.some((entry) => entry.provider === harness)) throw new Error("Unknown fixture harness")
+  const next: LiveSnapshot = {
+    ...snapshot,
+    revision: (acpStore.get().conversations[id]?.revision ?? 0) + 1,
+    session: { ...snapshot.session, harness, status: "failed", connection: "disconnected", error: "Native sign-in expired." },
+    blocks: [],
+    permissions: [],
+    nativeAgents: undefined,
+    requests: [{
+      id: `auth-recovery-${harness}`, status: "failed", failure: "auth", error: "Native sign-in expired.",
+      text: "Review the report [Attachment 1]", displayText: "Review the report [Attachment 1]",
+      attachments: [{ name: "report.pdf", mimeType: "application/pdf", size: 123, path: "/fixture/report.pdf" }],
+      nativeDelivery: { attemptId: "22222222-2222-4222-8222-222222222222", bindingId: id, ownerEpoch: "fixture", evidence: { kind: "accepted", source: "native-response" } },
+    }],
+  }
+  threadsStore.set({ composerHarness: harness })
+  mock.setLiveSnapshot(next)
+  applyLiveSnapshot(next)
+}
 const quietBlocks = {
   "quiet-tool": { type: "tool", id: "quiet-build", toolKind: "execute", title: "npm run build", input: "{\"command\":\"npm run build\"}", output: "", status: "pending" },
   "quiet-reply": { type: "text", text: "The route guard keeps the destination, and the session refresh" },

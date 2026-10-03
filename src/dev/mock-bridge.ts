@@ -1,10 +1,11 @@
+import { fixtureHarnesses } from "./harness-fixtures"
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
-import { RAIL_PURPOSES, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
+import { RAIL_PURPOSES, RAIL_RUNS, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
@@ -165,6 +166,8 @@ export function installMockBridge() {
   let setupWorktree: ThreadWorktree | undefined
   /** Threads started for a purpose, as the host records them on start. */
   const purposes: ThreadPurpose[] = scene === "rail" ? [...RAIL_PURPOSES] : []
+  /** The rail scene's runs are reported once, as the host would after the catalog. */
+  let railRunsSent = false
   const profiles = () =>
     MOCK_PROFILES.map((profile) =>
       scene === "setup-fallback" && profile.id === "codex" ? { ...profile, available: false, error: "Not signed in" } : profile
@@ -204,7 +207,7 @@ export function installMockBridge() {
       stop: null,
       external: false,
     }),
-    threadGroups: async () => [],
+    threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : []),
     threadPurposes: async () => [...purposes],
     worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
@@ -625,6 +628,11 @@ export function installMockBridge() {
     ],
     integrations: async () => INTEGRATIONS,
     discoverMcp: async () => MCP,
+    nativeAuthoringCatalog: async () => ({ cwd: "/fixture/project", capabilities: [] }),
+    listNativeAuthoring: async () => [],
+    readNativeAuthoring: async () => { throw new Error("Native authoring is unavailable in this fixture") },
+    writeNativeAuthoring: async () => { throw new Error("Native authoring is unavailable in this fixture") },
+    removeNativeAuthoring: async () => { throw new Error("Native authoring is unavailable in this fixture") },
     previewMcpSync: async (serverId, target) => ({
       serverId,
       target,
@@ -726,6 +734,12 @@ export function installMockBridge() {
     threads: async () => {
       const fixture = mockThreads()
       const threads = scene === "rail" ? fixture.threads.map(railRef) : fixture.threads
+      if (scene === "rail" && !railRunsSent) {
+        railRunsSent = true
+        setTimeout(() => {
+          for (const run of RAIL_RUNS) emit({ type: "thread-run", run })
+        }, 1_500)
+      }
       return { ...fixture, threads, activity: {} }
     },
     openThread: async (path: string) => ({
@@ -1091,18 +1105,7 @@ export function installMockBridge() {
     setDaemonLogin: async () => {},
     followThread: async () => {},
     unfollowThread: async () => {},
-    harnessDescriptors: async () => {
-      const resumable = ["codex", "claude", "cursor", "grok", "devin"]
-      const live = ["claude", "codex", "cursor", "grok", "devin", "opencode"]
-      return [...new Set([...resumable, ...live])].map((provider) => ({
-        provider,
-        displayName: provider,
-        resumable: resumable.includes(provider),
-        live: live.includes(provider),
-        canResume: live.includes(provider),
-        ...MOCK_MODES.get(provider),
-      }))
-    },
+    harnessDescriptors: async () => fixtureHarnesses.map((entry) => ({ ...entry, ...MOCK_MODES.get(entry.provider) })),
     resolveContinuation: async (path: string) => {
       const snapshot = await window.mako!.liveAttach(path)
       if (snapshot) return { transport: "attached", provider: snapshot.session.harness, conversationId: snapshot.session.id, snapshot }

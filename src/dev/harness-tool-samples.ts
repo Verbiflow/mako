@@ -50,6 +50,10 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
 
   // Codex
   { source: { harness: "codex", name: "exec_command", input: json({ cmd: "rg foo" }) }, expect: { kind: "shell", target: "rg foo" } },
+  { source: { harness: "codex", name: "exec_command", input: json({ command: "/bin/zsh -lc 'git diff --check; echo '\\''done'\\'''" }) }, expect: { kind: "shell", target: "git diff --check; echo 'done'", command: "git diff --check; echo 'done'" } },
+  { source: { harness: "codex", name: "exec_command", input: json({ command: "/bin/zsh -lc \"rg -n 'export|read\\\\(' src\"" }) }, expect: { target: "rg -n 'export|read\\(' src" } },
+  { source: { harness: "codex", name: "exec_command", input: json({ command: ["bash", "-lc", "npm test"] }) }, expect: { target: "npm test" } },
+  { source: { harness: "codex", name: "exec_command", input: json({ command: "/bin/zsh -lc 'a' && b" }) }, expect: { target: "/bin/zsh -lc 'a' && b" } },
   { source: { harness: "codex", name: "exec", input: "text(await tools.exec_command({cmd:'curl -s localhost:3000', yield_time_ms: 1000}))" }, expect: { kind: "shell", via: "exec", target: "curl -s localhost:3000" } },
   { source: { harness: "codex", name: "exec", input: "text(await tools.mcp__mako__app_status({}))" }, expect: { kind: "mcp", label: "App status", server: "mako", via: "exec" } },
   { source: { harness: "codex", name: "exec", input: "const a = await tools.exec_command({cmd:'ls'})\nconst b = await tools.exec_command({cmd:'pwd'})" }, expect: { kind: "code", label: "Script", target: "exec_command, exec_command" } },

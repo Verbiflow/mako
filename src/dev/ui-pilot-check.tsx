@@ -8,7 +8,7 @@ import { Divider } from "@/components/shell/divider"
 import { OceanScene } from "@/components/ui/ocean-scene"
 import { Transcript } from "@/components/transcript/transcript"
 import { Composer } from "@/components/composer/composer"
-import { store as sessionStore } from "@/state/session"
+import { actions, store as sessionStore } from "@/state/session"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import { installMockBridge } from "./mock-bridge"
@@ -18,9 +18,10 @@ installMockBridge()
 const page = document.getElementById("root")!
 page.className = "p-8 text-ui"
 const button = document.createElement("button")
+const clipboardOnly = new URL(location.href).searchParams.get("check") === "clipboard"
 button.className =
   "pressable rounded-md bg-primary px-3 py-2 text-primary-foreground"
-button.textContent = "Run UI regression checks"
+button.textContent = clipboardOnly ? "Run clipboard regression checks" : "Run UI regression checks"
 const output = document.createElement("pre")
 output.className = "my-4 whitespace-pre-wrap text-ui"
 output.textContent =
@@ -329,8 +330,31 @@ async function clipboard() {
         !fixture.textContent?.includes("Could not copy")
     )
     check(true, "a successful retry clears the obsolete failure")
+
   } finally {
     bridge.copy = original
+  }
+}
+
+async function attachmentClipboard() {
+  const bridge = window.mako!
+  const original = bridge.copy
+  const originalWriter = Object.getOwnPropertyDescriptor(navigator.clipboard, "write")
+  try {
+    // Exercise the imported-file contract through the actual copy action,
+    // including platforms where rich clipboard writing is unavailable.
+    Object.defineProperty(navigator.clipboard, "write", { configurable: true, value: () => Promise.reject(new Error("Rich clipboard unavailable")) })
+    const copiedFiles: string[] = []
+    bridge.copy = async (text) => { copiedFiles.push(text) }
+    const imported = { id: "imported", index: 1, name: "imported.png", mimeType: "image/png", kind: "image" as const, stagedPath: "/retained/imported.png" }
+    check(await actions.copy("Inspect [imported.png]", { notify: false, attachments: [imported] }), "an imported file with unknown size can be copied")
+    check(copiedFiles.at(-1)?.includes("/retained/imported.png") === true, "plain clipboard fallback preserves the actual file reference")
+    check(await actions.copy("Inline image commentary", { notify: false, attachments: [{ ...imported, stagedPath: undefined }] }), "inline media without a reusable path leaves its words copyable")
+    check(copiedFiles.at(-1) === "Inline image commentary", "unavailable metadata never empties the clipboard")
+  } finally {
+    bridge.copy = original
+    if (originalWriter) Object.defineProperty(navigator.clipboard, "write", originalWriter)
+    else Reflect.deleteProperty(navigator.clipboard, "write")
   }
 }
 
@@ -596,10 +620,16 @@ button.onclick = async () => {
   button.disabled = true
   output.textContent = "Running production UI checks…"
   try {
+    if (clipboardOnly) {
+      await attachmentClipboard()
+      output.textContent += "\n\nAll clipboard regression checks passed."
+      return
+    }
     await openingDraft()
     await paragraphs()
     await transcriptAnchor()
     await clipboard()
+    await attachmentClipboard()
     await divider()
     await reflectedLight()
     output.textContent += "\n\nAll UI regression checks passed."
