@@ -110,6 +110,14 @@ assert.throws(() => installHarness(host, definition), /example's live capability
 assert.equal(host.harnesses.list().length, 0)
 assert.equal(host.hooks.list().length, 0)
 
+assert.throws(() => installHarness(host, {
+  ...definition,
+  live: { ...definition.live, provider: "example", inspectNativeSession: undefined },
+  profile: { ...definition.profile, provider: "example" },
+}), /explicit checkpoint and session evidence/)
+assert.equal(host.harnesses.list().length, 0, "a missing native recovery contribution cannot install a partial harness")
+assert.equal(host.liveDrivers.list().length, 0)
+
 console.log(`${"".padEnd(10)}${familyNames.join(" ")}`)
 for (const line of matrix) console.log(line)
 console.log("PASS: every harness names each capability family, and has a live driver and a saved-history reader")

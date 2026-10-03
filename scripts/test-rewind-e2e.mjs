@@ -315,11 +315,12 @@ try {
     const binding = closed.control.bindings.find(
       (binding) => binding.nativeId === original.session.nativeId
     )
-    const { canResumeBinding } =
-      await import("../dist-electron/native-continuation.js")
+    const { assessProviderResume } =
+      await import("../dist-electron/provider-recovery.js")
+    const { resumable } = await import("../dist-electron/contracts/conversation-control.js")
     const { providerHost } = await import("../dist-electron/providers/index.js")
     await until(
-      () => canResumeBinding(binding, providerHost.processProbes.get(provider)),
+      async () => resumable(await assessProviderResume(binding, providerHost.liveDrivers.get(provider)), "same"),
       Boolean,
       30_000
     )

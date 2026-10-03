@@ -10,6 +10,10 @@ import {
 } from "../electron/native-continuation.ts"
 import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
+import { assessProviderResume } from "../electron/provider-recovery.ts"
+import { providerHost } from "../electron/providers/index.ts"
+import { resumable } from "../electron/contracts/conversation-control.ts"
+import type { NativeResumeEvidence } from "../electron/native-continuation.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-checkpoint-"))
 try {
@@ -89,6 +93,27 @@ try {
   await rm(path)
   assert.equal((await resumeVerdict(binding, idle)).kind, "unavailable")
   assert.equal(await nativeCheckpoint(root), undefined)
+  // Every installed declaration, plus a new harness, shares the decision owner.
+  // Inject native facts here; real file/DB/SDK readers have separate fixture oracles.
+  for (const driver of [...providerHost.liveDrivers.list(), { ...providerHost.liveDrivers.list()[0], provider: "future-harness" }]) {
+    assert.ok(driver.checkpoint && driver.inspectNativeSession, `${driver.provider}: explicit native recovery contributions`)
+    const saved = { ...binding, provider: driver.provider }
+    let reads = 0
+    let evidence: NativeResumeEvidence = { kind: "available", checkpoint: checkpoint!, strategy: "same-session" }
+    const adapter = { ...driver, inspectNativeSession: async () => { reads++; return evidence } }
+    assert.deepEqual(await assessProviderResume(saved, adapter), { kind: "resumable", record: "same" })
+    assert.deepEqual(await assessProviderResume({ ...saved, checkpoint: undefined }, adapter), { kind: "resumable", record: "unknown" })
+    evidence = { kind: "available", checkpoint: "new revision", strategy: "copy" }
+    assert.equal(resumable(await assessProviderResume(saved, adapter), "same"), false)
+    evidence = { kind: "held", by: "independent native owner" }
+    assert.deepEqual(await assessProviderResume(saved, adapter), evidence, "changing ownership cannot reuse a cached permission")
+    assert.equal(reads, 4)
+    const missing = await assessProviderResume(saved, { ...adapter, inspectNativeSession: undefined })
+    assert.equal(missing.kind, "unavailable")
+    assert.equal((await assessProviderResume(saved, { ...adapter, provider: "wrong-owner" })).kind, "unavailable")
+    assert.equal(reads, 4, "invalid ownership/implementation is refused before native I/O")
+    assert.equal((await assessProviderResume(saved, { ...adapter, inspectNativeSession: async () => { throw new Error("read failed") } })).kind, "unavailable")
+  }
   console.log(
     "Native continuation: unchanged file accepted; moved record reconnects but is not reused; missing, active, unavailable and failed probes denied"
   )

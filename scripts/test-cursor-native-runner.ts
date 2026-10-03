@@ -60,6 +60,17 @@ assert.ok(checked >= 4)
 
 assert.deepEqual((await runner.prepare!({ model: "gpt-6", options: { thinking: "high" } }, {})).dropped, ["thinking"], "an option the model lacks is named")
 await assert.rejects(runner.prepare!({ model: "retired" }, {}), /Cursor does not offer the model "retired"/)
+const admittedEnv = { CURSOR_API_KEY: "admitted-fixture-account" }
+let fallbackReads = 0
+const admitted = cursorSdkNativeRunner({
+  childEnv: async () => { fallbackReads++; return { CURSOR_API_KEY: "later-selection" } },
+  stateRoot: () => "/state",
+  models: async env => { assert.equal(env.CURSOR_API_KEY, admittedEnv.CURSOR_API_KEY); return catalog },
+})
+const preparedAccount = await admitted.prepare!({}, admittedEnv)
+const accountCommand = await admitted.resume("agent-1", "one admitted reply", preparedAccount.options, admittedEnv)
+assert.equal(accountCommand.env?.CURSOR_API_KEY, admittedEnv.CURSOR_API_KEY)
+assert.equal(fallbackReads, 0, "preparation and command building must not reread a later selected account")
 assert.deepEqual(runner.describe({ command: "x", args: ["child.js", CURSOR_SDK_HEADLESS, "not json"] }, catalog.models), {})
 
 console.log(`PASS: Cursor's headless runner starts the SDK child with the live selection (${checked} selections read back), resumes and imports, and names what it drops`)

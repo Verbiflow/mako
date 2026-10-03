@@ -133,7 +133,7 @@ const mocks = {
   "./provider-activity-engine.js": `export class ProviderActivityEngine { onChange() {} start() {} stop() {} }`,
   "./host-log.js": `export const hostLog = () => {}; export const hostWarn = () => {};`,
   "./host-git.js": `export class WorkspaceGit {}`,
-  "./host-workspace.js": `export class WorkspaceFiles {}`,
+  "./host-workspace.js": `export class WorkspaceFiles {}; export function readConversationFile() { throw new Error("Catalog readiness must not read preview files") }`,
 }
 try {
   const outfile = join(root, "threads.mjs")

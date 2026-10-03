@@ -80,8 +80,8 @@ async function runElectron() {
   const { startConversationMcp } =
     await import("../dist-electron/conversation-mcp.js")
   const { defaultCatalog } = await import("@mako/sessions")
-  const { nativeCheckpoint, resumeVerdict: genericResumeVerdict } =
-    await import("../dist-electron/native-continuation.js")
+  const { nativeCheckpoint } = await import("../dist-electron/native-continuation.js")
+  const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")
   const { resumable } =
     await import("../dist-electron/contracts/conversation-control.js")
   const cuaRoot = join("/tmp", `mako-provider-cua-${String(process.pid)}`)
@@ -90,22 +90,9 @@ async function runElectron() {
     if (!(await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")))
       throw new Error("--control needs an installed CUA Driver")
   }
-  // The host's own policy: a driver that knows its store (Cursor's SDK
-  // index root, Devin's lock file) judges it; the rest hash the record and
-  // ask the provider's process probe.
-  const checkpoint = (provider, path) => {
-    const driver = providerHost.liveDrivers.get(provider)
-    return driver?.checkpoint ? driver.checkpoint(path) : nativeCheckpoint(path)
-  }
-  const resumeVerdict = (binding) => {
-    const driver = providerHost.liveDrivers.get(binding.provider)
-    return driver?.resumeVerdict
-      ? driver.resumeVerdict(binding)
-      : genericResumeVerdict(
-          binding,
-          providerHost.processProbes.get(binding.provider)
-        )
-  }
+  // Use the same declared native evidence and shared policy as the host.
+  const checkpoint = (provider, path) => providerHost.liveDrivers.get(provider)?.checkpoint?.(path)
+  const resumeVerdict = binding => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider))
   const { nativeSessionPath } = await import("../dist-electron/native-source.js")
   const catalog = defaultCatalog()
   const { BrowserService } = await import("../packages/control-runtime/dist/browser-service.js")

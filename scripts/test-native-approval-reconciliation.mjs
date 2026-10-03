@@ -56,7 +56,7 @@ async function run() {
     await import("../dist-electron/live-conversations.js")
   const { defaultCatalog } = await import("@mako/sessions")
   const { nativeSessionPath } = await import("../dist-electron/native-source.js")
-  const { nativeCheckpoint, resumeVerdict } = await import("../dist-electron/native-continuation.js")
+  const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")
   const catalog = defaultCatalog()
   const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
   const { bindCodexApp, stopCodexApps } =
@@ -134,9 +134,9 @@ async function run() {
     appPath: root,
     driver: (name) => (name === provider ? observedDriver : undefined),
     history: async () => null,
-    checkpoint: path => driver.checkpoint ? driver.checkpoint(path) : nativeCheckpoint(path),
+    checkpoint: path => driver.checkpoint?.(path),
     nativePath: session => nativeSessionPath(session, catalog.list()),
-    resumeVerdict: binding => driver.resumeVerdict ? driver.resumeVerdict(binding) : resumeVerdict(binding, providerHost.processProbes.get(binding.provider)),
+    resumeVerdict: binding => assessProviderResume(binding, driver),
     emit() {},
     mcpSnapshot: async (path) => ({
       cwd: path,

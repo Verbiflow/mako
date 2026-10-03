@@ -34,6 +34,8 @@ const terminalCheck = process.argv.includes("--terminal")
 const searchCheck = process.argv.includes("--search")
 const modelFlag = process.argv.find((arg) => arg.startsWith("--model="))
 const selectedModel = modelFlag?.slice(8)
+/** A newer Mako.app to replace this one with after the restart, as an update does, on the same profile. */
+const updateFlag = process.argv.find((arg) => arg.startsWith("--update-to="))
 const args = process.argv
   .slice(2)
   .filter(
@@ -45,11 +47,12 @@ const args = process.argv
       arg !== "--stop" &&
       arg !== "--terminal" &&
       arg !== "--search" &&
-      arg !== modelFlag
+      arg !== modelFlag &&
+      arg !== updateFlag
   )
 assert.ok(
   args.length <= 2,
-  "Use [Mako.app] [provider] [--renderer-only] [--warm] [--model=id] [--ui-start] [--stop] [--terminal] [--search]"
+  "Use [Mako.app] [provider] [--renderer-only] [--warm] [--model=id] [--ui-start] [--stop] [--terminal] [--search] [--update-to=Newer.app]"
 )
 const acceptanceBudget =
   process.env.MAKO_STARTUP_BUDGET_MS === undefined
@@ -72,7 +75,8 @@ await writeFile(
   join(workspace, "README.md"),
   "Disposable package verification workspace.\n"
 )
-const executable = join(app, "Contents/MacOS/Mako")
+let executable = join(app, "Contents/MacOS/Mako")
+const updatedApp = updateFlag ? resolve(updateFlag.slice("--update-to=".length)) : undefined
 let conversationId = randomUUID()
 const marker = `PACKAGE_${randomUUID().replaceAll("-", "")}`
 const report = {
@@ -758,6 +762,8 @@ try {
     const completedMs = Date.now() - sentAt
     assert.ok(answer(first, requestId).includes(marker))
     const nativeId = first.session.nativeId
+    const { threadId, sessionId } = first
+    assert.ok(threadId && sessionId, "the conversation belongs to a Thread and a Session")
     let approvalEvidence
     if (approvalChecks) {
       const { checkPackagedApprovals } = await import('./packaged-approval-checks.mjs')
@@ -842,6 +848,7 @@ try {
     const loaded = await bridge("liveSnapshot", [conversationId])
     assert.ok(loaded)
     assert.equal(loaded.session.nativeId, nativeId)
+    assert.deepEqual([loaded.threadId, loaded.sessionId], [threadId, sessionId], "a restart keeps the Thread and Session")
     if (stoppedId) await checkNoFalseBanner(stoppedId)
     const nextId = randomUUID()
     await bridge("livePrompt", [
@@ -866,7 +873,24 @@ try {
       answer(resumed, nextId).includes(marker),
       "Resumed provider must recall the original marker"
     )
-    report.phases.push({ phase: "restart-native-resume-recall", passed: true })
+    report.phases.push({ phase: "restart-native-resume-recall", passed: true, threadId, sessionId })
+    if (updatedApp) {
+      await stopPackage()
+      execFileSync("codesign", ["--verify", "--deep", "--strict", updatedApp], { stdio: "pipe" })
+      executable = join(updatedApp, "Contents/MacOS/Mako")
+      await startPackage()
+      const after = await bridge("liveSnapshot", [conversationId])
+      assert.ok(after, "the update kept the conversation")
+      assert.deepEqual([after.session.nativeId, after.threadId, after.sessionId], [nativeId, threadId, sessionId], "an update keeps the native session, the Thread and the Session")
+      const updatedId = randomUUID()
+      await bridge("livePrompt", [conversationId, updatedId, "Reply only with the PACKAGE_ marker I asked you to remember in my first turn. Do not use tools or modify files.", []])
+      const updated = await completed(updatedId)
+      assert.equal(updated.session.nativeId, nativeId)
+      assert.ok(answer(updated, updatedId).includes(marker), "After the update the provider must still recall the original marker")
+      const build = JSON.parse(extractFile(join(updatedApp, "Contents/Resources/app.asar"), "package.json").toString("utf8")).makoBuild
+      report.phases.push({ phase: "update-native-resume-recall", passed: true, from: report.build, to: build })
+      console.log("Packaged update kept the Thread, the Session and the native session, with marker recall")
+    }
     if (searchCheck) await searchWorkspace("after-resume")
     await captureConversation("native-resume.png")
     await bridge("liveClose", [conversationId])

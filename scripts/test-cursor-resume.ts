@@ -1,3 +1,4 @@
+import { assessProviderResume } from "../electron/provider-recovery.ts"
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -165,22 +166,23 @@ try {
     cliKey: async () => null,
   })
   const driver = createCursorSdkDriver({ auth, stateRoot: () => stateRoot, home })
-  assert.ok(driver.resumeVerdict && driver.checkpoint)
+  assert.ok(driver.inspectNativeSession && driver.checkpoint)
+  const verdict = (binding: ProviderBinding) => assessProviderResume(binding, driver)
   const sdkBinding: ProviderBinding = { id: "b1", provider: "cursor", nativeId: agentId, path: sdkStorePath, checkpoint: sdkSecond, coveredBlocks: 1, includesBase: true }
-  assert.deepEqual(await driver.resumeVerdict(sdkBinding), { kind: "resumable", record: "same" })
-  assert.deepEqual(await driver.resumeVerdict({ ...sdkBinding, checkpoint: sdkFirst }), { kind: "resumable", record: "moved" })
-  assert.deepEqual(await driver.resumeVerdict({ ...sdkBinding, checkpoint: undefined }), { kind: "resumable", record: "unknown" }, "a binding without a checkpoint reopens without claiming unchanged history")
+  assert.deepEqual(await verdict(sdkBinding), { kind: "resumable", record: "same" })
+  assert.deepEqual(await verdict({ ...sdkBinding, checkpoint: sdkFirst }), { kind: "resumable", record: "moved" })
+  assert.deepEqual(await verdict({ ...sdkBinding, checkpoint: undefined }), { kind: "resumable", record: "unknown" }, "a binding without a checkpoint reopens without claiming unchanged history")
   assert.equal(await driver.checkpoint(sdkStorePath), sdkSecond, "the catalog path reads the same head")
 
   const acpBinding: ProviderBinding = { id: "b2", provider: "cursor", nativeId: legacyId, path: acpPath, checkpoint: second, coveredBlocks: 1, includesBase: true }
-  assert.deepEqual(await driver.resumeVerdict(acpBinding), { kind: "resumable", record: "same" }, "an ACP store resumes: the SDK imports it")
-  assert.deepEqual(await driver.resumeVerdict({ ...acpBinding, checkpoint: first }), { kind: "resumable", record: "moved" })
+  assert.deepEqual(await verdict(acpBinding), { kind: "resumable", record: "same" }, "an ACP store resumes: the SDK imports it")
+  assert.deepEqual(await verdict({ ...acpBinding, checkpoint: first }), { kind: "resumable", record: "moved" })
   writeLegacyStore(chatsPath, "root-9", 1, true)
-  assert.equal((await driver.resumeVerdict({ ...acpBinding, path: chatsPath })).kind, "resumable", "a chats store resumes the same way")
-  assert.equal((await driver.resumeVerdict({ ...acpBinding, path: join(home, "elsewhere", "store.db") })).kind, "unavailable", "a store outside Cursor's roots is not Cursor's")
-  assert.equal((await driver.resumeVerdict({ ...acpBinding, path: undefined })).kind, "unavailable")
+  assert.equal((await verdict({ ...acpBinding, path: chatsPath })).kind, "resumable", "a chats store resumes the same way")
+  assert.equal((await verdict({ ...acpBinding, path: join(home, "elsewhere", "store.db") })).kind, "unavailable", "a store outside Cursor's roots is not Cursor's")
+  assert.equal((await verdict({ ...acpBinding, path: undefined })).kind, "unavailable")
   rmSync(acpPath)
-  assert.equal((await driver.resumeVerdict(acpBinding)).kind, "unavailable", "a missing store cannot be resumed")
+  assert.equal((await verdict(acpBinding)).kind, "unavailable", "a missing store cannot be resumed")
   index.close()
   store.close()
   console.log(

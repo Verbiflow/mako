@@ -75,7 +75,7 @@ async function main() {
   await app.whenReady()
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
-  const { resumeVerdict } = await import(join(repo, "dist-electron/native-continuation.js"))
+  const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
   const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
   const { nativePathForSession } = await import(join(repo, "dist-electron/threads.js"))
   const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
@@ -89,12 +89,7 @@ async function main() {
     emit: () => {},
     mcpSnapshot: async (cwd) => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
     nativePath: nativePathForSession,
-    resumeVerdict: async (binding) => {
-      const driver = providerHost.liveDrivers.get(binding.provider)
-      return driver?.resumeVerdict
-        ? driver.resumeVerdict(binding)
-        : resumeVerdict(binding, providerHost.processProbes.get(binding.provider))
-    },
+    resumeVerdict: binding => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider)),
   })
   bindCodexApp((event) => owner.observe(event))
   const failures = []

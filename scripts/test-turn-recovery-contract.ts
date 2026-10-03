@@ -31,6 +31,8 @@ assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: undef
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: { kind: "continues", accepted: "On echo", exit: " ", tests: ["x"] } }), /tests that prove both/)
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: { kind: "continues", accepted: "On echo", exit: "One update", tests: [] } }), /tests that prove both/)
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, canResume: false }), /needs canResume/)
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, inspectNativeSession: undefined }), /explicit checkpoint and session evidence/)
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, checkpoint: undefined }), /explicit checkpoint and session evidence/)
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: { kind: "manual", reason: " " } }), /or why it cannot/)
 
 // A resumable ACP source locates its own sessions: the host resumes only a

@@ -269,4 +269,13 @@ async function check() {
   assert.equal(ended[0]?.nativePath, join(root, "located", exiting.session().nativeId),
     "the same update names the session's source, so the host can resume it before the thread list has indexed it")
   console.log("PASS: An ACP agent's first output accepts the prompt, and its process dying mid-turn ends the turn disconnected in one update that locates the session")
+  written.delete(exiting.session().nativeId)
+  const persisted = await conversation("provider-turn-grok")
+  assert.equal(persisted.session().nativePath, undefined)
+  written.add(persisted.session().nativeId)
+  await persisted.prompt("unannounced")
+  assert.equal(persisted.session().nativePath, join(root, "located", persisted.session().nativeId),
+    "normal turn completion refreshes the admitted native source without waiting for catalog discovery or process exit")
+  await persisted.close()
+  console.log("PASS: ACP completion locates a source persisted after startup")
 }

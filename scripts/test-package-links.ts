@@ -7,7 +7,7 @@ import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thre
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { RecipeSchema, saveRecipe } from "../electron/thread-recipe.js"
+import { publishDraft, recipePath, RecipeSchema, saveDraft } from "../electron/thread-recipe.js"
 import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, ownPackages } from "../electron/worktree-carry.js"
 
 /**
@@ -53,6 +53,12 @@ try {
   assert.ok(RecipeSchema.safeParse({ prepare: [install] }).success)
   assert.match(JSON.stringify(RecipeSchema.safeParse({ prepare: [{ ...install, outputs: ["**/node_modules", "dist"] }] }).error?.issues), /link is for package folders/)
   assert.equal(RecipeSchema.safeParse({ prepare: [{ command: "npm install", inputs: ["package-lock.json"], link: true }] }).success, false)
+  // Package folders link unless the step says not to; other outputs never do.
+  const { link: _, ...unsaid } = install
+  assert.equal(RecipeSchema.parse({ prepare: [unsaid] }).prepare[0]!.link, true, "linking is the default for package folders")
+  assert.equal(RecipeSchema.parse({ prepare: [{ ...install, link: false }] }).prepare[0]!.link, false, "link: false clones them instead")
+  assert.equal(RecipeSchema.parse({ prepare: [{ command: "cargo fetch", inputs: ["Cargo.lock"], outputs: ["target"] }] }).prepare[0]!.link, undefined)
+  assert.equal(RecipeSchema.parse({ prepare: [{ ...unsaid, outputs: ["**/node_modules", "dist"] }] }).prepare[0]!.link, undefined, "a step that writes more than package folders is cloned")
   assert.match((await carryReport(RecipeSchema.parse({ prepare: [install] }), main)).join("\n"), /link each package to the main checkout's when package-lock.json is the same there/)
 
   // Linking: each package a link to the main checkout's, the rest this checkout's own.
@@ -87,7 +93,8 @@ try {
     checks: { quick: "node -e \"require('left-pad')\"" },
   })
   const environment = (dataDir: string): ThreadEnvironment => ({ app: AppKeySchema.parse("folder-00000000000000aa"), host: "fix.thread.localhost", port: 20_020, ports: 10, dataDir })
-  await saveRecipe(recipes, main, recipe, environment(join(root, "data")))
+  const saved = await saveDraft(recipes, main, recipe, environment(join(root, "data")), {})
+  await publishDraft(await recipePath(recipes, main), environment(join(root, "data")).app, saved.version.version, { at: Date.now(), on: "this Mac", checkout: main, steps: [] })
   const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
   const linking = recipe.prepare.map((step) => ({ ...step, link: true }))
   const tools = (checkout: string) => environmentTools({ cwd: () => checkout, environment: async () => environment(join(root, "data")), launchedWith: () => undefined, processes, recipesRoot: recipes, settleMs: 15_000 })

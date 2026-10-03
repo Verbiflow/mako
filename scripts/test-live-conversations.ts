@@ -107,7 +107,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   }
 }
 
-async function hibernatesAndWakesExactlyOnce() {
+async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close-during-preparation" = false) {
   const root = mkdtempSync(join(tmpdir(), "mako-live-hibernate-"))
   const memoryPath = join(root, "session-memory.sqlite")
   const memory = new SessionMemory(memoryPath, {
@@ -191,7 +191,7 @@ async function hibernatesAndWakesExactlyOnce() {
     },
     setMode: async () => {},
   }
-  const owner = new LiveConversations({
+  const dependencies: ConstructorParameters<typeof LiveConversations>[0] = {
     appPath: root,
     root: join(root, "journals"),
     driver: () => driver,
@@ -202,7 +202,8 @@ async function hibernatesAndWakesExactlyOnce() {
     providerWarmLimit: 2,
     resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
     workspaceSnapshots,
-  })
+  }
+  const owner = new LiveConversations(dependencies)
   try {
     await owner.start("test-provider", root, { conversationId: id })
     await new Promise<void>((resolve) => setTimeout(resolve, 30))
@@ -244,6 +245,31 @@ async function hibernatesAndWakesExactlyOnce() {
     )
     await owner.setMode(id, "full")
     assert.equal(starts, 1, "changing a hibernated mode does not wake a process")
+
+    if (missingAssessment === "close-during-preparation") {
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      dependencies.tools = async () => { entered.resolve(); await release.promise; return undefined }
+      owner.submit(id, randomUUID(), "close during wake preparation")
+      await entered.promise
+      const closing = owner.close(id)
+      release.resolve()
+      await closing
+      assert.equal(starts, 1, "closing during async wake preparation never spawns a replacement provider")
+      assert.equal(prompts.length, 1, "the queued prompt cannot dispatch after close")
+      assert.equal(observer.heldBy("test-provider", "native-hibernate"), null)
+      return
+    }
+    if (missingAssessment) {
+      delete dependencies.resumeVerdict
+      const refused = randomUUID()
+      owner.submit(id, refused, "must not wake without evidence")
+      await waitFor(() => owner.snapshot(id)?.requests.find(request => request.id === refused)?.status === "failed", "missing recovery evidence did not refuse wake")
+      assert.equal(starts, 1, "no provider spawn without an assessment")
+      assert.equal(prompts.length, 1, "no prompt replay or duplicate dispatch")
+      assert.equal(observer.heldBy("test-provider", "native-hibernate"), null)
+      return
+    }
 
     owner.submit(id, randomUUID(), "first after wake", [], {
       model: "new-model",
@@ -996,7 +1022,7 @@ async function nativeActivityLastsItsTurn() {
     f.owner.observe({ type: "live-update", id: f.id, update: { kind: "event", label: "Context compacted" } })
     f.owner.observe({ type: "live-activity", id: f.id, activity: null })
     assert.equal(activity(), undefined)
-    assert.deepEqual(f.owner.snapshot(f.id)?.blocks.at(-1), { type: "event", label: "Context compacted", detail: undefined, body: undefined, tone: undefined })
+    assert.deepEqual(f.owner.snapshot(f.id)?.blocks.at(-1), { type: "event", source: undefined, label: "Context compacted", detail: undefined, body: undefined, tone: undefined })
 
     clock.mock.mockImplementation(() => 4_000)
     f.owner.observe({ type: "live-activity", id: f.id, activity: { kind: "retrying", attempt: 1, reason: "Overloaded" } })
@@ -1601,6 +1627,8 @@ await acceptanceAndRaces()
 await closeDuringStartup()
 await durabilityAndBatching()
 await hibernatesAndWakesExactlyOnce()
+await hibernatesAndWakesExactlyOnce(true)
+await hibernatesAndWakesExactlyOnce("close-during-preparation")
 await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()
 await failedCloseKeepsOwnership()

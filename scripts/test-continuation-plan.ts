@@ -32,6 +32,7 @@ let external: ContinuationInputs["external"] = null
 const planner = createContinuationPlanner({
   ref: async (path) => (path === ref.path ? ref : undefined),
   live: () => ({ available: true, canResume }),
+  assessResume: async () => external ? { kind: "held", by: "another app" } : { kind: "resumable", record: "unknown" },
   nativeInstalled: () => true,
   running: () => false,
   external: () => external,
@@ -75,3 +76,24 @@ const unavailable = createContinuationPlanner({
   nativeInstalled: () => true, running: () => false, external: () => null,
 })
 assert.deepEqual(await unavailable.resolve(ref.path), { transport: "unavailable", reason: "owner disconnected" }, "a transport failure never grants permission to start another writer")
+
+for (const provider of [...registeredHarnessIds(), "future-harness"]) {
+  let assessed = 0
+  let unavailableEvidence = true
+  const guarded = createContinuationPlanner({
+    ref: async () => ({ ...ref, harness: provider }),
+    resolveOwner: async () => ({ kind: "unowned" }),
+    assessResume: async () => {
+      assessed++
+      return unavailableEvidence ? undefined : { kind: "resumable", record: "unknown" }
+    },
+    live: () => ({ available: true, canResume: true }),
+    nativeInstalled: () => true, running: () => false, external: () => null,
+  })
+  assert.equal(await guarded.owner(ref.path), null)
+  assert.equal(assessed, 0, "viewing does not probe native recovery")
+  assert.equal((await guarded.plan(ref.path)).transport, "unavailable", `${provider}: missing evidence cannot authorize reopening`)
+  unavailableEvidence = false
+  await guarded.assertLive(ref.path, provider, ref.nativeId)
+  assert.equal(assessed, 2, "dispatch rechecks changing evidence instead of caching a verdict")
+}
