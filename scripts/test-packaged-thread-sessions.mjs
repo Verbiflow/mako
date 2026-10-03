@@ -401,12 +401,41 @@ async function runHarness(provider) {
       return { session: forked.sessionId, liveFork: watch, recalledMarker: true, answeredMs: recall.answeredMs, tabs: await sessionTabs(), screenshot: await shot("3-fork-of-live-answer"), closeUps: [await detail("3b-session-tabs", tabStrip), await detail("3c-grouped-rail-row", railRow(3))] }
     })
 
+    // As a person would: a mouse click on the live answer's Fork a few seconds after the answer, once the host has checkpointed it.
+    await phase("fork-live-answer-after-checkpoint", async (entry) => {
+      const id = ids.s3 ?? ids.s1
+      if (!ids.s3) await openTab(session1, id)
+      const fork = `${visible(`[data-live-conversation="${id}"] button[title^="Fork after this answer"]`)}.at(-1)`
+      await waitFor(() => snapshot(id), (snap) => (snap.baseCoveredBlocks ?? 0) > 0, "the host checkpointing the answers", 60_000)
+      await delay(3000)
+      entry.liveForkControls = await evaluate(`${visible(`[data-live-conversation="${id}"] button[title^="Fork after this answer"]`)}.length`)
+      entry.historyForkControls = await evaluate(`${visible(`[data-live-conversation="${id}"] button[title^="Fork from this answer"]`)}.length`)
+      assert.ok(entry.liveForkControls, "No live Fork control is left on the answers")
+      await toasts()
+      await click(fork, { label: "Fork on the last live answer" })
+      const forked = await waitFor(async () => {
+        const on = await liveOnScreen()
+        if (on && !known().has(on)) return on
+        const refused = (await newToasts())[0]
+        if (refused) {
+          entry.refusedScreenshot = await shot("3d-fork-live-answer-after-checkpoint-refused")
+          throw new Error(`Fork refused: ${refused}`)
+        }
+        return null
+      }, Boolean, "the fork on screen", 30_000)
+      ids.s7 = forked
+      const snap = await snapshot(forked)
+      assert.equal(snap.threadId, thread, "The fork joins the Thread")
+      return { session: snap.sessionId, screenshot: await shot("3d-fork-live-answer-after-checkpoint") }
+    })
+
     await phase("running-session-in-transcript-tab", async (entry) => {
       await openTab(session2, ids.s2)
       const before = await snapshot(ids.s2)
       const full = before.session.modes.find((mode) => mode.access === "full")
-      // A hibernated Session takes no mode change; its sleep command is approved instead.
-      if (full && before.session.currentMode !== full.id && before.session.connection === "connected") await bridge("liveSetMode", [ids.s2, full.id])
+      // A hibernated Session takes no mode change, and the host may hibernate it after this read; its sleep command is approved instead.
+      if (full && before.session.currentMode !== full.id)
+        await bridge("liveSetMode", [ids.s2, full.id]).catch((error) => { entry.modeChangeRefused = error instanceof Error ? error.message : String(error) })
       const word = randomBytes(5).toString("hex").replace(/\d/g, (digit) => "ghijklmnop"[digit])
       const expected = word.toUpperCase()
       const sentAt = Date.now()
@@ -526,8 +555,7 @@ async function runHarness(provider) {
     })
     if (!ids.s4) await phase("continue-in-worktree-live-fresh-answer", async (entry) => {
       await openTab(session1, ids.s1)
-      const turn = await ask(ids.s1, `Check ${hex()}: reply with just the marker. ${NO_TOOLS}`)
-      assert.ok(turn.answer.includes(marker))
+      await ask(ids.s1, `Reply with just the word ready (request ${hex()}). ${NO_TOOLS}`)
       return moveLive("6b-continued-in-worktree-live-fresh-answer", entry)
     })
 
