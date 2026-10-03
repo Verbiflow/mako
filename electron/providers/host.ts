@@ -1,3 +1,4 @@
+import type { ProviderAuthoringCapability, ProviderEditingCapability } from "./editing-capability.js"
 import type { ProviderArtifactPreview } from "./artifact-preview.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
@@ -18,6 +19,11 @@ import { validateLiveDriver } from "./live-driver.js"
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
   harnesses: ProviderRegistry<HarnessRecord>
+  hooks: ProviderRegistry<ProviderAuthoringCapability>
+  commands: ProviderRegistry<ProviderAuthoringCapability>
+  toolEditing: ProviderRegistry<ProviderAuthoringCapability>
+  skillEditing: ProviderRegistry<ProviderEditingCapability>
+  mcpEditing: ProviderRegistry<ProviderEditingCapability>
   artifactPreviews: ProviderRegistry<ProviderArtifactPreview>
   liveDrivers: ProviderRegistry<ProviderLiveDriver>
   /** Each harness's native-event decoder, for fixtures and the decode tool. */
@@ -41,6 +47,11 @@ export type ProviderModule = (host: ProviderHost) => void
 export function createProviderHost(): ProviderHost {
   return {
     harnesses: new ProviderRegistry(),
+    hooks: new ProviderRegistry(),
+    commands: new ProviderRegistry(),
+    toolEditing: new ProviderRegistry(),
+    skillEditing: new ProviderRegistry(),
+    mcpEditing: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
     liveDrivers: new ProviderRegistry(validateLiveDriver),
     decoders: new ProviderRegistry(),

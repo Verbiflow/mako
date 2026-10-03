@@ -22,6 +22,8 @@ interface AccountCapabilityBase
     selection: string | null,
     env: NodeJS.ProcessEnv
   ): SelectedAccount
+  /** Read the effective credential source on demand. Opaque host-only equality, never IPC. */
+  credentialRevision(name: string): Promise<string>
   accountUsage(name: string): Promise<AccountUsage>
   /**
    * Spend one of the account's reset credits to empty its windows. The same

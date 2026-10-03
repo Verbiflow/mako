@@ -1,3 +1,5 @@
+import type { HarnessPresentation } from "../contracts/harness-presentation.js"
+import type { ProviderAuthoringCapability, ProviderEditingCapability } from "./editing-capability.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderArtifactPreview } from "./artifact-preview.js"
@@ -35,6 +37,12 @@ export const notBuilt = (reason: string): Absent => ({ absent: "mako", reason })
  */
 export interface HarnessDefinition {
   provider: string
+  presentation: HarnessPresentation
+  hooks: ProviderAuthoringCapability | Absent
+  commands: ProviderAuthoringCapability | Absent
+  toolEditing: ProviderAuthoringCapability | Absent
+  skillEditing: ProviderEditingCapability | Absent
+  mcpEditing: ProviderEditingCapability | Absent
   /** Starts, streams, steers, answers and stops turns. */
   live: ProviderLiveDriver
   /**
@@ -61,11 +69,12 @@ export interface HarnessDefinition {
   artifactPreview: ProviderArtifactPreview | Absent
 }
 
-export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider">
+export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation">
 
 /** What an installed harness said it has no capability for. */
 export interface HarnessRecord {
   provider: string
+  presentation: HarnessPresentation
   absent: Partial<Record<HarnessFamily, Absent>>
 }
 
@@ -74,6 +83,20 @@ export function isAbsent<T extends ProviderCapability>(value: T | Absent): value
 }
 
 export function installHarness(host: ProviderHost, harness: HarnessDefinition): void {
+  if (!Number.isFinite(harness.presentation.firstRunPriority) || !harness.presentation.icon.id || !harness.presentation.icon.tint)
+    throw new Error(`${harness.provider} must declare its ordering and icon`)
+  // Validate every family before registering anything: an incomplete adapter
+  // must not leave half of its capabilities installed.
+  const { provider, presentation, ...declarations } = harness
+  for (const [family, value] of Object.entries(declarations)) {
+    if (!value) throw new Error(`${provider} has no ${family} declaration`)
+    if (isAbsent(value)) {
+      if (!value.reason.trim())
+        throw new Error(`${harness.provider} must explain its absent ${family}`)
+    } else if (!("provider" in value) || value.provider !== harness.provider) {
+      throw new Error(`${harness.provider}'s ${family} capability is filed under ${"provider" in value ? value.provider : "no provider"}`)
+    }
+  }
   const absent: HarnessRecord["absent"] = {}
   const install = <T extends ProviderCapability>(
     registry: ProviderRegistry<T>,
@@ -89,6 +112,11 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
     }
     registry.register(value)
   }
+  install(host.hooks, "hooks", harness.hooks)
+  install(host.commands, "commands", harness.commands)
+  install(host.toolEditing, "toolEditing", harness.toolEditing)
+  install(host.skillEditing, "skillEditing", harness.skillEditing)
+  install(host.mcpEditing, "mcpEditing", harness.mcpEditing)
   install(host.liveDrivers, "live", harness.live)
   install(host.decoders, "decoder", harness.decoder)
   install(host.profiles, "profile", harness.profile)
@@ -102,5 +130,5 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   install(host.connections, "connection", harness.connection)
   install(host.updateSources, "updates", harness.updates)
   install(host.artifactPreviews, "artifactPreview", harness.artifactPreview)
-  host.harnesses.register({ provider: harness.provider, absent })
+  host.harnesses.register({ provider: harness.provider, presentation, absent })
 }

@@ -42,7 +42,10 @@ export function scopedMcpWriteArgs(
   ]
 }
 
+export type McpReadFormat = "named-map" | "named-map-or-list" | "command-array-map"
+
 export interface ProviderMcpSource extends ProviderCapability {
+  readFormat: McpReadFormat
   command(env: NodeJS.ProcessEnv): string | null
   userFiles(account: ProviderAccountLocation): string[]
   workspaceFiles(cwd: string): string[]
