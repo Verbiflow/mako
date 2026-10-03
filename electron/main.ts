@@ -393,7 +393,7 @@ function whoseApp(app: AppKey): string | undefined {
   return folder ? `the ${basename(folder)} folder` : undefined
 }
 /** What changed on disk while apps ran, for their probes; FSEvents keeps that history, so macOS only. */
-const fileHistory = process.platform === "darwin" ? childHistory() : undefined
+const fileHistory = childHistory()
 /** And its running app's records, so any host sees and stops the processes another host started. */
 const threadProcesses = threadStore
   ? new ThreadProcesses({
@@ -2312,7 +2312,7 @@ app.whenReady().then(async () => {
     processes: threadProcesses,
     recipesRoot: threadRecipes,
     whose: whoseApp,
-    ...(fileHistory ? { history: fileHistory } : {}),
+    history: fileHistory,
   }) : undefined
   conversationMcp = await startConversationMcp(
     liveConversations,

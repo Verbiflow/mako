@@ -150,6 +150,7 @@ function mockProbe(view: Ready): AppProbeView {
   const home = "/Users/you"
   return {
     at: Date.now(),
+    home,
     running,
     upSince: Date.now() - 12 * 60_000,
     ports: { first: PORT, last: PORT + 9 },

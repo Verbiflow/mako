@@ -286,6 +286,7 @@ export function childHistory(script = defaultChildScript()): FileHistory {
 
   return {
     async mark() {
+      if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
       const reply = await ask({ t: "mark", id: nextId++ }, MARK_MS)
       if (reply.t !== "marked") throw failed(reply)
       return reply.mark

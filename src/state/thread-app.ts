@@ -138,7 +138,11 @@ export function probeThreadApp(cwd: string, { again = false } = {}): void {
   put({ ...current, looking: true })
   probe(cwd).then(
     (view) => put({ looking: false, view }),
-    (error: unknown) => put({ looking: false, ...(current?.view ? { view: current.view } : {}), error: error instanceof Error ? error.message : String(error) })
+    (error) => {
+      const failed: AppProbeState = { looking: false, error: error instanceof Error ? error.message : String(error) }
+      if (current?.view) failed.view = current.view
+      put(failed)
+    }
   )
 }
 

@@ -281,8 +281,8 @@ async function refresh(apps: Traced[], { history, home = homedir(), open }: { hi
 }
 
 /** Each watched folder `pids` hold a file open in, with the files. */
-function sightings(seen: Open, pids: number[], roots: Roots, at: number): Record<string, Held> {
-  const sighted: Record<string, Held> = {}
+function sightings(seen: Open, pids: number[], roots: Roots, at: number): Trace["held"] {
+  const sighted: Trace["held"] = {}
   for (const file of [...seen.files].sort((a, b) => Number(b.writing) - Number(a.writing))) {
     if (!pids.includes(file.pid)) continue
     const place = folderOf(file.path, roots)
@@ -353,6 +353,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
   const ours = (port: number) => (port >= input.ports.first && port <= input.ports.last) || port >= picked
   const view: AppProbeView = {
     at: now(),
+    home,
     running: input.pids.length > 0,
     ports: input.ports,
     listening: open.listening.map((entry) => ({ ...entry, fixed: !ours(entry.port) })),
@@ -380,9 +381,8 @@ export function probeText(view: AppProbeView): string {
   const changed = view.changed.entries.map(({ folder, paths, more, who }) => {
     const said = paths.slice(0, PATHS_SAID)
     const left = paths.length - said.length
-    const entry: { changed?: string[]; who: string } = { who }
-    if (said.length) entry.changed = left || more ? [...said, more ? `and more than ${left} others` : `and ${left} more`] : said
-    return [folder, entry] as const
+    if (!said.length) return [folder, { who }] as const
+    return [folder, { who, changed: left || more ? [...said, more ? `and more than ${left} others` : `and ${left} more`] : said }] as const
   })
   return toolText({
     running: view.running,
@@ -402,7 +402,8 @@ export function probeText(view: AppProbeView): string {
 }
 
 function shallowReason(trace: Trace | undefined, read: boolean, history: FileHistory | undefined): string {
-  if (!history) return process.platform === "darwin" ? "this Mako reads no history." : "the file system's history is read on macOS only."
+  if (process.platform !== "darwin") return "the file system's history is read on macOS only."
+  if (!history) return "this Mako reads no history."
   if (!trace) return "the app came up before Mako kept a record of where the history stood."
   if (!trace.mark) return "Mako couldn't read where the history stood when the app came up."
   if (!read) return "Mako is still reading the history since the app came up; probe again in a moment."
@@ -528,7 +529,13 @@ async function launchdServices(): Promise<string[] | undefined> {
 }
 
 /** Services added since the trace's list, leaving out apps LaunchServices launched, which come and go as anything opens an app. */
-async function addedServices(before: string[] | undefined): Promise<{ label: string; path?: string; program?: string }[]> {
+interface Service {
+  label: string
+  path?: string
+  program?: string
+}
+
+async function addedServices(before: string[] | undefined): Promise<Service[]> {
   if (!before) return []
   const known = new Set(before)
   const added = ((await launchdServices()) ?? []).filter((label) => !known.has(label) && !label.startsWith("application."))
@@ -536,7 +543,7 @@ async function addedServices(before: string[] | undefined): Promise<{ label: str
     if (index >= SERVICES_LOOKED_UP) return { label }
     const text = await run("launchctl", ["print", `gui/${process.getuid!()}/${label}`]).then(({ stdout }) => stdout, () => "")
     const field = (name: string) => new RegExp(`^\\t${name} = (.+)$`, "m").exec(text)?.[1]
-    const found: { label: string; path?: string; program?: string } = { label }
+    const found: Service = { label }
     const path = field("path")
     const program = field("program")
     if (path && isAbsolute(path)) found.path = path
@@ -553,9 +560,9 @@ async function launchAgents(since: number, home: string): Promise<{ label: strin
   await Promise.all((await entries(folder)).filter((entry) => entry.name.endsWith(".plist")).map(async (entry) => {
     const file = join(folder, entry.name)
     if (((await stat(file).catch(() => undefined))?.mtimeMs ?? 0) < since) return
-    const agent = AgentSchema.safeParse(await plist(file))
-    const label = (agent.success && agent.data.Label) || basename(file, ".plist")
-    const program = agent.success ? agent.data.Program ?? agent.data.ProgramArguments?.[0] : undefined
+    const agent = await plist(file, AgentSchema)
+    const label = agent?.Label || basename(file, ".plist")
+    const program = agent?.Program ?? agent?.ProgramArguments?.[0]
     found.push(program ? { label, file, program } : { label, file })
   }))
   return found
@@ -571,10 +578,10 @@ async function urlHandlers(home: string): Promise<Record<string, string> | undef
   if (process.platform !== "darwin") return undefined
   const file = join(home, ...HANDLERS)
   if (!(await stat(file).catch(() => undefined))) return {}
-  const parsed = HandlersSchema.safeParse(await plist(file))
-  if (!parsed.success) return undefined
+  const parsed = await plist(file, HandlersSchema)
+  if (!parsed) return undefined
   const found: Record<string, string> = {}
-  for (const entry of parsed.data.LSHandlers ?? []) {
+  for (const entry of parsed.LSHandlers ?? []) {
     const app = entry.LSHandlerRoleAll ?? entry.LSHandlerRoleViewer
     if (entry.LSHandlerURLScheme && app) found[entry.LSHandlerURLScheme.toLowerCase()] = app
   }
@@ -624,9 +631,8 @@ async function bundlesOf(commands: string[]): Promise<string[]> {
 async function declaredSchemes(bundles: string[]): Promise<Registered[]> {
   const declared = new Map<string, string>()
   await Promise.all(bundles.map(async (bundle) => {
-    const types = UrlTypesSchema.safeParse(await plist(join(bundle, "Contents", "Info.plist"), "CFBundleURLTypes"))
-    if (!types.success) return
-    for (const scheme of types.data.flatMap((type) => type.CFBundleURLSchemes ?? [])) if (!declared.has(scheme.toLowerCase())) declared.set(scheme.toLowerCase(), bundle)
+    const types = await plist(join(bundle, "Contents", "Info.plist"), UrlTypesSchema, "CFBundleURLTypes")
+    for (const scheme of (types ?? []).flatMap((type) => type.CFBundleURLSchemes ?? [])) if (!declared.has(scheme.toLowerCase())) declared.set(scheme.toLowerCase(), bundle)
   }))
   if (!declared.size) return []
   const handlers = await handlerApps([...declared.keys()])
@@ -689,13 +695,14 @@ async function itemsChanged(since: number, named: boolean): Promise<Registered[]
   }]
 }
 
-/** A property list as JSON, or one key of it; undefined when it can't be read. */
-async function plist(file: string, key?: string): Promise<unknown> {
+/** A property list, or one key of it, read as `schema`; undefined when it can't be read or isn't one. */
+async function plist<T>(file: string, schema: z.ZodType<T>, key?: string): Promise<T | undefined> {
   const args = key ? ["-extract", key, "json", "-o", "-", file] : ["-convert", "json", "-o", "-", file]
   const text = await run("plutil", args).then(({ stdout }) => stdout, () => undefined)
   if (text === undefined) return undefined
   try {
-    return JSON.parse(text)
+    const parsed = schema.safeParse(JSON.parse(text))
+    return parsed.success ? parsed.data : undefined
   } catch {
     return undefined
   }

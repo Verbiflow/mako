@@ -25,7 +25,7 @@ process.on("message", (raw) => {
   const { id } = request.data
   if (request.data.t === "mark" || request.data.t === "since") {
     const asked = request.data
-    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots)).catch((error: unknown) =>
+    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots)).catch((error) =>
       reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
     return
   }

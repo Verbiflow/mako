@@ -788,7 +788,7 @@ async function runMarks(rows: Row[]): Promise<Map<number, string>> {
   const { stdout } = await run("ps", ["-wwE", "-o", "pid=,command=", "-p", rows.map((row) => row.pid).join(",")], {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: PROCESS_TABLE_BYTES,
-  }).catch((error: unknown) => z.object({ stdout: z.string() }).catch({ stdout: "" }).parse(error))
+  }).catch((error) => z.object({ stdout: z.string() }).catch({ stdout: "" }).parse(error))
   for (const line of stdout.split("\n")) {
     const match = /^\s*(\d+) (.*)$/.exec(line)
     const row = match && rows.find((candidate) => candidate.pid === Number(match[1]))

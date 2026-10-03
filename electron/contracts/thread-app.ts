@@ -93,6 +93,8 @@ export interface Capped<T> {
  */
 export interface AppProbeView {
   at: number
+  /** The home folder its paths are under, to show them from `~`. */
+  home: string
   running: boolean
   upSince?: number
   /** The Thread's block of ports. */
