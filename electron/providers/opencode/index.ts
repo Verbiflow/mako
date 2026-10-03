@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { accountEnv } from "../../accounts.js"
-import { installHarness, lacks } from "../harness-definition.js"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
+import { openCodeCommands } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { openCodeAccountCapability } from "./accounts.js"
 import { openCodeDecoderSource } from "./decoder-source.js"
@@ -21,6 +22,12 @@ import { openCodeUpdateSource } from "./updates.js"
  */
 export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   provider: "opencode",
+  presentation: { firstRunPriority: 3, icon: { id: "opencode-mark", tint: "currentColor" } },
+  hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+  commands: openCodeCommands,
+  toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
+  skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
+  mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
   live: createOpenCodeDriver({
     env: () => accountEnv("opencode", process.env),
     approvalRoot: async () => {

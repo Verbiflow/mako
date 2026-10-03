@@ -7,6 +7,7 @@ import type {
   OpenCodeAuthType,
 } from "../../account-types.js"
 import {
+  credentialFileFingerprint,
   jsonFields,
   jwtClaims,
   stringValue,
@@ -125,5 +126,6 @@ export const openCodeAccountCapability: ObservedAccountCapability = {
   // OpenCode owns a multi-provider auth file and does not select isolated homes.
   accountEnv: async (_selection, base) => ({ ...base }),
   selectedAccount: () => ({ name: "default" }),
+  credentialRevision: () => credentialFileFingerprint(authFile()),
   accountUsage,
 }

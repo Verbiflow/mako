@@ -6,6 +6,7 @@ import { environmentForExecutable } from "../../executable.js"
 import { ProviderStartupWatch } from "../../provider-startup.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
 import { isOpenCodeV2 } from "./version.js"
+import { configuredListenPort } from "../../listen-port.js"
 
 const Ready = z.object({ url: z.string().url() }).transform(({ url }) => {
   const endpoint = new URL(url)
@@ -32,8 +33,9 @@ export async function startOpenCodeApi(input: {
 }) {
   input.signal?.throwIfAborted()
   const password = randomBytes(32).toString("base64url")
+  const port = configuredListenPort("MAKO_OPENCODE_API_PORT", input.env)
   const lifetime = new AbortController()
-  const child = input.trace.sync("spawn", () => spawnProviderProcess(input.command, ["serve", "--stdio", "--port", "0"], {
+  const child = input.trace.sync("spawn", () => spawnProviderProcess(input.command, ["serve", "--stdio", "--port", String(port)], {
     cwd: input.cwd,
     env: environmentForExecutable(input.command, { ...input.env, OPENCODE_PASSWORD: password }),
   }, { kind: "opencode:native-api", owner: input.conversationId }))

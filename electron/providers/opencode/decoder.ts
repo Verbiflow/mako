@@ -166,7 +166,7 @@ export class OpenCodeDecoder {
     if (SESSION_STATE.has(event.type)) return [...decoded, ...this.session(event)]
     if (openCodeIgnores(event)) return decoded
     const scope = SessionScope.safeParse(event.data).data
-    if (!scope) return [...decoded, { kind: "unknown", type: event.type, reason: "unknown", raw: { type: event.type } }]
+    if (!scope) return [...decoded, { kind: "unknown", type: event.type, reason: "unknown", raw: z.json().parse(event) }]
     if (!this.owns(scope.sessionID)) return decoded
     return [...decoded, ...this.contentOf(event)]
   }
@@ -228,7 +228,7 @@ export class OpenCodeDecoder {
     const ends = event.type === "session.tool.success" || event.type === "session.tool.failed"
     const ending = ends ? this.agentCall(event) : undefined
     if (ending) decoded.push(ending)
-    for (const update of this.content.observe(event, (type) => decoded.push({ kind: "unknown", type, reason: "unknown", raw: { type } })))
+    for (const update of this.content.observe(event, (type) => decoded.push({ kind: "unknown", type, reason: "unknown", raw: z.json().parse(event) })))
       decoded.push({ kind: "update", update })
     const call = ends ? undefined : this.agentCall(event)
     if (call) decoded.push(call)

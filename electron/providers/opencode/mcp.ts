@@ -5,6 +5,7 @@ import { openCodeExecutable } from "./installation.js"
 
 export const openCodeMcpSource: ProviderMcpSource = {
   provider: "opencode",
+  readFormat: "command-array-map",
   command: () => openCodeExecutable(),
   userFiles: () => [
     join(homedir(), ".config", "opencode", "opencode.json"),
