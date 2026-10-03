@@ -52,7 +52,7 @@ export interface ExchangeNote {
 }
 
 export type ResponseSection =
-  | { kind: "prose"; id: string; message: ChatMessage }
+  | { kind: "prose"; id: string; message: ChatMessage; previewedFiles?: readonly string[] }
   | { kind: "work"; id: string; messages: ChatMessage[] }
   | { kind: "steer"; id: string; message: ChatMessage }
   | { kind: "note"; id: string; message: ChatMessage }
@@ -114,6 +114,11 @@ export function responseSections(
       continue
     }
     const generated: ChatMessage[] = []
+    // Splitting attachment/text blocks for layout must retain their shared
+    // message provenance. Do not borrow visuals from another reply or turn.
+    const previewedFiles = message.blocks.flatMap(block =>
+      block.type === "attachment" && block.source.kind === "file" ? [block.source.path] : []
+    )
     let workBlocks: Block[] = []
     const flushMessageWork = () => {
       if (workBlocks.length === 0) return
@@ -141,7 +146,7 @@ export function responseSections(
         const prose = splitMessage(message, [block])
         if (block.type === "attachment") attachmentProse = prose
         generated.push(prose)
-        sections.push({ kind: "prose", id: prose.id, message: prose })
+        sections.push({ kind: "prose", id: prose.id, message: prose, previewedFiles })
       } else {
         workBlocks.push(block)
       }

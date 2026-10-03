@@ -135,6 +135,9 @@ export const anchorLine = markdownAnchorLine
 
 /** Inline code becomes a file action only when the whole span is a recognizable path. */
 export function inlineFileTarget(text: string): FileCitation | null {
+  // A bare JavaScript environment expression is code; an explicit file link
+  // (or `./process.env`) can still name a file with that spelling.
+  if (/^process\.env(?::|#|$)/.test(text)) return null
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /[\n\r`<>|;&=]/.test(text)) return null
   const target = markdownFileTarget(text)
   if (!target || /[*?[\]{}]/.test(target.path) || !filePreviewFormat(target.path)) return null
