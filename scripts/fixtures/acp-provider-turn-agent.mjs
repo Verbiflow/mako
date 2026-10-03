@@ -3,7 +3,7 @@
 // The prompt text names the recorded sequence to play once the prompted turn
 // has ended.
 import { Readable, Writable } from "node:stream"
-import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk"
+import { AgentSideConnection, RequestError, ndJsonStream } from "@agentclientprotocol/sdk"
 
 const sessionId = "provider-turn-fixture"
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -94,6 +94,8 @@ new AgentSideConnection((connection) => {
       const completed = { sessionUpdate: "auto_compact_completed", tokens_before: 1000, tokens_after: 200, elapsed_ms: 4200, summary_preview: null }
       await own(completed, "fixture-2")
       await own(completed, "fixture-2")
+      await grokUpdate({ sessionUpdate: "future_vendor_kind", value: { evidence: 42 } })
+      await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "" }, discardedNativeField: { evidence: 43 } })
       await update({ sessionUpdate: "mystery_update", value: 1 })
       await update({ sessionUpdate: "tool_call", toolCallId: "no-title" })
       await chunk("agent_message_chunk", "Still streaming.")
@@ -117,6 +119,13 @@ new AgentSideConnection((connection) => {
     // MCP servers failing while the session opens, before its id reaches
     // the client, as grok 1.0.44 and devin 3000.10.23 report them.
     async newSession() {
+      if (process.env.FIXTURE_PROVIDER === "provider-turn-modes") return {
+        sessionId,
+        modes: { currentModeId: "default", availableModes: [
+          { id: "default", name: "Default" }, { id: "plan", name: "Plan" },
+          { id: "refused", name: "Refused" }, { id: "slow", name: "Slow" },
+        ] },
+      }
       if (process.env.FIXTURE_PROVIDER === "provider-turn-grok") {
         await connection.extNotification("_x.ai/mcp/servers_updated", { mcpServers: [{ name: "okserver" }, { name: "crashes" }] })
         await connection.extNotification("_x.ai/mcp/server_status", { sessionId, name: "crashes", status: "unavailable", reason: "handshake_failed",
@@ -133,6 +142,11 @@ new AgentSideConnection((connection) => {
       return { sessionId }
     },
     async authenticate() {
+      return {}
+    },
+    async setSessionMode({ modeId }) {
+      if (modeId === "refused") throw new RequestError(-32000, "Native mode refused")
+      if (modeId === "slow") await pause(300)
       return {}
     },
     async prompt(params) {
