@@ -1,40 +1,57 @@
+import { InlineFilePreview } from "./file-preview"
+import { InlineDocumentAttachment } from "./inline-document-attachment"
+import {
+  diagnosticFormat,
+  filePreviewFormat,
+  officeFormat,
+} from "../../../electron/contracts/file-preview"
 import type { AttachmentContent } from "@mako/sessions"
 import { MediaPreview, MediaUnavailable } from "./media-preview"
-import { viewer } from "@/state/viewer"
-import { useTranscriptSource } from "./source-context"
 
 export function TranscriptAttachment({
   attachment,
 }: {
   attachment: AttachmentContent
 }) {
-  const context = useTranscriptSource()
   const { source, name, mimeType } = attachment
   if (source.kind === "unavailable")
     return <MediaUnavailable name={name} reason={source.reason} />
 
-  if (/^(?:image|audio|video)\//i.test(mimeType))
-    return <MediaPreview attachment={attachment} />
   if (source.kind === "file")
     return (
-      <button
-        className="pressable ref-token ref-chip leading-[1.25] text-ui"
-        onClick={() =>
-          void viewer.open(
-            source.path,
-            undefined,
-            context.threadPath,
-            context.liveId
-          )
-        }
-      >
-        {name}
-      </button>
+      <InlineFilePreview path={source.path} name={name} mimeType={mimeType} />
+    )
+
+  if (/^(?:image|audio|video)\//i.test(mimeType))
+    return <MediaPreview attachment={attachment} />
+  const format = filePreviewFormat(name, mimeType)
+  if (
+    source.kind === "inline" &&
+    (format === "markdown" ||
+      format === "html" ||
+      format === "table" ||
+      format === "text" ||
+      diagnosticFormat(name))
+  )
+    return (
+      <InlineDocumentAttachment
+        name={name}
+        mimeType={mimeType}
+        data={source.data}
+      />
     )
   const url =
     source.kind === "inline"
       ? `data:${mimeType};base64,${source.data}`
       : source.url
+  const office = officeFormat(name, mimeType)
+  if (office && (source.kind === "inline" || /^https?:/i.test(url)))
+    return (
+      <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} resolvedFile={{
+        path: name, contents: "", previewUrl: url, mimeType,
+        binary: true, truncated: false, size: 0,
+      }} />
+    )
   const safe =
     /^(?:https?:|data:(?:image|audio|video)\/|data:application\/pdf;base64,)/i.test(
       url
@@ -60,9 +77,19 @@ export function TranscriptAttachment({
         Download {name}
       </button>
     )
+  if (mimeType === "application/pdf" && safe)
+    return (
+      <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} resolvedFile={{
+        path: name, contents: "", previewUrl: url, mimeType,
+        binary: true, truncated: false, size: 0,
+      }} />
+    )
   if (!safe)
     return (
-      <MediaUnavailable name={name} reason="This link type can't be previewed" />
+      <MediaUnavailable
+        name={name}
+        reason="This link type can't be previewed"
+      />
     )
   return (
     <a

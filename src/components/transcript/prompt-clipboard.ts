@@ -1,5 +1,4 @@
 import type { ClipboardEvent } from "react"
-import { toast } from "sonner"
 import type { Attachment } from "@/lib/attachments"
 import { attachmentReference } from "@/lib/attachment-references"
 import { promptClipboard } from "@/lib/prompt-clipboard"
@@ -30,11 +29,12 @@ export function copyPromptSelection(event: ClipboardEvent<HTMLElement>, attachme
   }
   for (const block of fragment.querySelectorAll("p, pre, li, h1, h2, h3, h4, h5, h6, br")) block.append("\n")
   event.preventDefault()
+  const text = fragment.textContent.trimEnd()
   try {
-    const payload = promptClipboard(fragment.textContent.trimEnd(), [...copied.values()])
+    const payload = promptClipboard(text, [...copied.values()])
     event.clipboardData.setData("text/plain", payload.text)
     event.clipboardData.setData("text/html", payload.html)
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
+  } catch {
+    event.clipboardData.setData("text/plain", text)
   }
 }

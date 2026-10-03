@@ -1,3 +1,4 @@
+import { useHarnessIdentity } from "@/lib/harness-label"
 import { PlanContextChips } from "@/components/composer/plan-context"
 import { appendPlanContext, parsePlanContext } from "@/lib/proposed-plan"
 import { ProposedPlanCard } from "./proposed-plan"
@@ -15,6 +16,7 @@ import { memo, useMemo, useState } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { ToolRow } from "@/components/transcript/tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
+import { ActivityMark } from "@/components/ui/activity-mark"
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import { FileChip } from "@/components/composer/reference-chip"
 import { Slot } from "@/extend/slot"
@@ -50,7 +52,7 @@ import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, turnStopLabel, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { useTranscriptSource } from "./source-context"
-import { HARNESS_LABEL, harnessLabel } from "@/components/rail/harness-meta"
+import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
   Popover,
@@ -96,6 +98,7 @@ export const Exchange = memo(function Exchange({
   sentByMako?: MakoPrompt
   failed?: boolean
 }) {
+  useHarnessIdentity()
   const stopShown = Boolean(interrupted) && !streaming
   const notes = useMemo(
     () => (stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system),
@@ -116,7 +119,7 @@ export const Exchange = memo(function Exchange({
     )
     .at(-1)
   const provider = exchange.response.find(
-    (message) => message.provider && HARNESS_LABEL[message.provider]
+    (message) => message.provider && harnessLabels()[message.provider]
   )?.provider
   return (
     <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
@@ -177,10 +180,11 @@ export const Exchange = memo(function Exchange({
 })
 
 function AgentByline({ provider }: { provider: string }) {
+  useHarnessIdentity()
   return (
     <div className="flex items-center gap-1.5 text-label text-faint">
       <HarnessIcon harness={provider} className="size-3.5" />
-      <span>{HARNESS_LABEL[provider] ?? provider}</span>
+      <span>{harnessLabels()[provider] ?? provider}</span>
     </div>
   )
 }
@@ -195,6 +199,7 @@ function AgentByline({ provider }: { provider: string }) {
  * the prompt would be, saying what happened and who acted, with the moment.
  */
 function Continued({ continuation, timestamp }: { continuation: TurnContinuation; timestamp?: number }) {
+  useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const provider = harness ? harnessLabel(harness) : "the provider"
@@ -232,6 +237,7 @@ function MovedNote({ timestamp }: { timestamp?: number }) {
  * where a prompt would, in Mako's quiet line rather than the user's bubble.
  */
 function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: string }) {
+  useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const agent = provider ?? harness
@@ -480,7 +486,7 @@ function WorkSection({
         <div
           data-work-log
           className={cn(
-            "flex flex-col gap-2.5",
+            "flex flex-col",
             summarized && "mt-1.5 ml-[6.5px] border-l border-hairline pb-1 pl-4"
           )}
         >
@@ -659,12 +665,11 @@ function Response({
 
   return (
     <div className="flex flex-col gap-2.5">
-      {showWork && thinking && showThinking ? (
-        <Thinking text={thinking} live={Boolean(message.streaming && !text)} />
-      ) : null}
-
-      {showWork && tools.length > 0 ? (
-        <div className="flex flex-col gap-1">
+      {showWork && ((thinking && showThinking) || tools.length > 0) ? (
+        <div className="flex flex-col">
+          {thinking && showThinking ? (
+            <Thinking text={thinking} live={Boolean(message.streaming && !text && !tools.length)} />
+          ) : null}
           {tools.map((call) => (
             <ToolRow key={call.id} call={call} />
           ))}
@@ -700,27 +705,42 @@ function Response({
 function Thinking({ text, live }: { text: string; live: boolean }) {
   const [open, setOpen] = useState(false)
   const trimmed = text.trim()
-  const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1)
+  const lastLine = trimmed
+    .slice(trimmed.lastIndexOf("\n") + 1)
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "")
+    .replace(/[*_`#>]+/g, "")
+    .trim()
   const summary = lastLine.length > 120 ? `…${lastLine.slice(-119)}` : lastLine
+  const layer = "absolute inset-0 m-auto size-3.5 [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
   return (
-    <div className="rounded-lg border border-transparent">
+    <div>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-label={`${live ? "Reasoning in progress" : "Reasoning"}${summary ? `: ${summary}` : ""}`}
-        className="pressable flex w-full items-center gap-2 px-2 py-1.5 text-left text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+        className="pressable group/think -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-ui transition-colors duration-100 hover:bg-fill-hover"
       >
-        <ChevronRightIcon
-          className={cn(
-            "size-3 [transition:transform_150ms_var(--ease-out)]",
-            open && "rotate-90"
-          )}
-        />
-        <span className="shrink-0" title={summary}>Thought process</span>
+        <span className="relative size-3.5 shrink-0">
+          <ToolGlyph
+            kind="think"
+            className={cn(layer, live ? "text-foreground/80" : "text-faint", open ? "opacity-0" : "group-hover/think:opacity-0")}
+          />
+          <ChevronRightIcon
+            className={cn(layer, "text-faint", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/think:opacity-100")}
+          />
+        </span>
+        <span className="shrink-0 text-muted-foreground">Thought process</span>
+        {summary && !open ? <span className="min-w-0 truncate text-faint">{summary}</span> : null}
+        <span className="flex-1" />
+        {live ? (
+          <span role="status" aria-label="Reasoning" className="shrink-0 text-muted-foreground">
+            <ActivityMark state="reasoning" />
+          </span>
+        ) : null}
       </button>
       {open ? (
-        <div className="border-t border-hairline px-2.5 py-2 text-muted-foreground">
+        <div className="ml-1.75 border-l border-hairline py-1.5 pl-3.75 text-muted-foreground">
           <Prose text={text} streaming={live} />
         </div>
       ) : null}
@@ -822,6 +842,7 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
  * message, so it queues, steers or reopens the session exactly as one would.
  */
 function Stopped({ stop }: { stop: true | TurnStop }) {
+  useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const [sending, setSending] = useState(false)
@@ -868,6 +889,7 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
  * the prompt, so this stays quiet there.
  */
 function ForkButton({ exchange }: { exchange: ExchangeData }) {
+  useHarnessIdentity()
   const [open, setOpen] = useState(false)
   const scope = useConversationScope()
   const globalViewing = useThreads((state) => state.viewing?.ref)
@@ -952,7 +974,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui text-foreground/90 transition-colors duration-100 hover:bg-fill-hover"
           >
             <HarnessIcon harness={target} className="size-3.5" />
-            <span className="flex-1">{HARNESS_LABEL[target] ?? target}</span>
+            <span className="flex-1">{harnessLabels()[target] ?? target}</span>
             {target === viewing.harness ? (
               <span className="text-label text-faint">same agent</span>
             ) : null}

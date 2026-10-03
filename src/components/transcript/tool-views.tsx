@@ -14,6 +14,7 @@ import {
   writtenText,
 } from "@/lib/tools"
 import { cn } from "@/lib/utils"
+import { fileDir, fileName } from "@/lib/format"
 import {
   ArrowLeftRightIcon,
   BookOpenIcon,
@@ -152,12 +153,12 @@ function diffLines(before: string, after: string): DiffLine[] {
 
 function DiffBlock({ lines }: { lines: DiffLine[] }) {
   return (
-    <div className="overflow-x-auto font-mono text-ui leading-[1.6]">
+    <div className="overflow-x-auto rounded-md font-mono text-label leading-[1.6]">
       {lines.map((line, index) => (
         <div
           key={index}
           className={cn(
-            "flex gap-2 px-2.5",
+            "flex gap-2 px-2",
             line.kind === "add" && "bg-added/10 text-added",
             line.kind === "remove" && "bg-removed/10 text-removed",
             line.kind === "context" && "text-faint"
@@ -183,9 +184,9 @@ export function EditBody({ call }: ToolViewProps) {
   const edits = editsOf(call)
   if (edits.length === 0) return <Output text={call.result ?? ""} />
   return (
-    <div className="divide-y divide-hairline py-1">
+    <div className="space-y-2">
       {edits.map((edit, index) => (
-        <div key={index} className="py-1.5">
+        <div key={index}>
           <DiffBlock lines={diffLines(edit.oldText, edit.newText)} />
         </div>
       ))}
@@ -196,13 +197,11 @@ export function EditBody({ call }: ToolViewProps) {
 export function WriteBody({ call }: ToolViewProps) {
   const content = writtenText(call) ?? ""
   return (
-    <div className="py-1">
-      <DiffBlock
-        lines={content
-          .split("\n")
-          .map((text, index) => ({ kind: "add" as const, text, newLine: index + 1 }))}
-      />
-    </div>
+    <DiffBlock
+      lines={content
+        .split("\n")
+        .map((text, index) => ({ kind: "add" as const, text, newLine: index + 1 }))}
+    />
   )
 }
 
@@ -241,7 +240,7 @@ export function SubagentBody({ call }: ToolViewProps) {
         : "Completed"
 
   return (
-    <div className="flex flex-col gap-2 px-2.5 py-2">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 text-label">
         <span
           className={cn(
@@ -290,7 +289,7 @@ export function SkillBody({ call }: ToolViewProps) {
   const name =
     argAt(call.arguments, "skill") ?? argAt(call.arguments, "name") ?? "Skill"
   return (
-    <div className="space-y-2 px-2.5 py-2">
+    <div className="space-y-2">
       <div className="flex items-center gap-1.5 text-ui text-foreground/90">
         <BookOpenIcon className="size-3.5 text-faint" />
         <span className="font-medium">{name}</span>
@@ -310,7 +309,7 @@ export function WaitBody({ call }: ToolViewProps) {
   const execution = parseToolExecutionOutput(call.result)
   const output = execution?.output ?? normalizeToolOutput(call.result)
   return (
-    <div className="space-y-2 px-2.5 py-2">
+    <div className="space-y-2">
       {execution ? (
         <div className="flex items-center gap-2 text-label text-faint">
           <span className="size-1.5 rounded-full bg-positive" />
@@ -335,8 +334,8 @@ export function BashBody({ call }: ToolViewProps) {
   // script's own header; the command's output is what follows it.
   const result = parseToolExecutionOutput(call.result)?.output ?? call.result
   return (
-    <div className="space-y-1.5 px-2.5 py-2">
-      <div className="flex gap-2 font-mono text-ui text-foreground/90">
+    <div className="space-y-1.5">
+      <div className="flex gap-2 font-mono text-label leading-[1.6] text-foreground/90">
         <span className="shrink-0 text-muted-foreground select-none">$</span>
         <span className="whitespace-pre-wrap">{command}</span>
       </div>
@@ -355,4 +354,28 @@ export function BashBody({ call }: ToolViewProps) {
 
 export function EditPreview({before, after}: {before: string; after: string}) {
   return <DiffBlock lines={diffLines(before, after)} />
+}
+
+/**
+ * A file as a row target: the name, then the folder it lives in, dimmer and
+ * trimmed from the left so the nearest folders are the ones that stay.
+ */
+export function FileTarget({ path, note }: { path: string; note?: string }) {
+  const folder = shortFolder(path)
+  return (
+    <span className="flex min-w-0 items-baseline gap-1.5 font-mono text-label">
+      <span className="min-w-0 truncate">{fileName(path)}</span>
+      {folder ? <span className="min-w-0 shrink-[3] truncate opacity-60">{folder}</span> : null}
+      {note ? <span className="shrink-0 font-sans">{note}</span> : null}
+    </span>
+  )
+}
+
+const HOME = /^\/(?:Users|home)\/[^/]+(?=\/|$)/
+const FOLDER_DEPTH = 3
+
+function shortFolder(path: string): string {
+  const folder = fileDir(path).replace(HOME, "~")
+  const parts = folder.split("/")
+  return parts.length > FOLDER_DEPTH + 1 ? `…/${parts.slice(-FOLDER_DEPTH).join("/")}` : folder
 }

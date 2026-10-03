@@ -7,12 +7,12 @@ import { useTranscriptSource } from "./source-context"
 
 export function ToolDetails({details}: {details: ToolDetail[]}) {
   const source = useTranscriptSource()
-  return <div className="divide-y divide-hairline">{details.map((detail, index) => {
+  return <div className="space-y-2">{details.map((detail, index) => {
     switch (detail.type) {
-      case "location": return <div key={index}><button type="button" className="pressable p-2.5 text-ui underline" onClick={() => void viewer.open(detail.path, undefined, source.threadPath, source.liveId)}>{detail.path}{detail.line !== undefined ? `:${detail.line}` : ""}</button></div>
+      case "location": return <div key={index}><button type="button" className="pressable block max-w-full truncate py-0.5 text-left font-mono text-label text-muted-foreground underline decoration-hairline underline-offset-2 hover:text-foreground" onClick={() => void viewer.open(detail.path, undefined, source.threadPath, source.liveId)}>{detail.path}{detail.line !== undefined ? `:${detail.line}` : ""}</button></div>
       case "plan": return <PlanSummary key={index} plan={detail} />
-      case "terminal": return <p key={index} className="p-2.5 text-ui text-faint">Provider terminal <code>{detail.terminalId}</code>. This provider has not supplied a reconnectable terminal.</p>
-      case "diff": return <div key={index}><button type="button" className="pressable p-2.5 text-ui underline" onClick={() => void viewer.open(detail.path, undefined, source.threadPath, source.liveId)}>{detail.path}</button><EditPreview before={detail.oldText ?? ""} after={detail.newText} /></div>
+      case "terminal": return <p key={index} className="text-ui text-faint">Provider terminal <code>{detail.terminalId}</code>. This provider has not supplied a reconnectable terminal.</p>
+      case "diff": return <div key={index}><button type="button" className="pressable block max-w-full truncate py-0.5 text-left font-mono text-label text-muted-foreground underline decoration-hairline underline-offset-2 hover:text-foreground" onClick={() => void viewer.open(detail.path, undefined, source.threadPath, source.liveId)}>{detail.path}</button><EditPreview before={detail.oldText ?? ""} after={detail.newText} /></div>
     }
   })}</div>
 }

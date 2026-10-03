@@ -1,3 +1,5 @@
+import { InlineFilePreview } from "./file-preview"
+import { inlineFileLinks } from "@/lib/inline-file-links"
 import { useContext, useEffect, useRef, type ComponentProps } from "react"
 import type { ExtraProps } from "react-markdown"
 import { ProseStreamingContext } from "./prose-layout-context"
@@ -77,6 +79,28 @@ export function Paragraph({
       element.removeAttribute("data-estimated-paragraph")
     }
   }, [streaming, text])
+  const targets = inlineFileLinks(node)
+  if (targets.length)
+    return (
+      <div className={props.className}>
+        {child?.type === "element" && child.tagName === "a" ? null : (
+          <p>{children}</p>
+        )}
+        {targets.map((path) => (
+          <InlineFilePreview
+            key={path}
+            path={path}
+            name={path.split("/").at(-1) ?? path}
+          />
+        ))}
+      </div>
+    )
+  if (
+    node?.children.some(
+      (entry) => entry.type === "element" && entry.tagName === "img"
+    )
+  )
+    return <div className={props.className}>{children}</div>
   return (
     <p {...props} ref={ref}>
       {children}

@@ -1,6 +1,6 @@
 import { useCopy } from "@/components/ui/use-copy"
 import { ActivityMark } from "@/components/ui/activity-mark"
-import { toolKindActivity } from "@mako/sessions/tool-identity"
+import { toolKindActivity, type ToolIdentity, type ToolKind } from "@mako/sessions/tool-identity"
 import { memo, useEffect, useState, type ComponentType } from "react"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
@@ -18,11 +18,9 @@ import { loadThreadBlock } from "@/state/thread-viewing"
 import { loadLiveHistoryDetail } from "@/state/live-history"
 import {
   ChevronRightIcon,
-  CircleAlertIcon,
   CheckIcon,
   CopyIcon,
   FileTextIcon,
-  XIcon,
 } from "lucide-react"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -30,7 +28,8 @@ import { Shimmer } from "@/components/ui/shimmer"
 /**
  * One tool invocation, collapsed to a single line by default. The row is the
  * transcript's rhythm section — it has to stay quiet at a glance and be
- * complete when opened.
+ * complete when opened. Every harness and kind draws the same line: glyph,
+ * label, target, then whatever is still true about the call at the far end.
  */
 export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false)
@@ -40,9 +39,10 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const source = useTranscriptSource()
   const view = useToolView(call)
 
-  const summary = view?.summary?.(call) ?? call.tool.target ?? ""
+  const summary = view?.summary ? view.summary(call) : toolTarget(call.tool)
   const openPath = view?.openPath?.(call)
   const Body = view?.body
+  const server = toolServer(call.tool)
   // A page carries the head of each tool output; the rest is read when the
   // row opens, and the head stays on screen until it lands.
   const rest = open ? call.rest : undefined
@@ -62,30 +62,27 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   }, [rest, threadPath, liveId, readAttempt])
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-lg border transition-colors duration-150",
-        call.isError
-          ? "border-negative/30 bg-negative/[0.04]"
-          : open ? "border-hairline bg-surface" : "border-transparent"
-      )}
-    >
-      <div className="group/tool flex items-center">
+    <div>
+      <div className="group/tool -mx-1.5 flex min-w-0 items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
         <button
           type="button"
           aria-expanded={open}
           data-open={open || undefined}
           data-pending={call.pending || undefined}
           onClick={() => setOpen((value) => !value)}
-          className="pressable flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover"
+          className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-ui"
         >
           <LeadSlot call={call} open={open} icon={view?.icon} />
-          <span className="shrink-0 text-ui font-medium text-foreground/90">
-            {call.tool.kind === "shell" ? "$" : call.tool.label}
+          <span className={cn("shrink-0", call.isError ? "text-negative" : "text-muted-foreground")}>
+            {toolLabel(call.tool)}
           </span>
-          <span className="min-w-0 flex-1 truncate font-mono text-ui text-faint">
-            {summary}
-          </span>
+          {summary ? (
+            <span className={cn("min-w-0 truncate text-faint", !view?.summary && CODE_KINDS.has(call.tool.kind) && "font-mono text-label")}>
+              {summary}
+            </span>
+          ) : null}
+          <span className="flex-1" />
+          {server ? <span className="shrink-0 text-label text-faint/70">{server}</span> : null}
           <Status call={call} />
         </button>
         {openPath ? (
@@ -109,7 +106,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
       </div>
 
       {open ? (
-        <div className="border-t border-hairline">
+        <div data-tool-body className="ml-1.75 space-y-2 border-l border-hairline py-1.5 pl-3.75">
           {!rest && call.details?.length ? <ToolDetails details={call.details} /> : null}
           {!rest && (Body && !call.details?.some((detail) => detail.type === "diff") ? (
             <Body call={call} expanded />
@@ -117,7 +114,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
             <DefaultBody call={call} dense={dense} />
           ))}
           {!rest && call.attachments?.length ? (
-            <div className="space-y-2 p-2.5">
+            <div className="space-y-2">
               {call.attachments.map((attachment, index) => (
                 <TranscriptAttachment
                   key={attachment.id ?? index}
@@ -127,7 +124,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
             </div>
           ) : null}
           {rest ? (
-            <p className="px-2.5 pb-2 text-label">
+            <p className="text-label">
               {readError ? <><span role="alert">{readError}</span>{" "}<button type="button" className="pressable underline" onClick={() => { setReadError(null); setReadAttempt(value => value + 1) }}>Try again</button></>
                 : <Shimmer text={`Reading the rest of this output${rest.length ? ` · ${rest.length.toLocaleString()} characters` : ""}`} />}
             </p>
@@ -138,11 +135,35 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   )
 })
 
+/** Kinds whose target is something you could paste into a terminal or editor. */
+const CODE_KINDS: ReadonlySet<ToolKind> = new Set<ToolKind>([
+  "shell", "shell-input", "read", "edit", "write", "delete", "move",
+  "list", "search", "find", "code", "web-fetch",
+])
+
+/** An MCP tool's label without the server, which sits at the row's far end. */
+function toolLabel(tool: ToolIdentity): string {
+  const prefix = tool.server ? `${tool.server}: ` : ""
+  if (!prefix || !tool.label.startsWith(prefix)) return tool.label
+  const name = tool.label.slice(prefix.length)
+  return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+function toolServer(tool: ToolIdentity): string | undefined {
+  return tool.kind === "mcp" || tool.kind === "computer" ? tool.server : undefined
+}
+
+/** The target, unless it only repeats the tool's own name. */
+function toolTarget(tool: ToolIdentity): string {
+  const target = tool.target ?? ""
+  return tool.server && tool.tool && target === `${tool.server}: ${tool.tool}` ? "" : target
+}
+
 /**
  * One leading slot, two layers: the tool's glyph, and the chevron whenever
  * the pointer is near or the row is open. The glyph is what makes a row
  * scannable, so it shows from the first frame; the running state is the
- * status pip at the end of the row, not a spinner in place of identity.
+ * mark at the end of the row, not a spinner in place of identity.
  * Crossfaded with CSS alone — no state, no re-render per token, and the row
  * never shifts because the slot is one fixed square.
  */
@@ -186,6 +207,7 @@ function LeadSlot({
   )
 }
 
+/** What is still true about the call, in words; only a running call moves. */
 function Status({ call }: { call: ToolCall }) {
   if (call.pending) {
     return (
@@ -194,25 +216,9 @@ function Status({ call }: { call: ToolCall }) {
       </span>
     )
   }
-  if (call.isError) {
-    return (
-      <span className="flex shrink-0 items-center gap-1 text-label text-negative">
-        <CircleAlertIcon className="size-3" />
-        failed
-      </span>
-    )
-  }
-  if (call.isCanceled) {
-    return (
-      <span className="flex shrink-0 items-center gap-1 text-label text-faint">
-        <XIcon className="size-3" />
-        canceled
-      </span>
-    )
-  }
-  if (call.isCutOff) {
-    return <span className="shrink-0 text-label text-faint">cut off</span>
-  }
+  if (call.isError) return <span className="shrink-0 text-label text-negative">failed</span>
+  if (call.isCanceled) return <span className="shrink-0 text-label text-faint">canceled</span>
+  if (call.isCutOff) return <span className="shrink-0 text-label text-faint">cut off</span>
   return null
 }
 
@@ -221,7 +227,7 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
   const input = args ? formatToolArguments(call.arguments) : ""
 
   return (
-    <div className="space-y-2 px-2.5 py-2">
+    <div className="space-y-2">
       {args ? (
         <CopyableBlock label="input" text={input}>
           <pre className="rounded bg-raised px-2 py-1.5 font-mono text-label leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
@@ -261,7 +267,7 @@ export function Output({
     <CopyableBlock label="output" text={normalized}>
       <pre
         className={cn(
-          "font-mono text-ui leading-[1.55] break-words whitespace-pre-wrap",
+          "font-mono text-label leading-[1.6] break-words whitespace-pre-wrap",
           dense ? "max-h-40 overflow-y-auto" : "max-h-[26rem] overflow-y-auto",
           isError ? "text-negative/90" : "text-muted-foreground"
         )}

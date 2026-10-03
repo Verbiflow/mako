@@ -19,7 +19,11 @@ import {
   NAVIGATOR_WIDTH,
   TurnNavigator,
 } from "@/components/transcript/turn-navigator"
-import { LEAD_EXCHANGE_ID, isInterruptedNote, type Exchange as ExchangeData } from "@/lib/exchanges"
+import {
+  LEAD_EXCHANGE_ID,
+  isInterruptedNote,
+  type Exchange as ExchangeData,
+} from "@/lib/exchanges"
 import type { MakoPrompt, TurnStop } from "@/state/prompt-delivery"
 import { cn } from "@/lib/utils"
 import { ArrowDownIcon } from "lucide-react"
@@ -246,6 +250,8 @@ export function ConversationTimeline({
   const userScrolling = useRef(false)
   const lastScrollTop = useRef(0)
   const restore = useRef<ScrollAnchor | null>(null)
+  const readingAnchor = useRef<ScrollAnchor | null>(null)
+  const restoringReader = useRef<ScrollAnchor | null>(null)
   const pendingJump = useRef<string | null>(null)
   /**
    * One request for earlier history at a time, from the moment it is asked
@@ -284,25 +290,85 @@ export function ConversationTimeline({
     scrollMargin: edge ? 80 : 24,
     useAnimationFrameWithResizeObserver: true,
   })
+  const previousWindowed = useRef(windowed)
+  useLayoutEffect(() => {
+    if (previousWindowed.current === windowed) return
+    previousWindowed.current = windowed
+    const node = viewport.current,
+      snapshot = readingAnchor.current
+    if (!node || awaitingEarlier.current) return
+    if (pinned.current) {
+      if (windowed) rows.scrollToEnd({ behavior: "auto" })
+      else node.scrollTop = node.scrollHeight
+      return
+    }
+    if (!snapshot?.exchangeId) return
+    const index = exchanges.findIndex(
+      (exchange) => exchange.id === snapshot.exchangeId
+    )
+    if (index < 0) return
+    if (windowed)
+      rows.scrollToIndex(index, { align: "start", behavior: "auto" })
+    else if (index < hidden) setLimit(exchanges.length - index)
+    restoringReader.current = snapshot
+  }, [windowed, rows, exchanges, hidden])
   const virtualRows = rows.getVirtualItems()
   const mountedKeys = windowed
     ? virtualRows.map((row) => row.key).join("\0")
     : ""
 
+  useLayoutEffect(() => {
+    const node = viewport.current,
+      snapshot = restoringReader.current
+    if (
+      !node ||
+      !snapshot?.exchangeId ||
+      userScrolling.current ||
+      pendingJump.current
+    )
+      return
+    if (
+      !node.querySelector(
+        `[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`
+      )
+    )
+      return
+    preserveScrollAnchor(node, snapshot)
+    // Measurement reconciliation must no longer own the old index target.
+    if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+    lastScrollTop.current = node.scrollTop
+    readingAnchor.current = snapshot
+    restoringReader.current = null
+  }, [mountedKeys, shown.length, rows, windowed])
+
   useEffect(() => {
     if (more) setEverMore(true)
   }, [more, identity])
 
-  const scrollToEnd = useCallback((behavior: ScrollBehavior = "auto") => {
-    const node = viewport.current
-    if (!node) return
-    restore.current = null
-    userScrolling.current = false
-    pinned.current = true
-    node.scrollTo({ top: node.scrollHeight, behavior })
-    lastScrollTop.current = node.scrollTop
-    setShowJump(false)
-  }, [])
+  const scrollToEnd = useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      const node = viewport.current
+      if (!node) return
+      restore.current = null
+      pendingJump.current = null
+      userScrolling.current = false
+      readingAnchor.current = null
+      restoringReader.current = null
+      pinned.current = true
+      if (windowed) rows.scrollToEnd({ behavior: "auto" })
+      else
+        node.scrollTo({
+          top: node.scrollHeight,
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+            .matches
+            ? "auto"
+            : behavior,
+        })
+      lastScrollTop.current = node.scrollTop
+      setShowJump(false)
+    },
+    [rows, windowed]
+  )
 
   const onScroll = useCallback(() => {
     const node = viewport.current
@@ -312,9 +378,8 @@ export function ConversationTimeline({
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
     const atBottom = distance < NEAR_BOTTOM
     if (userScrolling.current) pinned.current = !movingUp && atBottom
-    // Keys, find-in-page and focus move the reader without a wheel or
-    // pointer; leaving the end upward releases the pin all the same.
-    else if (movingUp && !atBottom) pinned.current = false
+    // Layout/virtualizer adjustments are not reader intent. Keyboard input
+    // participates through the same explicit input handlers below.
     lastScrollTop.current = node.scrollTop
     // A reader who keeps scrolling while a page is on its way moves the
     // position that page must be placed around.
@@ -322,6 +387,15 @@ export function ConversationTimeline({
       const { shown, hasEarlier, head } = restore.current
       restore.current = { ...captureAnchor(node, [], hasEarlier), shown, head }
     }
+    if (
+      !pinned.current &&
+      !awaitingEarlier.current &&
+      !pendingJump.current &&
+      !restoringReader.current &&
+      (userScrolling.current || !readingAnchor.current)
+    )
+      readingAnchor.current = captureAnchor(node, [], false)
+    else if (pinned.current) readingAnchor.current = null
     const show = !pinned.current && !atBottom
     setShowJump((current) => (current === show ? current : show))
     // A reader scrolling again after a stalled request asks once more; the
@@ -329,18 +403,39 @@ export function ConversationTimeline({
     if (userScrolling.current) wake.current()
   }, [])
 
-  const onWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
-    userScrolling.current = true
-    stalled.current = false
-    if (!awaitingEarlier.current) restore.current = null
-    if (event.deltaY < 0) pinned.current = false
-  }, [])
+  const onWheel = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      if (windowed && viewport.current)
+        rows.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
+      pendingJump.current = null
+      restoringReader.current = null
+      readingAnchor.current = null
+      userScrolling.current = true
+      stalled.current = false
+      if (!awaitingEarlier.current) restore.current = null
+      if (event.deltaY < 0) pinned.current = false
+      const node = viewport.current
+      if (
+        node &&
+        ((event.deltaY < 0 && node.scrollTop <= 0) ||
+          (event.deltaY > 0 &&
+            node.scrollTop + node.clientHeight >= node.scrollHeight))
+      )
+        userScrolling.current = false
+    },
+    [rows, windowed]
+  )
 
   const onPointerDown = useCallback(() => {
+    if (windowed && viewport.current)
+      rows.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
+    pendingJump.current = null
+    restoringReader.current = null
+    readingAnchor.current = null
     userScrolling.current = true
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
-  }, [])
+  }, [rows, windowed])
 
   useEffect(() => {
     const node = viewport.current
@@ -378,6 +473,8 @@ export function ConversationTimeline({
     restore.current = null
     pendingJump.current = null
     userScrolling.current = false
+    readingAnchor.current = null
+    restoringReader.current = null
     pinned.current = true
     awaitingEarlier.current = false
     sawLoading.current = false
@@ -404,8 +501,15 @@ export function ConversationTimeline({
     if (!node) return
     const pin = () => {
       if (!pinned.current) {
-        if (restore.current) {
-          preserveScrollAnchor(node, restore.current)
+        const snapshot = restore.current ?? readingAnchor.current
+        if (
+          !userScrolling.current &&
+          snapshot?.exchangeId &&
+          node.querySelector(
+            `[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`
+          )
+        ) {
+          preserveScrollAnchor(node, snapshot)
           lastScrollTop.current = node.scrollTop
         }
         return
@@ -480,15 +584,7 @@ export function ConversationTimeline({
     lastScrollTop.current = node.scrollTop
     restore.current = settled
     endEarlier(true)
-  }, [
-    loadingEarlier,
-    shown,
-    hasEarlier,
-    exchanges,
-    windowed,
-    rows,
-    endEarlier,
-  ])
+  }, [loadingEarlier, shown, hasEarlier, exchanges, windowed, rows, endEarlier])
 
   const requestEarlier = useCallback(() => {
     const node = viewport.current
@@ -519,7 +615,15 @@ export function ConversationTimeline({
             endEarlier(false)
         }, 0)
       })
-  }, [more, hidden, hasEarlier, loadingEarlier, onLoadEarlier, shown, endEarlier])
+  }, [
+    more,
+    hidden,
+    hasEarlier,
+    loadingEarlier,
+    onLoadEarlier,
+    shown,
+    endEarlier,
+  ])
 
   const maybeLoadEarlier = useCallback(() => {
     const node = viewport.current
@@ -575,20 +679,18 @@ export function ConversationTimeline({
   const jump = useCallback(
     (id: string, behavior: ScrollBehavior = "smooth") => {
       restore.current = null
+      readingAnchor.current = null
+      restoringReader.current = null
+      pendingJump.current = null
       userScrolling.current = false
       pinned.current = false
       const index = exchanges.findIndex((exchange) => exchange.id === id)
       if (index < 0) return
       if (windowed) {
-        const element = viewport.current?.querySelector(
-          `[data-exchange="${CSS.escape(id)}"]`
-        )
-        if (element)
-          element.scrollIntoView({ behavior: "auto", block: "start" })
-        else {
-          pendingJump.current = id
-          rows.scrollToIndex(index, { align: "start", behavior: "auto" })
-        }
+        // The virtualizer owns reconciliation while rows are measured. A
+        // second jump must replace that target even if its row is mounted.
+        pendingJump.current = id
+        rows.scrollToIndex(index, { align: "start", behavior: "auto" })
         return
       }
       if (index < hidden) {
@@ -671,12 +773,19 @@ export function ConversationTimeline({
         <span ref={topFade} aria-hidden className="scroll-fade-top" />
         <div
           ref={viewport}
+          tabIndex={0}
+          role="region"
+          aria-label="Conversation transcript"
           onPointerDown={onPointerDown}
           onPointerUp={(event) => {
             if (event.pointerType === "mouse") userScrolling.current = false
           }}
           onScroll={onScroll}
           onScrollEnd={() => {
+            if (userScrolling.current) onScroll()
+            userScrolling.current = false
+          }}
+          onKeyUp={() => {
             userScrolling.current = false
           }}
           onKeyDown={(event) => {
@@ -695,8 +804,15 @@ export function ConversationTimeline({
                 "button,input,textarea,[contenteditable=true]"
               )
             ) {
+              if (windowed && viewport.current)
+                rows.scrollToOffset(viewport.current.scrollTop, {
+                  behavior: "auto",
+                })
+              pendingJump.current = null
+              restoringReader.current = null
               userScrolling.current = true
               stalled.current = false
+              pinned.current = false
             }
           }}
           onWheel={onWheel}

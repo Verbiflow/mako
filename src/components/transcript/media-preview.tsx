@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
-import { XIcon, ExpandIcon, ImageOffIcon, RotateCwIcon } from "lucide-react"
+import { ImageOffIcon, RotateCwIcon } from "lucide-react"
 import { readTranscriptMedia } from "@/state/transcript-media"
 import { viewer } from "@/state/viewer"
 import { useTranscriptSource } from "./source-context"
 import type { AttachmentContent } from "@mako/sessions"
 import { previewableMediaUrl } from "@/lib/transcript-media"
 import { Skeleton } from "@/components/ui/skeleton"
+import { InlineFilePreview } from "./file-preview"
 
 type Preview =
   | { kind: "ready"; url: string; mimeType: string }
@@ -199,73 +193,8 @@ export function MediaContent({
   mimeType: string
   onError: () => void
 }) {
-  if (mimeType.startsWith("audio/"))
-    return (
-      <audio
-        src={url}
-        controls
-        preload="none"
-        aria-label={name}
-        onError={onError}
-        className="w-full"
-      />
-    )
-  if (mimeType.startsWith("video/"))
-    return (
-      <video
-        src={url}
-        controls
-        preload="none"
-        aria-label={name}
-        onError={onError}
-        className="max-h-96 max-w-full"
-      />
-    )
-  if (!mimeType.startsWith("image/"))
-    return (
-      <a href={url} target="_blank" rel="noreferrer">
-        Open {name}
-      </a>
-    )
-  return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <button
-          type="button"
-          className="pressable group/media relative block max-w-full overflow-hidden rounded-lg border border-hairline"
-          aria-label={`Expand ${name}`}
-        >
-          <img
-            src={url}
-            alt={name}
-            loading="lazy"
-            decoding="async"
-            onError={onError}
-            className="max-h-96 max-w-full object-contain"
-          />
-          <span className="absolute right-2 bottom-2 rounded-md bg-raised p-1 text-faint opacity-0 group-hover/media:opacity-100 group-focus-visible/media:opacity-100">
-            <ExpandIcon className="size-4" />
-          </span>
-        </button>
-      </DialogTrigger>
-      <DialogContent className="max-w-[calc(100vw-2rem)] p-3">
-        <div className="mb-3 flex items-center gap-3">
-          <DialogTitle className="min-w-0 flex-1 truncate">{name}</DialogTitle>
-          <DialogClose
-            className="pressable rounded p-1 text-muted-foreground"
-            aria-label="Close preview"
-          >
-            <XIcon className="size-4" />
-          </DialogClose>
-        </div>
-        <div className="max-h-[80vh] overflow-auto">
-          <img
-            src={url}
-            alt={name}
-            className="mx-auto max-h-[78vh] max-w-full object-contain"
-          />
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
+  return <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} onPreviewError={onError} resolvedFile={{
+    path: name, contents: "", previewUrl: url, mimeType,
+    binary: true, truncated: false, size: 0,
+  }} />
 }

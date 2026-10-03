@@ -1,6 +1,20 @@
 import { useState, type ReactNode } from "react"
-import { ChevronRightIcon, CircleAlertIcon, TriangleAlertIcon } from "lucide-react"
-import { MCP_SERVER_FAILED, type TranscriptEvent } from "@mako/sessions/events"
+import {
+  ArrowLeftRightIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  CircleStopIcon,
+  FoldVerticalIcon,
+  InfoIcon,
+  TriangleAlertIcon,
+} from "lucide-react"
+import {
+  COMPACTION_FAILED,
+  CONTEXT_COMPACTED,
+  INTERRUPTED,
+  MCP_SERVER_FAILED,
+  type TranscriptEvent,
+} from "@mako/sessions/events"
 import { Collapse } from "@/components/ui/collapse"
 import { Prose } from "@/components/transcript/markdown"
 import { cn } from "@/lib/utils"
@@ -23,7 +37,7 @@ export function EventNotes({ messages, inline }: { messages: readonly ChatMessag
   }
   if (!runs.length) return null
   return (
-    <div className={cn("flex flex-col gap-1", inline ? "my-0.5" : "my-3")}>
+    <div className={cn("flex flex-col", !inline && "my-3")}>
       {runs.map((run) =>
         "notes" in run ? <SetupNotes key={run.id} notes={run.notes} /> : <EventNote key={run.id} note={run.note} />
       )}
@@ -31,10 +45,17 @@ export function EventNotes({ messages, inline }: { messages: readonly ChatMessag
   )
 }
 
-function ToneIcon({ tone }: { tone: TranscriptEvent["tone"] }) {
-  if (tone === "error") return <CircleAlertIcon className="size-3 shrink-0 text-negative" />
-  if (tone === "warning") return <TriangleAlertIcon className="size-3 shrink-0 text-caution" />
-  return null
+/**
+ * The note's glyph, in the slot a tool row keeps for its own, so a marker and
+ * a tool line up down the column whatever their tone.
+ */
+function NoteIcon({ tone, label, className }: { tone: TranscriptEvent["tone"]; label: string; className: string }) {
+  if (tone === "error") return <CircleAlertIcon className={cn(className, "text-negative")} />
+  if (tone === "warning") return <TriangleAlertIcon className={cn(className, "text-caution")} />
+  if (label === CONTEXT_COMPACTED || label === COMPACTION_FAILED) return <FoldVerticalIcon className={cn(className, "text-faint")} />
+  if (label === INTERRUPTED) return <CircleStopIcon className={cn(className, "text-faint")} />
+  if (/\bmodel\b/i.test(label)) return <ArrowLeftRightIcon className={cn(className, "text-faint")} />
+  return <InfoIcon className={cn(className, "text-faint")} />
 }
 
 /** The line every marker shares; it opens onto `children` when there is more to read. */
@@ -50,33 +71,40 @@ function NoteLine({
   children?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
+  const layer = "absolute inset-0 m-auto size-3.5 [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
   const line = (
     <>
-      <ToneIcon tone={tone} />
+      <span className="relative size-3.5 shrink-0">
+        <NoteIcon
+          tone={tone}
+          label={title}
+          className={cn(layer, children && (open ? "opacity-0" : "group-hover/note:opacity-0"))}
+        />
+        {children ? (
+          <ChevronRightIcon
+            className={cn(layer, "text-faint", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/note:opacity-100")}
+          />
+        ) : null}
+      </span>
       <span className={cn("shrink-0", tone === "error" ? "text-negative" : "text-muted-foreground")}>{title}</span>
       {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
     </>
   )
+  const row = "flex h-7 min-w-0 items-center gap-2 text-ui"
   if (!children)
-    return <div className="flex min-w-0 items-center gap-1.5 py-0.5 text-label" title={detail}>{line}</div>
+    return <div className={row} title={detail}>{line}</div>
   return (
     <div>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="pressable group/note -mx-1.5 flex max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-label transition-colors duration-100 hover:bg-fill-hover"
+        className={cn(row, "pressable group/note -mx-1.5 w-[calc(100%+12px)] rounded-md px-1.5 text-left transition-colors duration-100 hover:bg-fill-hover")}
       >
         {line}
-        <ChevronRightIcon
-          className={cn(
-            "size-3 shrink-0 text-faint opacity-0 [transition:transform_150ms_var(--ease-out),opacity_100ms_ease] group-hover/note:opacity-100",
-            open && "rotate-90 opacity-100"
-          )}
-        />
       </button>
       <Collapse open={open}>
-        <div className="mt-1 mb-1 max-h-80 overflow-y-auto rounded-lg border border-hairline px-3 py-2 text-label text-muted-foreground">
+        <div className="ml-1.75 max-h-80 overflow-y-auto border-l border-hairline py-1.5 pl-3.75 text-ui text-muted-foreground">
           {children}
         </div>
       </Collapse>

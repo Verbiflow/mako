@@ -1,3 +1,4 @@
+import { ListItem } from "./list-item"
 import { DiagramPreview, HighlightedCode } from "./code-preview"
 import { TranscriptAttachment } from "./attachment"
 import { markdownMedia, previewableMediaUrl } from "@/lib/transcript-media"
@@ -239,6 +240,7 @@ function useThrottled(text: string, active: boolean): string {
 
 const components = {
   p: Paragraph,
+  li: ListItem,
   pre: CodeBlock,
   a: CitationLink,
   img: MarkdownMedia,
@@ -353,7 +355,8 @@ function CitationLink({ href, children }: ComponentProps<"a">) {
           target.path,
           target.line,
           source.threadPath,
-          source.liveId
+          source.liveId,
+          target.anchor
         )
       }}
       className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
