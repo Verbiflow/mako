@@ -19,6 +19,7 @@ import { threadsStore } from "@/state/thread-store"
 import { applyLiveSnapshot } from "@/state/live-recovery"
 import { acpStore } from "@/state/acp-state"
 import type { Exchange } from "@/lib/exchanges"
+import type { AttachmentContent } from "@mako/sessions"
 import type { FileContents, LiveSnapshot } from "@/lib/types"
 import {
   filePreviewFormat,
@@ -31,7 +32,8 @@ export function fixtureTheme(theme: "light" | "dark") { prefsStore.set({ theme }
 let setHarness: ((harness: NonNullable<Exchange["response"][number]["provider"]>) => void) | undefined
 export function fixtureHarness(harness: NonNullable<Exchange["response"][number]["provider"]>) { setHarness?.(harness) }
 let setReply: ((text: string) => void) | undefined
-export function fixtureReply(text: string) { setReply?.(text) }
+let setReplyAttachments: ((attachments: AttachmentContent[]) => void) | undefined
+export function fixtureReply(text: string, attachments: AttachmentContent[] = []) { setReply?.(text); setReplyAttachments?.(attachments) }
 let setPrompt: ((prompt: Exchange["prompt"]) => void) | undefined
 export function fixturePrompt(prompt: Exchange["prompt"]) { setPrompt?.(prompt) }
 const mock = installMockBridge()
@@ -350,8 +352,10 @@ function Fixture() {
   useEffect(() => { setHarness = updateHarness; return () => { setHarness = undefined } }, [])
   const [scenario, setScenario] = useState("media")
   const [reply, updateReply] = useState<string>()
+  const [replyAttachments, updateReplyAttachments] = useState<AttachmentContent[]>([])
   const [prompt, updatePrompt] = useState<Exchange["prompt"]>()
   useEffect(() => { setReply = updateReply; return () => { setReply = undefined } }, [])
+  useEffect(() => { setReplyAttachments = updateReplyAttachments; return () => { setReplyAttachments = undefined } }, [])
   useEffect(() => { setPrompt = updatePrompt; return () => { setPrompt = undefined } }, [])
   const [start, setStart] = useState(41)
   const [count, setCount] = useState(40)
@@ -399,7 +403,11 @@ function Fixture() {
                   "Here are the generated assets.\n\n![Native asset](/fixture/native-image)\n\n[demo.mp4](/fixture/demo.mp4)\n\n[voice.wav](/fixture/voice.wav)"
                 ),
               ]
-  if (reply !== undefined) turns.splice(0, turns.length, exchange(1, reply))
+  if (reply !== undefined) {
+    const turn = exchange(1, reply)
+    turn.response[0]!.blocks.unshift(...replyAttachments)
+    turns.splice(0, turns.length, turn)
+  }
   if (prompt && turns[0]) turns[0].prompt = prompt
   if (scenario === "native-documents")
     turns[0]!.response[0]!.blocks = [
