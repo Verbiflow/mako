@@ -20,6 +20,7 @@ import { TerminalPanel } from "@/components/inspector/terminal-lazy"
 import {
   BashBody,
   EditBody,
+  FileTarget,
   SkillBody,
   SubagentBody,
   WaitBody,
@@ -30,7 +31,6 @@ import {
   editsOf,
   writtenText,
 } from "@/lib/tools"
-import { fileName } from "@/lib/format"
 
 /**
  * The desk's own contributions, registered through exactly the same public
@@ -95,8 +95,7 @@ export function installBuiltins(): () => void {
       registerToolKindView(kind, {
         summary: (call: ToolCall) => {
           const edits = editsOf(call)
-          const path = call.tool.target ?? ""
-          return edits.length > 1 ? `${path} · ${edits.length} edits` : path
+          return fileSummary(call, edits.length > 1 ? `${edits.length} edits` : undefined)
         },
         body: EditBody,
         openPath: (call: ToolCall) => call.tool.path,
@@ -105,13 +104,13 @@ export function installBuiltins(): () => void {
     registerToolKindView("write", {
       summary: (call: ToolCall) => {
         const lines = countLines(writtenText(call))
-        return lines ? `${call.tool.target ?? ""} · ${lines} ${lines === 1 ? "line" : "lines"}` : call.tool.target ?? ""
+        return fileSummary(call, lines ? `${lines} ${lines === 1 ? "line" : "lines"}` : undefined)
       },
       body: WriteBody,
       openPath: (call: ToolCall) => call.tool.path,
     }),
     registerToolKindView("read", {
-      summary: (call: ToolCall) => call.tool.path ? fileName(call.tool.path) : call.tool.target ?? "",
+      summary: (call: ToolCall) => fileSummary(call),
       openPath: (call: ToolCall) => call.tool.path,
     }),
     registerToolKindView("skill", { body: SkillBody }),
@@ -121,4 +120,9 @@ export function installBuiltins(): () => void {
     ),
   ]
   return () => disposers.forEach((dispose) => dispose())
+}
+
+function fileSummary(call: ToolCall, note?: string) {
+  const path = call.tool.target ?? call.tool.path
+  return path ? <FileTarget path={path} note={note} /> : note ?? ""
 }
