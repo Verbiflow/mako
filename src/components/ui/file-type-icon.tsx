@@ -30,7 +30,7 @@ export function FileTypeIcon({ path, mimeType, className }: {
   mimeType?: string
   className?: string
 }) {
-  const format = filePreviewFormat(path, mimeType)
+  const format = filePreviewFormat(path, mimeType) ?? filePreviewFormat(path)
   const Icon = format ? marks[format] : FileIcon
   return <Icon aria-hidden className={className} />
 }
