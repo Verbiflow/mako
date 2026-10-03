@@ -311,14 +311,26 @@ export function installMockThreadApp(): void {
     put({ phase: "crashed", processes: [{ name: "web", state: "exited", port: PORT, exit: { code: 1, afterMs: 9_000, at: Date.now() } }] })
   }
 
-  const runCheck = (tier: "quick" | "full") => {
+  const runCheck = (tier: "quick" | "full", only?: string[]) => {
     const key = `check:${tier}` as const
     reset(key)
     const lines = tier === "full" ? FULL_PASS : scenario === "check-failed" ? QUICK_FAIL : QUICK_PASS
+    const ms = tier === "full" ? 3200 : 2200
     const set = (state: "running" | "passed" | "failed") =>
-      put({ checks: current().checks.map((check) => (check.tier === tier ? { ...check, state, at: Date.now() } : check)) })
+      put({
+        checks: current().checks.map((check) => {
+          if (check.tier !== tier) return check
+          if (!check.steps) return { ...check, state, at: Date.now() }
+          const steps = check.steps.map((step) => {
+            if (only && !only.includes(step.name)) return step
+            return state === "running" ? { name: step.name, command: step.command, state } : { ...step, state, ms, at: Date.now() }
+          })
+          const whole = state === "running" ? state : steps.every((step) => step.state === "passed") ? "passed" : steps.some((step) => step.state === "failed") ? "failed" : "never"
+          return { ...check, state: whole, at: Date.now(), steps }
+        }),
+      })
     set("running")
-    stream(key, lines, tier === "full" ? 3200 : 2200, () => set(lines === QUICK_FAIL ? "failed" : "passed"))
+    stream(key, lines, ms, () => set(lines === QUICK_FAIL ? "failed" : "passed"))
   }
 
   installThreadAppDriver({
@@ -328,7 +340,7 @@ export function installMockThreadApp(): void {
       cancel()
       put({ phase: "stopped", processes: [{ name: "web", state: "stopped", port: PORT }] })
     },
-    runCheck: (_cwd, tier) => runCheck(tier),
+    runCheck: (_cwd, tier, steps) => runCheck(tier, steps),
     makeRoom: () => {
       roomMade = true
       toast("Stopped the apps of “Migrate billing to v2” and “Old experiment”. Their files and data stay.")

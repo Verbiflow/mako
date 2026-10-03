@@ -43,10 +43,10 @@ export function stepsCommand(steps: readonly CheckStep[]): string {
   const listed = steps.map(({ name, command, parallel }) => (parallel ? { name, command, parallel: true as const } : { name, command }))
   return [
     `${HEADER}${JSON.stringify(listed)}`,
-    `d=$${STEPS_FOLDER_VARIABLE}; unset ${STEPS_FOLDER_VARIABLE}`,
-    `mako_step() { rm -f "$d/$1.exit"; printf '%s' "$2" > "$d/$1.cmd"; : > "$d/$1.start"; printf '[%s] %s\\n' "$1" "$2"; { (eval "$2") </dev/null 2>&1; printf '%s\\n' "$?" > "$d/$1.code"; } | tee "$d/$1.log"; mv -f "$d/$1.code" "$d/$1.exit"; printf '[%s] exit %s\\n\\n' "$1" "$(cat "$d/$1.exit")"; }`,
-    `mako_passed() { for step; do [ "$(cat "$d/$step.exit" 2>/dev/null)" = 0 ] || return 1; done; }`,
-    `rm -f ${steps.map((step) => `"$d/${step.name}".*`).join(" ")}`,
+    `mako_steps=$${STEPS_FOLDER_VARIABLE}; unset ${STEPS_FOLDER_VARIABLE}`,
+    `mako_step() { rm -f "$mako_steps/$1.exit"; printf '%s' "$2" > "$mako_steps/$1.cmd"; : > "$mako_steps/$1.start"; printf '[%s] %s\\n' "$1" "$2"; { (eval "$2") </dev/null 2>&1; printf '%s\\n' "$?" > "$mako_steps/$1.code"; } | tee "$mako_steps/$1.log"; mv -f "$mako_steps/$1.code" "$mako_steps/$1.exit"; printf '[%s] exit %s\\n\\n' "$1" "$(cat "$mako_steps/$1.exit")"; }`,
+    `mako_passed() { for mako_name; do [ "$(cat "$mako_steps/$mako_name.exit" 2>/dev/null)" = 0 ] || return 1; done; }`,
+    `rm -f ${steps.map((step) => `"$mako_steps/${step.name}".*`).join(" ")}`,
     ...stepGroups(steps).map((group) => {
       const run = group.length === 1
         ? `mako_step ${group[0]!.name} ${quote(group[0]!.command)}`
