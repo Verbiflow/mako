@@ -109,6 +109,7 @@ export const Prose = memo(function Prose({
   references,
   skills,
   threads,
+  previewedFiles,
 }: {
   text: string
   className?: string
@@ -117,6 +118,8 @@ export const Prose = memo(function Prose({
   skills?: readonly SkillAppendixEntry[]
   /** Referenced conversations with no token to restore; their placeholders read as title chips. */
   threads?: readonly ThreadAppendixEntry[]
+  /** File-backed native visuals already rendered by this reply. */
+  previewedFiles?: readonly string[]
   /** While true the parse is rate-limited rather than run per token. */
   streaming?: boolean
   urlTransform?: (url: string) => string
@@ -154,9 +157,12 @@ export const Prose = memo(function Prose({
   )
   const rehypePlugins = useMemo<
     Parameters<typeof Markdown>[0]["rehypePlugins"]
-  >(() => (tree ? [[reuseParsedProse, tree], rehypeAssetGroups] : [rehypeAssetGroups]), [tree])
+  >(() => {
+    const assets: [typeof rehypeAssetGroups, { previewedFiles?: readonly string[] }] = [rehypeAssetGroups, { previewedFiles }]
+    return tree ? [[reuseParsedProse, tree], assets] : [assets]
+  }, [tree, previewedFiles])
 
-  const settled = !streaming && !referenceInput && !urlTransform && !hasTree
+  const settled = !streaming && !referenceInput && !urlTransform && !hasTree && !previewedFiles?.length
   const rendered = useMemo(() => {
     const cached = settled ? settledProse.get(source) : undefined
     if (cached) {

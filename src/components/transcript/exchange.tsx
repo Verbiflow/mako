@@ -152,7 +152,7 @@ export const Exchange = memo(function Exchange({
                 <Prompt message={section.message} />
               </div>
             ) : section.kind === "prose" ? (
-              <Response key={section.id} message={section.message} showWork />
+              <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
             ) : (
               <WorkSection
                 key={section.id}
@@ -623,9 +623,11 @@ function formatDuration(milliseconds: number): string {
 function Response({
   message,
   showWork,
+  previewedFiles,
 }: {
   message: ChatMessage
   showWork: boolean
+  previewedFiles?: readonly string[]
 }) {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
 
@@ -680,7 +682,7 @@ function Response({
           streaming={message.streaming}
         />
       ))}
-      {text ? <Prose text={text} streaming={message.streaming} /> : null}
+      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} /> : null}
 
       {message.error ? (
         <div className="flex items-start gap-2 rounded-lg border border-negative/30 bg-negative/[0.06] px-2.5 py-2 text-ui text-negative">
