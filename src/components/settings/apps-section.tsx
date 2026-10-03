@@ -400,8 +400,10 @@ function Credentials({ setup, secrets, saving, onAllow }: {
 
 function RecipeSource({ state }: { state: ReadyRecipe }) {
   const where =
-    state.source === "mako"
-      ? `Saved in Mako${state.savedAt ? ` ${ago(state.savedAt)}` : ""}, for every branch${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
+    state.draft
+      ? `Version ${state.version ?? ""}, a draft saved${state.savedAt ? ` ${ago(state.savedAt)}` : ""} that only this folder's app runs until an agent proves and publishes it.`
+      : state.source === "mako"
+      ? `${state.version ? `Version ${state.version}, saved` : "Saved"} in Mako${state.savedAt ? ` ${ago(state.savedAt)}` : ""}, for every branch${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
       : "Committed with the project as .mako/recipe.json, so it changes with the branch."
   return (
     <div className="flex items-center gap-3 border-t border-hairline pt-4">
