@@ -69,6 +69,9 @@ import { ThreadArchives } from "./thread-archives.js"
 import { ThreadLifecycle, followNativeArchives } from "./thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
+import { installThreadTitlesIpc } from "./ipc/thread-titles.js"
+import { ThreadTitler } from "./thread-titles.js"
+import { resolveTitleModel } from "./thread-title-model.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { installChatFoldersIpc } from "./ipc/chat-folders.js"
 import { installWorkspaceMovesIpc } from "./ipc/workspace-moves.js"
@@ -259,7 +262,7 @@ import {
   previewSkillRemove,
   previewSkillSync,
 } from "./skill-sync.js"
-import { installGitIpc } from "./ipc/git.js"
+import { installGitIpc, openUtilityModels } from "./ipc/git.js"
 import { fileResponse } from "./file-response.js"
 import { startWebHost } from "./web-host.js"
 import { SharedConversations } from "./shared-conversations.js"
@@ -368,6 +371,12 @@ const { store: threadStore, problem: threadStoreProblem } = openThreadStore(thre
 if (threadStoreProblem) hostWarn("threads", "Thread store problem", { problem: threadStoreProblem })
 installThreadStore(threadStore)
 const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event) => emit(event)) : () => {}
+const utilityModels = openUtilityModels()
+/** Names Threads from their latest exchanges, with the model chosen in Settings and only then. */
+const threadTitler = threadStore
+  ? new ThreadTitler({ store: threadStore, model: () => resolveTitleModel(utilityModels), emit: (titles) => emit({ type: "thread-titles", titles }) })
+  : undefined
+if (threadTitler) void utilityModels.titleModel().then((model) => threadTitler.configure(model !== null))
 const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
 /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
 const conversationsIn = (path: string, status: (value: string) => boolean) => liveConversations
@@ -1215,7 +1224,7 @@ function bindIpc() {
   })
 
   installWorkspaceIpc({ withHost, emit })
-  installGitIpc({ withHost })
+  installGitIpc({ withHost, models: utilityModels })
 
   handle("mako:list-plugins", () => listPlugins())
   handle("mako:plugins-dir", () => pluginsDir())
@@ -2181,6 +2190,7 @@ app.whenReady().then(async () => {
   liveConversations = new LiveConversations({
     memory: sessionMemory ?? undefined,
     threads: threadStore ?? undefined,
+    exchangeCompleted: (exchange) => threadTitler?.exchange(exchange),
     mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
     workspaceSnapshots: new WorkspaceSnapshots(
       join(app.getPath("userData"), "workspace-snapshots")
@@ -2342,6 +2352,7 @@ app.whenReady().then(async () => {
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
   followNativeArchives(threadLifecycle, subscribeThreadEvents, emit)
   installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
+  installThreadTitlesIpc({ store: threadStore, titler: threadTitler, models: utilityModels, emit })
   installThreadWorktreesIpc(threadWorktrees)
   installChatFoldersIpc()
   installWorkspaceMovesIpc(moves)
@@ -2558,6 +2569,7 @@ const quitLifecycle = backgroundLifecycle({
       sessionMemory?.close()
       installThreadStore(null)
       stopFollowingThreads()
+      threadTitler?.close()
       threadStore?.close()
       threadArchives?.close()
       checkoutHeads.close()

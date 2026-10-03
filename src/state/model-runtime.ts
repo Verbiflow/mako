@@ -28,4 +28,6 @@ export const utilityModels = {
     getMako().connectUtilityModel(input),
   disconnect: (provider: UtilityProvider) =>
     getMako().disconnectUtilityModel(provider),
+  /** The connected model that names Threads, or null to keep their agents' names. */
+  setTitleModel: (model: string | null) => getMako().setThreadTitleModel(model),
 }

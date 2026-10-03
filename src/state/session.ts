@@ -7,6 +7,7 @@ import type { Attachment } from "@/lib/attachments"
 import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
+import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { refreshWorktrees } from "@/state/worktrees"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
@@ -246,6 +247,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-purposes") {
     applyThreadPurposes(event.purposes)
+    return
+  }
+  if (event.type === "thread-titles") {
+    applyThreadTitles(event.titles)
     return
   }
   if (event.type === "host-reconnected") {
@@ -627,6 +632,11 @@ async function loadGroups() {
     await loadThreadPurposes()
   } catch (error) {
     toast.error("Setup Threads show without their Setup label", { description: error instanceof Error ? error.message : String(error) })
+  }
+  try {
+    await loadThreadTitles()
+  } catch (error) {
+    toast.error("Threads show their agents' names until Mako reconnects", { description: error instanceof Error ? error.message : String(error) })
   }
 }
 

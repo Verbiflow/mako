@@ -49,6 +49,8 @@ export const HandoffSchema = z.object({
     owner: PrincipalIdSchema,
     title: z.string().optional(),
     titleSource: z.enum(["user", "frozen", "auto"]).optional(),
+    autoTitle: z.string().optional(),
+    originalTitle: z.string().optional(),
   }),
   sessions: z.array(z.object({
     id: SessionIdSchema,

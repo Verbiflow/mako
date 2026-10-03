@@ -9,6 +9,7 @@ import type {
 } from "./thread-lifecycle.js"
 import type { ThreadGroup } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
+import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
 import type { ThreadWorktrees, WorktreeInventory, WorktreeReview } from "./thread-worktrees.js"
 import type { ChatFolders } from "./chat-folders.js"
@@ -186,6 +187,13 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<ThreadArchiveSnapshot>("mako:thread-archives"),
     threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
     threadPurposes: () => invokeTrustedHost<ThreadPurpose[]>("mako:thread-purposes"),
+    threadTitles: () => invokeTrustedHost<ThreadTitleEntry[]>("mako:thread-titles"),
+    /** `title: null` gives the Thread's name back to automatic titles. */
+    renameThread: (operationId: string, thread: string, title: string | null, original?: string) =>
+      invokeTrustedHost<ThreadTitleEntry>("mako:thread-rename", operationId, thread, title, original),
+    importThreadTitles: (entries: Array<{ thread: string; title: string }>) =>
+      invokeTrustedHost<ThreadTitleEntry[]>("mako:thread-titles-import", entries),
+    setThreadTitleModel: (model: string | null) => invokeTrustedHost<void>("mako:thread-title-model", model),
     worktrees: () => invokeTrustedHost<ThreadWorktrees>("mako:worktrees"),
     checkoutHeads: (folders: string[]) => invokeTrustedHost<CheckoutHeads>("mako:checkout-heads", folders),
     threadApp: (cwd: string) => invokeTrustedHost<ThreadAppView>("mako:thread-app", cwd),

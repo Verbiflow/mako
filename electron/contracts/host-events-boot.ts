@@ -5,6 +5,7 @@ import type { WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
+import type { ThreadTitleEntry } from "./thread-titles.js"
 import {
   type ControlActivity,
   type BrowserControlStatus,
@@ -110,6 +111,8 @@ export type HostEventBody =
   | { type: "thread-group"; change: ThreadGroupChange }
   /** Every Thread Mako started for a job of its own, after one more was recorded; window-wide. */
   | { type: "thread-purposes"; purposes: ThreadPurpose[] }
+  /** These Threads' names changed, from any host; the rest are as they were. Window-wide. */
+  | { type: "thread-titles"; titles: ThreadTitleEntry[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */
   | { type: "thread-removed"; path: string }
   | {

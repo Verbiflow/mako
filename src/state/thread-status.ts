@@ -11,6 +11,7 @@ import {
   type NotificationSubject,
 } from "@/state/notifications"
 import { prefsStore } from "@/state/prefs"
+import { threadTitlesStore } from "@/state/thread-titles"
 import type { AttentionByPath, ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
 
@@ -251,7 +252,7 @@ export function threadSubject(
   return {
     id: subjectId({ kind: "thread", path }),
     target: { kind: "thread", path },
-    title: prefsStore.get().titleOverrides[path] ?? ref?.title ?? workspaceName(ref?.cwd),
+    title: prefsStore.get().titleOverrides[path] ?? (ref?.threadId ? threadTitlesStore.get().byThread[ref.threadId]?.title : undefined) ?? ref?.title ?? workspaceName(ref?.cwd),
     agent: harnessLabel(harness),
     workspace: subjectWorkspace(ref?.cwd),
   }

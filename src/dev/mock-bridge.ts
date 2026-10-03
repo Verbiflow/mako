@@ -7,6 +7,7 @@ import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
 import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
+import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { ContextBreakdown, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
@@ -166,6 +167,8 @@ export function installMockBridge() {
   let setupWorktree: ThreadWorktree | undefined
   /** Threads started for a purpose, as the host records them on start. */
   const purposes: ThreadPurpose[] = scene === "rail" ? [...RAIL_PURPOSES] : []
+  /** Threads renamed in this page, as the Thread store keeps them. */
+  const titles = new Map<string, ThreadTitleEntry>()
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false
   const profiles = () =>
@@ -209,6 +212,16 @@ export function installMockBridge() {
     }),
     threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : []),
     threadPurposes: async () => [...purposes],
+    threadTitles: async () => [...titles.values()],
+    renameThread: async (_operationId: string, thread: string, title: string | null) => {
+      const entry: ThreadTitleEntry = title === null ? { thread, title: null } : { thread, title, source: "user" }
+      if (title === null) titles.delete(thread)
+      else titles.set(thread, entry)
+      emit({ type: "thread-titles", titles: [entry] })
+      return entry
+    },
+    importThreadTitles: async () => [],
+    setThreadTitleModel: async () => {},
     worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>

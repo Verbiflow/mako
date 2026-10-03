@@ -25,6 +25,7 @@ import { acp, acpForThread, useAcp } from "@/state/acp"
 import type { AcpPresence } from "@/state/acp-presence"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useThreadPurposes } from "@/state/thread-purposes"
+import { useThreadTitles } from "@/state/thread-titles"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
@@ -88,8 +89,9 @@ export function LiveAgentRow({
   // A folded row whose other Session is the one doing something shows that
   // Session's state; this conversation's own mark is for when it's the news.
   const otherSession = foldState && foldState.status.kind !== "idle" && foldState.sessions[0]?.status !== foldState.status
+  const named = useThreadTitles((titles) => (thread ? titles.byThread[thread]?.title : undefined))
   const title =
-    presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
+    named ?? presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
   const open = () => {
     if (folded) openFoldedThread(folded.thread, folded.members)
     else acp.activate(presence.key)

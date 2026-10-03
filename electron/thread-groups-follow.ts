@@ -7,8 +7,8 @@ import type { ThreadStore } from "./thread-store.js"
  * Every host on this Mac shares one Thread store, and a new Session in a
  * Thread is announced only to the windows of the host that made it. This
  * host looks for other hosts' commits once a second and tells its own
- * windows which Threads' tabs changed, and the Threads' purposes when
- * another host recorded one.
+ * windows which Threads' tabs and names changed, and the Threads' purposes
+ * when another host recorded one.
  */
 export function followOtherHosts(store: ThreadStore, emit: (event: HostEvent) => void, intervalMs = 1000): () => void {
   let known = byId(store.groups())
@@ -25,6 +25,8 @@ export function followOtherHosts(store: ThreadStore, emit: (event: HostEvent) =>
         emit({ type: "thread-purposes", purposes: nextPurposes })
       }
       const changed = store.takeExternalChanges()
+      const titles = store.takeExternalTitles()
+      if (titles.length) emit({ type: "thread-titles", titles })
       failing = false
       if (!changed) return
       const groups = byId(store.groups())

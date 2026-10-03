@@ -35,6 +35,7 @@ import {
 import { threadsStore, useThreads } from "@/state/thread-store"
 import { followThreadMoves } from "@/state/thread-moves"
 import { noteOutcome, retireSubject } from "@/state/notifications"
+import { offerWindowRenames } from "@/state/thread-titles"
 
 interface ThreadCatalog {
   ready: boolean
@@ -184,6 +185,7 @@ export function applyThreads(list: ThreadRef[], loaded = true) {
   const unique = threadList(list)
   threadsStore.set({ threads: unique, loaded })
   followThreadMoves(previous, unique)
+  offerWindowRenames(unique)
   if (initialHydration) seedRecentThreadActivity(unique)
 }
 
