@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -19,15 +20,7 @@ import type { LiveBatch } from "../electron/contracts/live-conversations.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 // Shared-policy conformance labels; real native adapter evidence is tested separately.
-for (const provider of [
-  "claude",
-  "codex",
-  "cursor",
-  "grok",
-  "devin",
-  "opencode",
-  "seventh-fixture",
-]) {
+for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   const root = mkdtempSync(join(tmpdir(), "mako-delivery-"))
   const id = randomUUID()
   let emit: (event: LiveDriverEvent) => void = () => {}

@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { setImmediate as tick } from "node:timers/promises"
@@ -14,7 +15,7 @@ installMockBridge()
 const notices = mock.method(toast, "error", () => "fixture")
 const dismissed = mock.method(toast, "dismiss", () => "fixture")
 const sends = mock.method(getMako(), "livePrompt", async () => { throw new Error("Unexpected send") })
-const providers = ["claude", "codex", "cursor", "grok", "devin", "opencode"]
+const providers = registeredHarnessIds()
 try {
   for (const [index, harness] of providers.entries()) {
     const snapshot = auditSnapshot(1, harness)

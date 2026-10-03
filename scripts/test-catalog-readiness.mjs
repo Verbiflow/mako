@@ -1,3 +1,8 @@
+import { tsImport } from "tsx/esm/api"
+const { registeredHarnessIds } = await tsImport(
+  "./registered-harnesses.ts",
+  import.meta.url
+)
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -43,7 +48,9 @@ class Client {
     onSnapshot?.(refs)
     return refs
   }
-  async refresh() { return this.stats }
+  async refresh() {
+    return this.stats
+  }
   async page(path) {
     state.reads.push(path)
     return path === "missing"
@@ -190,15 +197,7 @@ try {
   state.lineage = deferred()
   state.list = deferred()
   install()
-  const providers = [
-    "claude",
-    "codex",
-    "cursor",
-    "grok",
-    "devin",
-    "opencode",
-    "future-provider",
-  ]
+  const providers = [...registeredHarnessIds(), "future-provider"]
   const pages = providers.map((provider) => threads.pageThread(provider))
   const opened = threads.openThread("claude")
   const block = threads.threadBlock("devin", { entry: 0, block: 0 })
@@ -214,21 +213,41 @@ try {
   assert.equal((await block).text, "devin")
   assert.ok(state.reads.includes("follow:current-view"))
   assert.ok(!state.reads.includes("follow:stale-view"))
-  assert.equal(threads.threadsReady(), false, "known paths do not wait for full discovery")
+  assert.equal(
+    threads.threadsReady(),
+    false,
+    "known paths do not wait for full discovery"
+  )
   const client = state.clients.at(-1)
   for (const listener of client.events) {
-    listener({ event: "entries", path: "current-view", entries: [{ kind: "user", text: "during discovery" }], replace: false })
-    listener({ event: "updated", ref: { harness: "codex", path: "updated", title: "new" } })
+    listener({
+      event: "entries",
+      path: "current-view",
+      entries: [{ kind: "user", text: "during discovery" }],
+      replace: false,
+    })
+    listener({
+      event: "updated",
+      ref: { harness: "codex", path: "updated", title: "new" },
+    })
     listener({ event: "removed", path: "removed" })
   }
-  assert.ok(state.events.some(e => e.type === "thread-entries" && e.path === "current-view"), "follow delivery is independent of list hydration")
+  assert.ok(
+    state.events.some(
+      (e) => e.type === "thread-entries" && e.path === "current-view"
+    ),
+    "follow delivery is independent of list hydration"
+  )
   state.list.resolve([
     { harness: "codex", path: "updated", title: "newest snapshot" },
   ])
   await tick()
   assert.equal(threads.threadsReady(), true)
-  assert.equal(threads.listThreads().find(ref => ref.path === "updated").title, "newest snapshot")
-  assert.ok(!threads.listThreads().some(ref => ref.path === "removed"))
+  assert.equal(
+    threads.listThreads().find((ref) => ref.path === "updated").title,
+    "newest snapshot"
+  )
+  assert.ok(!threads.listThreads().some((ref) => ref.path === "removed"))
   state.list = null
 
   // Losing the worker temporarily removes the reader; requests share its one restart.
@@ -268,7 +287,7 @@ try {
   assert.equal(threads.threadsReady(), true)
   lostList.resolve([{ harness: "codex", path: "lost-reader" }])
   await tick()
-  assert.ok(!threads.listThreads().some(ref => ref.path === "lost-reader"))
+  assert.ok(!threads.listThreads().some((ref) => ref.path === "lost-reader"))
   assert.equal(threads.threadsReady(), true)
   threads.stopThreads()
 
@@ -341,23 +360,34 @@ try {
   install()
   const brokenScan = threads.pageThread("claude")
   await tick()
-  state.workers.at(-1).emit("message", { type: "failed", message: "fixture worker failure" })
+  state.workers
+    .at(-1)
+    .emit("message", { type: "failed", message: "fixture worker failure" })
   await tick()
   state.scan.reject(new Error("fixture scan failed"))
   assert.equal((await brokenScan).ref.harness, "claude")
   await tick()
   assert.equal(threads.threadsReady(), false)
   assert.equal(state.catalogs.at(-1).closed, false)
-  assert.ok(state.events.some(e => e.type === "notice" && e.message.includes("fixture scan failed")))
+  assert.ok(
+    state.events.some(
+      (e) => e.type === "notice" && e.message.includes("fixture scan failed")
+    )
+  )
   threads.stopThreads()
 
   // Preparation failure still rejects known-path reads and closes the failed reader.
   const preparation = deferred()
   state.prepare = preparation.promise
   install()
-  const brokenPrepare = assert.rejects(threads.pageThread("codex"), /fixture preparation failed/)
+  const brokenPrepare = assert.rejects(
+    threads.pageThread("codex"),
+    /fixture preparation failed/
+  )
   await tick()
-  state.workers.at(-1).emit("message", { type: "failed", message: "fixture worker failure" })
+  state.workers
+    .at(-1)
+    .emit("message", { type: "failed", message: "fixture worker failure" })
   await tick()
   preparation.reject(new Error("fixture preparation failed"))
   await brokenPrepare
@@ -398,7 +428,7 @@ try {
   oldList.resolve([{ harness: "codex", path: "old-catalog" }])
   await tick()
   assert.equal(oldClient.closed, true)
-  assert.ok(!threads.listThreads().some(ref => ref.path === "old-catalog"))
+  assert.ok(!threads.listThreads().some((ref) => ref.path === "old-catalog"))
   assert.equal(threads.threadsReady(), true)
   threads.stopThreads()
 
@@ -416,19 +446,35 @@ try {
   const staleSharedList = state.list
   state.list = null
   shared.close()
-  const recovered = await Promise.all(providers.map(provider => threads.pageThread(provider)))
-  assert.deepEqual(recovered.map(page => page.ref.harness), providers)
+  const recovered = await Promise.all(
+    providers.map((provider) => threads.pageThread(provider))
+  )
+  assert.deepEqual(
+    recovered.map((page) => page.ref.harness),
+    providers
+  )
   assert.equal(state.clients.at(-1).closed, false)
-  assert.ok(state.events.some(event => event.type === "thread-reader-reset" && event.path === "cursor"), "selected view must refresh before following a replacement reader")
+  assert.ok(
+    state.events.some(
+      (event) => event.type === "thread-reader-reset" && event.path === "cursor"
+    ),
+    "selected view must refresh before following a replacement reader"
+  )
   assert.equal(state.workers.length, workerCount)
-  staleSharedList.resolve([{harness:"codex",path:"stale-shared-reader"}])
+  staleSharedList.resolve([{ harness: "codex", path: "stale-shared-reader" }])
   await tick()
-  assert.ok(!threads.listThreads().some(ref => ref.path === "stale-shared-reader"))
+  assert.ok(
+    !threads.listThreads().some((ref) => ref.path === "stale-shared-reader")
+  )
   assert.equal(threads.threadsReady(), true)
   threads.stopThreads()
   assert.equal(state.clients.at(-1).closed, true)
   await tick()
-  assert.equal(state.workers.length, workerCount, "stop does not start another reader")
+  assert.equal(
+    state.workers.length,
+    workerCount,
+    "stop does not start another reader"
+  )
 
   console.log(
     "Catalog readiness: all-six/future reads, missing source, follow replacement, recovery/fallback, failure and stop/reinstall passed"

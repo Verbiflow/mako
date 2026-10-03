@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -15,7 +16,7 @@ import { validateLiveDriver } from "../electron/providers/live-driver.ts"
 // script runs each, so a new harness cannot register the promise without them.
 const scripts = Object.values<string>(JSON.parse(readFileSync("package.json", "utf8")).scripts).join("\n")
 const drivers = providerHost.liveDrivers.list()
-assert.deepEqual(drivers.map((driver) => driver.provider).sort(), ["claude", "codex", "cursor", "devin", "grok", "opencode"])
+assert.deepEqual(drivers.map((driver) => driver.provider).sort(), registeredHarnessIds().sort())
 for (const driver of drivers) {
   const recovery = driver.turnRecovery
   if (recovery.kind === "manual") continue

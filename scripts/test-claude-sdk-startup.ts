@@ -22,11 +22,14 @@ const driver = createClaudeSdkDriver({
   available: () => true,
   query,
   configure: async () => ({
+    account: { name: "fixture-launch" },
+    options: {
     cwd: root,
     pathToClaudeCodeExecutable: shim,
     settingSources: [],
     strictMcpConfig: true,
     sessionId: randomUUID(),
+    },
   }),
 })
 const id = randomUUID()

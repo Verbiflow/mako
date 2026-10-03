@@ -1,13 +1,15 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { homedir, tmpdir } from "node:os"
+import { dirname, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { createMakoBridge } from "../electron/contracts/renderer-bridge.ts"
 import { WorkspaceGit } from "../electron/host-git.ts"
-import { WorkspaceFiles } from "../electron/host-workspace.ts"
+import { readConversationFile, WorkspaceFiles } from "../electron/host-workspace.ts"
 import { inlineFileTarget } from "../src/lib/file-citations.ts"
+import { threadFileWorkspace } from "../electron/contracts/thread-file-workspace.ts"
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 
 /**
  * Opening a file the transcript linked.
@@ -23,7 +25,9 @@ import { inlineFileTarget } from "../src/lib/file-citations.ts"
  */
 
 const run = promisify(execFile)
-const root = await mkdtemp(join(tmpdir(), "mako-file-open-"))
+const outer = await mkdtemp(join(tmpdir(), "mako-file-open-"))
+const root = join(outer, "project")
+await mkdir(root)
 try {
   await run("git", ["init", "-q", "."], { cwd: root })
   const tracked = [
@@ -40,7 +44,15 @@ try {
   await run("git", ["add", "-A"], { cwd: root })
   await run(
     "git",
-    ["-c", "user.email=t@mako", "-c", "user.name=Test", "commit", "-qm", "init"],
+    [
+      "-c",
+      "user.email=t@mako",
+      "-c",
+      "user.name=Test",
+      "commit",
+      "-qm",
+      "init",
+    ],
     { cwd: root }
   )
 
@@ -51,7 +63,84 @@ try {
     endLine: undefined,
   })
 
+  await writeFile(join(root, ".gitignore"), "ignored/\n")
+  await mkdir(join(root, "ignored"))
+  await writeFile(join(root, "ignored", "test-notifications.ts"), "Ignored build output")
+  const workspace = new WorkspaceFiles(outer, new WorkspaceGit(outer))
+  assert.equal((await workspace.read("test-notifications.ts")).path, "project/scripts/test-notifications.ts", "multi-repository workspaces resolve names through each ignore-aware file index")
+  assert.ok(!(await workspace.list()).some((file) => file.path.includes("ignored/")))
   const files = new WorkspaceFiles(root, new WorkspaceGit(root))
+  const moved = join(outer, "moved")
+  await mkdir(moved)
+  await writeFile(join(moved, "owned.md"), "Moved conversation's output")
+  await writeFile(join(root, "owned.md"), "Original project output")
+  for (const harness of registeredHarnessIds()) {
+    const cwd = threadFileWorkspace({ cwd: root, workspace: root, currentCwd: moved })!
+    assert.equal((await new WorkspaceFiles(cwd, new WorkspaceGit(cwd)).read("owned.md")).contents, "Moved conversation's output", `${harness} reads the owning conversation's current folder`)
+  }
+  assert.equal(threadFileWorkspace({}), undefined, "Missing ownership never invents the active project's folder")
+  await writeFile(join(root, "src", "owned.md"), "Nested working folder's output")
+  assert.equal((await readConversationFile(join(root, "src"), "owned.md")).contents, "Nested working folder's output", "A conversation-relative path uses its cwd even inside a Git repository")
+  assert.equal((await readConversationFile(join(root, "src"), "../owned.md")).contents, "Original project output", "Parent-relative paths preserve native working-directory semantics")
+  await assert.rejects(readConversationFile(join(root, "src"), "./AGENTS.md"), /No file at \.\/AGENTS\.md/, "Explicit relative paths never silently select the repository-root file")
+  let scans = 0
+  const indexGate = Promise.withResolvers<void>()
+  class CountedGit extends WorkspaceGit {
+    override async listFiles() { scans++; await indexGate.promise; return ["owned.md"] }
+  }
+  const concurrent = new WorkspaceFiles(root, new CountedGit(root))
+  const reads = [concurrent.list(), concurrent.list()]
+  indexGate.resolve()
+  const indexes = await Promise.all(reads)
+  assert.equal(scans, 1, "Simultaneous preview cards share one in-flight index scan")
+  assert.equal(indexes[0], indexes[1])
+  for (const [name, data, media, mime] of [
+    [
+      "native-image",
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXZkAAAAASUVORK5CYII=", "base64"),
+      "image",
+      "image/png",
+    ],
+    ["native-document", Buffer.from("%PDF-1.7\n"), "pdf", "application/pdf"],
+    [
+      "native-video",
+      Buffer.from([0, 0, 0, 20, 102, 116, 121, 112, 105, 115, 111, 109]),
+      "video",
+      "video/mp4",
+    ],
+  ] as const) {
+    await writeFile(join(root, name), data)
+    const read = await files.read(name)
+    assert.equal(
+      read.media,
+      media,
+      "native asset signatures survive extensionless filenames"
+    )
+    assert.equal(read.mimeType, mime)
+    assert.ok(read.previewUrl)
+    assert.equal(read.contents, "")
+  }
+
+  const diagnostic = join(root, "large.har")
+  await writeFile(
+    diagnostic,
+    JSON.stringify({
+      log: { entries: [] },
+      padding: " ".repeat(3 * 1024 * 1024),
+    })
+  )
+  const diagnosticFile = await files.read("large.har")
+  assert.equal(diagnosticFile.diagnostic, "har")
+  assert.ok(diagnosticFile.size > 3 * 1024 * 1024)
+  assert.ok(
+    diagnosticFile.contents.length <= 4096,
+    "large diagnostics return only a bounded source excerpt to React"
+  )
+  assert.ok(
+    diagnosticFile.previewUrl,
+    "inspection streams the original, not the truncated excerpt"
+  )
+
   const opened = async (path: string) => (await files.read(path)).path
   const refused = async (path: string) =>
     await files.read(path).then(
@@ -91,6 +180,12 @@ try {
     `No file at ${join(root, "absent.ts")}`,
     "an absolute request is taken literally"
   )
+  const homePath = `~/${relative(homedir(), join(root, "AGENTS.md"))}`
+  assert.equal((await files.read(homePath)).contents, "// AGENTS.md\n", "home-relative asset paths open the actual file")
+  const absentHome = `~/${relative(homedir(), join(root, "absent.ts"))}`
+  assert.equal(await refused(absentHome), `No file at ${absentHome}`, "missing home paths never fall back to unrelated project names")
+  for (const pattern of ["1-option-a-ledger-*.jpg", "shot?.png", "shot[12].png"]) assert.equal(inlineFileTarget(pattern), null, "file patterns remain literal")
+  for (const name of ["report.docx", "measurements.xlsx", "review.pptx", "requests.har", "render.cpuprofile"]) assert.ok(inlineFileTarget(name), "shared preview formats become file links")
   assert.equal(await refused("scripts"), "scripts is a directory")
   assert.match(
     await refused("../outside.ts"),
@@ -142,12 +237,16 @@ try {
     "Error invoking remote method 'mako:git-status': Error: gone"
   )
   const settled = await caught(disconnected)
-  assert.equal(settled, disconnected, "the error object itself is never replaced")
+  assert.equal(
+    settled,
+    disconnected,
+    "the error object itself is never replaced"
+  )
   assert.equal(settled?.message, "gone")
 
   console.log(
     "Opening a linked file: named and partial paths resolve, ambiguity and absence read as sentences, and host errors lose Electron's IPC wrapper"
   )
 } finally {
-  await rm(root, { recursive: true, force: true })
+  await rm(outer, { recursive: true, force: true })
 }

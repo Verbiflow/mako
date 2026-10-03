@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { threadDebugPort } from "./thread-debug-port.mjs"
 import { spawn, execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
@@ -158,11 +159,12 @@ async function startPackage() {
   delete env.MAKO_WEB_SOCKET
   delete env.MAKO_HOST_ONLY
   delete env.MAKO_WEB_ONLY
+  const debugPort = await threadDebugPort()
   child = spawn(
     executable,
     [
       `--user-data-dir=${join(root, "profile")}`,
-      "--remote-debugging-port=0",
+      `--remote-debugging-port=${debugPort}`,
       "--remote-debugging-address=127.0.0.1",
     ],
     { cwd: workspace, env, detached: true, stdio: ["ignore", "pipe", "pipe"] }
@@ -195,6 +197,7 @@ async function startPackage() {
   })
   const port = await waitFor(
     async () => {
+      if (debugPort) return debugPort
       try {
         return Number(
           (

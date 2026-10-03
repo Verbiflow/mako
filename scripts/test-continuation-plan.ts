@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
 import { createContinuationPlanner } from "../electron/continuation.ts"
@@ -50,7 +51,7 @@ await assert.rejects(planner.assertNative(ref.path), /open in another app/)
 await assert.rejects(planner.assertNative("/missing"), /no longer in the catalog/)
 console.log("Continuation plan: live, native, handoff and refusal rules; host refuses a transport its plan did not choose")
 
-for (const provider of ["codex", "claude", "cursor", "grok", "devin", "opencode"]) {
+for (const provider of registeredHarnessIds()) {
   const attached = createContinuationPlanner({
     ref: async () => ({ ...ref, harness: provider, heldBy: "Mako dev3", locked: true }),
     resolveOwner: async () => ({ kind: "attached", provider, conversationId: "existing", snapshot: { fixture: true } }),

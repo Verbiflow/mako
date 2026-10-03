@@ -38,9 +38,11 @@ import { AcpPanel } from "../src/components/viewer/acp-panel"
 import { AccessModeList, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
 import { ContextMeter, UsageDetails } from "../src/components/composer/context-meter"
 import { TooltipProvider } from "../src/components/ui/tooltip"
+import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 import { threadsStore } from "../src/state/threads"
 import { TransferStatus } from "../src/components/viewer/transfer-status"
 import { ConversationRelations } from "../src/components/viewer/conversation-relations"
+import { savedMessageDraft } from "../src/lib/saved-message-draft"
 
 const id = "11111111-1111-4111-8111-111111111111"
 const control: NonNullable<LiveAcpConversation["control"]> = {
@@ -93,10 +95,45 @@ assert.match(authenticationMarkup, /Your prompt waits until sign-in succeeds/)
 assert.doesNotMatch(authenticationMarkup, /Choose how long to allow it/)
 conversation.permission = null
 conversation.session = { ...conversation.session, status: "ready", connection: "connected" }
+for (const descriptor of fixtureHarnesses) {
+  const request = { id: `auth-${descriptor.provider}`, text: "Native carrier", displayText: "Review this file [Attachment 1]", attachments: [
+    { name: "report.pdf", mimeType: "application/pdf", size: 123, path: "/disposable/report.pdf" },
+    { name: "image.png", mimeType: "image/png", size: 4, data: "YWJjZA==" },
+  ], status: "failed" as const, failure: "auth" as const, nativeDelivery: {
+    attemptId: "attempt", bindingId: id, ownerEpoch: "epoch",
+    evidence: { kind: "accepted" as const, source: "native-response" as const },
+  } }
+  conversation.harness = descriptor.provider
+  conversation.session = { ...conversation.session, harness: descriptor.provider }
+  conversation.requests = [request]
+  publish()
+  // The history disclosure deliberately defers its body; the newest recovery
+  // notice exposes the action when reviewed in browser acceptance below.
+  const prepared = savedMessageDraft(request)
+  assert.match(prepared.text, /Review this file/)
+  assert.doesNotMatch(prepared.text, /Native carrier/)
+  assert.deepEqual(prepared.attachments.map((file) => [file.stagedPath, file.data]), [["/disposable/report.pdf", undefined], [undefined, "YWJjZA=="]])
+  assert.equal(request.status, "failed")
+  assert.equal(request.nativeDelivery.evidence.kind, "accepted")
+  const markup = renderToStaticMarkup(<RetainedRequests />)
+  assert.match(markup, /Sign-in required/)
+  assert.doesNotMatch(markup, /Use in new thread|Send again|Send another copy/)
+}
+const duplicateFiles = savedMessageDraft({ id: "duplicates", text: "Keep both", attachments: [
+  { name: "same.pdf", mimeType: "application/pdf", size: 1, path: "/a/same.pdf" },
+  { name: "same.pdf", mimeType: "application/pdf", size: 2, path: "/b/same.pdf" },
+] })
+assert.notEqual(duplicateFiles.attachments[0]?.reference, duplicateFiles.attachments[1]?.reference)
+const literalAppendix = "Example\n---\n[Attachment 9] private.pdf — application/pdf, 1 KB. Saved at /private.pdf; read it from there."
+assert.equal(savedMessageDraft({ id: "literal", text: literalAppendix, attachments: [] }).text, literalAppendix)
+assert.match(savedMessageDraft({ id: "missing", text: "Keep a missing file", attachments: [{ name: "missing.pdf", mimeType: "application/pdf", size: 2 }] }).attachments[0]?.error ?? "", /Attach it again/)
+conversation.harness = "claude"
+conversation.session = { ...conversation.session, harness: "claude" }
+conversation.requests = []
 // The access picker shows one ladder: tier labels in tier order, the
 // provider's own name beside them, and who enforces a host-made tier.
 threadsStore.set({
-  descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, canResume: true, canSteer: true, steering: "step", recovery: { compaction: { kind: "supported" } } }],
+  descriptors: fixtureHarnesses.map((entry) => entry.provider === "claude" ? { ...entry, canSteer: true, steering: "step", recovery: { compaction: { kind: "supported" } } } : entry),
 })
 conversation.session = {
   ...conversation.session,
@@ -135,6 +172,7 @@ publish()
 const singleModeMarkup = renderToStaticMarkup(<LiveComposerControls />)
 assert.match(singleModeMarkup, /aria-label="Access: Full access"/)
 assert.doesNotMatch(singleModeMarkup, /<button[^>]*aria-label="Access:/)
+const originalAccessDescriptors = threadsStore.get().descriptors
 threadsStore.set({
   descriptors: [{ provider: "cursor", displayName: "Cursor", resumable: true, live: true, canResume: false, modes: conversation.session.modes }],
   composerHarness: "cursor",
@@ -142,8 +180,8 @@ threadsStore.set({
 const nextSessionMarkup = renderToStaticMarkup(<NextSessionModePicker />)
 assert.match(nextSessionMarkup, /aria-label="Access: Full access"/)
 assert.doesNotMatch(nextSessionMarkup, /<button/)
-// A provider with a declared default reports that level before any choice:
-// an unchosen session runs under it, so the chip names it.
+// A declared factory default cannot certify a native configured policy.
+// Without an explicit/remembered choice, report native configuration honestly.
 threadsStore.set({
   descriptors: [{
     provider: "grok",
@@ -162,7 +200,9 @@ threadsStore.set({
   composerHarness: "grok",
 })
 const defaultedMarkup = renderToStaticMarkup(<NextSessionModePicker />)
-assert.match(defaultedMarkup, /aria-label="Access: Ask before acting"/)
+assert.match(defaultedMarkup, /aria-label="Access: Native default"/)
+assert.doesNotMatch(defaultedMarkup, /aria-label="Access: Ask before acting"/)
+assert.match(defaultedMarkup, /native configuration/)
 // The thread's own remembered level still outranks the provider default.
 threadsStore.set({
   viewing: {
@@ -172,7 +212,7 @@ threadsStore.set({
 })
 const rememberedMarkup = renderToStaticMarkup(<NextSessionModePicker />)
 assert.match(rememberedMarkup, /aria-label="Access: Full access"/)
-threadsStore.set({ viewing: null })
+threadsStore.set({ viewing: null, descriptors: originalAccessDescriptors, composerHarness: "claude" })
 conversation.session = { ...conversation.session, currentMode: null, modes: [] }
 control.actions = [
   {

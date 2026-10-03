@@ -335,6 +335,7 @@ console.log("composer settings: role cycling walks only reported options")
   const { providerStore, providerProfileKey } = await import("../src/state/providers.ts")
   const { prefsStore, setPref } = await import("../src/state/prefs.ts")
   providerStore.set({
+    profiles: { claude: profile },
     contexts: { [providerProfileKey("claude", cwd)]: profile },
   })
   acpStore.set({ conversations: {}, activeKey: null })
@@ -362,6 +363,37 @@ console.log("composer settings: role cycling walks only reported options")
   providerStore.set({ contexts: {} })
 }
 console.log("composer settings: the loadout orders, bounds, and applies its picks")
+
+// Stale saved entries remain removable, but neither shortcut nor picker may
+// change intent using a model absent from the current workspace discovery.
+{
+  const { loadoutAvailability, availableLoadoutModel, applyLoadoutEntry, removeFromLoadout } = await import("../src/state/model-loadout.ts")
+  const { providerStore, providerProfileKey } = await import("../src/state/providers.ts")
+  const { prefsStore, setPref } = await import("../src/state/prefs.ts")
+  const { registeredHarnessIds } = await import("./registered-harnesses.ts")
+  for (const harness of registeredHarnessIds()) {
+    const entry = { harness, model: "native-variant" }
+    const ready: HarnessProfile = { ...profile, id: harness, models: [{ id: "current", label: "Current model", options: [], variants: [{ id: "native-variant", options: {} }] }] }
+    assert.equal(loadoutAvailability(entry, ready).kind, "ready")
+    assert.equal(loadoutAvailability(entry, { ...ready, pending: true }).kind, "loading")
+    assert.equal(loadoutAvailability(entry, { ...ready, available: false }).kind, "unavailable")
+    const missing = { ...ready, models: [] }
+    providerStore.set({ profiles: { [harness]: ready }, contexts: { [providerProfileKey(harness, "")]: missing } })
+    assert.equal(availableLoadoutModel(entry, ""), undefined, "workspace discovery wins over a stale global list")
+    threadsStore.set({ composerHarness: harness, viewing: null, opening: null })
+    setPref("modelLoadout", [entry])
+    const before = prefsStore.get().providerSettings
+    applyLoadoutEntry(0)
+    assert.deepEqual(prefsStore.get().providerSettings, before, "unavailable shortcut leaves the chosen model unchanged")
+    assert.deepEqual(prefsStore.get().modelLoadout, [entry], "a vanished model is not silently removed")
+    providerStore.set({ contexts: { [providerProfileKey(harness, "")]: ready } })
+    assert.equal(availableLoadoutModel(entry, ""), entry.model, "valid native variants retain their identity")
+    removeFromLoadout(0)
+    assert.deepEqual(prefsStore.get().modelLoadout, [])
+  }
+  providerStore.set({ profiles: {}, contexts: {} })
+}
+console.log("composer settings: all registered loadouts refuse stale workspace models and preserve native variants")
 
 // A remembered option the default model can't take yields to that model's
 // defaults: Devin's default moved to Adaptive, which has no Fast mode, and a
@@ -405,3 +437,66 @@ console.log("composer settings: remembered options the model lacks fall back to 
   assert.equal(titleFromPrompt("", []), undefined)
 }
 console.log("composer settings: new Thread titles skip attachment markers")
+
+// Explicit options belong to a model and target. Switching models must neither
+// carry incompatible options forward nor erase choices when switching back.
+{
+  const { chooseComposerModel, chooseComposerOption, resolveComposerSettings, resetComposerSettings } =
+    await import("../src/state/composer-settings.ts")
+  const { providerStore, providerProfileKey } = await import("../src/state/providers.ts")
+  const { prefsStore, setPref } = await import("../src/state/prefs.ts")
+  const { registeredHarnessIds } = await import("./registered-harnesses.ts")
+  for (const harness of registeredHarnessIds()) {
+    const memoryProfile: HarnessProfile = {
+      ...profile, id: harness, settings: { model: "one" },
+      models: [
+        { id: "one", aliases: ["native-one"], label: "One", options: [
+          { id: "effort", label: "Effort", kind: "select", values: [
+            { value: "low", label: "Low", default: true }, { value: "high", label: "High" },
+          ] },
+        ] },
+        { id: "two", label: "Two", options: [
+          { id: "fast", label: "Fast", kind: "boolean", current: false },
+        ] },
+      ],
+    }
+    providerStore.set({ contexts: { [providerProfileKey(harness, cwd)]: memoryProfile } })
+    setPref("settingsOverrides", {})
+    setPref("providerSettings", {})
+    setPref("modelSettings", {})
+    const draft = { kind: "new" as const, harness, cwd }
+    chooseComposerModel(draft, "one")
+    chooseComposerOption(draft, "effort", "high")
+    chooseComposerModel(draft, "two")
+    assert.deepEqual(resolveComposerSettings(draft).settings, { model: "two", options: { fast: false } })
+    chooseComposerOption(draft, "fast", true)
+    chooseComposerModel(draft, "native-one")
+    assert.deepEqual(resolveComposerSettings(draft).settings, { model: "native-one", options: { effort: "high" } })
+    chooseComposerModel(draft, "two")
+    assert.equal(resolveComposerSettings(draft).settings.options?.fast, true)
+    // A native observation is not copied into another session's remembered intent.
+    const threadOne = { kind: "thread" as const, harness, cwd, path: "/one" }
+    const threadTwo = { ...threadOne, path: "/two" }
+    chooseComposerModel(threadOne, "one")
+    assert.equal(resolveComposerSettings(threadOne).settings.options?.effort, "low")
+    chooseComposerOption(threadOne, "effort", "high")
+    chooseComposerModel(threadOne, "two")
+    chooseComposerModel(threadOne, "one")
+    assert.equal(resolveComposerSettings(threadOne).settings.options?.effort, "high")
+    chooseComposerModel(threadTwo, "one")
+    assert.equal(resolveComposerSettings(threadTwo).settings.options?.effort, "low")
+    // Changed native choices remain an actionable issue rather than silent coercion.
+    providerStore.set({ contexts: { [providerProfileKey(harness, cwd)]: {
+      ...memoryProfile, models: [{ ...memoryProfile.models[0]!, options: [] }, memoryProfile.models[1]!],
+    } } })
+    assert.equal(resolveComposerSettings(threadOne).issues.length, 1)
+    resetComposerSettings(threadOne)
+    chooseComposerModel(threadOne, "one")
+    assert.deepEqual(resolveComposerSettings(threadOne).issues, [])
+    setPref("modelSettings", { ...prefsStore.get().modelSettings, "old-invalid-key": {} })
+    resetComposerSettings(draft)
+    assert.ok(Object.keys(prefsStore.get().modelSettings).length <= 256)
+  }
+  providerStore.set({ contexts: {} })
+}
+console.log("composer settings: per-model explicit choices restore across switches and stay scoped across the registry")

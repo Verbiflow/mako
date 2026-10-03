@@ -14,6 +14,9 @@ const file: Attachment = { id: "notes", index: 2, name: "notes.txt", reference: 
 const text = `  Compare ${image.reference}\nwith ${file.reference} @src/index.css @thread:claude:native-id #review\n`
 const payload = promptClipboard(text, [image, file])
 const restored = parsePromptClipboard(payload.text, payload.html)
+const imported = promptClipboard(text, [{ ...image, size: undefined }, file])
+assert.equal(parsePromptClipboard(imported.text, imported.html)?.attachments[0]?.size, undefined, "Imported attachments retain unknown sizes across rich copy")
+assert.equal(parsePromptClipboard(imported.text)?.attachments[0]?.size, undefined, "Plain copy of imported attachments remains reusable")
 assert.ok(restored)
 assert.equal(restored.text, text)
 assert.deepEqual(restored.attachments.map(item => item.stagedPath), [image.stagedPath, file.stagedPath])

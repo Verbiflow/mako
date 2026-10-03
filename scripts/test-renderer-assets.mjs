@@ -68,7 +68,27 @@ async function checkElectron() {
   app.setPath("userData", join(directory, "profile"))
   electronProtocol.registerSchemesAsPrivileged(privilegedSchemes())
   await app.whenReady()
-  electronProtocol.handle("mako-app", deskFileHandler(join(directory, "dist")))
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
+    "<< /Length 0 >>\nstream\n\nendstream",
+  ]
+  let pdf = "%PDF-1.4\n"
+  const offsets = [0]
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.byteLength(pdf))
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`
+  }
+  const xref = Buffer.byteLength(pdf)
+  pdf += `xref\n0 5\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  const previewRequests = []
+  electronProtocol.handle("mako-app", deskFileHandler(join(directory, "dist"), async request => {
+    previewRequests.push({ url: request.url, range: request.headers.get("range") })
+    if (request.url !== "mako-file://asset/document.pdf?client=fixture") return new Response("Forbidden", { status: 403 })
+    if (request.headers.get("range") === "bytes=0-3") return new Response("%PDF", { status: 206, headers: { "content-range": `bytes 0-3/${Buffer.byteLength(pdf)}` } })
+    return new Response(pdf, { headers: { "content-type": "application/pdf" } })
+  }))
   const window = new BrowserWindow({
     show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
@@ -103,6 +123,30 @@ async function checkElectron() {
       for (const mask of result.masks)
         assert.ok(mask.width > 0, `${protocol}: ${mask.selector} mask failed to load`)
       console.log(`${protocol}: ocean artwork, reflection, About icon and all CSS animation masks load`)
+      if (protocol === "http") {
+        const blocked = await window.webContents.executeJavaScript(`fetch('mako-app://desk/__mako_file/asset/document.pdf?client=fixture').then(() => false, () => true)`)
+        assert.equal(blocked, true, "An unrelated HTTP origin must not read authorized desk files")
+        assert.equal(previewRequests.length, 0, "Cross-origin requests must not reach the file authorization handler")
+      }
+      if (protocol === "mako-app") {
+        const preview = await window.webContents.executeJavaScript(`(async () => {
+          const url = 'mako-app://desk/__mako_file/asset/document.pdf?client=fixture';
+          const bytes = await fetch(url).then(response => response.text());
+          const range = await fetch(url, {headers:{Range:'bytes=0-3'}}).then(async response => ({status:response.status, bytes:await response.text()}));
+          const denied = await fetch(url.replace('fixture', 'another-client')).then(response => response.status);
+          const deadline = Date.now() + 10000;
+          while (document.querySelector('canvas[aria-label="Protocol fixture.pdf, page 1"]')?.parentElement?.getAttribute('aria-busy') !== 'false' && Date.now() < deadline)
+            await new Promise(resolve => setTimeout(resolve, 25));
+          return {bytes:bytes.slice(0,4), range, denied, canvas:document.querySelector('canvas[aria-label="Protocol fixture.pdf, page 1"]')?.width ?? 0, ready:document.querySelector('canvas[aria-label="Protocol fixture.pdf, page 1"]')?.parentElement?.getAttribute('aria-busy') === 'false', error:document.querySelector('[role="status"]')?.textContent};
+        })()`)
+        assert.equal(preview.bytes, "%PDF")
+        assert.deepEqual(preview.range, {status:206, bytes:"%PDF"})
+        assert.equal(preview.denied, 403, "Client authorization must survive same-origin routing")
+        assert.ok(preview.canvas > 0, `Packaged PDF worker and XHR failed: ${preview.error}`)
+        assert.equal(preview.ready, true, `PDF page rendering did not finish: ${preview.error}`)
+        assert.ok(previewRequests.some(request => request.range === "bytes=0-3"))
+        console.log("mako-app: authorized PDF bytes, range forwarding, rejected client and actual PDF worker rendering pass")
+      }
     }
     app.exit(0)
   } catch (error) {

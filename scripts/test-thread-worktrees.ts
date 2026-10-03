@@ -504,7 +504,19 @@ assert.equal(existsSync(join(single.path, "dist", "app.js")), true)
 assert.equal(existsSync(join(single.path, "dist", "big.js")), false)
 
 // Without a recipe, a worktree has what Git checks out and nothing more.
+// Warm a separate pool while install outputs are authorized, then withdraw the
+// recipe. This exercises reuse deterministically rather than depending on refill timing.
+recipe = RecipeSchema.parse({ prepare: [INSTALL] })
+const withdrawnRepo = repository("withdrawn-recipe")
+const withdrawn = new ThreadWorktreeService(join(root, "withdrawn-worktrees"), threads, undefined, undefined, undefined, setup)
+await withdrawn.prepare(randomUUID(), withdrawnRepo, "Warm the old recipe")
+await withdrawn.settled()
 recipe = undefined
+const withdrawnBare = await withdrawn.prepare(randomUUID(), withdrawnRepo, "Use the current recipe")
+assert.equal(withdrawnBare.spare, true, "the withdrawn recipe is checked on a warmed spare")
+for (const entry of ["node_modules", "web/node_modules"])
+  assert.equal(existsSync(join(withdrawnBare.path, entry)), false, `${entry} from an obsolete recipe stays behind`)
+await withdrawn.settled()
 const bareId = randomUUID()
 const bare = await worktrees.prepare(bareId, shop, "No recipe")
 assert.equal(bare.copied, 0)

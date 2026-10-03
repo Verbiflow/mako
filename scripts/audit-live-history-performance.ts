@@ -1,10 +1,11 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import { LiveHistoryReader } from "../electron/live-history-reader"
 import { auditId, auditSnapshot, auditStats } from "./performance-audit-fixtures"
-const evidence = "docs/audits/2026-09-23/live-history-performance"
+const evidence = process.env.MAKO_PERFORMANCE_EVIDENCE ?? "docs/audits/2026-09-23/live-history-performance"
 await mkdir(evidence, { recursive: true })
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const { installMockBridge } = await import("../src/dev/mock-bridge")
@@ -14,7 +15,7 @@ const { hydrateLive, loadEarlierLive, applyLiveBatch } = await import("../src/st
 const { loadLiveHistoryDetail } = await import("../src/state/live-history")
 installMockBridge()
 const results = []
-for (const [index, provider] of ["claude", "codex", "cursor", "grok", "devin", "opencode"].entries()) {
+for (const [index, provider] of registeredHarnessIds().entries()) {
   const source = { ...auditSnapshot(300, provider, 256, 120 * 1024), epoch: "performance" }
   source.session.id = auditId(index + 10000)
   const id = source.session.id

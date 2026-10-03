@@ -30,6 +30,7 @@ const ready = (phase: "stopped" | "starting" | "running"): ThreadAppView => ({
 let hostView: ThreadAppView = ready("stopped")
 let failing = false
 let views = 0
+let heldView: Promise<ThreadAppView> | undefined
 let releaseStart: (() => void) | undefined
 const WORKTREE = "/work/shop-worktree"
 let hostMarks: AppMark[] = [{ checkout: CWD, state: "crashed" }, { checkout: WORKTREE, state: "running", port: 20_020 }]
@@ -44,6 +45,7 @@ const bridge = {
   threadApp: async (cwd: string) => {
     assert.equal(cwd, CWD)
     views += 1
+    if (heldView) { const pending = heldView; heldView = undefined; return pending }
     if (failing) throw new Error("No handler for mako:thread-app")
     return hostView
   },
@@ -99,6 +101,27 @@ hostView = ready("running")
 releaseStart!()
 await until(() => phase() === "running", "the host's running view")
 
+// An older successful or failed read must not overwrite a newer answer, even across watch lifetimes.
+unwatch()
+let releaseOld: (view: ThreadAppView) => void = () => {}
+heldView = new Promise((resolve) => { releaseOld = resolve })
+const unwatchOld = driver.watch!(CWD)
+unwatchOld()
+const unwatchFresh = driver.watch!(CWD)
+await until(() => phase() === "running", "the newly watched view")
+releaseOld(ready("stopped"))
+await wait(30)
+assert.equal(phase(), "running", "a read from an earlier watcher can't land on a new one")
+unwatchFresh()
+let rejectOld: (error: Error) => void = () => {}
+heldView = new Promise((_resolve, reject) => { rejectOld = reject })
+const unwatchPending = driver.watch!(CWD)
+driver.stop(CWD)
+await until(() => phase() === "running", "the newer action read")
+rejectOld(new Error("older failed read"))
+await wait(30)
+assert.equal(phase(), "running", "an older failure can't hide a newer running view")
+
 // Output: everything so far, then only what's new, then a new run from the top.
 const received: [string, boolean][] = []
 const unsubscribe = driver.subscribeOutput(CWD, "process:web", (text, reset) => received.push([text, reset]))
@@ -116,7 +139,7 @@ driver.stop(CWD)
 await until(() => threadAppStore.get().byCwd[CWD] === undefined, "the control hidden")
 
 // Nothing shows the folder: the host isn't asked about it again.
-unwatch()
+unwatchPending()
 const asked = views
 await wait(1_500)
 assert.equal(views, asked)

@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -12,7 +13,7 @@ import type { LiveSessionState } from "../electron/shared.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-question-retirement-"))
 try {
-  for (const provider of ["claude", "codex", "cursor", "grok", "devin", "opencode", "future"]) {
+  for (const provider of [...registeredHarnessIds(), "future"]) {
     const id = randomUUID(), path = join(root, provider + ".native")
     await writeFile(path, "native")
     let state: LiveSessionState = { id, harness: provider, cwd: root, nativeId: "native", nativePath: path, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }

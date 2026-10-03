@@ -19,7 +19,8 @@ import {
 } from "../electron/providers/claude/sdk-driver.ts"
 import { claudeExecutablePath } from "../electron/providers/claude/sdk-process.ts"
 import { ClaudeProjection } from "../electron/providers/claude/sdk-projection.ts"
-import { ClaudeInput } from "../electron/providers/claude/input.ts"
+import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
+import { claudeInputContent, ClaudeInput } from "../electron/providers/claude/input.ts"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { ClaudeTranscript } from "../electron/providers/claude/sdk-transcript.ts"
 import type { LiveDriverEvent } from "../electron/shared.ts"
@@ -73,13 +74,24 @@ class Messages implements AsyncIterable<SDKMessage> {
     }
   }
 }
+const mixedInput = await claudeInputContent("Review it", [{ name: "report.pdf", mimeType: "application/pdf", path: "/fixture/report.pdf", size: 12 }])
+assert.ok(Array.isArray(mixedInput))
+assert.equal(mixedInput.length, 1)
+assert.equal(mixedInput[0]?.type, "text")
+if (mixedInput[0]?.type === "text") {
+  const parsed = readPromptAttachments(mixedInput[0].text)
+  assert.equal(parsed.text, "Review it")
+  assert.equal(parsed.attachments[0]?.name, "report.pdf")
+}
+await assert.rejects(claudeInputContent("Review it", [{ name: "report.pdf", mimeType: "application/pdf", size: 12 }]), /not staged/)
+
 const events: LiveDriverEvent[] = []
 const output = new Messages()
 let input: AsyncIterator<SDKUserMessage> | undefined
 let closed = false
 const dependencies: ClaudeSdkDependencies = {
   available: () => true,
-  configure: async () => ({}),
+  configure: async () => ({ options: {}, account: { name: "fixture-launch" } }),
   receiptTimeoutMs: 20,
   interruptTimeoutMs: 20,
   query: (options) => {
@@ -199,7 +211,7 @@ await assert.rejects(
   const deaths: LiveDriverEvent[] = []
   const dyingDriver = createClaudeSdkDriver({
     ...dependencies,
-    configure: async () => ({ env: { CLAUDE_CONFIG_DIR: configDir } }),
+    configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: configDir } }, account: { name: "fixture-launch" } }),
     query: (options) => ({ ...dependencies.query(options), [Symbol.asyncIterator]: () => dying[Symbol.asyncIterator]() }),
   })
   await dyingDriver.start("/tmp/work", { conversationId, emit: (event) => deaths.push(event) })
@@ -224,7 +236,7 @@ const racing = createClaudeSdkDriver({
     await new Promise<void>((resolve) => {
       configured = resolve
     })
-    return {}
+    return { options: {}, account: { name: "fixture-launch" } }
   },
   query: (options) => {
     launched = true
@@ -345,7 +357,7 @@ for (const confirmed of [true, false]) {
       "the retry counts down to when Claude tries again")
     assert.deepEqual(
       compactEvents.flatMap((event) => event.type === "live-update" ? [event.update] : []),
-      [{ kind: "event", id: boundary, label: "Context compacted", detail: "Manual · 1k → 200 tokens · took 8s", body: "Kept: the parser plan." }],
+      [{ kind: "event", id: boundary, source: { harness: "claude", record: boundary }, label: "Context compacted", detail: "Manual · 1k → 200 tokens · took 8s", body: "Kept: the parser plan." }],
       "the boundary is a transcript event with its trigger, tokens, Claude's own duration and the hook's summary, not assistant text"
     )
   }

@@ -1,3 +1,4 @@
+import { providerHost } from "../electron/providers/index.js"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { access, chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
@@ -30,6 +31,13 @@ import type { JsonValue } from "../electron/codex-app-json.js"
 import type { McpProvider, McpRegistrySnapshot } from "../electron/shared.js"
 import { migrateRetiredMakoMcpFile } from "../electron/retired-mcp.js"
 import { conversationServers } from "../electron/providers/live-driver.js"
+import { projectedMcpServers, reachableMcpServers } from "../electron/contracts/mcp-reach.js"
+
+function readFormat(provider: string) {
+  const source = providerHost.mcpSources.get(provider)
+  assert.ok(source, `MCP source registered for ${provider}`)
+  return source.readFormat
+}
 
 function discovered(
   provider: McpProvider,
@@ -37,7 +45,7 @@ function discovered(
   config: JsonValue
 ): McpDiscoveredDefinition {
   const [definition] = parseProviderJson(
-    provider,
+    readFormat(provider),
     JSON.stringify({ mcpServers: { [name]: config } })
   )
   assert.ok(definition)
@@ -139,12 +147,12 @@ function testProviderFixtures(): void {
     mcpServers: { shared: { command: "/bin/server", args: ["serve"] } },
   })
   for (const provider of ["claude", "cursor", "devin"] as const) {
-    const [definition] = parseProviderJson(provider, json)
+    const [definition] = parseProviderJson(readFormat(provider), json)
     assert.equal(definition?.name, "shared")
     assert.equal(definition?.transport, "stdio")
   }
   const [codex] = parseProviderJson(
-    "codex",
+    readFormat("codex"),
     JSON.stringify([
       {
         name: "remote",
@@ -153,7 +161,7 @@ function testProviderFixtures(): void {
     ])
   )
   const [grok] = parseProviderJson(
-    "grok",
+    readFormat("grok"),
     JSON.stringify([
       {
         name: "events",
@@ -162,7 +170,7 @@ function testProviderFixtures(): void {
     ])
   )
   const [opencode] = parseProviderJson(
-    "opencode",
+    readFormat("opencode"),
     JSON.stringify({
       mcp: {
         local: {
@@ -183,7 +191,7 @@ function testProviderFixtures(): void {
 
 function testAxiomPreview(): void {
   const definition = parseProviderJson(
-    "codex",
+    readFormat("codex"),
     JSON.stringify([
       {
         name: "axiom",
@@ -203,6 +211,7 @@ function testAxiomPreview(): void {
     envNames: [],
     headerNames: [],
     portable: true,
+    enabled: true,
   })
   const claude = z
     .object({
@@ -228,6 +237,37 @@ function testAxiomPreview(): void {
     type: "remote",
     url: "https://mcp.axiom.co/mcp",
   })
+}
+
+function testDisabledNativeSources(): void {
+  const disabled = discovered("cursor", "disabled", { command: "node", args: ["server.js"], disabled: true })
+  const enabled = discovered("claude", "disabled", { command: "node", args: ["server.js"] })
+  const snapshot: McpRegistrySnapshot = { cwd: tmpdir(), generatedAt: 1, providers: [], servers: mergeMcpDefinitions([disabled]) }
+  assert.equal(snapshot.servers[0]?.origins[0]?.enabled, false)
+  assert.deepEqual(projectedMcpServers(snapshot, "future-harness", ["stdio"]), [])
+  assert.deepEqual(reachableMcpServers(snapshot, "cursor", ["stdio"]), [])
+  snapshot.servers = mergeMcpDefinitions([disabled, enabled])
+  assert.equal(projectedMcpServers(snapshot, "future-harness", ["stdio"]).length, 1)
+  assert.equal(projectedMcpServers(snapshot, "cursor", ["stdio"]).length, 0, "a peer cannot override native disablement")
+  assert.equal(reachableMcpServers(snapshot, "cursor", ["stdio"]).length, 0)
+  assert.equal(reachableMcpServers(snapshot, "claude", ["stdio"]).length, 1)
+  snapshot.servers = mergeMcpDefinitions([enabled, { ...enabled, definition: { ...enabled.definition, enabled: false }, origin: { ...enabled.origin, scope: "workspace" } }])
+  assert.deepEqual(projectedMcpServers(snapshot, "future-harness", ["stdio"]), [], "workspace disablement supersedes user enablement")
+  const [openCode] = parseProviderJson("command-array-map", JSON.stringify({ mcp: { disabled: { type: "local", command: ["node", "server.js"], enabled: false } } }))
+  assert.equal(openCode?.enabled, false)
+  const definition = { name: "disabled", transport: "stdio" as const, command: "new-server", args: [], envNames: [], headerNames: [], portable: true }
+  for (const format of ["claude", "cursor", "opencode"] as const) {
+    const root = format === "opencode" ? "mcp" : "mcpServers"
+    const previous = { enabled: false, disabled: true, command: "old-server", args: ["old"], timeout: 10_000, environment: { KEEP: "original" }, oauth: false }
+    const merged = JSON.parse(mergeJsonMcpConfig(JSON.stringify({ extra: true, [root]: { disabled: previous } }), definition, format))
+    assert.equal(merged.extra, true)
+    assert.equal(merged[root].disabled.enabled, false)
+    assert.equal(merged[root].disabled.disabled, true)
+    assert.equal(merged[root].disabled.timeout, 10_000)
+    assert.deepEqual(merged[root].disabled.environment, { KEEP: "original" })
+    assert.equal(merged[root].disabled.oauth, false)
+    assert.equal(merged[root].disabled.args, undefined, "empty new arguments remove stale transport arguments")
+  }
 }
 
 async function testAxiomSyncPreview(): Promise<void> {
@@ -297,7 +337,7 @@ function testRedaction(): void {
     ["API_KEY", "MODE"]
   )
   const [authenticated] = parseProviderJson(
-    "codex",
+    readFormat("codex"),
     JSON.stringify([
       {
         name: "authenticated",
@@ -749,6 +789,7 @@ testProtocolVersion()
 await testRetiredMcpMigration()
 testProviderFixtures()
 testAxiomPreview()
+testDisabledNativeSources()
 await testAxiomSyncPreview()
 testRedaction()
 testDedupeAndConflicts()

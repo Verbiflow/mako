@@ -5,6 +5,7 @@ import { SessionIdSchema, ThreadIdSchema } from "../electron/contracts/thread-id
 import type { ThreadRef } from "../src/lib/types"
 import type { AcpPresence } from "../src/state/acp-presence"
 import type { FoldRow } from "../src/lib/thread-fold"
+import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 
 /**
  * A Thread with several Sessions: one rail row, tabs in the workbench, and
@@ -22,13 +23,15 @@ Object.assign(globalThis, {
 })
 
 const { renderToStaticMarkup } = await import("react-dom/server")
-const { EMPTY_FOLD, foldThreads, foldedThreadStatus, presenceThreadStatus } = await import("../src/lib/thread-fold")
+const { EMPTY_FOLD, foldThreads, foldedThreadState, presenceThreadStatus, sameFoldedThreadState, sessionRunning, sessionStateText } = await import("../src/lib/thread-fold")
 const { sessionTabTitle, threadSessionTabs } = await import("../src/state/thread-sessions")
 const { discardSessionDraft, leaveSessionDraft, putSessionDraft, rowThread, sessionDraftKey, threadGroupsStore } = await import("../src/state/thread-groups")
 const { threadArchiveKey } = await import("../electron/contracts/thread-lifecycle")
 const { rememberDraft } = await import("../src/state/drafts")
 const { SessionTabList } = await import("../src/components/stage/session-tabs")
 const { TooltipProvider } = await import("../src/components/ui/tooltip")
+const { threadsStore } = await import("../src/state/thread-store")
+threadsStore.set({ descriptors: fixtureHarnesses })
 
 const thread = randomUUID()
 const [first, second, third] = [randomUUID(), randomUUID(), randomUUID()]
@@ -69,8 +72,25 @@ assert.deepEqual([...fold.hidden].sort(), [alias.path, fork.key].sort(), "the fo
 assert.equal(foldThreads(rows.slice(0, 1), groups, threadOf).byLead.size, 0, "a Thread with one row visible stays an ordinary row")
 assert.equal(foldThreads(rows, {}, {}), EMPTY_FOLD, "no groups, nothing folds")
 
-const status = foldedThreadStatus(fold.byLead.get(parent.path)?.members ?? [], () => ({ kind: "review", at: 1, unread: false }))
-assert.equal(status.kind, "working", "the row wears the most demanding status among its Sessions")
+const members = fold.byLead.get(parent.path)?.members ?? []
+const read = foldedThreadState(members, () => ({ kind: "review", at: 1, unread: false }))
+assert.equal(read.status.kind, "working", "the row wears the most demanding status among its Sessions")
+assert.equal(read.readyBeside, false)
+// One Session finished while you were away, the other still running: the
+// Thread isn't done, so the mark says working and the answer sits beside it.
+const mixed = foldedThreadState(members, () => ({ kind: "review", at: 1, unread: true }))
+assert.equal(mixed.status.kind, "working", "work under way outranks an unread answer on the mark")
+assert.equal(mixed.readyBeside, true, "the unread answer is still shown")
+assert.equal(mixed.priority, 3, "the rail still ranks the Thread by its unread answer")
+assert.deepEqual(mixed.sessions.map((session) => [session.harness, sessionStateText(session.status)]), [["claude", "answer ready"], ["codex", "working"]])
+assert.deepEqual(mixed.sessions.map((session) => sessionRunning(session.status)), [false, true], "only the running Session's mark moves")
+const asking = foldedThreadState([members[0]!, { kind: "live", key: "ask", presence: presence("ask", "grok", third, "needs-permission") }], () => ({ kind: "review", at: 1, unread: true }))
+assert.equal(asking.status.kind, "needs-permission", "an approval outranks everything")
+assert.equal(asking.readyBeside, true)
+const done = foldedThreadState([members[0]!], () => ({ kind: "review", at: 1, unread: true }))
+assert.equal(done.readyBeside, false, "an unread answer that is the mark isn't drawn twice")
+assert.ok(sameFoldedThreadState(mixed, foldedThreadState(members, () => ({ kind: "review", at: 1, unread: true }))))
+assert.ok(!sameFoldedThreadState(mixed, read))
 assert.equal(presenceThreadStatus(presence("x", "grok", first, "needs-permission")).kind, "needs-permission")
 
 // The rail folds on every catalog event; 2,000 rows with 100 multi-Session

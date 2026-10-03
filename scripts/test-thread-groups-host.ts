@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, realpathSync, rmSync } from "node:fs"
@@ -19,7 +20,7 @@ import { ThreadStore } from "../electron/thread-store.js"
  * restart places every journal where it was.
  */
 
-const HARNESSES = ["claude", "codex", "cursor", "grok", "devin", "opencode"] as const
+const HARNESSES = registeredHarnessIds()
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-groups-host-")))
 const storePath = join(root, "threads.sqlite")
 const journals = join(root, "journals")

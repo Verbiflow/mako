@@ -35,7 +35,7 @@ async function check() {
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
-  const { liveStart, livePrompt, liveCancel, liveClose, liveCompact } = await import(join(repo, "dist-electron/acp.js"))
+  const { liveStart, livePrompt, liveCancel, liveClose, liveCompact, liveSetMode } = await import(join(repo, "dist-electron/acp.js"))
   const { advancePromptDelivery } = await import(join(repo, "dist-electron/contracts/prompt-delivery.js"))
   const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
   const hostLogFile = join(root, "host.log")
@@ -64,6 +64,7 @@ async function check() {
   })
   fixture("provider-turn-grok", grokAcpSource)
   fixture("provider-turn-devin", devinAcpSource)
+  fixture("provider-turn-modes", grokAcpSource)
 
   async function conversation(provider) {
     const id = randomUUID()
@@ -84,6 +85,7 @@ async function check() {
     }
     return {
       events, session, updates, until,
+      mode: (modeId) => liveSetMode(id, modeId),
       markers: (label) => updates().filter((update) => update.kind === "event" && update.label === label).map((update) => update.detail),
       opened: () => updates().filter((update) => update.kind === "provider-turn"),
       statusesSince: (seen) => events.slice(seen).flatMap((event) => event.type === "live-session" ? [event.session.status] : []),
@@ -96,6 +98,26 @@ async function check() {
       compact: (actionId) => liveCompact(id, actionId),
     }
   }
+
+  await assert.rejects(liveSetMode("missing-session", "plan"), /no longer connected/)
+  const modes = await conversation("provider-turn-modes")
+  assert.equal(modes.session().currentMode, "default")
+  await assert.rejects(modes.mode("invented-mode"), /does not offer that mode/)
+  await assert.rejects(modes.mode("refused"), /Native mode refused/)
+  assert.equal(modes.session().currentMode, "default", "a refusal leaves the acknowledged mode unchanged")
+  await modes.mode("plan")
+  assert.equal(modes.session().currentMode, "plan", "only a successful native acknowledgment changes the observed mode")
+  const pendingMode = modes.mode("slow")
+  const pendingResult = pendingMode.then(() => ({ succeeded: true }), (error) => ({ error }))
+  await assert.rejects(modes.mode("default"), /already waiting/)
+  assert.equal(modes.session().currentMode, "plan", "a pending native request is not applied optimistically")
+  await modes.close()
+  const closedEvents = modes.events.length
+  const lateResult = await pendingResult
+  assert.ok(lateResult.error, "closing the session rejects its pending mode change")
+  assert.equal(modes.events.length, closedEvents, "a late result cannot publish mode state into a closed session")
+  await assert.rejects(modes.mode("default"), /no longer connected/)
+  console.log("PASS: Native mode acknowledgment, refusal, missing/closed session, overlapping request and close-during-request fencing")
 
   const grok = await conversation("provider-turn-grok")
   assert.deepEqual(grok.markers("MCP server failed"), ["crashes · could not connect"],
@@ -162,11 +184,22 @@ async function check() {
   assert.deepEqual(refusedActivity, [{ kind: "compacting" }, null, null],
     "Grok's kinds on ACP's own method reach its decoder instead of being dropped by the SDK")
   assert.deepEqual(since(beforeRefused).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    [{ kind: "event", id: "fixture-2", label: "Context compacted", detail: "Automatic · 1k → 200 tokens · took 4s" }],
+    [{ kind: "event", id: "fixture-2", source: { harness: "provider-turn-grok", record: "fixture-2" }, label: "Context compacted", detail: "Automatic · 1k → 200 tokens · took 4s" }],
     "the replayed completion, named by Grok's event id, is drawn once")
   const logged = await readFile(hostLogFile, "utf8")
   assert.match(logged, /native event not handled.*kind=session\/update\/mystery_update/, "an undeclared kind is on record")
-  assert.match(logged, /native event not handled.*kind=session\/update\/tool_call\/invalid/, "a malformed known kind is on record under its own name")
+  assert.match(logged, /native event unreadable.*kind=session\/update\/tool_call\/invalid/, "a malformed known kind is on record under its own name")
+  const { flushUnknown } = await import(join(repo, "dist-electron/native-unknown.js"))
+  await flushUnknown()
+  const retained = (await readFile(join(root, "native-unknown.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line))
+  const mystery = retained.find(record => record.kind === "session/update/mystery_update")
+  assert.deepEqual(mystery?.record.params.update, { sessionUpdate: "mystery_update", value: 1 }, "an unknown subkind of a recognized vendor envelope retains its payload")
+  const vendor = retained.find(record => record.kind.includes("future_vendor_kind"))
+  assert.deepEqual(vendor?.record.params.update.value, { evidence: 42 }, "recognized vendor envelopes retain unknown subkind data")
+  const lost = retained.find(record => record.kind === "session/update/agent_message_chunk/lost/discardedNativeField")
+  assert.deepEqual(lost?.record.params.update.discardedNativeField, { evidence: 43 }, "SDK-discarded values retain original raw params")
+  const invalid = retained.find(record => record.kind === "session/update/tool_call/invalid")
+  assert.equal(invalid?.record.params.update.toolCallId, "no-title", "malformed known updates retain the original field values")
   assert.doesNotMatch(logged, /Error handling notification/, "the SDK never sees, or prints, an update it would refuse")
   console.log("PASS: session/update the ACP SDK would refuse reaches the provider's decoder or the unknown-event log, and a replayed marker is drawn once")
   await grok.close()

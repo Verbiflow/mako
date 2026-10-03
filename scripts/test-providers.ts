@@ -138,9 +138,15 @@ assert.deepEqual(
   const locks = await mkdtemp(join(tmpdir(), "mako-devin-locks-"))
   try {
     const now = Date.now()
-    let running: DevinProcess[] = [{ pid: 700, startedAt: now - 60_000 }, { pid: 701, startedAt: now - 10_000 }]
+    let running: DevinProcess[] = [
+      { pid: 700, startedAt: now - 60_000 },
+      { pid: 701, startedAt: now - 10_000 },
+    ]
     let asked = 0
-    const probe = devinProcessProbeFor({ locks, processes: async () => (asked++, running) })
+    const probe = devinProcessProbeFor({
+      locks,
+      processes: async () => (asked++, running),
+    })
     const lock = async (session: string, pid: number, at: number) => {
       await writeFile(join(locks, `${session}.lock`), String(pid))
       await utimes(join(locks, `${session}.lock`), at / 1000, at / 1000)
@@ -150,14 +156,30 @@ assert.deepEqual(
     await lock("dead-pid", 999, now - 5_000)
     await lock("ancient", 700, now - 86_400_000)
     const signal = new AbortController().signal
-    assert.deepEqual(await probe.probe(signal), { kind: "available", sessions: [{ nativeId: "open-one", status: "open" }] },
-      "a lock is open only when a running devin started before writing it")
+    assert.deepEqual(
+      await probe.probe(signal),
+      {
+        kind: "available",
+        sessions: [{ nativeId: "open-one", status: "open" }],
+      },
+      "a lock is open only when a running devin started before writing it"
+    )
     await lock("open-one", 701, now - 1_000)
-    assert.deepEqual(await probe.probe(signal), { kind: "available", sessions: [{ nativeId: "open-one", status: "open" }] },
-      "a session another devin loads is re-read when its lock changes")
+    assert.deepEqual(
+      await probe.probe(signal),
+      {
+        kind: "available",
+        sessions: [{ nativeId: "open-one", status: "open" }],
+      },
+      "a session another devin loads is re-read when its lock changes"
+    )
     running = []
     await rm(locks, { recursive: true })
-    assert.deepEqual(await probe.probe(signal), { kind: "available", sessions: [] }, "with no devin running, no lock is read")
+    assert.deepEqual(
+      await probe.probe(signal),
+      { kind: "available", sessions: [] },
+      "with no devin running, no lock is read"
+    )
     assert.equal(asked, 3)
   } finally {
     await rm(locks, { recursive: true, force: true })
@@ -363,10 +385,16 @@ try {
 const providers = providerHost.profiles.list().map((loader) => loader.provider)
 assert.ok(providers.length > 0)
 assert.equal(new Set(providers).size, providers.length)
-// Every harness runs headless. Cursor's runner is its SDK child in one-shot
+// Supported families match their declarations. Cursor's runner is its SDK child in one-shot
 // mode, so it has one transport and no ACP source. Cursor and Grok expose
 // provider-owned sign-in.
-assert.deepEqual(providerHost.nativeRunners.list().map((runner) => runner.provider), providers)
+assert.deepEqual(
+  providerHost.nativeRunners.list().map((runner) => runner.provider),
+  providerHost.harnesses
+    .list()
+    .filter((entry) => !entry.absent.nativeRunner)
+    .map((entry) => entry.provider)
+)
 assert.equal(providerHost.liveDrivers.get("cursor")?.canResume, true)
 assert.equal(providerHost.liveDrivers.get("cursor")?.steering, "interrupt")
 assert.deepEqual(
@@ -375,35 +403,68 @@ assert.deepEqual(
 )
 assert.deepEqual(
   providerHost.mcpSources.list().map((source) => source.provider),
-  providers
+  providerHost.harnesses
+    .list()
+    .filter((entry) => !entry.absent.mcp)
+    .map((entry) => entry.provider)
 )
 assert.deepEqual(
   providerHost.skillSources.list().map((source) => source.provider),
-  providers
+  providerHost.harnesses
+    .list()
+    .filter((entry) => !entry.absent.skills)
+    .map((entry) => entry.provider)
 )
 assert.deepEqual(
   providerHost.acpSources.list().map((source) => source.provider),
   ["grok", "devin"]
 )
 assert.equal(providerHost.liveDrivers.get("opencode")?.canResume, true)
-assert.equal(providerHost.liveDrivers.get("opencode")?.observesNativeAgents, true)
+assert.equal(
+  providerHost.liveDrivers.get("opencode")?.observesNativeAgents,
+  true
+)
 assert.deepEqual(
   providerHost.sessionEmitters.list().map((emitter) => emitter.provider),
-  ["claude", "codex", "cursor", "grok", "devin", "opencode"]
+  providerHost.harnesses
+    .list()
+    .filter((entry) => !entry.absent.sessionEmitter)
+    .map((entry) => entry.provider)
 )
 assert.deepEqual(
   providerHost.processProbes.list().map((probe) => probe.provider),
-  ["claude", "codex", "cursor", "grok", "devin", "opencode"]
+  providerHost.harnesses
+    .list()
+    .filter((entry) => !entry.absent.processProbe)
+    .map((entry) => entry.provider)
 )
 assert.equal(providerHost.nativeRunners.get("claude")?.fastMode, "supported")
 assert.equal(providerHost.profiles.get("claude")?.transport, "sdk")
 assert.ok(providerHost.liveDrivers.get("claude")?.steer)
-assert.equal(providerHost.liveDrivers.get("claude")?.compaction?.kind, "supported")
-assert.equal(providerHost.liveDrivers.get("codex")?.compaction?.kind, "supported")
-assert.equal(providerHost.liveDrivers.get("devin")?.compaction?.kind, "supported")
-assert.equal(providerHost.liveDrivers.get("opencode")?.compaction?.kind, "supported")
-assert.equal(providerHost.liveDrivers.get("grok")?.compaction?.kind, "supported")
-assert.equal(providerHost.liveDrivers.get("cursor")?.compaction?.kind, "unavailable")
+assert.equal(
+  providerHost.liveDrivers.get("claude")?.compaction?.kind,
+  "supported"
+)
+assert.equal(
+  providerHost.liveDrivers.get("codex")?.compaction?.kind,
+  "supported"
+)
+assert.equal(
+  providerHost.liveDrivers.get("devin")?.compaction?.kind,
+  "supported"
+)
+assert.equal(
+  providerHost.liveDrivers.get("opencode")?.compaction?.kind,
+  "supported"
+)
+assert.equal(
+  providerHost.liveDrivers.get("grok")?.compaction?.kind,
+  "supported"
+)
+assert.equal(
+  providerHost.liveDrivers.get("cursor")?.compaction?.kind,
+  "unavailable"
+)
 assert.deepEqual(
   providerHost.accountCapabilities
     .list()
@@ -417,8 +478,15 @@ assert.deepEqual(
     ["opencode", "observed"],
   ]
 )
-assert.equal((await providerHost.accountCapabilities.get("cursor")?.accountEnv("default", { PATH: "/bin" }))?.PATH, "/bin",
-  "an observed account leaves the harness's environment as it is")
+assert.equal(
+  (
+    await providerHost.accountCapabilities
+      .get("cursor")
+      ?.accountEnv("default", { PATH: "/bin" })
+  )?.PATH,
+  "/bin",
+  "an observed account leaves the harness's environment as it is"
+)
 const accountCapability: ProviderAccountCapability =
   providerHost.accountCapabilities.get("claude")!
 assert.equal(accountCapability.mode, "selectable")
@@ -472,18 +540,21 @@ assert.deepEqual(
 )
 
 const grok = providerHost.nativeRunners.get("grok")!
-assert.deepEqual(await grok.resume("session", "continue", { options: { effort: "high" } }), {
-  command: "grok",
-  args: [
-    "-p",
-    "continue",
-    "--resume",
-    "session",
-    "--always-approve",
-    "--reasoning-effort",
-    "high",
-  ],
-})
+assert.deepEqual(
+  await grok.resume("session", "continue", { options: { effort: "high" } }),
+  {
+    command: "grok",
+    args: [
+      "-p",
+      "continue",
+      "--resume",
+      "session",
+      "--always-approve",
+      "--reasoning-effort",
+      "high",
+    ],
+  }
+)
 
 const devin = providerHost.nativeRunners.get("devin")!
 assert.deepEqual((await devin.fresh("start", { model: "adaptive" })).args, [

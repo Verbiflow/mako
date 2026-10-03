@@ -78,6 +78,15 @@ try {
     () => {}
   )
   const blocks = reduceLiveUpdates([], updates)
+  blocks.push({
+    type: "event",
+    id: "native-compaction-1",
+    label: "Context compacted",
+    detail: "Automatic",
+    body: "The retained summary",
+    tone: "warning",
+    source: { harness: "fixture", record: "native-compaction-1" },
+  })
   const journal = new LiveJournal(root, id)
   journal.commit({
     session: {
@@ -118,6 +127,16 @@ try {
   archive.note(ref, async () => thread)
   await archive.flush()
   const archived = (await archive.read(ref.path))!
+  const marker = archived.entries.find((entry) => entry.kind === "event")
+  assert.deepEqual(marker, {
+    kind: "event",
+    id: "native-compaction-1",
+    label: "Context compacted",
+    detail: "Automatic",
+    body: "The retained summary",
+    tone: "warning",
+    source: { harness: "fixture", record: "native-compaction-1" },
+  })
   await archive.stop()
   const archivedCall = threadToMessages(archived.entries).flatMap((message) =>
     pairTools(message.blocks)

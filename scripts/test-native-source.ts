@@ -1,8 +1,9 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { nativeSessionPath } from "../electron/native-source.ts"
 import type { ThreadRef } from "@mako/sessions"
 
-for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+for (const harness of registeredHarnessIds()) {
   const first: ThreadRef = { harness, nativeId: "native-id", path: "/configured/store/first" }
   const second = { ...first, path: "/configured/store/second" }
   const identity = { harness, nativeId: first.nativeId }

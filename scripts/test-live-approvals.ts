@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import type { ApprovalSubmission } from "../electron/contracts/approval-response.js"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
@@ -13,7 +14,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-approval-receipts-"))
 try {
-  for (const provider of ["claude", "codex", "cursor", "grok", "devin", "opencode", "future"]) {
+  for (const provider of [...registeredHarnessIds(), "future"]) {
     let id = randomUUID()
     const journalRoot = join(root, provider)
     let calls = 0

@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -20,7 +21,7 @@ assert.ok(decoded?.method === "item/completed" && decoded.item.type === "agentMe
 assert.equal(codexAnsweredQuestions("native", "ordinary prose").length, 0)
 assert.deepEqual(codexAnsweredQuestions("native",codexQuestionAnswer(native,{[native.questions[0]!.id]:["Two"]})),[{sessionId:"native",itemId:"item-1",questionIds:[native.questions[0]!.id]}])
 try {
-  for (const provider of ["claude","codex","cursor","grok","devin","opencode","future"]) {
+  for (const provider of [...registeredHarnessIds(), "future"]) {
     const id = randomUUID(), path = join(root,provider+".native"), journals = join(root,provider)
     writeFileSync(path,"native")
     let state: LiveSessionState = {id,harness:provider,cwd:root,nativeId:"native",nativePath:path,status:"ready",connection:"connected",modes:[],currentMode:null,configOptions:[]}

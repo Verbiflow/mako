@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -13,7 +14,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-native-approval-evidence-"))
 try {
-  for (const provider of ["claude", "codex", "cursor", "grok", "devin", "opencode", "future"]) {
+  for (const provider of [...registeredHarnessIds(), "future"]) {
     const id = randomUUID(), journalRoot = join(root, provider)
     let emit!: (event: LiveDriverEvent) => void
     let calls = 0

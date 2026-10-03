@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -32,7 +33,7 @@ const cancellations: string[] = []
 const finishes = new Map<string, () => void>()
 const sessions = new Map<string, LiveSessionState>()
 const emitters = new Map<string, (event: LiveDriverEvent) => void>()
-const providers = ["codex", "claude", "cursor", "grok", "devin", "opencode"]
+const providers = registeredHarnessIds()
 const drivers = new Map(providers.map((provider) => [provider, {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   provider, canResume: true, available: () => true,

@@ -434,6 +434,8 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
   const grok = providerHost.accountCapabilities.get("grok")
   assert.ok(grok)
   let calls = 0
+  let credential = "first-credential"
+  const revision = mock.method(grok, "credentialRevision", async () => credential)
   let next: () => AccountUsage = () => ({ status: "ok", windows: [] })
   const read = mock.method(grok, "accountUsage", async () => {
     calls++
@@ -483,10 +485,41 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
     const amended = await accountUsage("grok", "default")
     assert.ok(amended.status === "ok" && amended.windows[0]?.usedPercent === 55)
     assert.equal(heard[0], amended, "listeners hear the amended reading")
+    credential = "rotated-credential"
+    next = () => ({ status: "error", detail: "HTTP 429" })
+    const rotated = await accountUsage("grok", "default")
+    assert.equal(rotated.status, "error", "same-email credential rotation cannot reuse the previous login's last-good usage")
+    assert.equal(calls, before + 1, "credential revision invalidates a fresh usage cache without listing accounts")
   } finally {
+    revision.mock.restore()
     read.mock.restore()
     for (const list of lists) list.mock.restore()
   }
+}
+
+// A rotation during an endpoint request cannot overwrite a newer login's cache.
+{
+  const capability = providerHost.accountCapabilities.get("grok")!
+  let current = "inflight-old"
+  const revision = mock.method(capability, "credentialRevision", async () => current)
+  const entered = Promise.withResolvers<void>()
+  const obsolete = Promise.withResolvers<AccountUsage>()
+  let calls = 0
+  const read = mock.method(capability, "accountUsage", async () => {
+    calls++
+    if (calls === 1) { entered.resolve(); return obsolete.promise }
+    return { status: "ok" as const, windows: [{ usedPercent: 12, windowMinutes: 60, resetsAt: Date.now() + 60_000 }] }
+  })
+  try {
+    const old = accountUsage("grok", "default")
+    await entered.promise
+    current = "inflight-new"
+    const latest = await accountUsage("grok", "default")
+    obsolete.resolve({ status: "error", detail: "Obsolete request failed" })
+    assert.equal((await old).status, "error", "an obsolete response cannot borrow a different login's good usage")
+    assert.equal(await accountUsage("grok", "default"), latest, "an obsolete response cannot invalidate the newer revision")
+    assert.equal(calls, 2)
+  } finally { read.mock.restore(); revision.mock.restore() }
 }
 
 console.log(

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import {
   excerpt,
+  notificationHeadline,
   plainText,
   summaryNotification,
 } from "../src/lib/notification-text.ts"
@@ -707,8 +708,43 @@ assert.equal(parseAuthorizationReadout('{"authorization":"weird","alert":"enable
   assert.ok(DELIVERY_GRACE_MS > 0)
 }
 
+/* ------------------------------------------------------------------ */
+/* A Thread with several Sessions                                       */
+/* ------------------------------------------------------------------ */
+
+assert.equal(notificationHeadline("ready", "Codex", ["Claude Code"]), "Codex finished · Claude Code still working")
+assert.equal(notificationHeadline("failed", "Codex", ["Codex"]), "Codex failed · another Codex session still working")
+assert.equal(notificationHeadline("ready", "Codex", ["Claude Code", "Claude Code"]), "Codex finished · 2 Claude Code sessions still working")
+assert.equal(notificationHeadline("ask", "Codex", ["Claude Code", "Grok", "Devin"]), "Codex needs you · Claude Code, Grok and Devin still working")
+assert.equal(notificationHeadline("ready", "Codex", []), "Codex finished")
+{
+  reset()
+  const fake = fakeEnvironment()
+  const working = new Map([["/codex", ["Claude Code"]], ["/claude", []]])
+  fake.env.siblings = (target) =>
+    target.kind === "thread" && working.has(target.path) ? { thread: "t1", working: working.get(target.path) ?? [] } : undefined
+  const uninstall = installNotificationEnvironment(fake.env)
+  fake.setFocused(false)
+  noteOutcome({ kind: "ready", subject: { ...subjectFor("/codex", "Fold"), agent: "Codex" }, marker: "t1" })
+  await fake.advance(BURST_SETTLE_MS)
+  const first = notificationsStore.get().items[0]
+  assert.equal(first?.thread, "t1")
+  assert.deepEqual(first?.alongside, ["Claude Code"], "the item names the Session still working")
+  assert.equal(fake.log.desktop.at(-1)?.subtitle, "Codex finished · Claude Code still working · mako")
+  noteOutcome({ kind: "ready", subject: subjectFor("/claude", "Fold"), marker: "t1" })
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(notificationsStore.get().items[0]?.alongside, undefined, "the last Session to finish has nothing beside it")
+  assert.equal(fake.log.desktop.at(-1)?.subtitle, "Claude Code finished · mako")
+  assert.equal(unseenItems(notificationsStore.get().items).length, 2, "each Session's answer opens on its own")
+  assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["mako-thread:t1"], "two Sessions of one Thread count once")
+  noteOutcome({ kind: "ready", subject: subjectFor("/solo"), marker: "t1" })
+  assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/solo", "mako-thread:t1"])
+  markAllSeen()
+  uninstall()
+}
+
 reset()
 prefsStore.set({ badgeCount: true })
 console.log(
-  "Notifications: excerpts, policy by thread visibility, burst summaries, retire on restart, hydration replays, live and external transitions, the authorization readout, honest delivery, and one banner per thread verified"
+  "Notifications: excerpts, policy by thread visibility, burst summaries, retire on restart, hydration replays, live and external transitions, the authorization readout, honest delivery, one banner per thread, and Sessions of one Thread verified"
 )

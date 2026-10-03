@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -44,15 +45,7 @@ if (!process.argv.includes("--fixture")) {
   }
 } else {
   const root = process.argv.at(-1)!
-  for (const provider of [
-    "claude",
-    "codex",
-    "cursor",
-    "grok",
-    "devin",
-    "opencode",
-    "future",
-  ]) {
+  for (const provider of [...registeredHarnessIds(), "future"]) {
     const sessions = new Map<string, LiveSessionState>()
     const emitters = new Map<string, (event: LiveDriverEvent) => void>()
     const sent: string[] = []

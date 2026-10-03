@@ -81,9 +81,9 @@ const lossy: LossySessionUpdate[] = []
 const kept = await Array.fromAsync((await screenSessionUpdates({ readable: ReadableStream.from(bent), writable: new WritableStream() }, () => assert.fail("nothing here is refused"), (value) => lossy.push(value))).readable)
 assert.deepEqual(kept, bent, "a lossy update still reaches the SDK")
 assert.deepEqual(lossy, [
-  { kind: "tool_call_update", paths: ["status"] },
-  { kind: "tool_call", paths: ["kind"] },
-  { kind: "plan", paths: ["entries[]"] },
-  { kind: "agent_message_chunk", paths: ["extra"] },
+  { params: bent[0]?.params, kind: "tool_call_update", paths: ["status"] },
+  { params: bent[1]?.params, kind: "tool_call", paths: ["kind"] },
+  { params: bent[2]?.params, kind: "plan", paths: ["entries[]"] },
+  { params: bent[3]?.params, kind: "agent_message_chunk", paths: ["extra"] },
 ], "an unknown value, a dropped entry and a stripped field each name where they were lost, and a whole update names nothing")
 console.log("ACP streams: a session/update the SDK keeps only in part names the values it lost")

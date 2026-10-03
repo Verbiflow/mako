@@ -42,8 +42,9 @@ async function review() {
   try {
     await window.loadURL(process.env.MAKO_RELOAD_URL + 'scripts/reload-selection.html')
     await until("Boolean(document.querySelector('.composer-input'))")
+    const fixtureHarnesses = await evaluate("import('/src/dev/harness-fixtures.ts').then(({fixtureHarnesses})=>fixtureHarnesses.map(entry=>entry.provider))")
     page.debugger.attach('1.3')
-    for (const harness of ['claude', 'codex', 'cursor', 'grok', 'devin', 'opencode']) {
+    for (const harness of fixtureHarnesses) {
       await evaluate(`document.querySelector('[data-provider="${harness}"]').click()`)
       await until(`document.querySelector('.composer-input')?.placeholder.toLowerCase().includes('${harness}')`)
       const draft = `${harness}: keep this unsent draft through raw reload`

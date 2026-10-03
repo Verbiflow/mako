@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import {
   createMakoBridge,
@@ -158,7 +159,7 @@ assert.equal(swapped.entries[0], shown?.entries[0], "other entries keep identity
 assert.equal(swapped.streamReplaceFrom, 1, "the projection restarts at the entry that changed")
 assert.equal(swapped.streamRevision, (shown?.streamRevision ?? 0) + 1)
 // Every provider uses the same recovery path; earlier loaded pages and drafts survive.
-for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+for (const harness of registeredHarnessIds()) {
   const ref = { ...paged, harness, path: `/recovery/${harness}` }
   threadsStore.set({ viewing: { ref, entries: [{kind:"user",text:"old"}], pageStart: 40, totalEntries: 41, hasEarlier: true } })
   rememberDraft(ref.path, "Unsent recovery draft")

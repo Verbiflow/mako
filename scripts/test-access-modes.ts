@@ -171,6 +171,7 @@ assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, accessModeId("fu
 assert.throws(() => acpModeChange(grokAcpSource.access, grokModes, accessModeId("auto"), "full", "grok"), /when its session starts/)
 assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, "plan", "full", "grok", accessModeId("full")),
   { kind: "native", modeId: "plan", nativeModeId: "plan" }, "Plan is entered live")
+assert.throws(() => acpModeChange(grokAcpSource.access, grokModes, "invented-mode", "full", "grok"), /does not offer that mode/)
 assert.deepEqual(acpModeChange(grokAcpSource.access, grokModes, accessModeId("full"), "full", "grok", "plan"),
   { kind: "native", modeId: accessModeId("full"), nativeModeId: "default" }, "leaving Plan returns to the launch tier through Grok's default mode")
 assert.throws(() => acpModeChange(grokAcpSource.access, grokModes, accessModeId("ask"), "full", "grok", "plan"), /when its session starts/,

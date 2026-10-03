@@ -113,3 +113,10 @@ assertDraftsSaved()
 assert.equal(readDraftStorage("quit-proof"), null)
 assert.equal(saved.get("mako.preview.unsaved.quit-proof"), "Do not lose this paragraph")
 console.log("Quit and update refuse unsaved drafts; retry preserves the original window's storage namespace")
+writeAttachmentDrafts({ restored: [
+  { ...attachment, id: "native-path-only", size: undefined },
+  { ...attachment, id: "known-empty", size: 0 },
+] })
+assert.equal(readAttachmentDrafts().restored?.[0]?.size, undefined)
+assert.equal(readAttachmentDrafts().restored?.[1]?.size, 0)
+console.log("Restored native drafts preserve unknown size separately from known empty files")

@@ -14,6 +14,7 @@ import {
   type SdkRunResult,
 } from "../electron/providers/cursor/sdk/wire.ts"
 import type { LiveUpdate } from "../electron/contracts/live-content.ts"
+import { RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.ts"
 
 const run = { agent_id: "agent-1", run_id: "run-1" } as const
 
@@ -640,6 +641,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const id = randomUUID()
   const markers: string[] = []
   const activity: string[] = []
+  let lastStop: string | undefined
   try {
     await driver.start(root, {
       conversationId: id,
@@ -649,6 +651,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
           markers.push([label, detail, body, tone].filter(Boolean).join(" | "))
         }
         if (event.type === "live-activity") activity.push(event.activity?.kind ?? "idle")
+        if (event.type === "live-session") lastStop = event.session.lastStop
       },
     })
     const summary = (text: string) => (turn: string): SdkEvent => ({ event: "message", turn, message: { ...run, type: "task", text } })
@@ -682,8 +685,13 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     assert.ok(failure?.startsWith("Turn failed | Provider returned error: x") && failure.includes(`| ${long} |`), "a long reason is clipped beside the label and whole in the body")
     assert.deepEqual(await turn([], { status: "error", error: { message: "RST_STREAM", code: "unavailable" } }), [],
       "a dropped connection is Mako's to continue, not the conversation's failure")
-    assert.deepEqual(await turn([], { status: "error", error: { message: "Agent turn stopped after repeated resume attempts made no progress" } }), [],
-      "the SDK giving up its own resumes is a dropped connection too")
+    const gaveUp = "Agent turn stopped after repeated resume attempts made no progress"
+    assert.deepEqual(await turn([], { status: "error", error: { message: gaveUp } }), [`Turn failed | ${gaveUp} | error`],
+      "the SDK giving up its own no-progress resumes is a failed turn, never one Mako continues by itself")
+    assert.equal(lastStop, RETRIES_EXHAUSTED_STOP, "so the host offers Send again instead of continuing it")
+    assert.deepEqual(await turn([], { status: "error", error: { message: "Connection failed repeatedly" } }), ["Turn failed | Connection failed repeatedly | error"],
+      "the SDK giving up its transport retries is failed too, though its words read as a network drop")
+    assert.equal(lastStop, RETRIES_EXHAUSTED_STOP)
   } finally {
     await driver.close(id)
     rmSync(root, { recursive: true, force: true })

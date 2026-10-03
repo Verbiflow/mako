@@ -12,7 +12,7 @@ import { LiveJournal } from "../electron/live-journal.js"
 import { SessionMemory } from "../electron/session-memory.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
 import { reduceLiveUpdates, type LiveUpdate } from "../electron/contracts/live-content.js"
-import { CONNECTION_LOST_STOP } from "../electron/contracts/providers-acp.js"
+import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.js"
 import type {
   LiveDriverEvent,
   LiveSessionState,
@@ -1490,6 +1490,18 @@ async function providerExitContinued() {
     assert.equal(request?.interruption?.reason, "connection-lost", "a turn that failed on a dropped connection is continued")
     await waitFor(() => prompts.length === 2, "the continuation was not sent")
     assert.equal(starts.length, 1, "a live process is continued in place")
+  })
+
+  await run(true, async ({ owner, id, prompts, end }) => {
+    owner.submit(id, randomUUID(), "first")
+    await dispatched(owner, id, 0)
+    end({ status: "failed", lastStop: RETRIES_EXHAUSTED_STOP, error: "Connection failed repeatedly" })
+    await sleep(60)
+    const request = owner.snapshot(id)!.requests[0]
+    assert.equal(request?.status, "failed", "a turn whose transport exhausted its own retries is never re-run by Mako, though its words read as a dropped connection")
+    assert.equal(request?.interruption, undefined)
+    assert.equal(request?.failure, "network")
+    assert.equal(prompts.length, 1)
   })
 
   await run(true, async ({ owner, id, prompts, end }) => {

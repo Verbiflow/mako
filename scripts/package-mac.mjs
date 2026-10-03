@@ -24,8 +24,8 @@ import { localMacConfig, resolveLocalIdentity, verifyLocalSignature } from "./ma
 const project = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const args = process.argv.slice(2)
 assert.ok(
-  args.every((arg) => arg === "--dir" || arg === "--local" || arg.startsWith("--output=")),
-  "Use --dir, --local, and/or --output=<directory>"
+  args.every((arg) => arg === "--dir" || arg === "--local" || arg === "--defer-runtime-checks" || arg.startsWith("--output=")),
+  "Use --dir, --local, --output=<directory>, and/or --defer-runtime-checks"
 )
 assert.ok(!args.includes("--local") || args.includes("--dir"), "Local signing produces an app directory, not public release archives")
 const localIdentity = args.includes("--local")
@@ -276,16 +276,20 @@ try {
   await auditPackage(app, "darwin-arm64", join(output, "package-size.json"))
   const imports = assertPackagedImports(app)
   const signature = localIdentity ? await verifyLocalSignature(app, localIdentity) : null
-  execFileSync(process.execPath, [join(project, "scripts/test-packaged-control-cli.mjs"), app], { cwd: project, stdio: "inherit", timeout: 45_000 })
-  execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app], { cwd: project, stdio: "inherit", timeout: 180_000 })
-  execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app, "--launch-services"], { cwd: project, stdio: "inherit", timeout: 180_000 })
+  const deferredRuntimeChecks = args.includes("--defer-runtime-checks")
+  if (!deferredRuntimeChecks) {
+    execFileSync(process.execPath, [join(project, "scripts/test-packaged-control-cli.mjs"), app], { cwd: project, stdio: "inherit", timeout: 45_000 })
+    execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app], { cwd: project, stdio: "inherit", timeout: 180_000 })
+    execFileSync(process.execPath, [join(project, "scripts/test-packaged-startup.mjs"), app, "--launch-services"], { cwd: project, stdio: "inherit", timeout: 180_000 })
+  }
   await writeFile(
     join(output, "package-inputs.json"),
-    JSON.stringify({ app, imports, signature, files: verified }, null, 2)
+    JSON.stringify({ app, imports, signature, runtimeChecks: deferredRuntimeChecks ? "pending external acceptance" : "passed", files: verified }, null, 2)
   )
   console.log(
     `Packaged ${verified.length} verified build files with ${imports} resolved host imports`
   )
+  if (deferredRuntimeChecks) console.log("Runtime checks deferred: this package is not ready for installation until separate startup and integration acceptance passes")
 } finally {
   await rm(stage, { recursive: true, force: true })
 }

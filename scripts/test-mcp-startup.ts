@@ -22,6 +22,7 @@ const source: ProviderMcpSource = {
   userFiles: () => [],
   workspaceFiles: () => [],
   readsCli: true,
+  readFormat: "named-map-or-list",
   write: { kind: "none" },
 }
 providerHost.mcpSources.register(source)

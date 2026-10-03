@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -47,7 +48,7 @@ reading.resolve(); await read; await drained
 assert.equal(completed, true); assert.equal(storeOpen, false)
 
 // Every adapter uses the same awaited close -> ownership-release boundary.
-for (const provider of ["claude", "codex", "cursor", "grok", "devin", "opencode", "future"]) {
+for (const provider of [...registeredHarnessIds(), "future"]) {
   const root = mkdtempSync(join(tmpdir(), "mako-shutdown-")), nativeId = randomUUID()
   const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "shutdown fixture" })
   const close = deferred(), revoke = deferred()

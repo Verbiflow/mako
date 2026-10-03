@@ -1,7 +1,15 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { ProviderStartupWatch, exitDescription, stderrDetail } from "../electron/provider-startup.ts"
 import { errorMessage } from "../electron/live-runtime.ts"
+import { configuredListenPort } from "../electron/listen-port.ts"
+
+assert.equal(configuredListenPort("MAKO_OPENCODE_API_PORT", {}), 0)
+assert.equal(configuredListenPort("MAKO_OPENCODE_API_PORT", { MAKO_OPENCODE_API_PORT: "20025" }), 20025)
+for (const value of ["", "0", "-1", "65536", "20025.5", "bad"]) {
+  assert.throws(() => configuredListenPort("MAKO_OPENCODE_API_PORT", { MAKO_OPENCODE_API_PORT: value }), /must be a port/)
+}
 
 class FakeProcess extends EventEmitter {
   exitCode: number | null = null
@@ -133,7 +141,7 @@ console.log(
 )
 
 // Every process-backed adapter receives the same progress and cleanup behavior.
-for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+for (const harness of registeredHarnessIds()) {
   const child = new FakeProcess()
   const watch = new ProviderStartupWatch(child, { harness, silenceMs: 80, totalMs: 1_000 })
   await watch.step("initialize", Promise.resolve(undefined))

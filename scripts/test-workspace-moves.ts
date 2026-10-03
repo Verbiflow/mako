@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, symlinkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -13,6 +13,8 @@ import type { WorkspaceMoves as WorkspaceMovesState } from "../electron/contract
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/mcp-reach.js"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
+import { RECIPE_PATH } from "../electron/thread-recipe.js"
+import { writeAllowedSecrets } from "../electron/recipe-secrets.js"
 import { moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
@@ -136,7 +138,8 @@ try {
 
   // The tools, over the conversation's real HTTP MCP server, act on the calling conversation only.
   const removed: number[] = []
-  const tools = workspaceTools({ cwd: (id) => sources.get(id)?.cwd, worktrees, moves, removed: () => removed.push(1) })
+  const recipesRoot = join(root, "recipes")
+  const tools = workspaceTools({ recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, removed: () => removed.push(1) })
   let releaseComputer = () => {}
   const computerHeld = new Promise<void>((resolve) => { releaseComputer = resolve })
   grants = await startConversationMcp(
@@ -157,7 +160,7 @@ try {
   assert.deepEqual([computer.getServerVersion()?.name, agent.getServerVersion()?.name], [MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER], "each server introduces itself by the name the agent app lists it under")
   assert.deepEqual((await computer.listTools()).tools.map((tool) => tool.name), ["js", "js_reset"], "browser and computer use have a server of their own")
   const listed = (await agent.listTools()).tools
-  assert.deepEqual(listed.map((tool) => tool.name), ["worktree_status", "worktree_move", "worktree_merge", "worktree_remove"])
+  assert.deepEqual(listed.map((tool) => tool.name), ["worktree_status", "worktree_bring", "worktree_move", "worktree_merge", "worktree_remove"])
   assert.match(agent.getInstructions() ?? "", /^Mako's tools for the Thread this Session belongs to\./, "the mako server says what it's for")
   for (const word of ["main checkout", "worktree", "checkout", "app", "recipe"])
     assert.match(agent.getInstructions() ?? "", new RegExp(`^- ${word}: `, "m"), `the instructions define "${word}", the word every tool uses`)
@@ -197,6 +200,66 @@ try {
   const onBranch = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} })))
   assert.equal(onBranch.editsIn, "this Thread's worktree")
   assert.deepEqual(onBranch.threadWorktree, { folder: worktreePath, branch: "mako/thread", mainCheckout: project, commitsSinceBranching: 0 })
+  // Existing worktrees can catch up, and one-offs leave the project recipe alone.
+  writeFileSync(join(project, ".git", "info", "exclude"), "local.json\n.env\n.env.local\n.env.alias\nshared.json\nconfig/\nbundle/\nassets/\n")
+  writeFileSync(join(project, "local.json"), '{"main":true}')
+  writeFileSync(join(project, ".env"), "TOKEN=fixture-only")
+  writeFileSync(join(project, "shared.json"), "shared")
+  mkdirSync(join(project, ".mako"))
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ carry: ["local.json"], secrets: [".env", ".env.local", ".env.alias"] }))
+  // The project recipe committed with this checkout is read from the worktree too.
+  mkdirSync(join(worktreePath, ".mako"))
+  writeFileSync(join(worktreePath, RECIPE_PATH), readFileSync(join(project, RECIPE_PATH)))
+  const inventory = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} }))).ignoredInMain
+  assert.equal(inventory.folder, project)
+  assert.ok(inventory.paths.includes(".env") && inventory.paths.includes("local.json"))
+  const bring = async (entries?: { path: string; link?: boolean }[]) => agent.callTool({ name: "worktree_bring", arguments: entries ? { entries } : {} })
+  assert.deepEqual(parseYaml(text(await bring())).copied, ["local.json"])
+  const deniedBring = await bring([{ path: "shared.json" }, { path: ".env" }])
+  assert.equal(deniedBring.isError, true)
+  assert.match(text(deniedBring), /hasn't allowed/)
+  assert.equal(existsSync(join(worktreePath, "shared.json")), false, "validate the whole request before changing anything")
+  await writeAllowedSecrets(recipesRoot, worktreePath, [".env", ".env.local", ".env.alias"])
+  assert.deepEqual(parseYaml(text(await bring())).copied, [".env"])
+  assert.equal(lstatSync(join(worktreePath, ".env")).isSymbolicLink(), false, "env files are independent copies by default")
+  writeFileSync(join(worktreePath, ".env"), "TOKEN=worktree-only")
+  assert.ok(parseYaml(text(await bring())).existing.includes(".env"))
+  assert.equal(readFileSync(join(worktreePath, ".env"), "utf8"), "TOKEN=worktree-only")
+  assert.equal(readFileSync(join(project, ".env"), "utf8"), "TOKEN=fixture-only")
+  writeFileSync(join(project, ".env.local"), "LOCAL=fixture")
+  symlinkSync(".env.local", join(project, ".env.alias"))
+  await bring([{ path: ".env.alias" }])
+  assert.equal(lstatSync(join(worktreePath, ".env.alias")).isSymbolicLink(), false, "a source env symlink still becomes a copy")
+  assert.deepEqual(parseYaml(text(await bring([{ path: "shared.json", link: true }]))).linked, ["shared.json"])
+  assert.equal(lstatSync(join(worktreePath, "shared.json")).isSymbolicLink(), true)
+  symlinkSync("missing", join(worktreePath, ".env.local"))
+  assert.deepEqual(parseYaml(text(await bring([{ path: ".env.local" }]))).existing, [".env.local"], "a broken destination link stays untouched")
+  const outside = join(root, "outside")
+  mkdirSync(outside)
+  mkdirSync(join(project, "config"))
+  writeFileSync(join(project, "config", "local.json"), "local")
+  symlinkSync(outside, join(worktreePath, "config"))
+  assert.match(text(await bring([{ path: "config/local.json" }])), /destination points outside/)
+  assert.equal(existsSync(join(outside, "local.json")), false)
+  writeFileSync(join(project, "config", ".env"), "nested")
+  assert.match(text(await bring([{ path: "config" }])), /holds credentials/, "a directory selection can't bypass its credential files")
+  mkdirSync(join(project, "assets"))
+  writeFileSync(join(project, "assets", "one.json"), "one")
+  writeFileSync(join(project, "assets", "two.txt"), "two")
+  assert.deepEqual(parseYaml(text(await bring([{ path: "assets/*.json" }]))).copied, ["assets/one.json"], "patterns work inside a collapsed ignored folder")
+  assert.equal(existsSync(join(worktreePath, "assets", "two.txt")), false)
+  mkdirSync(join(project, "bundle"))
+  writeFileSync(join(project, "bundle", "large.bin"), Buffer.alloc(2 * 1024 * 1024, 7))
+  assert.deepEqual(parseYaml(text(await bring([{ path: "bundle" }]))).copied, ["bundle"])
+  assert.equal(readFileSync(join(worktreePath, "bundle", "large.bin")).length, 2 * 1024 * 1024)
+  writeFileSync(join(worktreePath, "bundle", "large.bin"), "changed")
+  assert.equal(readFileSync(join(project, "bundle", "large.bin")).length, 2 * 1024 * 1024, "cloned outputs stay independent")
+  assert.deepEqual(parseYaml(text(await bring([{ path: "a.txt" }]))).missing, ["a.txt"], "tracked files aren't brought")
+  assert.equal((await bring([{ path: "../outside" }])).isError, true)
+  const beforeBring = readFileSync(join(worktreePath, RECIPE_PATH), "utf8")
+  await bring([{ path: "local.json" }])
+  assert.equal(readFileSync(join(worktreePath, RECIPE_PATH), "utf8"), beforeBring, "one-offs don't change the project recipe")
+
   assert.match(text(await agent.callTool({ name: "worktree_merge", arguments: {} })), /^Merged mako\/thread into main in the main checkout/)
   assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), /^Removed this Thread's worktree, .* its branch, mako\/thread, is kept/is)
   assert.deepEqual(removedPaths, [worktreePath])

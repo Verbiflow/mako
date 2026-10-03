@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { z } from "zod"
@@ -42,7 +43,7 @@ async function read<T>(reader: LiveHistoryReader, source: LiveSnapshot, input: L
   return JSON.parse(pieces.join("")) as T
 }
 
-for (const [index, provider] of ["claude", "codex", "cursor", "grok", "devin", "opencode"].entries()) {
+for (const [index, provider] of registeredHarnessIds().entries()) {
   const source = auditSnapshot(300, provider, 256, 120 * 1024)
   source.session.id = auditId(100 + index)
   source.epoch = "source-epoch"
@@ -226,7 +227,7 @@ try {
   // for hosts that do and do not name earlier prompts. The first page starts
   // after the running prompt: that prompt is not redrawn at the end, and once
   // its page loads it appears once, with the steer inside its answer.
-  for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+  for (const harness of registeredHarnessIds()) {
     for (const namesEarlier of [true, false]) {
       const label = `${harness}${namesEarlier ? "" : " (no earlierRequests)"}`
       const prompt = `${harness}-running`

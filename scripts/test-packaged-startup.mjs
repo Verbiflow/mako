@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import WebSocket from "ws"
+import { threadDebugPort } from "./thread-debug-port.mjs"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
 import {
   runtimeInfo,
@@ -117,7 +118,8 @@ function detach() {
 async function launch() {
   const started = performance.now()
   const executable = join(app, "Contents/MacOS/Mako")
-  const flags = ["--background", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1"]
+  const debugPort = await threadDebugPort()
+  const flags = ["--background", `--remote-debugging-port=${debugPort}`, "--remote-debugging-address=127.0.0.1"]
   // Finder/Dock launch through LaunchServices. Direct exec alone misses -600
   // from stale or hidden registrations. -W tracks the client's whole lifetime.
   const child = launchServices
@@ -168,9 +170,9 @@ async function launch() {
     "The test must exercise the separate packaged host, not standalone mode"
   )
   const target = await until(async () => {
-    let port
+    let port = debugPort
     try {
-      port = Number(
+      if (!port) port = Number(
         (await readFile(join(uiRoot, "DevToolsActivePort"), "utf8")).split(
           "\n"
         )[0]

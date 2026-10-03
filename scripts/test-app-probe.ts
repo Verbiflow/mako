@@ -1,3 +1,4 @@
+import { z } from "zod"
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
@@ -28,12 +29,13 @@ const escaped = join(root, "escaped.pid")
 
 const service = createServer((socket) => socket.on("error", () => {}))
 await new Promise<void>((resolve) => service.listen(0, "127.0.0.1", resolve))
-const servicePort = (service.address() as { port: number }).port
+const PortAddress = z.object({ port: z.number().int().positive() })
+const servicePort = PortAddress.parse(service.address()).port
 
 async function free(): Promise<number> {
   const server = createServer()
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
-  const { port } = server.address() as { port: number }
+  const { port } = PortAddress.parse(server.address())
   await new Promise<void>((resolve) => server.close(() => resolve()))
   return port
 }

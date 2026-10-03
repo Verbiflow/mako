@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { appendFile, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
@@ -74,7 +75,7 @@ try {
   assert.equal((await createCodexQuestionHistory()(binding))[0]!.retired, true, "Cold reconstruction preserves the same retirement")
 
   // The host consumes one capability, with no provider-name branches.
-  for(const provider of ["claude","codex","cursor","grok","devin","opencode","future"]) {
+  for(const provider of [...registeredHarnessIds(), "future"]) {
     const id=randomUUID(), journals=join(root,provider)
     const first=codexAsyncQuestion(native,"first","first",[{title:"First?"}])
     const newer=codexAsyncQuestion(native,"newer","newer",[{title:"Newer?"}])

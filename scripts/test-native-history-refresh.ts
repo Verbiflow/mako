@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -90,7 +91,7 @@ try {
 
 // The reader contract permits no checkpoint. Exercise the same lifecycle and
 // durability rules for every shipped provider, without inventing native evidence.
-for (const harness of ["claude", "codex", "cursor", "grok", "devin", "opencode"]) {
+for (const harness of registeredHarnessIds()) {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "mako-refresh-lifecycle-"))
   const conversation = randomUUID()
   let page: ThreadPage = {

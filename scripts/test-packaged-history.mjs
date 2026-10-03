@@ -131,7 +131,7 @@ async function checkReadingAndDraft(item) {
     await delay(350)
   }
   assert.ok(control?.tool, `${item.provider}: a visible actual tool row is available`)
-  await until(() => evaluate(`(()=>{const b=window.proofTool;const panel=b?.parentElement?.parentElement;return b?.isConnected && b.getAttribute('aria-expanded')==='true' && panel.querySelector('.border-t') && !panel.textContent.includes('Reading the rest of this output')})()`), `${item.provider} expanded tool`)
+  await until(() => evaluate(`(()=>{const b=window.proofTool;const panel=b?.parentElement?.parentElement;return b?.isConnected && b.getAttribute('aria-expanded')==='true' && panel.querySelector('[data-tool-body]') && !panel.textContent.includes('Reading the rest of this output')})()`), `${item.provider} expanded tool`)
   assert.equal(await evaluate(`Boolean(document.querySelector('[role="alert"]'))`), false, 'No tool read error')
   await delay(350)
   await evaluate(`window.proofTool.scrollIntoView({block:'center',behavior:'instant'})`)

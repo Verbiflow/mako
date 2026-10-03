@@ -1,3 +1,4 @@
+import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, readFileSync } from "node:fs"
@@ -13,7 +14,7 @@ import type { ProviderLiveDriver, ProviderSteerResult } from "../electron/provid
 
 const root = mkdtempSync(join(tmpdir(), "mako-queued-steering-"))
 try {
-  for (const provider of ["claude", "codex", "cursor", "grok", "devin", "opencode", "future"]) {
+  for (const provider of [...registeredHarnessIds(), "future"]) {
     for (const outcome of ["accepted", "refused", "held-refused", "lost-reply", "restart", "storage-failure", "receipt-storage-failure"] as const) {
       const id = randomUUID(), first = randomUUID(), queuedId = randomUUID()
       const directory = join(root, provider, outcome)

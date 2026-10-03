@@ -1,3 +1,4 @@
+import { fixtureHarnesses } from "../src/dev/harness-fixtures.ts"
 import assert from "node:assert/strict"
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -19,6 +20,11 @@ import type { ProviderRegistry, ProviderCapability } from "../electron/providers
  */
 
 const families = {
+  hooks: "hooks",
+  commands: "commands",
+  toolEditing: "toolEditing",
+  skillEditing: "skillEditing",
+  mcpEditing: "mcpEditing",
   live: "liveDrivers",
   decoder: "decoders",
   profile: "profiles",
@@ -40,10 +46,10 @@ const familyNames = Object.keys(families) as HarnessFamily[]
 const registry = (family: HarnessFamily): ProviderRegistry<ProviderCapability> => providerHost[families[family]]
 
 const harnesses = providerHost.harnesses.list()
-assert.deepEqual(
-  harnesses.map((harness) => harness.provider),
-  ["claude", "codex", "cursor", "grok", "devin", "opencode"]
-)
+assert.deepEqual(new Set(fixtureHarnesses.map((entry) => entry.provider)), new Set(harnesses.map((entry) => entry.provider)), "new harnesses need explicit browser fixture evidence")
+for (const entry of harnesses) assert.deepEqual(fixtureHarnesses.find((fixture) => fixture.provider === entry.provider)?.presentation, entry.presentation)
+assert.ok(harnesses.length > 0)
+assert.equal(new Set(harnesses.map((entry) => entry.provider)).size, harnesses.length)
 
 for (const family of familyNames) {
   for (const capability of registry(family).list()) {
@@ -80,6 +86,12 @@ for (const harness of harnesses) {
 const host = createProviderHost()
 const definition: HarnessDefinition = {
   provider: "example",
+  presentation: { firstRunPriority: 99, icon: { id: "codex-cloud", tint: "currentColor" } },
+  hooks: lacks("test"),
+  commands: lacks("test"),
+  toolEditing: lacks("test"),
+  skillEditing: lacks("test"),
+  mcpEditing: lacks("test"),
   live: providerHost.liveDrivers.get("codex")!,
   decoder: lacks("test"),
   profile: providerHost.profiles.get("codex")!,
@@ -95,6 +107,8 @@ const definition: HarnessDefinition = {
   artifactPreview: lacks("test"),
 }
 assert.throws(() => installHarness(host, definition), /example's live capability is filed under codex/)
+assert.equal(host.harnesses.list().length, 0)
+assert.equal(host.hooks.list().length, 0)
 
 console.log(`${"".padEnd(10)}${familyNames.join(" ")}`)
 for (const line of matrix) console.log(line)

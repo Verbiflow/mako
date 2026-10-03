@@ -82,6 +82,7 @@ for (const source of sources) {
   const silent = [...source.silent].filter((kind) => exercised.has(kind)).length
   console.log(`${source.provider}: ${checked} fixture${checked === 1 ? "" : "s"}; ` +
     `${decoded.length - missing.length} of ${decoded.length} decoded kinds and ${silent} of ${source.silent.size} silent kinds exercised`)
+  if (!options.only && missing.length) fail(source.provider, `decoded kinds lack fixtures: ${missing.join(", ")}`)
   if (options.coverage && missing.length) console.log(indent(`not exercised: ${missing.join(", ")}`))
 }
 

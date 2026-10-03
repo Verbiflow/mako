@@ -14,9 +14,11 @@ import {
   buildForeignPrompt,
   buildPrompt,
   parseAttachmentAppendix,
+  formatBytes,
   type Attachment,
 } from "../src/lib/attachments.ts"
 import { SavedAttachmentSchema } from "../src/lib/draft-persistence.ts"
+import { PromptAttachmentSchema } from "../electron/contracts/prompt-attachments.ts"
 
 const image: Attachment = {
   id: "image",
@@ -98,6 +100,9 @@ for (const body of [draft, "Compare [Attachment 1] with [Attachment 2]."]) {
   assert.equal(reusable[0]?.name, image.name)
   assert.equal(reusable[0]?.mimeType, "image/png")
   assert.equal(reusable[0]?.stagedPath, image.stagedPath)
+  assert.equal(reusable[0]?.size, undefined, "A native path is not evidence that a file is empty")
+  assert.equal(SavedAttachmentSchema.parse(reusable[0]).size, undefined)
+  assert.equal(PromptAttachmentSchema.parse(reusable[0]).size, undefined)
   assert.ok(
     buildForeignPrompt(
       restoreAttachmentReferences(parsed.body, reusable),
@@ -240,6 +245,10 @@ assert.deepEqual(
 )
 
 const onlyFiles = parseAttachmentAppendix(buildForeignPrompt("", [image]))
+assert.equal(formatBytes(undefined), "Size unknown")
+assert.equal(formatBytes(0), "0 B", "A known empty file remains distinguishable")
+assert.equal(SavedAttachmentSchema.parse({ ...image, size: 0 }).size, 0)
+assert.equal(PromptAttachmentSchema.parse({ ...image, size: 0 }).size, 0)
 assert.equal(onlyFiles.body, "")
 assert.equal(onlyFiles.files[0]?.name, image.name)
 assert.equal(

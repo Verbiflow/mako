@@ -40,8 +40,9 @@ async function checkWindow() {
   try {
     await w.loadURL(process.env.MAKO_RECOVERY_URL+'scripts/live-workflow.html')
     await until("Boolean(document.querySelector('.composer-input'))")
+    const fixtureHarnesses = await evaluate("import('/src/dev/harness-fixtures.ts').then(({fixtureHarnesses})=>fixtureHarnesses.map(entry=>entry.provider))")
     if (process.env.MAKO_NATIVE_APPROVAL_UI) {
-      for (const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for (const harness of fixtureHarnesses) {
         await evaluate(`(async()=>{
           const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');const {applyLiveSnapshot}=await import('/src/state/live-recovery.ts');
           const s=acpStore.get(),live=s.conversations[s.activeKey],native={scope:crypto.randomUUID(),sessionId:'native-session',requestId:'native-request'};
@@ -75,7 +76,7 @@ async function checkWindow() {
         await evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(scope)}+' button')].find(b=>b.textContent.trim()===${JSON.stringify(text)} && b.getClientRects().length);if(!b)throw Error('Missing recovery control: '+${JSON.stringify(text)});document.querySelector('[data-test-control]')?.removeAttribute('data-test-control');b.setAttribute('data-test-control','')})()`)
         await click('[data-test-control]')
       }
-      for(const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for(const harness of fixtureHarnesses) {
         await seed(harness,'controls-'+harness)
         await evaluate(`(async()=>{
           const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');
@@ -130,7 +131,7 @@ async function checkWindow() {
       return
     }
     if (process.env.MAKO_APPROVAL_RECONCILIATION_FIXTURES) {
-      for (const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for (const harness of fixtureHarnesses) {
         const fixture = JSON.parse(await readFile(join(process.env.MAKO_APPROVAL_RECONCILIATION_FIXTURES,harness+'.json'),'utf8'))
         await evaluate(`(async()=>{
           const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');const {applyLiveSnapshot}=await import('/src/state/live-recovery.ts');
@@ -157,7 +158,7 @@ async function checkWindow() {
       return
     }
     if (process.env.MAKO_APPROVAL_RECOVERY) {
-      for (const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for (const harness of fixtureHarnesses) {
         for (const outcome of ['submitted','uncertain','refused','ended']) {
           await evaluate(`(async()=>{
             const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');const {applyLiveSnapshot}=await import('/src/state/live-recovery.ts');
@@ -234,7 +235,7 @@ async function checkWindow() {
       return
     }
     if (process.env.MAKO_APPROVAL_FIXTURES) {
-      for (const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for (const harness of fixtureHarnesses) {
         const fixture = JSON.parse(await readFile(join(process.env.MAKO_APPROVAL_FIXTURES, harness+'.json'),'utf8'))
         await evaluate(`(async()=>{
           const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');const {applyLiveSnapshot}=await import('/src/state/live-recovery.ts');
@@ -263,7 +264,7 @@ async function checkWindow() {
     if (process.env.MAKO_QUEUED_STEERING) {
       const queuedId='33333333-3333-4333-8333-333333333333'
       const runningId='22222222-2222-4222-8222-222222222222'
-      for(const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for(const harness of fixtureHarnesses) {
         for(const outcome of ['accepted','not-accepted','uncertain']) {
           await evaluate(`(async()=>{
             const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');const {applyLiveSnapshot}=await import('/src/state/live-recovery.ts');
@@ -316,7 +317,7 @@ async function checkWindow() {
         const transfer={input:{id:${JSON.stringify(transferId)},provider:${JSON.stringify(harness)},text:'Review the saved changes.',attachments:[]},createdAt:1,state};
         acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...live,harness:${JSON.stringify(harness)},session:{...live.session,harness:${JSON.stringify(harness)},status:'ready',connection:'connected'},requests:[],pendingPrompts:[],sending:false,
           control:{...live.control,actions:kind==='transfer'?[]:[action],transfers:kind==='transfer'?[transfer]:[]}}}});return true})()`)
-      for(const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for(const harness of fixtureHarnesses) {
         await operationSeed(harness,'transfer',{kind:'uncertain',error:'Connection closed before the switch result arrived.'})
         await until("document.querySelector('[data-transfer-recovery]')?.textContent.includes('is unconfirmed')")
         assert.ok(await evaluate("document.querySelector('[data-transfer-recovery]').textContent.includes('repeat work')"))
@@ -332,7 +333,7 @@ async function checkWindow() {
         await until("document.querySelector('[data-action-recovery]')?.textContent.includes('does not resend')")
         assert.ok(await evaluate("document.querySelector('[data-action-recovery]').textContent.includes('Acknowledge without resending')"))
       }
-      for (const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for (const harness of fixtureHarnesses) {
         await operationSeed(harness,'compact',{kind:'acknowledged',receipt:{at:1,outcome:{kind:'uncertain',reason:'The native reply was lost before completion could be confirmed.'}}})
         await until("!document.querySelector('[data-action-recovery]')")
         await click('[aria-label="Conversation actions"]')
@@ -424,7 +425,7 @@ async function checkWindow() {
             nativeDelivery:evidence ? {attemptId:'11111111-1111-4111-8111-111111111111',bindingId:'fixture',ownerEpoch:'fixture',evidence:evidence==='accepted'?{kind:evidence,source:'native-response'}:evidence==='not-accepted'?{kind:evidence,source:'preflight',reason:'Not connected'}:{kind:evidence,reason:'Lost response'}} : undefined} : request)
         }}});return true})()`)
       const button = "[...document.querySelectorAll('[data-request-recovery] button')].find(n=>/Send again|Send another copy/.test(n.textContent))"
-      for (const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+      for (const harness of fixtureHarnesses) {
         await seed(harness,'delivery-'+harness)
         await update(undefined)
         if(harness==='codex') await capture('compact.png')
@@ -496,7 +497,7 @@ async function checkWindow() {
     await until("[...document.querySelectorAll('button[aria-expanded]')].some(n=>n.textContent.includes('Saved messages (2)'))")
     await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
     await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
-    for(const harness of ['claude','codex','cursor','grok','devin','opencode']) {
+    for(const harness of fixtureHarnesses) {
       await seed(harness,'new-'+harness)
       await until("Boolean(document.querySelector('[data-recovery-notice]'))")
       assert.equal(await evaluate("document.querySelectorAll('[data-recovery-notice]').length"),1)

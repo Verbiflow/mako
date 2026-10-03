@@ -11,6 +11,7 @@ import {
   decodeFileCitation,
   linkFileCitations,
   markdownFileTarget,
+  anchorLine,
 } from "../src/lib/file-citations.ts"
 import {
   argAt,
@@ -444,6 +445,15 @@ assert.deepEqual(markdownFileTarget("/work/src/index.ts#L12-L18"), {
   line: 12,
   endLine: 18,
 })
+// A `#section` anchor is a heading, not part of the filename.
+assert.deepEqual(markdownFileTarget("docs/notes.md#setup-steps"), {
+  path: "docs/notes.md",
+  line: undefined,
+  endLine: undefined,
+  anchor: "setup-steps",
+})
+assert.equal(anchorLine("# Intro\n\ntext\n\n## Setup steps\n\nmore", "setup-steps"), 5)
+assert.equal(anchorLine("# Intro\n\n## Setup steps", "missing"), undefined)
 const workCall = (id: string, name: string, extra: Partial<ToolCall> = {}): ToolCall =>
   ({ id, name, pending: false, ...extra, tool: identifyTool({ name, input: extra.arguments === undefined ? undefined : JSON.stringify(extra.arguments) }) })
 assert.deepEqual(
@@ -1679,3 +1689,10 @@ assert.doesNotMatch(
   "the mark's ring is spread only, never a blurred shadow"
 )
 console.log("Failed threads acknowledge on open; the unread mark is styled once")
+
+assert.equal(anchorLine("```md\n## Setup\n```\n\n## Setup", "setup"), 5)
+assert.equal(anchorLine("## Setup\n\n## Setup", "setup-1"), 3)
+assert.equal(anchorLine("Setup\n=====", "setup"), 1)
+assert.equal(anchorLine("## [Setup](./guide.md)", "setup"), 1)
+assert.equal(anchorLine("## 日本語", "日本語"), 1)
+assert.deepEqual(markdownFileTarget("notes.md#L1-cache"), {path:"notes.md",line:undefined,endLine:undefined,anchor:"L1-cache"})

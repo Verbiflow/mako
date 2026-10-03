@@ -23,6 +23,7 @@ import {
   type DevRendererRegistration,
 } from "../electron/dev-renderer-registration.js"
 import { deskFile } from "../electron/desk-scheme.js"
+import { deskPreviewFile, resolveDeskPreviewUrl } from "../electron/desk-preview-url.js"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
@@ -161,6 +162,15 @@ for (const event of ["will-navigate", "will-redirect"] as const) {
 
 // The scheme serves the bundle and nothing beside it.
 const root = "/Applications/Mako.app/Contents/Resources/app.asar/dist"
+const originalPreview = "mako-file://asset/a%20b.pdf?grant=owned"
+const deskPreview = resolveDeskPreviewUrl(originalPreview, "mako-app://desk/index.html", "desk-client")
+assert.equal(deskPreview, "mako-app://desk/__mako_file/asset/a%20b.pdf?grant=owned&client=desk-client")
+assert.equal(deskPreviewFile(deskPreview), `${originalPreview}&client=desk-client`)
+assert.equal(resolveDeskPreviewUrl(originalPreview, "http://localhost:20020/", "desk-client"), `${originalPreview}&client=desk-client`)
+assert.equal(resolveDeskPreviewUrl("https://example.test/file.pdf", "mako-app://desk/index.html"), "https://example.test/file.pdf")
+assert.equal(deskPreviewFile("mako-app://other/__mako_file/asset/file.pdf"), null)
+assert.equal(deskPreviewFile("mako-app://desk/__mako_file//etc/passwd"), null)
+assert.equal(deskPreviewFile("mako-app://desk/assets/file.pdf"), null)
 assert.equal(deskFile(root, "mako-app://desk/index.html?preview=x"), `${root}/index.html`)
 assert.equal(deskFile(root, "mako-app://desk/"), `${root}/index.html`)
 assert.equal(deskFile(root, "mako-app://desk/assets/app-1.js"), `${root}/assets/app-1.js`)
