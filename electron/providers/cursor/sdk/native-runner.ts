@@ -31,8 +31,8 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
     return resolved
   }
 
-  async function command(spec: Omit<SdkHeadlessSpec, "stateRoot" | "model">, options: NativeRunOptions | undefined): Promise<NativeCommand> {
-    const env = await dependencies.childEnv()
+  async function command(spec: Omit<SdkHeadlessSpec, "stateRoot" | "model">, options: NativeRunOptions | undefined, launchEnv?: NodeJS.ProcessEnv): Promise<NativeCommand> {
+    const env = launchEnv ?? await dependencies.childEnv()
     const full: SdkHeadlessSpec = { ...spec, stateRoot: dependencies.stateRoot(), model: (await selection(options, env)).selection }
     const childEnv: NonNullable<NativeCommand["env"]> = { ELECTRON_RUN_AS_NODE: "1", NODE_OPTIONS: "" }
     if (env.CURSOR_API_KEY) childEnv.CURSOR_API_KEY = env.CURSOR_API_KEY
@@ -58,11 +58,11 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
     fastMode: "unsupported",
     // Every option of the selected model rides its selection; `prepare` names what the model lacks.
     carries: [],
-    async prepare(options) {
-      return { options, dropped: (await selection(options, await dependencies.childEnv())).dropped }
+    async prepare(options, env) {
+      return { options, dropped: (await selection(options, env)).dropped }
     },
-    resume: (id, prompt, options) => command({ agentId: id, create: false, prompt, importFrom: importFrom(id, options?.nativePath) }, options),
-    fresh: (prompt, options) => command({ agentId: randomUUID(), create: true, prompt }, options),
+    resume: (id, prompt, options, env) => command({ agentId: id, create: false, prompt, importFrom: importFrom(id, options?.nativePath) }, options, env),
+    fresh: (prompt, options, env) => command({ agentId: randomUUID(), create: true, prompt }, options, env),
     describe({ args }, catalog) {
       let raw: unknown
       try {

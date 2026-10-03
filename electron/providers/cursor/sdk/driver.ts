@@ -15,7 +15,8 @@ import { appendPromptAttachments } from "@mako/sessions/prompt-attachments"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import { mcpServerFailedEvent, messageEvent, TURN_FAILED } from "@mako/sessions/events"
 import { CURSOR_PLAN_OPTION } from "@mako/sessions"
-import { compareNativeCheckpoint, type ProviderBinding, type ResumeVerdict } from "../../../contracts/conversation-control.js"
+import type { ProviderBinding } from "../../../contracts/conversation-control.js"
+import type { NativeResumeEvidence } from "../../../native-continuation.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
 import {
@@ -378,7 +379,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
    * ledger; a `cursor-agent` store is only ever read here, so a CLI that
    * still has it open loses nothing when the SDK continues from a copy.
    */
-  const resumeVerdict = async (binding: ProviderBinding): Promise<ResumeVerdict> => {
+  const inspectNativeSession = async (binding: ProviderBinding): Promise<NativeResumeEvidence> => {
     if (!binding.nativeId || !binding.path)
       return { kind: "unavailable", reason: "The saved binding does not name a Cursor session store." }
     const origin = cursorStoreOrigin(binding.path, { home: dependencies.home })
@@ -387,7 +388,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     const current = await checkpoint(binding.path)
     if (current === undefined)
       return { kind: "unavailable", reason: "The Cursor session store is missing or unreadable." }
-    return { kind: "resumable", record: compareNativeCheckpoint(binding.checkpoint, current) }
+    return { kind: "available", checkpoint: current, strategy: origin.origin === "sdk" ? "same-session" : "copy" }
   }
 
   return {
@@ -408,7 +409,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     },
     canResume: true,
     checkpoint,
-    resumeVerdict,
+    inspectNativeSession,
     // Verified 2026-09-13 (SDK 1.0.31): a steer delivered while `sleep 6 &&
     // echo two` ran completed that shell step after 1.7 s and the model
     // resumed with the steered text, so the SDK cuts the current step short
