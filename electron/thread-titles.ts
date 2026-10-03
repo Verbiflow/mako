@@ -39,7 +39,14 @@ export class TitleModelError extends Error {
 export interface ThreadTitlerOptions {
   store: ThreadStore
   model(): Promise<TitleModel>
+  /**
+   * Whether a model is chosen now. Every host shares the choice, so a host
+   * with titles off asks again, at most once per `recheckMs`, when an
+   * exchange finishes.
+   */
+  chosen?(): Promise<boolean>
   emit(titles: ThreadTitleEntry[]): void
+  recheckMs?: number
   /** How long a Thread stays quiet after an exchange before it is named. */
   quietMs?: number
   /** The least time between two requests for one Thread. */
@@ -163,6 +170,7 @@ export class ThreadTitler {
   private running = 0
   private pausedUntil = 0
   private unavailable?: string
+  private checkedAt = -Infinity
   private closed = false
 
   constructor(options: ThreadTitlerOptions) {
@@ -174,10 +182,28 @@ export class ThreadTitler {
     this.enabled = enabled
     this.unavailable = undefined
     this.pausedUntil = 0
+    this.checkedAt = this.now()
   }
 
   exchange(exchange: CompletedExchange): void {
-    if (!this.enabled || this.closed) return
+    if (this.closed) return
+    if (this.enabled) {
+      this.keep(exchange)
+      return
+    }
+    const { chosen, recheckMs = 60_000 } = this.options
+    if (!chosen || this.now() < this.checkedAt + recheckMs) return
+    this.checkedAt = this.now()
+    void chosen().then((on) => {
+      if (!on || this.closed || this.enabled) return
+      this.configure(true)
+      this.keep(exchange)
+    }, (error: unknown) => {
+      hostWarn("thread-titles", "the model chosen for titles could not be read", { error: error instanceof Error ? error.message : String(error) })
+    })
+  }
+
+  private keep(exchange: CompletedExchange): void {
     try {
       const { store } = this.options
       const placed = store.journalPlacement(exchange.conversationId)
@@ -258,10 +284,14 @@ export class ThreadTitler {
     try {
       if (this.now() < this.pausedUntil) return
       const model = await this.options.model()
+      if (model.kind === "off") {
+        this.configure(false)
+        return
+      }
       if (model.kind !== "ready") {
-        if (model.kind === "unavailable" && model.reason !== this.unavailable)
+        if (model.reason !== this.unavailable)
           hostWarn("thread-titles", "Threads keep their names: the model chosen for titles is unavailable", { reason: model.reason })
-        this.unavailable = model.kind === "unavailable" ? model.reason : undefined
+        this.unavailable = model.reason
         return
       }
       this.unavailable = undefined

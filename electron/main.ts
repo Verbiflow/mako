@@ -374,7 +374,12 @@ const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event)
 const utilityModels = openUtilityModels()
 /** Names Threads from their latest exchanges, with the model chosen in Settings and only then. */
 const threadTitler = threadStore
-  ? new ThreadTitler({ store: threadStore, model: () => resolveTitleModel(utilityModels), emit: (titles) => emit({ type: "thread-titles", titles }) })
+  ? new ThreadTitler({
+      store: threadStore,
+      model: () => resolveTitleModel(utilityModels),
+      chosen: async () => (await utilityModels.titleModel()) !== null,
+      emit: (titles) => emit({ type: "thread-titles", titles }),
+    })
   : undefined
 if (threadTitler) void utilityModels.titleModel().then((model) => threadTitler.configure(model !== null))
 const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))

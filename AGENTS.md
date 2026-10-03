@@ -1417,6 +1417,21 @@ never reads it from caller input. A store with a newer
 schema is refused without writing. `npm run test:thread-store` covers the
 rules, six-harness migration across a restart and actors.
 
+Automatic Thread titles (`electron/thread-titles.ts`) run only with a model
+chosen in Settings > Conversation from the commit-drafting connections
+(`thread-title-model.ts`); no other connection or coding-agent account stands
+in for it. `LiveConversations.flush` reports each request that turned
+`completed` once, harness-independent; the store keeps each Session's last two
+exchanges, bounded, and the window is the Thread's latest two across its
+Sessions by completion time. A quiet period coalesces bursts, and a window
+already answered (`auto_context`) asks nothing. The model's title lives in
+`auto_title` beside `title`, so `title` with any source but `auto`, including
+none from an older build, is the person's or Mako's and is never replaced.
+`applyAutoTitle` is a compare-and-set on `title_revision` and the window's
+digest: a rename, newer exchange, other host's title or merge since the claim
+makes a late answer lose. `scripts/test-thread-titles.ts` covers it with a
+fake model.
+
 Every Session also has an execution owner (this device or a named cloud
 runtime) and a generation that rises on every owner change, including to
 nobody while in transit (`electron/contracts/thread-execution.ts`, the

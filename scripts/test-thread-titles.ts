@@ -330,6 +330,53 @@ async function unavailableAndFailing(): Promise<void> {
   store.close()
 }
 
+async function sharedChoice(): Promise<void> {
+  const store = openStore("shared-choice")
+  const model = new FakeModel()
+  let chosen = false
+  let reads = 0
+  const named = new ThreadTitler({
+    store,
+    model: model.resolution,
+    chosen: async () => {
+      reads += 1
+      return chosen
+    },
+    emit: () => {},
+    quietMs: QUIET,
+    spacingMs: 0,
+    recheckMs: 40,
+  })
+  named.configure(false)
+  const { conversation, thread } = newThread(store)
+  finish(named, conversation, "Read the logs")
+  assert.equal(reads, 0, "a host that just read the choice doesn't read it again")
+  await delay(50)
+  finish(named, conversation, "Read the traces")
+  finish(named, conversation, "Read the dumps")
+  await delay(5)
+  assert.equal(reads, 1, "the choice is read at most once per interval")
+  assert.equal(store.titleContext(thread)?.exchanges.length, 0, "with titles off nothing is kept")
+
+  // Another host chooses a model.
+  chosen = true
+  await delay(50)
+  finish(named, conversation, "Read the metrics")
+  await until(() => title(store, thread) === "metrics work", "this host starts naming without a restart")
+
+  // Another host turns titles off again.
+  chosen = false
+  model.kind = "off"
+  finish(named, conversation, "Read the alerts")
+  await delay(QUIET * 3)
+  finish(named, conversation, "Read the pages")
+  await delay(QUIET * 3)
+  assert.equal(model.calls.length, 1)
+  assert.ok(!store.titleContext(thread)?.exchanges.some((exchange) => exchange.prompt === "Read the pages"), "once off, exchanges are not kept")
+  named.close()
+  store.close()
+}
+
 async function invalidOutput(): Promise<void> {
   assert.equal(parseTitle(""), undefined)
   assert.equal(parseTitle("   \n  "), undefined)
@@ -596,6 +643,7 @@ async function main(): Promise<void> {
     await restartAndProvenance()
     await importsAndFrozen()
     await unavailableAndFailing()
+    await sharedChoice()
     await invalidOutput()
     await boundedVolume()
     await mergedAway()
@@ -603,7 +651,7 @@ async function main(): Promise<void> {
     await otherHostsHear()
     await modelChoice()
     await everyHarness()
-    console.log("thread titles: topic change, rename in flight, out of order, duplicates, restart and provenance, imports, unavailable and failing models, invalid output, bounded volume, merged Thread, multi-Session order, other hosts, model choice, six harnesses")
+    console.log("thread titles: topic change, rename in flight, out of order, duplicates, restart and provenance, imports, unavailable and failing models, a choice shared by hosts, invalid output, bounded volume, merged Thread, multi-Session order, other hosts, model choice, six harnesses")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
