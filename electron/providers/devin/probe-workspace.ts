@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { runDiscovery } from "../profile-transport.js"
 
@@ -118,7 +118,7 @@ async function removeProbe(
 
 function probeSessionIds(database: string, workspace: string): string[] {
   if (!existsSync(database)) return []
-  const db = new DatabaseSync(database, { readOnly: true })
+  const db = openNativeStore(database)
   try {
     return z
       .array(SessionSchema)

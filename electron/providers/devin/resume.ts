@@ -2,7 +2,8 @@ import { createHash } from "node:crypto"
 import { open } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import type { DatabaseSync } from "node:sqlite"
+import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "../../native-continuation.js"
@@ -20,7 +21,7 @@ export function devinResumePolicy(directory = join(process.env.XDG_DATA_HOME || 
     if (!id) return undefined
     let db: DatabaseSync | undefined
     try {
-      db = new DatabaseSync(database, { readOnly: true })
+      db = openNativeStore(database)
       const row = rowSchema.safeParse(db.prepare("SELECT main_chain_id, model, working_directory FROM sessions WHERE id = ? AND hidden = 0").get(id))
       return row.success ? createHash("sha256").update(JSON.stringify([id, row.data])).digest("hex") : undefined
     } catch {
@@ -72,7 +73,7 @@ export function devinResumePolicy(directory = join(process.env.XDG_DATA_HOME || 
     if (!/^[\w-]+$/.test(nativeId)) return undefined
     let db: DatabaseSync | undefined
     try {
-      db = new DatabaseSync(database, { readOnly: true })
+      db = openNativeStore(database)
       return db.prepare("SELECT 1 FROM sessions WHERE id = ? AND hidden = 0").get(nativeId) ? `${database}#${nativeId}` : undefined
     } catch {
       return undefined

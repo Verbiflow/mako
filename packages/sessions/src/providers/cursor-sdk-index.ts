@@ -3,7 +3,7 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import { z } from "zod"
 import type { CursorSdkModelSelection } from "./cursor-sdk-models.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
-import { openNativeStore } from "../read-only-sqlite.js"
+import { openNativeStore, refuseNativeWrite } from "../read-only-sqlite.js"
 
 /**
  * The Cursor SDK keeps two things per state root: one `store.db` of blobs
@@ -483,6 +483,7 @@ export interface CursorSdkAgentMatch {
 export function removeCursorSdkAgent(indexPath: string, match: CursorSdkAgentMatch): string | null {
   const module = sqliteModule()
   if (!module) return null
+  refuseNativeWrite("Cursor's agent index")
   let database: DatabaseSync
   try {
     database = new module.DatabaseSync(indexPath)

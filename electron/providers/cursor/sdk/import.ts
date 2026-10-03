@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { mkdirSync, rmSync } from "node:fs"
 import { dirname } from "node:path"
-import { DatabaseSync } from "node:sqlite"
+import type { DatabaseSync } from "node:sqlite"
+import { openNativeStore, refuseNativeWrite } from "@mako/sessions/read-only-sqlite"
 import {
   CURSOR_SDK_IMPORT_METADATA_KEY,
   cursorSdkStorePath,
@@ -57,7 +58,7 @@ export class CursorImportError extends Error {
 export function readLegacyStoreMeta(path: string): LegacyStoreMeta {
   let database: DatabaseSync | undefined
   try {
-    database = new DatabaseSync(path, { readOnly: true })
+    database = openNativeStore(path)
     const row = MetaRowSchema.safeParse(database.prepare("SELECT value FROM meta WHERE key = '0'").get())
     if (!row.success) throw new CursorImportError("The Cursor session store has no meta row to import from.")
     const meta = LegacyMetaSchema.safeParse(JSON.parse(row.data.value))
@@ -75,13 +76,14 @@ export function readLegacyStoreMeta(path: string): LegacyStoreMeta {
 
 /** Copy the legacy store, WAL folded in, to where the SDK will look for `agentId`. */
 export function copyLegacyStore(sourcePath: string, stateRoot: string, agentId: string): string {
+  refuseNativeWrite("Cursor's agent stores")
   const target = cursorSdkStorePath(stateRoot, agentId)
   mkdirSync(dirname(target), { recursive: true })
   // A half-finished earlier import leaves a store with no index row; replace it.
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${target}${suffix}`, { force: true })
   let source: DatabaseSync | undefined
   try {
-    source = new DatabaseSync(sourcePath, { readOnly: true })
+    source = openNativeStore(sourcePath)
     source.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`)
   } catch (error) {
     rmSync(target, { force: true })

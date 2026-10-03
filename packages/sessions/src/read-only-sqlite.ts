@@ -137,6 +137,18 @@ export function openNativeStore(path: string, options: ReadOnlyOpenOptions = {})
   return new DatabaseSync(path, options.timeout === undefined ? { readOnly: true } : { readOnly: true, timeout: options.timeout })
 }
 
+/** Throws `ReadOnlyStoreError` for `store` once `restrictNativeStores` ran. */
+export function refuseNativeWrite(store: string): void {
+  if (strictNativeStores) throw new ReadOnlyStoreError(store)
+}
+
+/** A harness's database opened to write it; refused after `restrictNativeStores`. */
+export function openNativeStoreForWriting(path: string): DatabaseSync {
+  refuseNativeWrite(`The harness store ${path}`)
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
+  return new DatabaseSync(path)
+}
+
 /** What a held native connection must be reopened for; it changes only for a strict snapshot. */
 export function nativeStoreVersion(path: string): string {
   if (!strictNativeStores) return ""
