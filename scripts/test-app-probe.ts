@@ -18,8 +18,10 @@ import { childHistory } from "../electron/watch-backend.js"
  * to, files it holds open for writing outside its checkout, processes it
  * left outside its tree (and one in the checkout that isn't its), a change
  * deep in a folder it keeps state in, read from the file system's history
- * and missed by modification times, who had files open where, and what it
- * registered with macOS, before and after it does.
+ * and missed by modification times, a container seen only through what it
+ * holds open there, a read-only database's -wal, who had files open where,
+ * what it registered with macOS, before and after it does, and the report
+ * once it stopped, which ends at the stop.
  */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-app-probe-")))
@@ -31,9 +33,14 @@ const deep = join(support, "probe-app", "deep", "a", "b")
 const cache = join(home, "Library", "Caches", "probe-cache")
 const agents = join(home, "Library", "LaunchAgents")
 const handlers = join(home, "Library", "Preferences", "com.apple.LaunchServices")
+const container = join(home, "Library", "Containers", "com.example.sandboxed")
 const bundle = join(root, "Probe.app")
 for (const folder of [checkout, deep, join(support, "other-app"), cache, agents, handlers, join(bundle, "Contents", "MacOS")]) mkdirSync(folder, { recursive: true })
 writeFileSync(join(deep, "state.json"), "{}")
+// A database opened read-only: SQLite opens its -wal read-write anyway.
+const readOnly = join(root, "read-only.db")
+writeFileSync(readOnly, "")
+writeFileSync(`${readOnly}-wal`, "")
 const old = new Date(Date.now() - 3_600_000)
 for (const path of [join(deep, "state.json"), deep, join(deep, ".."), join(deep, "..", ".."), join(support, "probe-app"), join(support, "other-app"), cache, agents, handlers])
   utimesSync(path, old, old)
@@ -74,7 +81,7 @@ const outside = await free()
 
 const app = join(root, "app.cjs")
 const settings = {
-  port, outside, servicePort, shared, inside: join(checkout, "inside.log"), deep, cache: join(cache, "blob"), escaped, marked, bundle, go, release, root, socket,
+  port, outside, servicePort, shared, inside: join(checkout, "inside.log"), deep, cache: join(cache, "blob"), escaped, marked, bundle, go, release, root, socket, container: join(container, "Data"), readOnly,
   agent: join(agents, `${label}.agent.plist`),
   agentPlist: plist(`<key>Label</key><string>${label}.agent</string><key>ProgramArguments</key><array><string>${service}</string></array>`),
   handlers: join(handlers, "com.apple.launchservices.secure.plist"),
@@ -92,6 +99,11 @@ fs.openSync(s.shared, "a")
 fs.openSync(s.inside, "a")
 fs.writeFileSync(s.deep + "/state.json", '{"changed":true}')
 fs.openSync(s.deep + "/held.log", "a")
+fs.mkdirSync(s.container, { recursive: true })
+fs.openSync(s.container + "/state.sqlite", "a")
+fs.writeFileSync(s.container + "/closed.txt", "written and closed")
+fs.openSync(s.readOnly, "r")
+fs.openSync(s.readOnly + "-wal", "r+")
 const blob = fs.openSync(s.cache, "w")
 const away = (script, file, cwd) => spawn(process.execPath, ["-e", "const c = require('node:child_process').spawn(" + script + ", { detached: true, stdio: 'ignore', cwd: " + JSON.stringify(cwd) + " }); require('node:fs').writeFileSync(process.argv[1], String(c.pid)); c.unref()", file], { detached: true, stdio: "ignore" }).unref()
 away("'sleep', ['60']", s.escaped, process.cwd())
@@ -157,7 +169,8 @@ try {
   const open = await openBy(running.pids)
   assert.deepEqual(open.listening.map((entry) => entry.port).sort((a, b) => a - b), [port, outside].sort((a, b) => a - b))
   assert.ok(open.connected.some((entry) => entry.port === servicePort && entry.local), JSON.stringify(open.connected))
-  assert.deepEqual((await writingOutside(open, [checkout, records, home])).map((entry) => entry.path), [shared])
+  assert.ok(open.files.some((file) => file.path === `${readOnly}-wal`), "lsof shows the -wal")
+  assert.deepEqual((await writingOutside(open, [checkout, records, home])).map((entry) => entry.path), [shared], "a -wal beside a database held read-only counts as read")
 
   const owner = await processes.portOwner(servicePort)
   assert.match(processes.ownerName(owner!, key), /which Mako didn't start/)
@@ -211,7 +224,11 @@ try {
   assert.ok(!folder(view, join("/private", stranger)), "another program's file in /tmp is left out")
   assert.match(view.notes.join("\n"), /other entr(y|ies) in \/private\/tmp changed since the app came up and (is|are) left out/)
   assert.ok(!view.changed.entries.some((entry) => entry.folder.startsWith(checkout) || entry.folder.startsWith(records)))
-  assert.deepEqual(new Set(view.writing.entries.map((entry) => entry.path)), new Set([shared, join(deep, "held.log")]))
+  const sandboxed = folder(view, container)
+  assert.deepEqual(sandboxed?.paths, [join("Data", "state.sqlite")], `a container counts only from what the app holds open for writing there: ${JSON.stringify(sandboxed)}`)
+  assert.match(sandboxed!.who, /^pid \d+ \(node\) has Data\/state\.sqlite open for writing now\.$/)
+  assert.match(view.notes.join("\n"), /Library\/Containers and ~\/Library\/Group Containers, where macOS keeps sandboxed apps' data, only files the app held open for writing/)
+  assert.deepEqual(new Set(view.writing.entries.map((entry) => entry.path)), new Set([shared, join(deep, "held.log"), join(container, "Data", "state.sqlite")]))
   assert.ok(view.connectsTo.some((entry) => entry.port === servicePort))
   assert.deepEqual(new Set(view.leftovers.map((entry) => entry.pid)), new Set([leftover, sure]))
 
@@ -261,11 +278,29 @@ try {
   assert.deepEqual(new Set(stopped.leftovers.map((entry) => entry.pid)), new Set([leftover, sure]), "the stop leaves the escaped processes, and the probe still finds them")
   assert.equal(stopped.since, running.since)
 
+  // As app_stop does once nothing runs: the trace is closed, so what other programs do after the stop isn't the app's.
+  await refreshTraces([{ folder: stopped.folder, pids: [], ended: true }], { history, home })
+  mkdirSync(join(support, "after-stop"))
+  writeFileSync(join(support, "after-stop", "late.json"), "{}")
+  writeFileSync(join(agents, `${label}.late.plist`), plist(`<key>Label</key><string>${label}.late</string><key>ProgramArguments</key><array><string>/usr/bin/true</string></array>`))
+  const down = await probeApp(await inputFor())
+  assert.equal(down.running, false)
+  assert.ok(down.stoppedAt !== undefined && down.stoppedAt >= running.since! && down.stoppedAt <= Date.now())
+  assert.equal(down.changedBy, "history", "the history was read up to the stop")
+  assert.ok(folder(down, join(support, "probe-app"))?.paths.includes(join("deep", "a", "b", "state.json")), "what changed while it ran still shows")
+  assert.ok(!folder(down, join(support, "after-stop")), "a folder changed after the stop doesn't")
+  assert.ok(down.registered.some((entry) => entry.name === `${label}.agent`), "an agent written while it ran still shows")
+  assert.ok(!down.registered.some((entry) => entry.name === `${label}.late`), "one written after the stop doesn't")
+  assert.match(down.notes[0]!, /^The app stopped .+, when Mako saw nothing of it running; changedFolders and registered cover only while it ran/)
+  assert.match(probeText(down), /stoppedAt: /)
+  const again = await probeApp(await inputFor())
+  assert.deepEqual([again.stoppedAt, again.changed.entries.map((entry) => entry.folder)], [down.stoppedAt, down.changed.entries.map((entry) => entry.folder)], "a closed trace stays as it was")
+
   const picked = await systemPortsFrom()
   assert.ok(picked > 1024 && outside >= picked, "a port the system picked counts as one, so it isn't called fixed")
   assert.deepEqual(capped([1, 2, 3]), { entries: [1, 2, 3] })
   assert.equal(capped(Array.from({ length: 45 }, (_, index) => index)).more, 5)
-  console.log("app probe: ports, a local service, a shared file, leftovers by mark and by folder but not a stranger's, deep changes from history that times miss, who had files open now and earlier, and registrations before and after")
+  console.log("app probe: ports, a local service, a shared file but not a read-only database's -wal, leftovers by mark and by folder but not a stranger's, deep changes from history that times miss, a container only from what's held open there, who had files open now and earlier, registrations before and after, and a stopped app's report ending at its stop")
 } finally {
   try { execFileSync("launchctl", ["remove", label], { stdio: "ignore" }) } catch { /* never registered */ }
   for (const pid of started) try { process.kill(pid, "SIGKILL") } catch { /* already gone */ }

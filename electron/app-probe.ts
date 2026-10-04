@@ -38,9 +38,7 @@ const ITEMS_FOLDER = "/private/var/db/com.apple.backgroundtaskmanagement"
  * Folders, under home, where apps keep state outside their checkout. One
  * level down names an app's folder. The file system's history sees a change
  * at any depth in them; modification times see one two levels down.
- * Library/Containers and Library/Group Containers are left out: reading in
- * another app's container makes macOS ask the user to let Mako access data
- * from other apps, and it asks again on every read.
+ * Library/Containers and Library/Group Containers are `SEALED` instead.
  */
 const WATCHED = [
   "Library/Application Support",
@@ -53,6 +51,15 @@ const WATCHED = [
   ".local/share",
   ".local/state",
 ]
+
+/**
+ * Where macOS keeps sandboxed apps' data, under home. Reading in another
+ * app's container makes macOS ask the user to let Mako access data from
+ * other apps, and it asks again on every read, so Mako never reads or
+ * lists them: a folder there counts only from the files the app's
+ * processes hold open for writing, as `lsof` names them.
+ */
+const SEALED = ["Library/Containers", "Library/Group Containers"]
 
 /** Beside an app's records: what the probe compares against, from when the app came up. */
 const TRACE = "probe.json"
@@ -82,6 +89,18 @@ const TraceSchema = z.object({
   services: z.array(z.string()).optional(),
   /** The default app for each URL scheme when the app came up, by bundle id. */
   handlers: z.record(z.string(), z.string()).optional(),
+  /**
+   * Once nothing of the app runs: when Mako saw it stop, whether the
+   * history was read up to then, and what was registered then, so a probe
+   * of the stopped app counts only what happened while it ran.
+   */
+  down: z.object({
+    at: z.number(),
+    read: z.boolean(),
+    services: z.array(z.string()).optional(),
+    handlers: z.record(z.string(), z.string()).optional(),
+    items: z.number(),
+  }).strict().optional(),
 }).strict()
 type Trace = z.infer<typeof TraceSchema>
 
@@ -137,6 +156,12 @@ export async function openBy(pids: number[]): Promise<Open> {
       else if (type === "unix" && isAbsolute(value))
         found.files.push({ path: privateLinked(value), pid, writing: false })
     }
+  }
+  // SQLite opens a database's -wal read-write even for a read-only connection, which never writes it.
+  for (const file of found.files) {
+    if (!file.writing || !file.path.endsWith("-wal")) continue
+    const database = found.files.filter((other) => other.pid === file.pid && other.path === file.path.slice(0, -"-wal".length))
+    if (database.length && database.every((other) => !other.writing)) file.writing = false
   }
   const listened = new Set(found.listening.map((entry) => entry.port))
   for (const socket of sockets)
@@ -195,16 +220,18 @@ interface Roots {
   history: string[]
   /** /tmp, resolved: every program's scratch, so a change there is the app's only when it had the entry open. */
   scratch: string
+  /** `SEALED` under home. */
+  sealed: string[]
 }
 
 async function rootsOf(home: string): Promise<Roots> {
   const scratch = await resolved("/tmp")
-  return { home, history: [...WATCHED.map((name) => join(home, name)), scratch], scratch }
+  return { home, history: [...WATCHED.map((name) => join(home, name)), scratch], scratch, sealed: SEALED.map((name) => join(home, name)) }
 }
 
-/** The folder a path counts under: one level into a watched folder or /tmp, or at the top of home; and where in it. */
+/** The folder a path counts under: one level into a watched or sealed folder or /tmp, or at the top of home; and where in it. */
 function folderOf(path: string, roots: Roots): { folder: string; inner: string } | undefined {
-  for (const root of roots.history) {
+  for (const root of [...roots.history, ...roots.sealed]) {
     if (path === root || !within(path, root)) continue
     const [name, ...rest] = relative(root, path).split(sep)
     return { folder: join(root, name!), inner: rest.join(sep) }
@@ -236,10 +263,11 @@ export async function beginTrace(folder: string, up: number, history?: FileHisto
   await saveTrace(folder, trace)
 }
 
-/** Apps whose traces to bring up to date: each one's records folder and the processes it runs now. */
+/** Apps whose traces to bring up to date: each one's records folder and the processes it runs now; `ended` once none of its own runs. */
 export interface Traced {
   folder: string
   pids: number[]
+  ended?: boolean
 }
 
 let refreshing: Promise<unknown> = Promise.resolve()
@@ -249,9 +277,10 @@ let refreshing: Promise<unknown> = Promise.resolve()
  * open in the watched folders, and, given `history`, what the file
  * system's history says changed since each was last read. Apps last read
  * at the same mark share one read, and all end at the same new mark, so
- * reading every running app costs one read. Resolves to the records
- * folders whose history now reaches this moment. One refresh at a time in
- * this process.
+ * reading every running app costs one read. An `ended` app's trace is
+ * closed after this last read and never brought up to date again. Resolves
+ * to the records folders whose history now reaches this moment. One refresh
+ * at a time in this process.
  */
 export function refreshTraces(apps: Traced[], options: { history?: FileHistory; home?: string; open?: Open } = {}): Promise<Set<string>> {
   const next = refreshing.catch(() => {}).then(() => refresh(apps, options))
@@ -262,12 +291,19 @@ export function refreshTraces(apps: Traced[], options: { history?: FileHistory; 
 async function refresh(apps: Traced[], { history, home = homedir(), open }: { history?: FileHistory; home?: string; open?: Open }): Promise<Set<string>> {
   const read = new Set<string>()
   const traced = (await Promise.all(apps.map(async (app) => ({ ...app, trace: await currentTrace(app.folder) }))))
-    .flatMap((app) => (app.trace ? [{ ...app, trace: app.trace }] : []))
+    .flatMap((app) => (app.trace && !app.trace.down ? [{ ...app, trace: app.trace }] : []))
   if (!traced.length) return read
   const roots = await rootsOf(home)
   const seen = open ?? (await openBy(traced.flatMap((app) => app.pids)))
   const at = Date.now()
-  for (const app of traced) Object.assign(app.trace.held, sightings(seen, app.pids, roots, at))
+  for (const app of traced) {
+    const sighted = sightings(seen, app.pids, roots, at)
+    Object.assign(app.trace.held, sighted)
+    // The history never reads a sealed folder, so what the app holds open for writing there is all Mako knows changed.
+    for (const [folder, entry] of Object.entries(sighted))
+      if (roots.sealed.some((root) => within(folder, root)))
+        for (const file of entry.files) if (file.writing) note(app.trace.changed, folder, file.inner)
+  }
   const marked = traced.filter((app) => app.trace.mark)
   const now = history && marked.length ? await history.mark().catch(() => undefined) : undefined
   if (history && now) {
@@ -285,6 +321,15 @@ async function refresh(apps: Traced[], { history, home = homedir(), open }: { hi
         app.trace.mark = now
         read.add(app.folder)
       }
+    }
+  }
+  const ended = traced.filter((app) => app.ended)
+  if (ended.length) {
+    const [services, handlers, items] = await Promise.all([launchdServices(), urlHandlers(home), itemsTime()])
+    for (const app of ended) {
+      app.trace.down = { at, read: read.has(app.folder), items }
+      if (services) app.trace.down.services = services
+      if (handlers) app.trace.down.handlers = handlers
     }
   }
   await Promise.all(traced.map(async (app) => {
@@ -337,29 +382,39 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
   const { since } = input
   const everyone = [...new Set([...input.pids, ...input.leftovers.map((entry) => entry.pid)])]
   const [open, picked, roots, skip] = await Promise.all([openBy(everyone), systemPortsFrom(), rootsOf(home), Promise.all(input.skip.map(resolved))])
+  const stopped = since !== undefined && !input.pids.length
   const refreshed = since === undefined
     ? Promise.resolve(false)
-    : refreshTraces([{ folder: input.folder, pids: everyone }], { history: input.history, home, open }).then((read) => read.has(input.folder), () => false)
+    : refreshTraces([{ folder: input.folder, pids: everyone, ended: stopped }], { history: input.history, home, open }).then((read) => read.has(input.folder), () => false)
+  const reading = Promise.race([refreshed, sleep(WAIT_MS).then(() => false)])
   const [read, writing, registered, owners] = await Promise.all([
-    Promise.race([refreshed, sleep(WAIT_MS).then(() => false)]),
+    reading,
     writingOutside(open, input.own),
-    since === undefined || process.platform !== "darwin" ? Promise.resolve([]) : registrations(since, home, input),
+    since === undefined || process.platform !== "darwin"
+      ? Promise.resolve([])
+      // A stopped app's registrations are counted up to its stop, which that refresh records.
+      : stopped ? reading.then(() => registrations(since, home, input)) : registrations(since, home, input),
     localOwners(open, input),
   ])
   const kept = (folder: string) => !skip.some((root) => within(folder, root) || within(root, folder))
   const trace = since === undefined ? undefined : await currentTrace(input.folder)
+  const down = stopped ? trace?.down : undefined
   const changed: Record<string, Changed> = {}
   let changedBy: AppProbeView["changedBy"] = "times"
   const notes: string[] = []
   if (since !== undefined) {
-    const deep = Boolean(read && trace?.mark)
+    const deep = Boolean(trace?.mark && (down ? down.read : read))
     for (const [folder, entry] of Object.entries(trace?.changed ?? {})) changed[folder] = { ...entry, paths: [...entry.paths] }
     const shallow = deep ? (trace?.lost ?? []) : roots.history
-    for (const found of await byTimes(since, shallow, home, kept)) note(changed, found.folder, found.inner)
+    for (const found of await byTimes(since, shallow, home, kept, down?.at)) note(changed, found.folder, found.inner)
     if (deep) changedBy = "history"
+    const sealed = process.platform === "darwin"
+      ? ` In ${SEALED.map((name) => `~/${name}`).join(" and ")}, where macOS keeps sandboxed apps' data, only files the app held open for writing when Mako looked count: reading there makes macOS ask the user to let Mako access other apps' data.`
+      : ""
     notes.push(changedBy === "history"
-      ? "changedFolders is read from the file system's history, so a change at any depth counts; at the top of home only what's directly there is compared."
-      : `changedFolders compares modification times one or two levels down, so a change deeper in an otherwise untouched folder is missed: ${shallowReason(trace, read, input.history)}`)
+      ? `changedFolders is read from the file system's history, so a change at any depth counts; at the top of home only what's directly there is compared.${sealed}`
+      : `changedFolders compares modification times one or two levels down, so a change deeper in an otherwise untouched folder is missed: ${shallowReason(trace, down ? down.read : read, input.history, Boolean(down))}${sealed}`)
+    if (down) notes.unshift(`The app stopped ${when(down.at, now())}, when Mako saw nothing of it running; changedFolders and registered cover only while it ran, so what other programs changed since isn't counted.`)
   }
   const held = (folder: string) => open.files.some((file) => within(file.path, folder)) ||
     [...open.cwds.values()].some((cwd) => within(cwd, folder)) || Boolean(trace?.held[folder]?.files.length)
@@ -385,6 +440,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
     notes,
   }
   if (since !== undefined) view.upSince = since
+  if (down) view.stoppedAt = down.at
   if (owners.length) notes.unshift("connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it.")
   if (writing.length) notes.push("writing is files the app holds open for writing outside this checkout and this Thread's data folder; two copies writing one file is a conflict.")
   if (input.leftovers.length) notes.push("leftovers, by pid, look left behind by the app: each started since it came up and outlived the process that started it, so stopping the app doesn't end it. One that carries the app's mark (set in the environment of everything Mako starts for it) is surely the app's; one Mako can't read the environment of counts because it works in this checkout or data folder.")
@@ -405,6 +461,7 @@ export function probeText(view: AppProbeView): string {
   return toolText({
     running: view.running,
     upSince: view.upSince === undefined ? undefined : when(view.upSince, view.at),
+    stoppedAt: view.stoppedAt === undefined ? undefined : when(view.stoppedAt, view.at),
     listening: Object.fromEntries(view.listening.map((entry) =>
       [entry.port, entry.fixed ? `pid ${entry.pid}; outside this Thread's ports ${first}-${last}, so a second copy would fight over it` : `pid ${entry.pid}`])),
     connectsTo: Object.fromEntries(view.connectsTo.map(({ port, owner }) => [port, owner])),
@@ -419,11 +476,12 @@ export function probeText(view: AppProbeView): string {
   })
 }
 
-function shallowReason(trace: Trace | undefined, read: boolean, history: FileHistory | undefined): string {
+function shallowReason(trace: Trace | undefined, read: boolean, history: FileHistory | undefined, stopped: boolean): string {
   if (process.platform !== "darwin") return "the file system's history is read on macOS only."
   if (!history) return "this Mako reads no history."
   if (!trace) return "the app came up before Mako kept a record of where the history stood."
   if (!trace.mark) return "Mako couldn't read where the history stood when the app came up."
+  if (!read && stopped) return "Mako couldn't read the history up to when the app stopped."
   if (!read) return "Mako is still reading the history since the app came up; probe again in a moment."
   return "the history couldn't be read."
 }
@@ -470,9 +528,12 @@ async function localOwners(open: Open, input: ProbeInput): Promise<{ port: numbe
  * entries', and what's directly in home. A file changed in place deeper
  * down leaves both times as they were.
  */
-async function byTimes(since: number, roots: string[], home: string, kept: (path: string) => boolean): Promise<{ folder: string; inner: string }[]> {
+async function byTimes(since: number, roots: string[], home: string, kept: (path: string) => boolean, until = Infinity): Promise<{ folder: string; inner: string }[]> {
   const found: { folder: string; inner: string }[] = []
-  const newer = async (path: string) => ((await stat(path).catch(() => undefined))?.mtimeMs ?? 0) >= since
+  const newer = async (path: string) => {
+    const time = (await stat(path).catch(() => undefined))?.mtimeMs ?? 0
+    return time >= since && time <= until
+  }
   await Promise.all(roots.map(async (root) => {
     await Promise.all((await entries(root)).map(async (entry) => {
       const path = join(root, entry.name)
@@ -498,21 +559,23 @@ type Registered = AppProbeView["registered"][number]
  * LaunchAgents, default apps for URL schemes, schemes the app bundles it
  * runs declare, and whether login and background items changed. macOS doesn't say who
  * registered any of them, so each says whether it points into the app.
+ * Once the app is down, up to what its trace recorded then.
  */
 async function registrations(since: number, home: string, input: ProbeInput): Promise<Registered[]> {
   const [trace, bundles, own] = await Promise.all([currentTrace(input.folder), bundlesOf(input.commands), Promise.all(input.own.map(resolved))])
+  const down = input.pids.length ? undefined : trace?.down
   const places = [...own, ...bundles]
   const whose = (...paths: (string | undefined)[]) => paths.some((path) => path !== undefined && places.some((root) => within(path, root)))
     ? " It points into this app's checkout, data folder or app bundle, so it's the app's."
     : " macOS doesn't say what registered it, so it may be another app's."
   const [services, agents, handlers, schemes] = await Promise.all([
-    addedServices(trace?.services),
-    launchAgents(since, home),
-    changedHandlers(trace?.handlers, since, home),
+    addedServices(trace?.services, down?.services),
+    launchAgents(since, home, down?.at),
+    changedHandlers(trace?.handlers, since, home, down),
     declaredSchemes(bundles),
   ])
   const loaded = new Set(services.flatMap((entry) => (entry.path ? [entry.path] : [])))
-  const items = await itemsChanged(since, services.length + agents.length > 0)
+  const items = await itemsChanged(since, services.length + agents.length > 0, down?.items)
   return [
     ...services.map(({ label, path, program }): Registered => ({
       kind: "service",
@@ -553,10 +616,11 @@ interface Service {
   program?: string
 }
 
-async function addedServices(before: string[] | undefined): Promise<Service[]> {
+/** `after` is the list when the app went down; without one, the list now. */
+async function addedServices(before: string[] | undefined, after?: string[]): Promise<Service[]> {
   if (!before) return []
   const known = new Set(before)
-  const added = ((await launchdServices()) ?? []).filter((label) => !known.has(label) && !label.startsWith("application."))
+  const added = (after ?? (await launchdServices()) ?? []).filter((label) => !known.has(label) && !label.startsWith("application."))
   return Promise.all(added.map(async (label, index) => {
     if (index >= SERVICES_LOOKED_UP) return { label }
     const text = await run("launchctl", ["print", `gui/${process.getuid!()}/${label}`]).then(({ stdout }) => stdout, () => "")
@@ -572,12 +636,13 @@ async function addedServices(before: string[] | undefined): Promise<Service[]> {
 
 const AgentSchema = z.object({ Label: z.string().optional(), Program: z.string().optional(), ProgramArguments: z.array(z.string()).optional() })
 
-async function launchAgents(since: number, home: string): Promise<{ label: string; file: string; program?: string }[]> {
+async function launchAgents(since: number, home: string, until = Infinity): Promise<{ label: string; file: string; program?: string }[]> {
   const folder = join(home, "Library", "LaunchAgents")
   const found: { label: string; file: string; program?: string }[] = []
   await Promise.all((await entries(folder)).filter((entry) => entry.name.endsWith(".plist")).map(async (entry) => {
     const file = join(folder, entry.name)
-    if (((await stat(file).catch(() => undefined))?.mtimeMs ?? 0) < since) return
+    const time = (await stat(file).catch(() => undefined))?.mtimeMs ?? 0
+    if (time < since || time > until) return
     const agent = await plist(file, AgentSchema)
     const label = agent?.Label || basename(file, ".plist")
     const program = agent?.Program ?? agent?.ProgramArguments?.[0]
@@ -606,12 +671,13 @@ async function urlHandlers(home: string): Promise<Record<string, string> | undef
   return found
 }
 
-async function changedHandlers(before: Record<string, string> | undefined, since: number, home: string): Promise<Registered[]> {
+async function changedHandlers(before: Record<string, string> | undefined, since: number, home: string, down?: Trace["down"]): Promise<Registered[]> {
   if (!before) {
-    const changed = ((await stat(join(home, ...HANDLERS)).catch(() => undefined))?.mtimeMs ?? 0) >= since
+    const time = (await stat(join(home, ...HANDLERS)).catch(() => undefined))?.mtimeMs ?? 0
+    const changed = time >= since && time <= (down?.at ?? Infinity)
     return changed ? [{ kind: "url-handler", name: "Default apps for links", detail: "The default apps for links changed while the app ran; Mako has no record from its start to say which." }] : []
   }
-  const now = (await urlHandlers(home)) ?? before
+  const now = (down ? down.handlers : await urlHandlers(home)) ?? before
   return Object.entries(now).filter(([scheme, app]) => before[scheme] !== app).map(([scheme, app]) => ({
     kind: "url-handler",
     name: `${scheme}:`,
@@ -702,10 +768,10 @@ async function itemsTime(): Promise<number> {
  * Whether macOS's login and background items changed since `since`. Only
  * an administrator can list them, so what changed goes unnamed; `named`
  * says a service or agent above was registered then, which macOS adds to
- * the list.
+ * the list. `at` is the list's time when the app went down.
  */
-async function itemsChanged(since: number, named: boolean): Promise<Registered[]> {
-  if ((await itemsTime()) < since) return []
+async function itemsChanged(since: number, named: boolean, at?: number): Promise<Registered[]> {
+  if ((at ?? (await itemsTime())) < since) return []
   return [{
     kind: "login-item",
     name: "Login items",

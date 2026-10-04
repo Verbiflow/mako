@@ -111,6 +111,8 @@ export interface AppProbeView {
   home: string
   running: boolean
   upSince?: number
+  /** When Mako saw the app stop; what changed and was registered is counted up to then. */
+  stoppedAt?: number
   /** The Thread's block of ports. */
   ports: { first: number; last: number }
   /** `fixed` is a port outside the block the system didn't pick, so a second copy would fight over it. */

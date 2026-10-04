@@ -72,7 +72,7 @@ const ROOM_MEMORY_MS = 15_000
  * call by nothing by default. The others get SETTLE_MS.
  */
 const CHECK_WAIT_MS = new Map([["codex", 10 * 60_000], ["claude", 10 * 60_000]])
-/** Under memory pressure, another Thread's app unused this long is stopped to make room. */
+/** Under memory pressure, or for a start that won't fit in free memory, another Thread's app unused this long is stopped to make room. */
 const EVICT_QUIET_MS = 15 * 60 * 1000
 const PREPARE_KEY = runKey("prepare", "checkout")
 /** How often a start waiting in line looks at memory again. */
@@ -445,10 +445,23 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     // A link never replaces what the worktree has; a copy makes an entry the recipe stopped linking the worktree's own.
     await bringFiles(root, checkout, recipe.carry ?? [])
   }
-  /** Under memory pressure, stops other Threads' quiet apps first; the start waits only while the machine stays critical. */
-  const makeRoom = async (app: AppKey): Promise<{ refused?: string; notes: string[] }> => {
+  /** What the app's copies peak at, by its project's estimate, when free memory now is less than that. */
+  const shortFor = async (checkout: string): Promise<{ peakBytes: number; freeBytes: number } | undefined> => {
+    const [estimate, free] = await Promise.all([
+      projectRoot(checkout).then((root) => deps.processes.estimate(root)),
+      (deps.freeMemory ?? freeMemory)().catch(() => undefined),
+    ])
+    return estimate.kind === "ready" && free && free.freeBytes < estimate.peakBytes ? { peakBytes: estimate.peakBytes, freeBytes: free.freeBytes } : undefined
+  }
+  /**
+   * Under memory pressure, or when the app's copies peak at more than is
+   * free, stops other Threads' quiet apps first; the start waits only while
+   * the machine stays critical.
+   */
+  const makeRoom = async (app: AppKey, checkout: string): Promise<{ refused?: string; notes: string[] }> => {
     const notes: string[] = []
-    if ((await pressure()) === "normal") return { notes }
+    const roomy = async () => (await pressure()) === "normal" && !(await shortFor(checkout))
+    if (await roomy()) return { notes }
     const now = (deps.now ?? Date.now)()
     const others = (await deps.processes.active()).filter((entry) => entry.app !== app)
     // A spare checkout's install is for a Thread nobody has started yet, so it goes first; one handed to a Thread left a link where it was.
@@ -459,14 +472,19 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (ahead.length) {
       for (const entry of ahead) await deps.processes.stop(entry.app)
       notes.push(`Stopped the install of ${ahead.length === 1 ? "a checkout" : `${ahead.length} checkouts`} kept ready for new Threads, to make room.`)
-      if ((await pressure()) === "normal") return { notes }
+      if (await roomy()) return { notes }
     }
     for (const quiet of others.filter((entry) => !ahead.includes(entry) && entry.usedAt < now - EVICT_QUIET_MS).sort((a, b) => a.usedAt - b.usedAt)) {
       await deps.processes.stop(quiet.app)
       notes.push(`Stopped the quiet app of ${deps.whose?.(quiet.app) || quiet.app} (${bytes(quiet.memoryBytes)}, unused for ${minutes(now - quiet.usedAt)}) to make room.`)
-      if ((await pressure()) === "normal") return { notes }
+      if (await roomy()) return { notes }
     }
-    if ((await pressure()) !== "critical") return { notes: [...notes, "This Mac is short of memory; the app starts anyway."] }
+    const level = await pressure()
+    if (level === "normal") {
+      const short = await shortFor(checkout)
+      return { notes: short ? [...notes, `Each copy of this app peaks around ${bytes(short.peakBytes)} (the median of its recent runs) and ${bytes(short.freeBytes)} is free; the app starts anyway.`] : notes }
+    }
+    if (level !== "critical") return { notes: [...notes, "This Mac is short of memory; the app starts anyway."] }
     const running = (await deps.processes.active()).filter((entry) => entry.app !== app)
       .map((entry) => `${deps.whose?.(entry.app) || entry.app} (${bytes(entry.memoryBytes)}, used ${minutes(now - entry.usedAt)} ago)`)
     return {
@@ -565,7 +583,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         return { kind: "blocked", shown: true, message: `Preparing this checkout (${command}); the app starts by itself once it's done, and app_status shows when. app_logs with process "prepare" watches it.` }
       }
       if (preparing) return { kind: "blocked", ...preparing }
-      const room = anyway ? { notes: [] } : await makeRoom(app)
+      const room = anyway ? { notes: [] } : await makeRoom(app, current.checkout)
       if (room.refused) {
         line.set(app, { since: line.get(app)?.since ?? (deps.now ?? Date.now)(), again })
         followLine()
@@ -639,7 +657,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     const inLine = line.delete(environment.app)
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the prepare step" : status.name)
-    const { leftovers } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
+    const { leftovers, pids, folder } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
+    if (!pids.length) await refreshTraces([{ folder, pids: [], ended: true }], deps.history ? { history: deps.history } : {}).catch(() => {})
     const left = leftovers.length
       ? ` Still running, though, and likely left behind by the app: ${leftovers.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up and outlived the process that started it, so no stop reaches it; ${leftovers.every((entry) => entry.sure) ? "each carries the app's mark" : "each carries the app's mark or works in this checkout or data folder"}. Stop one yourself if it's the app's and shouldn't outlive it.`
       : ""
@@ -673,11 +692,19 @@ export function environmentTools(deps: Deps): EnvironmentTools {
    * system's history less often, so a probe reads only what changed since.
    */
   let historyReadAt = 0
+  /** Apps seen running at the last look; one gone since gets its trace closed, with the history read up to then. */
+  let wereActive = new Set<string>()
   setInterval(() => {
-    const history = deps.history && (deps.now ?? Date.now)() - historyReadAt >= TRACE_EVERY_MS ? deps.history : undefined
-    if (history) historyReadAt = (deps.now ?? Date.now)()
     void deps.processes.active()
-      .then((apps) => apps.length ? refreshTraces(apps.map(({ folder, pids }) => ({ folder, pids })), history ? { history } : {}) : undefined)
+      .then((apps) => {
+        const active = new Set(apps.map((app) => app.folder))
+        const ended = [...wereActive].filter((folder) => !active.has(folder))
+        wereActive = active
+        const due = deps.history && (ended.length || (deps.now ?? Date.now)() - historyReadAt >= TRACE_EVERY_MS)
+        if (due) historyReadAt = (deps.now ?? Date.now)()
+        const traced = [...apps.map(({ folder, pids }) => ({ folder, pids })), ...ended.map((folder) => ({ folder, pids: [], ended: true }))]
+        return traced.length ? refreshTraces(traced, due ? { history: deps.history } : {}) : undefined
+      })
       .catch(() => {})
   }, SAMPLE_EVERY_MS).unref()
   const stop = async (conversationId: string, names?: string[]) => stopIn(await context(conversationId), names)

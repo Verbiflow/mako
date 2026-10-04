@@ -116,12 +116,12 @@ export function ProbeReport({ view }: { view: AppProbeView }) {
       ) : null}
       {view.changed.entries.length ? (
         <Section
-          title="Changed since it started"
+          title={view.stoppedAt === undefined ? "Changed since it started" : "Changed while it ran"}
           note={`Other apps write in these folders too, so look for names of this project or its tools. ${
             view.changedBy === "history"
               ? "Read from the file system's history, so a change at any depth shows."
               : "Compared by modification times one or two levels down, so a change deeper in an otherwise untouched folder can be missed."
-          }`}
+          } Sandboxed apps' containers show only files it held open for writing, since reading them makes macOS ask for access to other apps' data.`}
         >
           {view.changed.entries.map((entry) => (
             <Finding key={entry.folder} name={where(entry.folder)}>

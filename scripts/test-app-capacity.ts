@@ -258,6 +258,32 @@ try {
   await tools.desk.stopApps([app])
   assert.equal((await tools.desk.room()).apps.some((entry) => entry.app === app), false, "a stopped app leaves the Room")
 
+  // Admission: with memory normal, a start whose copies peak at more than is free stops quiet apps first, as under pressure, then starts anyway.
+  mkdirSync(join(project, ".mako"), { recursive: true })
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ processes: { server: { command: "sleep 300" } } }))
+  const quiet = AppKeySchema.parse(randomUUID())
+  owned.push(quiet)
+  const quietProject = join(root, "quiet-project")
+  mkdirSync(quietProject)
+  await processes.ofProject(quiet, quietProject)
+  await processes.touch(quiet, quietProject)
+  await processes.start(quiet, [{ kind: "process", name: "idle", command: "sleep 300", cwd: quietProject, env: process.env }])
+  skew += 16 * 60_000
+  const quietRunning = async () => (await processes.active()).some((entry) => entry.app === quiet)
+  free = { freeBytes: median * 10, totalBytes: median * 40 }
+  const roomy = await tools.start(memoryConversation)
+  assert.match(roomy, /server: running/)
+  assert.doesNotMatch(roomy, /Stopped the quiet app|peaks around/, "a copy that fits stops nothing")
+  assert.ok(await quietRunning())
+  await tools.stop(memoryConversation)
+  free = { freeBytes: Math.floor(median / 2), totalBytes: median * 40 }
+  const tight = await tools.start(memoryConversation)
+  assert.match(tight, new RegExp(`Stopped the quiet app of ${quiet} \\(.+, unused for 16 min\\) to make room\\.`), tight)
+  assert.match(tight, /Each copy of this app peaks around .+ \(the median of its recent runs\) and .+ is free; the app starts anyway\./)
+  assert.match(tight, /server: running/)
+  assert.equal(await quietRunning(), false, "the quiet app was stopped for it")
+  await tools.stop(memoryConversation)
+
   // Containers run outside every process tree, so a project that starts them gets no estimate.
   const docker = join(root, "bin", "docker")
   mkdirSync(join(root, "bin"))
@@ -274,7 +300,7 @@ try {
   assert.deepEqual(await processes.estimate(boxed), { kind: "containers" })
   await processes.stop(boxedApp)
 
-  console.log(`app capacity: spares run their install in the background and hand the record over on claim (no second install; a claim mid-install hands the run over, the start waits for it, the Room names its Thread); memory peaks kept per project across runs and hosts, "about N at once" only after ${FIT_RUNS} settled runs, containers never estimated; the Room lists apps with project, Thread, memory, up and used times, and stops them`)
+  console.log(`app capacity: spares run their install in the background and hand the record over on claim (no second install; a claim mid-install hands the run over, the start waits for it, the Room names its Thread); memory peaks kept per project across runs and hosts, "about N at once" only after ${FIT_RUNS} settled runs, a start that won't fit in free memory stops quiet apps first, containers never estimated; the Room lists apps with project, Thread, memory, up and used times, and stops them`)
 } finally {
   rmSync(hold, { force: true })
   const started = readdirSync(records).flatMap((name) => AppKeySchema.safeParse(name).data ?? [])
