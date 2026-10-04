@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path"
 import { createServer } from "vite"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { appDataFolder, ensureRuntime, fixtureProfile, runtimeDataRoot } from "../dist-electron/runtime-service.js"
+import { appDataFolder, ensureRuntime, fixtureProfile, noteFixtureCheckout, runtimeDataRoot } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
 import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
 import { fixtureDeskRefusal } from "../dist-electron/contracts/fixture-desk-policy.js"
@@ -102,6 +102,7 @@ if (needsRestart(runtime.info)) {
 }
 if (fixture && runtime.info.fixture !== true)
   throw new Error(`Host ${runtime.info.pid} is not a fixture desk host; no page was served.`)
+if (fixture) await noteFixtureCheckout(dataRoot, root)
 // A profile host stops itself once nothing has used it for a while. This
 // launcher is a user, even between page loads, so it holds a lease keyed by
 // its own pid; a crashed launcher's lease expires with it.

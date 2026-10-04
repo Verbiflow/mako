@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
-import { mkdir, open, rename, stat, type FileHandle } from "node:fs/promises"
+import { mkdir, open, readFile, rename, stat, writeFile, type FileHandle } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { HOST_LOG_MAX_BYTES } from "./host-log.js"
@@ -20,6 +20,18 @@ export function appDataFolder(env: NodeJS.ProcessEnv = process.env): string {
 /** The profile a fixture desk launched from the checkout at `root` runs on. */
 export function fixtureProfile(root: string, env: NodeJS.ProcessEnv): string {
   return env.MAKO_PROFILE || `fixture-${createHash("sha256").update(root).digest("hex").slice(0, 8)}`
+}
+
+const FIXTURE_CHECKOUT = "fixture-checkout"
+
+/** Notes in a fixture desk's data which checkout launched it, so a profile whose checkout is gone can be told from one in use. */
+export async function noteFixtureCheckout(dataRoot: string, root: string): Promise<void> {
+  await writeFile(join(dataRoot, FIXTURE_CHECKOUT), root, { mode: 0o600 })
+}
+
+/** The checkout that last launched the fixture desk with this data, when it noted one. */
+export async function fixtureCheckout(dataRoot: string): Promise<string | undefined> {
+  return readFile(join(dataRoot, FIXTURE_CHECKOUT), "utf8").then((text) => text.trim() || undefined, () => undefined)
 }
 
 export function runtimeDataRoot(appData: string, env: NodeJS.ProcessEnv): string {
