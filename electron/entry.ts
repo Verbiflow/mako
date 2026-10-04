@@ -1,5 +1,7 @@
 import { enableMainCompileCache } from "./compile-cache.js"
+import { forgetStartingRepository } from "./git-environment.js"
 
+forgetStartingRepository()
 if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-entry]", process.env.MAKO_HOST_ONLY === "1" ? "host" : "client")
 const { app } = await import("electron")
 const host = process.env.MAKO_HOST_ONLY === "1" || process.env.MAKO_STANDALONE === "1"

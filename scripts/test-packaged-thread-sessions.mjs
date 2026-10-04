@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 /**
  * Installed-app evidence that related work is a Session in the same Thread,
  * on real harnesses: the `+` after the last Session tab, Fork from an

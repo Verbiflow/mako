@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"

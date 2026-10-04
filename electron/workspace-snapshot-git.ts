@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path"
 import { pipeline } from "node:stream/promises"
 import { promisify } from "node:util"
 import { z } from "zod"
+import { forgetStartingRepository } from "./git-environment.js"
 
 const execute = promisify(execFile)
 export interface SnapshotObjects {
@@ -69,15 +70,7 @@ function environment(
     GIT_COMMITTER_NAME: "Mako",
     GIT_COMMITTER_EMAIL: "mako@localhost",
   }
-  for (const key of [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  ])
-    delete env[key]
+  forgetStartingRepository(env)
   if (index) env.GIT_INDEX_FILE = index
   if (objects?.write) env.GIT_OBJECT_DIRECTORY = objects.write
   if (objects?.read?.length)

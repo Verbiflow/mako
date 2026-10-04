@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { mkdtemp, writeFile, mkdir } from "node:fs/promises"

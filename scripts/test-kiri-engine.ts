@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { z } from "zod"
 import { execFile } from "node:child_process"

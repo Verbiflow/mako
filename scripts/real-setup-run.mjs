@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 /**
  * A real agent sets a project up through Mako's own setup flow, in a packaged
  * Mako on an isolated profile, and this watches it: the agent's tool calls,

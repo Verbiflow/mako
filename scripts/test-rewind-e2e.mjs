@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 /** Opt-in real-provider check. Runs the normal web host with isolated app data and Git files. */
 import assert from "node:assert/strict"
 import { spawn, execFileSync } from "node:child_process"
