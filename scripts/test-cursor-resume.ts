@@ -9,6 +9,7 @@ import {
   cursorLegacyIdentity,
   cursorSdkAgentDirectory,
   cursorSdkIndexPath,
+  readCursorSdkAgent,
   cursorSdkStateRoot,
   cursorSdkStorePath,
   cursorStoreOrigin,
@@ -21,9 +22,10 @@ import {
   CursorImportError,
   copyLegacyStore,
   importedAgentDocument,
-  readLegacyStoreMeta,
+  verifyImportRevision,
   resolveImportAgentId,
 } from "../electron/providers/cursor/sdk/import.ts"
+import { readLegacyStoreSnapshot } from "../electron/providers/cursor/legacy-store.ts"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../electron/providers/cursor/resume.ts"
 
 /**
@@ -82,10 +84,11 @@ try {
 
   // Import helpers: the meta is read whole, the copy folds the WAL in, and
   // the index document carries Mako's record plus the blob key.
-  const meta = readLegacyStoreMeta(acpPath)
+  const snapshot = readLegacyStoreSnapshot(acpPath, legacyId)
+  const meta = snapshot.meta
   assert.equal(meta.latestRootBlobId, "root-2")
   assert.equal(meta.blobEncryptionKey, "a2V5")
-  assert.throws(() => readLegacyStoreMeta(join(home, "missing.db")), CursorImportError)
+  assert.throws(() => readLegacyStoreSnapshot(join(home, "missing.db"), legacyId), CursorImportError)
   const copied = copyLegacyStore(acpPath, stateRoot, legacyId)
   assert.equal(copied, cursorSdkStorePath(stateRoot, legacyId))
   {
@@ -97,17 +100,17 @@ try {
     }
   }
   const source = { path: acpPath, identity: legacyId, cwd: "/repo", name: "From ACP" }
-  const document = importedAgentDocument({ agentId: legacyId, source, meta, now: 1_000 })
+  const document = importedAgentDocument({ agentId: legacyId, source, snapshot, now: 1_000 })
   assert.equal(document.latestRootBlobId, "root-2")
   assert.equal(document.name, "From ACP")
   assert.equal(document.createdAt, 1_000, "no createdAt in the meta: now")
-  assert.deepEqual(document.sdkMetadata[CURSOR_SDK_IMPORT_METADATA_KEY], { path: acpPath, identity: legacyId, agentId: legacyId })
+  assert.deepEqual(document.sdkMetadata[CURSOR_SDK_IMPORT_METADATA_KEY], { path: acpPath, identity: legacyId, agentId: legacyId, revision: second })
   assert.equal(document.sdkMetadata.blobEncryptionKey, "a2V5")
 
   assert.deepEqual(resolveImportAgentId(legacyId, acpPath, []), { agentId: legacyId, existing: false }, "an unused id is kept")
   assert.deepEqual(
     resolveImportAgentId(legacyId, acpPath, [{ agentId: legacyId, importedFrom: acpPath }]),
-    { agentId: legacyId, existing: true },
+    { agentId: legacyId, existing: true, revision: undefined },
     "the same store again opens the import it already has"
   )
   const forked = resolveImportAgentId(legacyId, chatsPath, [{ agentId: legacyId, importedFrom: acpPath }])
@@ -115,9 +118,38 @@ try {
   assert.notEqual(forked.agentId, legacyId, "the chats fork of an imported ACP session gets its own agent")
   assert.deepEqual(
     resolveImportAgentId(legacyId, chatsPath, [{ agentId: legacyId, importedFrom: acpPath }, { agentId: forked.agentId, importedFrom: chatsPath }]),
-    { agentId: forked.agentId, existing: true }
+    { agentId: forked.agentId, existing: true, revision: undefined }
   )
   assert.equal(resolveImportAgentId(legacyId, acpPath, [{ agentId: legacyId }]).existing, false, "an SDK agent that merely shares the id is not the import")
+  // An independent writer advances the source after the previously read meta.
+  // The registered document must use the VACUUM snapshot's head and revision.
+  const writer = new DatabaseSync(acpPath)
+  writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0")
+  writer.prepare("INSERT OR REPLACE INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: legacyId, latestRootBlobId: "root-wal", blobEncryptionKey: "bmV3" }))
+  writer.prepare("INSERT INTO blobs VALUES ('wal-only', ?)").run(Buffer.from("new"))
+  assert.throws(() => copyLegacyStore(acpPath, stateRoot, legacyId), /destination already exists/)
+  assert.equal(readLegacyStoreSnapshot(copied, legacyId).revision, second, "a competing import cannot delete an existing destination")
+  rmSync(cursorSdkAgentDirectory(stateRoot, legacyId), { recursive: true, force: true })
+  const walCopy = copyLegacyStore(acpPath, stateRoot, legacyId)
+  const copiedSnapshot = readLegacyStoreSnapshot(walCopy, legacyId)
+  assert.equal(copiedSnapshot.meta.latestRootBlobId, "root-wal")
+  assert.equal(copiedSnapshot.meta.blobEncryptionKey, "bmV3")
+  assert.equal(copiedSnapshot.revision, cursorLegacyCheckpoint(acpPath, legacyId))
+  assert.notEqual(copiedSnapshot.revision, second)
+  const walDocument = importedAgentDocument({ agentId: legacyId, source, snapshot: copiedSnapshot, now: 1000 })
+  assert.equal(walDocument.latestRootBlobId, "root-wal", "the index uses the copied head, not the earlier source meta")
+  assert.equal(walDocument.sdkMetadata[CURSOR_SDK_IMPORT_METADATA_KEY].revision, copiedSnapshot.revision)
+  assert.equal(verifyImportRevision(copiedSnapshot.revision, copiedSnapshot.revision), copiedSnapshot.revision)
+  assert.throws(() => verifyImportRevision(undefined, copiedSnapshot.revision), /predates revision receipts/)
+  writer.prepare("INSERT OR REPLACE INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: legacyId, latestRootBlobId: "root-after-copy" }))
+  const movedSnapshot = readLegacyStoreSnapshot(acpPath, legacyId)
+  assert.throws(() => verifyImportRevision(copiedSnapshot.revision, movedSnapshot.revision), /changed after import/)
+  assert.equal(readLegacyStoreSnapshot(walCopy, legacyId).revision, copiedSnapshot.revision, "refusal preserves the copied history")
+  assert.throws(() => readLegacyStoreSnapshot(acpPath, "wrong-agent"), /different agent/)
+  writer.close()
+  assert.deepEqual(resolveImportAgentId(legacyId, acpPath, [{ agentId: legacyId, importedFrom: acpPath, importRevision: copiedSnapshot.revision }]), { agentId: legacyId, existing: true, revision: copiedSnapshot.revision })
+  // Leave the source at the earlier fixture head for the admission assertions.
+  writeLegacyStore(acpPath, "root-2", 3, true)
   rmSync(cursorSdkAgentDirectory(stateRoot, legacyId), { recursive: true, force: true })
 
   // SDK checkpoints: the root lives in index.db, the count in the store.
@@ -146,6 +178,8 @@ try {
 
   assert.equal(cursorSdkCheckpoint(stateRoot, directoryName), undefined, "no index row yet: no checkpoint")
   setRoot("root-1")
+  index.prepare("UPDATE agents SET metadata_json = ? WHERE agent_id = ?").run(JSON.stringify(walDocument.sdkMetadata), agentId)
+  assert.equal(readCursorSdkAgent(cursorSdkIndexPath(stateRoot), agentId)?.imported?.revision, copiedSnapshot.revision, "the sessions reader retains the persisted native import revision")
   const sdkFirst = cursorSdkCheckpoint(stateRoot, directoryName)
   assert.ok(sdkFirst, "a root in the index makes the store checkpointable")
   assert.equal(cursorSdkCheckpoint(stateRoot, directoryName), sdkFirst, "stable while nothing moves")

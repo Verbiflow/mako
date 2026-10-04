@@ -104,7 +104,7 @@ try {
     request: async (method, params) => {
       const answers: FixtureAnswers = {
         me: () => identity.promise,
-        open: () => { opened.resolve(); return { agentId: "fixture-agent", model: { id: "fixture-model" }, imported: false, importSource: "/native/previous-import.db" } },
+        open: () => { opened.resolve(); return { agentId: "fixture-agent", model: { id: "fixture-model" }, imported: false, importSource: "/native/previous-import.db", importRevision: "verified-snapshot-head" } },
       }
       const respond = answers[method]
       return respond ? respond() : client.request(method, params)
@@ -121,6 +121,7 @@ try {
   const identified = await starting
   assert.equal(identified.executionContext?.identity.kind, "reported")
   assert.equal(identified.executionContext?.sourceImport?.source, "/native/previous-import.db", "a previously indexed import retains native provenance even when no new copy occurred")
+  assert.equal(identified.executionContext?.sourceImport?.revision, "verified-snapshot-head", "the parent retains the child snapshot revision")
   await delayed.close(delayedId)
   await driver.start(root, { conversationId: id, emit() {} })
   const pending = driver.prompt(id, "first", [], undefined, dispatch())

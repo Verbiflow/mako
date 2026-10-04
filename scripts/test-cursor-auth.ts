@@ -124,6 +124,10 @@ try {
     await store.save({ version: 1, apiKey: KEY_GOOD, method: "pasted", keyName: "laptop", savedAt: "2026-09-13T00:00:00Z" })
     assert.ok(!readFileSync(join(root, "c1.bin")).includes(KEY_GOOD), "the file never holds the key in clear")
     assert.equal((await store.load())?.apiKey, KEY_GOOD)
+    const firstRevision = (await store.load())?.revision
+    assert.ok(firstRevision)
+    await store.save({ version: 1, apiKey: KEY_GOOD, method: "pasted", savedAt: "2026-09-13T00:00:00Z" })
+    assert.notEqual((await store.load())?.revision, firstRevision, "each save records a new opaque revision, even for the same key")
     await store.clear()
     assert.equal(await store.load(), null)
     const lockedStore = new CursorCredentialStore(join(root, "c1.bin"), locked)
@@ -139,6 +143,13 @@ try {
     const status = await auth.status()
     assert.deepEqual(status.state, { status: "signed-in", source: "env", email: "kash@example.com", keyName: "laptop" })
     assert.equal((await auth.childEnv()).CURSOR_API_KEY, KEY_GOOD)
+    const launch = await auth.childLaunch()
+    assert.equal(launch.credential.kind, "configured")
+    if (launch.credential.kind === "configured") {
+      assert.equal(launch.credential.source, "env")
+      assert.equal(launch.credential.revision.kind, "unavailable")
+    }
+    assert.ok(!JSON.stringify(launch.credential).includes(KEY_GOOD), "public credential facts never contain key material")
     assert.equal(fake.spawned.length, 1, "childEnv spawns nothing")
     assert.equal(await auth.status(), status, "a fresh answer is reused")
     clock += CURSOR_SDK_AUTH_TTL_MS
@@ -173,6 +184,12 @@ try {
     assert.deepEqual(signedIn.state, { status: "signed-in", source: "mako", method: "pasted", email: "kash@example.com", keyName: "laptop" })
     assert.equal((await credentials.load())?.apiKey, KEY_GOOD)
     assert.equal((await auth.childEnv()).CURSOR_API_KEY, KEY_GOOD, "Mako's key now outranks the CLI's")
+    const configured = (await auth.childLaunch()).credential
+    assert.equal(configured.kind, "configured")
+    if (configured.kind === "configured") {
+      assert.equal(configured.source, "mako")
+      assert.equal(configured.revision.kind, "reported")
+    }
     assert.deepEqual(changes, ["mako"])
     // Sign-out forgets Mako's key and the SDK's file; the CLI's login remains and is reported as such.
     const after = await auth.signOut()
@@ -229,13 +246,17 @@ try {
     assert.match(rejectionText("cli", "x"), /cursor-agent login/)
   }
 
-  // A saved key this host cannot open is a problem of its own, and the CLI's login still runs.
+  // An unreadable saved key cannot silently switch the executing identity to CLI/SDK.
   {
     const path = join(root, "opaque.bin")
     writeFileSync(path, "not-mako")
-    const { auth } = make({ path, cliKey: KEY_CLI })
+    const { auth, fake } = make({ path, cliKey: KEY_CLI })
     const status = await auth.status()
-    assert.deepEqual(status.state, { status: "signed-in", source: "cli", email: "cli@example.com", keyName: "cursor-agent" })
+    assert.ok(status.state.status === "signed-out" && status.state.problem?.source === "mako")
+    await assert.rejects(auth.childLaunch(), /could not be opened/)
+    assert.equal(fake.spawned.length, 0, "an unreadable saved credential cannot launch a different account")
+    const explicit = make({ path, cliKey: KEY_CLI, env: { CURSOR_API_KEY: KEY_GOOD } }).auth
+    assert.equal((await explicit.childEnv()).CURSOR_API_KEY, KEY_GOOD, "an explicit environment override keeps declared precedence")
     const alone = make({ path }).auth
     const problem = await alone.status()
     assert.ok(problem.state.status === "signed-out" && problem.state.problem?.source === "mako")

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
+import { setTimeout as delay } from "node:timers/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -18,10 +20,13 @@ let preparations = 0
 let claims = 0
 let releases = 0
 let verdict: ResumeVerdict = { kind: "held", by: "external executor" }
+let pipeDescendant = false
 const unregister = providerHost.nativeRunners.register({
   provider, available: () => true, fastMode: "unsupported", carries: [],
   prepare: async options => { preparations++; await prepareGate; return { options, dropped: [] } },
-  resume: () => ({ command: process.execPath, args: ["-e", "console.log('own-native-fixture'); setTimeout(() => {}, 40)"] }),
+  resume: () => ({ command: process.execPath, args: pipeDescendant
+    ? [fileURLToPath(new URL("./fixtures/native-pipe-child.mjs", import.meta.url)), "leader", root]
+    : ["-e", "console.log('own-native-fixture'); setTimeout(() => {}, 40)"] }),
   fresh: () => { throw new Error("Recovery must not fall back to a fresh session") },
   describe: () => ({}),
 })
@@ -64,8 +69,37 @@ try {
   assert.equal(claims, 1, "a racing claim cannot spawn another writer")
   memory.release(provider, ref.nativeId, other)
   assert.equal(nativeLifecycleWork().length, 0)
-  console.log("Native admission: shared refusal, missing evidence/claim, concurrent preparation, one spawn, exact hold release and racing owner verified")
+  pipeDescendant = true
+  await resumeNative(ref, "retain until descendant drains", { captureOutput: true })
+  const descendantResult = waitForNativeRun(ref.path)
+  let settled = false
+  void descendantResult.then(() => { settled = true })
+  const deadline = Date.now() + 5_000
+  let leaderExited = false
+  while (!leaderExited && Date.now() < deadline) {
+    try {
+      const pid = Number(await readFile(join(root, "leader-pid"), "utf8"))
+      try { process.kill(pid, 0) } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ESRCH") leaderExited = true
+        else throw error
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error
+    }
+    if (!leaderExited) await delay(10)
+  }
+  assert.equal(leaderExited, true, "the independently spawned leader actually exited")
+  assert.equal(settled, false, "leader exit cannot settle while its descendant holds output")
+  assert.equal(releases, 1, "the claim remains held after leader exit")
+  await assert.rejects(resumeNative(ref, "must not race descendant"), /active writer/)
+  await writeFile(join(root, "release-pipes"), "release")
+  const drained = await descendantResult
+  assert.equal(drained.text, "leader\ndescendant:" + "🦉".repeat(16_384))
+  assert.equal(releases, 2, "closed pipes release the claim exactly once")
+  assert.equal(nativeLifecycleWork().length, 0)
+  console.log("Native admission: refusal, concurrent preparation, exact claims, leader exit with inherited pipes and lossless descendant output verified")
 } finally {
+  await writeFile(join(root, "release-pipes"), "release").catch(() => {})
   bindDrivers(() => {})
   unregister()
   memory.close()

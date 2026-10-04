@@ -19,7 +19,14 @@ assert.equal(disconnectedContext(context)?.identity.kind, "unavailable")
 context.runtime = reportedRuntime("native-1.2", "hello")
 context.identity = reportedIdentity("native@example.test", "native", "account/read")
 context.store = { kind: "located", path: "/native/store/session-a" }
+context.sourceImport = { source: "/native/legacy", destination: "/native/store/session-a", nativeId: "session-a", via: "fixture copy", revision: "copied-checkpoint" }
 assert.deepEqual(ExecutionContextSchema.parse(context), context)
+assert.equal(assessExecutionContext(context, context, false).kind, "unverified", "matching account/version facts cannot certify missing credentials or service authority")
+context.credential = { kind: "configured", source: "fixture", revision: { kind: "reported", value: "opaque-revision", via: "fixture credential record" } }
+context.service = { kind: "reported", authority: "fixture-service", via: "native handshake" }
+assert.equal(assessExecutionContext(context, { ...context, service: { kind: "reported", authority: "other-service", via: "native handshake" } }, false).kind, "incompatible")
+assert.equal(assessExecutionContext(context, { ...context, credential: undefined }, false).kind, "unverified", "older credential evidence remains missing")
+assert.equal(assessExecutionContext(context, { ...context, credential: { kind: "configured", source: "fixture", revision: { kind: "reported", value: "new-revision", via: "fixture" } } }, false).kind, "unverified", "changed credentials require compatibility proof even with the same principal")
 assert.equal(assessExecutionContext(context, context, false).kind, "compatible")
 assert.equal(assessExecutionContext(undefined, context, false).kind, "unverified", "old journals do not invent compatibility")
 assert.equal(assessExecutionContext(context, { ...context, transport: "changed" }, false).kind, "incompatible")

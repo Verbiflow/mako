@@ -15,6 +15,10 @@ import {
 } from "../electron/harnesses.js"
 import type { HarnessProfile } from "../electron/shared.js"
 
+const workspaceRoot = await mkdtemp(join(tmpdir(), "mako-send-discovery-"))
+const workspace = (name: string) => join(workspaceRoot, name)
+await Promise.all(["anywhere", "cold", "flaky", "fresh", "native-selection", "never", "one", "two", "unavailable"].map(name => mkdir(workspace(name))))
+
 let account = "one"
 let loads = 0
 /** Real discovery takes seconds; hold the fixture open to observe what answers meanwhile. */
@@ -70,12 +74,12 @@ async function until(predicate: () => boolean) {
 }
 try {
   assert.equal(
-    await resolveHarnessLaunch(profile.id, "/one", undefined),
+    await resolveHarnessLaunch(profile.id, workspace("one"), undefined),
     undefined
   )
   const nativeOptions = { options: { effort: "high" } }
   assert.equal(
-    await resolveHarnessLaunch(profile.id, "/one", nativeOptions),
+    await resolveHarnessLaunch(profile.id, workspace("one"), nativeOptions),
     nativeOptions
   )
   assert.equal(
@@ -86,7 +90,7 @@ try {
   const cacheGate = Promise.withResolvers<null>()
   recall.mock.mockImplementationOnce(() => cacheGate.promise)
   let answered = false
-  const immediate = harnessProfilesNow("/one").then((profiles) => {
+  const immediate = harnessProfilesNow(workspace("one")).then((profiles) => {
     answered = true
     return profiles
   })
@@ -104,10 +108,10 @@ try {
   )
   await until(() => reported.length >= 1)
   assert.equal(loads, 1)
-  assert.deepEqual(reported, ["/one"], "Discovery reports through the event")
+  assert.deepEqual(reported, [workspace("one")], "Discovery reports through the event")
   const freshGate = Promise.withResolvers<void>()
   hold = freshGate.promise
-  const borrowed = await harnessProfile(profile.id, false, "/fresh")
+  const borrowed = await harnessProfile(profile.id, false, workspace("fresh"))
   assert.equal(
     borrowed.pending,
     true,
@@ -124,15 +128,15 @@ try {
   freshGate.resolve()
   hold = null
   await until(() => reported.length >= 2)
-  assert.deepEqual(reported, ["/one", "/fresh"])
-  const settled = await harnessProfile(profile.id, false, "/fresh")
+  assert.deepEqual(reported, [workspace("one"), workspace("fresh")])
+  const settled = await harnessProfile(profile.id, false, workspace("fresh"))
   assert.equal(settled.pending, undefined)
   assert.deepEqual(settled.settings, profile.settings)
   account = "persisted"
   const persistedGate = Promise.withResolvers<void>()
   hold = persistedGate.promise
   nearest.mock.mockImplementationOnce(async () => profile)
-  const recalled = await harnessProfile(profile.id, false, "/anywhere")
+  const recalled = await harnessProfile(profile.id, false, workspace("anywhere"))
   assert.equal(recalled.pending, true, "The persisted cache serves an account's catalog across host restarts")
   assert.deepEqual(recalled.models, profile.models)
   assert.equal(recalled.settings, undefined)
@@ -141,19 +145,19 @@ try {
   await until(() => reported.length >= 3)
   assert.equal(loads, 3)
   account = "cold"
-  const cold = await harnessProfile(profile.id, false, "/cold")
+  const cold = await harnessProfile(profile.id, false, workspace("cold"))
   assert.equal(cold.pending, undefined, "Without any account snapshot, display waits for discovery")
   await until(() => reported.length >= 4)
   assert.equal(loads, 4)
   account = "one"
   now += 60_000
-  await harnessProfileForSend(profile.id, "/one")
+  await harnessProfileForSend(profile.id, workspace("one"))
   assert.equal(
     loads,
     4,
     "Sending does not run discovery again after the display TTL"
   )
-  const stale = await harnessProfile(profile.id, false, "/one")
+  const stale = await harnessProfile(profile.id, false, workspace("one"))
   assert.equal(
     stale.pending,
     undefined,
@@ -162,16 +166,16 @@ try {
   assert.equal(loads, 5, "Ordinary discovery still refreshes expired profiles")
   await until(() => reported.length >= 5)
   assert.equal(reported.length, 5, "The refresh behind a stale answer reports")
-  await harnessProfile(profile.id, true, "/one")
+  await harnessProfile(profile.id, true, workspace("one"))
   assert.equal(loads, 6, "Explicit refresh stays authoritative")
-  await harnessProfileForSend(profile.id, "/two")
+  await harnessProfileForSend(profile.id, workspace("two"))
   assert.equal(
     loads,
     7,
     "A different workspace cannot borrow the cached settings"
   )
   account = "two"
-  await harnessProfileForSend(profile.id, "/one")
+  await harnessProfileForSend(profile.id, workspace("one"))
   assert.equal(
     loads,
     8,
@@ -205,11 +209,11 @@ try {
   }
   account = "launch-one"
   const beforeReports = reported.length
-  const first = resolveHarnessLaunch(profile.id, "/one", {
+  const first = resolveHarnessLaunch(profile.id, workspace("one"), {
     model: "fixture-model",
     options: { effort: "low" },
   })
-  const duplicate = resolveHarnessLaunch(profile.id, "/one", {
+  const duplicate = resolveHarnessLaunch(profile.id, workspace("one"), {
     model: "fixture-model",
   })
   await until(() => launchLoads >= 1)
@@ -219,10 +223,10 @@ try {
     "Concurrent launches share a scoped catalogue query"
   )
   account = "launch-two"
-  const otherAccount = resolveHarnessLaunch(profile.id, "/one", {
+  const otherAccount = resolveHarnessLaunch(profile.id, workspace("one"), {
     model: "fixture-model",
   })
-  const otherWorkspace = resolveHarnessLaunch(profile.id, "/two", {
+  const otherWorkspace = resolveHarnessLaunch(profile.id, workspace("two"), {
     model: "fixture-model",
   })
   await until(() => launchLoads >= 3)
@@ -239,7 +243,7 @@ try {
     "Launch-only data must not replace the full displayed profile"
   )
   await assert.rejects(
-    resolveHarnessLaunch(profile.id, "/one", {
+    resolveHarnessLaunch(profile.id, workspace("one"), {
       model: "fixture-model",
       options: { effort: "invalid" },
     }),
@@ -269,7 +273,7 @@ try {
   assert.equal(
     await resolveHarnessLaunch(
       profile.id,
-      "/native-selection",
+      workspace("native-selection"),
       nativeSelection
     ),
     nativeSelection
@@ -280,7 +284,7 @@ try {
     "Provider-native model-only selections need no catalogue translation"
   )
   await assert.rejects(
-    resolveHarnessLaunch(profile.id, "/native-selection", {
+    resolveHarnessLaunch(profile.id, workspace("native-selection"), {
       model: "fixture-model",
       options: { effort: "invalid" },
     }),
@@ -289,37 +293,37 @@ try {
   const unavailable = { ...profile, available: false, error: "Provider is not signed in", models: [] }
   loader.loadForSend = async () => unavailable
   account = "unavailable-model-catalogue"
-  await assert.rejects(resolveHarnessLaunch(profile.id, "/unavailable", { model: "model-family", options: { effort: "high" } }), /not signed in/)
+  await assert.rejects(resolveHarnessLaunch(profile.id, workspace("unavailable"), { model: "model-family", options: { effort: "high" } }), /not signed in/)
 
   // A discovery that fails after it has succeeded keeps the account's models
   // and says why; the failure is held briefly and never persisted.
   account = "flaky"
-  const good = await harnessProfile(profile.id, true, "/flaky")
+  const good = await harnessProfile(profile.id, true, workspace("flaky"))
   assert.equal(good.available, true)
   const persisted = persist.mock.callCount()
   failWith = new Error("cursor-agent discovery timed out during cursor/list_available_models after 30000 ms")
-  const kept = await harnessProfile(profile.id, true, "/flaky")
+  const kept = await harnessProfile(profile.id, true, workspace("flaky"))
   assert.equal(kept.available, true, "the last discovered models still answer")
   assert.deepEqual(kept.models, profile.models)
   assert.match(kept.configurationError ?? "", /timed out.*Showing the last discovered settings/)
   assert.equal(persist.mock.callCount(), persisted, "a failed discovery is never persisted")
   const beforeRetry = loads
   const reportedBefore = reported.length
-  await harnessProfile(profile.id, false, "/flaky")
+  await harnessProfile(profile.id, false, workspace("flaky"))
   assert.equal(loads, beforeRetry, "the failure is held for a moment")
   now += FAILED_DISCOVERY_TTL_MS + 1
   failWith = null
-  const stillKept = await harnessProfile(profile.id, false, "/flaky")
+  const stillKept = await harnessProfile(profile.id, false, workspace("flaky"))
   assert.equal(stillKept.configurationError, kept.configurationError, "stale beats blank while discovery reruns")
   assert.equal(loads, beforeRetry + 1, "an expired failure reruns discovery")
   await until(() => reported.length > reportedBefore)
-  const recovered = await harnessProfile(profile.id, false, "/flaky")
+  const recovered = await harnessProfile(profile.id, false, workspace("flaky"))
   assert.equal(recovered.configurationError, undefined, "the rerun clears the failure")
   // A send during the failure validates against the last catalogue at once
   // instead of waiting on another 30 s discovery, and retries it behind.
   delete loader.nativeModelIds
   failWith = new Error("cursor-agent discovery timed out during cursor/list_available_models after 30000 ms")
-  await harnessProfile(profile.id, true, "/flaky")
+  await harnessProfile(profile.id, true, workspace("flaky"))
   now += FAILED_DISCOVERY_TTL_MS + 1
   failWith = null
   const sendLoads = loads
@@ -327,7 +331,7 @@ try {
   const sendGate = Promise.withResolvers<void>()
   hold = sendGate.promise
   const sent = await Promise.race([
-    resolveHarnessLaunch(profile.id, "/flaky", { model: "account-model" }),
+    resolveHarnessLaunch(profile.id, workspace("flaky"), { model: "account-model" }),
     new Promise<"waited">((resolve) => setTimeout(() => resolve("waited"), 200)),
   ])
   assert.deepEqual(sent, { model: "account-model" }, "a send never waits on a refresh while a catalogue is known")
@@ -335,13 +339,13 @@ try {
   sendGate.resolve()
   hold = null
   await until(() => reported.length > reportedBeforeSend)
-  const healed = await harnessProfileForSend(profile.id, "/flaky")
+  const healed = await harnessProfileForSend(profile.id, workspace("flaky"))
   assert.equal(healed.configurationError, undefined, "the retry behind the send heals the profile")
   assert.equal(loads, sendLoads + 1, "a healthy stale catalogue is not refreshed per send")
   // With nothing ever discovered for the account, the failure is the answer.
   account = "never-discovered"
   failWith = new Error("spawn ENOENT")
-  const blank = await harnessProfile(profile.id, true, "/never")
+  const blank = await harnessProfile(profile.id, true, workspace("never"))
   assert.equal(blank.available, false)
   assert.match(blank.error ?? "", /ENOENT/)
   failWith = null
@@ -349,6 +353,7 @@ try {
     "Send discovery: native defaults and native IDs avoid discovery; a new workspace borrows the account's catalog; option validation, concurrent launches, account/workspace isolation, aliases, and full profile updates are preserved"
   )
 } finally {
+  await rm(workspaceRoot, { recursive: true, force: true })
   stopReporting()
   only.mock.restore()
   clock.mock.restore()
