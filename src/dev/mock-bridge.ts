@@ -250,9 +250,6 @@ export function installMockBridge() {
     projectAppSetup: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
-    allowProjectSecrets: async () => {
-      throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
-    },
     removeWorktree: async () => {
       throw new Error("The mock desk has no worktrees to remove.")
     },

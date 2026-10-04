@@ -126,22 +126,32 @@ const prepareSchema = z.object({
    */
   outputs: z.array(checkoutPattern).min(1).max(10).optional(),
   /**
-   * A new checkout's package folders link each package to the main
-   * checkout's, in a second, instead of cloning them. An install must
-   * never run over the links, since it writes through them into the main
-   * checkout; Mako gives the checkout its own copy first. The default for a
-   * step whose outputs are all package folders; `false` clones them instead,
-   * for a bundler that doesn't follow links.
+   * A new checkout's outputs link each entry to the main checkout's, in a
+   * second, instead of cloning them, so nothing may write into them: an
+   * install would write through the links into the main checkout, so Mako
+   * gives the checkout its own copy first. Left out, a recipe written before
+   * linking was the default clones them; `recipe_save` writes `true` for a
+   * step with outputs that doesn't say (`withLinkDefault`).
    */
   link: z.boolean().optional(),
 }).strict().refine(
-  (step) => !step.link || packageFolders(step.outputs),
-  { message: "link is for package folders: give outputs such as **/node_modules, and nothing else", path: ["link"] },
-).transform((step) => (step.link === undefined && packageFolders(step.outputs) ? { ...step, link: true } : step))
+  (step) => step.link === undefined || step.outputs?.length,
+  { message: "link is for a step's outputs: name them in outputs, or leave link out", path: ["link"] },
+)
 
-function packageFolders(outputs: readonly string[] | undefined): boolean {
-  return Boolean(outputs?.length && outputs.every((pattern) => pattern.split("/").at(-1) === "node_modules"))
-}
+/** A path a recipe names alone is copied. */
+const copiedPath = checkoutPattern.transform((path) => ({ path, link: false }))
+
+/** One of the files Git ignores that a new checkout gets from the main checkout: copied, or linked to the main checkout's. */
+const carryEntrySchema = z.union([
+  copiedPath,
+  z.object({
+    path: checkoutPattern,
+    /** Shared with the main checkout instead of copied, for a large folder nothing writes into. */
+    link: z.boolean().default(false),
+  }).strict(),
+])
+export type CarryEntry = z.infer<typeof carryEntrySchema>
 
 export const RecipeSchema = z.object({
   $schema: z.string().optional(),
@@ -162,14 +172,14 @@ export const RecipeSchema = z.object({
   }).strict().default({}),
   /** Install in a fresh copy, and catch up after the branch moves: each step only when its inputs changed. */
   prepare: z.array(prepareSchema).max(10).default([]),
-  /** Files Git ignores that a new checkout gets from the main checkout as they are, such as a local settings file. Never credentials. */
-  carry: z.array(checkoutPattern).max(20).optional(),
   /**
-   * Files Git ignores that hold credentials, such as `.env` files. A new
-   * checkout gets them from the main checkout only once the person has
-   * allowed it in Mako; nobody reads them.
+   * Files Git ignores that a new checkout gets from the main checkout as
+   * they are, such as a local settings file or `.env.local`: copied, or with
+   * `link`, shared with the main checkout's.
    */
-  secrets: z.array(checkoutPattern).max(20).optional(),
+  carry: z.array(carryEntrySchema).max(20).optional(),
+  /** Read into `carry`: recipes saved before credentials files were carried like any other listed them here. */
+  secrets: z.array(copiedPath).max(20).optional(),
   /**
    * One copy on this Mac at a time: for an app with a fixed port, one local
    * database or one Docker stack that copies can't split. A start is refused
@@ -183,9 +193,21 @@ export const RecipeSchema = z.object({
    * containers' volumes or its database, when its worktree is removed.
    */
   cleanup: command.optional(),
-}).strict()
+}).strict().superRefine((recipe, context) => {
+  const seen = new Set<string>()
+  for (const [index, { path }] of [...(recipe.carry ?? []), ...(recipe.secrets ?? [])].entries()) {
+    if (seen.has(path)) context.addIssue({ code: "custom", path: ["carry", index], message: `${path} is listed twice; list it once, with link or without` })
+    seen.add(path)
+  }
+}).transform(({ secrets, ...recipe }) => (secrets?.length ? { ...recipe, carry: [...(recipe.carry ?? []), ...secrets] } : recipe))
 
 export type Recipe = z.infer<typeof RecipeSchema>
+
+/** What `recipe_save` keeps: a step with outputs that doesn't say links them, written out so the version says so. */
+export function withLinkDefault(recipe: Recipe): Recipe {
+  if (!recipe.prepare.some((step) => step.outputs?.length && step.link === undefined)) return recipe
+  return { ...recipe, prepare: recipe.prepare.map((step) => (step.outputs?.length && step.link === undefined ? { ...step, link: true } : step)) }
+}
 export type RecipeTarget = z.infer<typeof targetSchema>
 export type RecipeProcess = z.infer<typeof processSchema>
 export type CheckTier = keyof Recipe["checks"]
@@ -259,7 +281,17 @@ async function readJson(path: string): Promise<JsonRead> {
 }
 
 export function recipeIssues(error: z.ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join(".") || "the file"}: ${issue.message}`).join("; ")
+  return error.issues.flatMap((issue) => issueLines(issue, [])).join("; ")
+}
+
+/** A union's issue as the issues of the one option the value could be, which say what's wrong; zod's own says only "Invalid input". */
+function issueLines(issue: z.core.$ZodIssue, under: PropertyKey[]): string[] {
+  const path = [...under, ...issue.path]
+  if (issue.code === "invalid_union") {
+    const fitting = issue.errors.filter((option) => !option.every((inner) => inner.code === "invalid_type" && !inner.path.length))
+    if (fitting.length === 1) return fitting[0]!.flatMap((inner) => issueLines(inner, path))
+  }
+  return [`${path.map(String).join(".") || "the file"}: ${issue.message}`]
 }
 
 /**

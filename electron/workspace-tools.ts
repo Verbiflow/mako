@@ -8,7 +8,6 @@ import { toolText } from "./tool-text.js"
 import type { WorkspaceMoves } from "./workspace-moves.js"
 import { git } from "./worktree-git.js"
 import { checkoutOf, checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
-import { grantedSecrets, readAllowedSecrets } from "./recipe-secrets.js"
 import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
 
 type Worktrees = Pick<ThreadWorktreeService, "ofConversation" | "ahead" | "merge" | "remove">
@@ -120,9 +119,8 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       if (!worktree || !(await within(worktree.path, checkout))) throw new Error("This Session must edit in this Thread's worktree before bringing files into it. worktree_status says where it edits.")
       const main = await projectRoot(checkout)
       const recipe = await projectRecipe(checkout, deps.recipesRoot)
-      const granted = deps.recipesRoot ? grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout)) : []
-      const wanted = entries ?? [...(recipe?.carry ?? []), ...granted].map((path) => ({ path }))
-      const result = await bringFiles(main, checkout, wanted, granted)
+      const wanted = entries ?? recipe?.carry ?? []
+      const result = await bringFiles(main, checkout, wanted)
       return toolText({ mainCheckout: main, worktree: checkout, ...result })
     },
     async merge(conversationId) {
@@ -168,7 +166,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
   server.registerTool(
     "worktree_bring",
     {
-      description: "Bring ignored files from the originating main checkout into this Thread's existing worktree. Call when the recipe added carry or secrets after the worktree was created, or when this Thread needs a one-off local file or output. Leave entries out to copy the recipe's carry and approved secrets, or name relative paths/patterns without changing the project recipe. Copies by default, cloning large folders on supported volumes; link: true explicitly shares an entry with the main checkout, so writes affect both. Env files are independent copies unless explicitly linked. Existing destination entries stay untouched, including broken links. Credentials require the user's existing App setup grant; no file values are read or returned. Refuses outside paths and Python virtual environments. worktree_status lists the main checkout's ignored paths. Use prepare outputs for dependency folders whose matching inputs Mako should check.",
+      description: "Bring ignored files from the originating main checkout into this Thread's existing worktree. Call when the recipe's carry changed after the worktree was created, when this Thread needs a one-off local file or output, or to make a linked entry this worktree's own before changing it. Leave entries out to bring the recipe's carry as it says, or name relative paths or patterns without changing the recipe. Copies by default, cloning large folders on supported volumes; link: true shares an entry with the main checkout, so a write there changes both. Copying an entry that's linked here makes it this worktree's own, keeping what was made in it here; other existing entries stay untouched. No file values are read or returned. Refuses outside paths and Python virtual environments. worktree_status lists the main checkout's ignored paths. Use prepare outputs for dependency folders whose matching inputs Mako should check.",
       inputSchema: z.object({ entries: z.array(z.object({ path: checkoutPattern, link: z.boolean().optional() }).strict()).max(20).optional() }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

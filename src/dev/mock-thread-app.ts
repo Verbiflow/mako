@@ -234,8 +234,7 @@ export function installMockThreadApp(): void {
     timers.clear()
   }
 
-  // Settings › Apps: mako's credentials wait for the person; api's were allowed; site isn't set up.
-  const allowed = new Map<string, number | undefined>([["/Users/you/api", Date.now() - 26 * 60 * 60_000]])
+  // Settings › Apps: mako copies its env file and links its fixtures; api copies its env files; site isn't set up.
   const projectOf = (folder: string) => (folder.startsWith(`${CWD}/`) || folder.includes("/.mako/worktrees/mako") ? CWD : folder.includes("/.mako/worktrees/") ? "/Users/you/api" : folder)
   const mockSetup = (folder: string): ProjectAppSetup => {
     const root = projectOf(folder)
@@ -243,10 +242,6 @@ export function installMockThreadApp(): void {
     const view = threadAppStore.get().byCwd[CWD]
     if (root === CWD && (view?.kind === "none" || view?.kind === "setting-up")) return { project, root, recipe: { kind: "none" } }
     if (root === CWD && view?.kind === "invalid") return { project, root, recipe: { kind: "invalid", message: view.message, file: `/Users/you/.mako/recipes/mako-3f9a1c2e.json` } }
-    const secrets = (patterns: string[], files: string[]) => {
-      const at = allowed.get(root)
-      return at === undefined ? { patterns, files, allowed: false } : { patterns, files, allowed: true, allowedAt: at }
-    }
     if (root === CWD)
       return {
         project,
@@ -272,11 +267,14 @@ export function installMockThreadApp(): void {
               full: [{ command: "npm run test:dev-live" }],
             },
             prepare: [{ command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: true }],
-            carry: ["config/dev.local.json"],
+            carry: [
+              { path: "config/dev.local.json", link: false, credentials: false },
+              { path: ".env.local", link: false, credentials: true },
+              { path: "fixtures/recordings", link: true, credentials: false },
+            ],
             oneAtATime: false,
           },
         },
-        secrets: secrets([".env.local"], [".env.local"]),
       }
     if (root === "/Users/you/api")
       return {
@@ -301,11 +299,13 @@ export function installMockThreadApp(): void {
               { command: "uv sync", inputs: ["uv.lock"], outputs: [], link: false },
               { command: "uv run python -m app.db ensure", inputs: ["migrations"], outputs: [], link: false },
             ],
-            carry: [],
+            carry: [
+              { path: ".env", link: false, credentials: true },
+              { path: "server/.env", link: false, credentials: true },
+            ],
             oneAtATime: true,
           },
         },
-        secrets: secrets([".env", "server/.env"], [".env", "server/.env"]),
       }
     return { project, root, recipe: { kind: "none" } }
   }
@@ -401,11 +401,6 @@ export function installMockThreadApp(): void {
       if (room) putRoom({ ...room, apps: room.apps.filter((app) => !roomStopped.has(app.app)) })
     },
     setup: async (root) => mockSetup(root),
-    allowSecrets: async (root, allow) => {
-      allowed.set(projectOf(root), allow ? Date.now() : undefined)
-      if (projectOf(root) === CWD) put({ credentialsWaiting: allow ? undefined : true })
-      return mockSetup(root)
-    },
     probe: async () => {
       await new Promise((resolve) => setTimeout(resolve, 700))
       return mockProbe(current())
@@ -571,9 +566,7 @@ export function installMockThreadApp(): void {
   }
 
   function ready(phase: Ready["phase"]): Ready {
-    const view = readyView(phase)
-    if (allowed.get(CWD) === undefined) view.credentialsWaiting = true
-    return view
+    return readyView(phase)
   }
 
   function readyView(phase: Ready["phase"]): Ready {

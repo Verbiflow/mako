@@ -185,11 +185,6 @@ export function installHostThreadApp(): void {
     },
     probe: (cwd) => mako.probeThreadApp(cwd),
     setup: (root) => mako.projectAppSetup(root),
-    allowSecrets: async (root, allow) => {
-      const setup = await mako.allowProjectSecrets(root, allow)
-      for (const cwd of watched.keys()) schedule(cwd, 0)
-      return setup
-    },
     watchMarks: () => watchLooks(() => markWatchers, (by) => { markWatchers += by }),
     watchRoom: () => {
       const release = watchLooks(() => roomWatchers, (by) => { roomWatchers += by })

@@ -1,6 +1,6 @@
 /**
  * A project's app setup as Settings shows it: the recipe every Thread runs
- * its app from, written out, and the credentials files new Threads may have.
+ * its app from, written out.
  */
 
 export interface RecipeProcessView {
@@ -24,7 +24,8 @@ export interface RecipeView {
   processes: RecipeProcessView[]
   checks: { quick?: RecipeCheckStepView[]; full?: RecipeCheckStepView[] }
   prepare: { command: string; inputs: string[]; outputs: string[]; link: boolean }[]
-  carry: string[]
+  /** Files Git ignores that new Threads get from the main checkout; `credentials` for one named like an env or key file. */
+  carry: { path: string; link: boolean; credentials: boolean }[]
   oneAtATime: boolean
 }
 
@@ -69,19 +70,8 @@ export type ProjectRecipeState =
       versions: RecipeVersionView[]
     }
 
-/** The files the recipe names as holding credentials, and the person's answer. */
-export interface ProjectSecrets {
-  patterns: string[]
-  /** What they match in the main checkout now. */
-  files: string[]
-  allowed: boolean
-  /** When the person allowed them. */
-  allowedAt?: number
-}
-
 export interface ProjectAppSetup {
   project: string
   root: string
   recipe: ProjectRecipeState
-  secrets?: ProjectSecrets
 }

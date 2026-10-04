@@ -130,7 +130,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
           <Action data-app-action="take-turn" onSelect={() => threadAppDriver()?.takeTurn(cwd)}>
             Stop it there and run it here
           </Action>
-          <SetupItem project={project} view={view} />
+          <SetupItem project={project} />
         </MenuContent>
       </Menu>
     )
@@ -144,7 +144,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
       </button>
     )
     return (
-      <WithSetup project={project} run={run} runLabel={shown ? `Run ${shown}` : undefined} credentialsWaiting={view.credentialsWaiting}>
+      <WithSetup project={project} run={run} runLabel={shown ? `Run ${shown}` : undefined}>
         {shown ? (
           <span className="mr-0.5 flex shrink-0 items-center">
             {button}
@@ -175,7 +175,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
         ) : (
           <ReadyMenu cwd={cwd} view={view} target={target} />
         )}
-        {view.kind === "ready" || view.kind === "invalid" ? <SetupItem project={project} view={view} /> : null}
+        {view.kind === "ready" || view.kind === "invalid" ? <SetupItem project={project} /> : null}
       </MenuContent>
     </Menu>
   )
@@ -185,7 +185,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
  * Right-click on the control, in any state: the project's app in Settings,
  * and Run when a click would run it.
  */
-function WithSetup({ project, run, runLabel = "Run app", credentialsWaiting, children }: { project: string; run?: () => void; runLabel?: string; credentialsWaiting?: boolean; children: ReactNode }) {
+function WithSetup({ project, run, runLabel = "Run app", children }: { project: string; run?: () => void; runLabel?: string; children: ReactNode }) {
   return (
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>
@@ -198,29 +198,26 @@ function WithSetup({ project, run, runLabel = "Run app", credentialsWaiting, chi
             <MenuSeparator />
           </>
         ) : null}
-        <SetupRowItem project={project} credentialsWaiting={credentialsWaiting} />
+        <SetupRowItem project={project} />
       </ContextMenuContent>
     </ContextMenu>
   )
 }
 
 /** The last row of the control's own menu: the project's app in Settings. */
-function SetupItem({ project, view }: { project: string; view: ThreadAppView }) {
+function SetupItem({ project }: { project: string }) {
   return (
     <>
       <MenuSeparator />
-      <SetupRowItem project={project} credentialsWaiting={view.kind === "ready" && view.credentialsWaiting} />
+      <SetupRowItem project={project} />
     </>
   )
 }
 
-function SetupRowItem({ project, credentialsWaiting }: { project: string; credentialsWaiting?: boolean }) {
+function SetupRowItem({ project }: { project: string }) {
   return (
-    <MenuItem data-app-action="app-setup" className="group gap-3" onSelect={() => openAppSetup(project)}>
-      <span className="shrink-0">App setup</span>
-      {credentialsWaiting ? (
-        <span className="min-w-0 flex-1 truncate text-right text-label text-caution">Credentials not copied</span>
-      ) : null}
+    <MenuItem data-app-action="app-setup" onSelect={() => openAppSetup(project)}>
+      App setup
     </MenuItem>
   )
 }

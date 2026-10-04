@@ -20,5 +20,4 @@ export function installThreadAppIpc(desk: DeskApp) {
   registerIpc("mako:thread-app-room", (): Promise<RoomView> => desk.room())
   registerIpc("mako:thread-app-stop-apps", (_event, apps: string[]): Promise<void> => desk.stopApps(apps))
   registerIpc("mako:project-app-setup", (_event, cwd: string): Promise<ProjectAppSetup> => desk.setup(cwd))
-  registerIpc("mako:project-app-secrets", (_event, cwd: string, allow: boolean): Promise<ProjectAppSetup> => desk.allowSecrets(cwd, allow))
 }

@@ -12,13 +12,13 @@ import type { AppActionOutcome, AppCheckStepView, AppCheckView, AppMark, AppOutp
 import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView, RecipeVersionView } from "./contracts/project-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
-import { grantedSecrets, readAllowedSecrets, writeAllowedSecrets } from "./recipe-secrets.js"
-import { bringFiles, carryReport, isSpareCheckout, linkedEntries, matchedEntries, ownPackages } from "./worktree-carry.js"
+import { bringFiles, carryReport, holdsCredentials, isSpareCheckout, linkedCarry, linkedEntries, linkReach, ownPackages, reachRoots, throughLinks, type LinkReach } from "./worktree-carry.js"
 import { ago, toolText, when } from "./tool-text.js"
 import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
 import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type StepRecord, type StepState } from "./check-steps.js"
 import { freeMemory, memoryPressure, runKey, type AppOverview, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import type { FileHistory } from "./watch-backend.js"
+import type { HistoryMark } from "./contracts/watcher-child.js"
 import { installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
 import { installStatus, settleHanded } from "./spare-install.js"
 import {
@@ -50,6 +50,7 @@ import {
   versionCount,
   versionHistory,
   versionNumbers,
+  withLinkDefault,
   type VersionHistory,
   type CheckTier,
   type Recipe,
@@ -86,6 +87,15 @@ const HISTORY_LISTED = 5
 const CLEANUP_MS = 2 * 60_000
 /** How often running apps' traces are read; a probe reads at most this much of the file system's history. */
 const TRACE_EVERY_MS = 2 * 60_000
+/** app_status says nothing of writes through links rather than wait longer than this for the file system's history. */
+const LINK_WRITES_WAIT_MS = 1_500
+
+/** The recipe's carry entries named like credentials, and the one rule for them. */
+function credentialsSummary(recipe: Recipe): string | undefined {
+  const named = (recipe.carry ?? []).filter((entry) => holdsCredentials(entry.path)).map((entry) => entry.path)
+  if (!named.length) return undefined
+  return `${named.join(", ")} ${named.length === 1 ? "holds credentials" : "hold credentials"}: Mako brings ${named.length === 1 ? "it" : "them"} into each worktree as the recipe's carry says. Never open, print or copy ${named.length === 1 ? "it" : "them"} yourself.`
+}
 
 interface Deps {
   cwd(conversationId: string): string | undefined
@@ -165,10 +175,8 @@ export interface DeskApp {
   room(): Promise<RoomView>
   /** Stops each app, as its own Stop does; one waiting for memory leaves the line. */
   stopApps(apps: string[]): Promise<void>
-  /** The project's recipe written out, with its credentials files, for Settings. */
+  /** The project's recipe written out, for Settings. */
   setup(cwd: string): Promise<ProjectAppSetup>
-  /** The person's answer on the recipe's credentials files: new checkouts get all of them, or none. */
-  allowSecrets(cwd: string, allow: boolean): Promise<ProjectAppSetup>
 }
 
 interface Context {
@@ -428,12 +436,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     await deps.processes.settle(app, [PREPARE_KEY], settleMs)
     return settled()
   }
-  /** Catch up older worktrees with the recipe's files and approved credentials, keeping their own edits. */
+  /** Catch up older worktrees with the recipe's carry, keeping their own edits and the copies they made their own. */
   const bringCheckoutFiles = async ({ checkout, recipe }: Context & { recipe: Recipe }) => {
     const root = await projectRoot(checkout)
     if (root === checkout) return
-    const granted = deps.recipesRoot ? grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout)) : []
-    await bringFiles(root, checkout, [...(recipe.carry ?? []), ...granted].map((path) => ({ path })), granted)
+    // A link never replaces what the worktree has; a copy makes an entry the recipe stopped linking the worktree's own.
+    await bringFiles(root, checkout, recipe.carry ?? [])
   }
   /** Under memory pressure, stops other Threads' quiet apps first; the start waits only while the machine stays critical. */
   const makeRoom = async (app: AppKey): Promise<{ refused?: string; notes: string[] }> => {
@@ -468,8 +476,15 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (read.kind !== "ready" || !read.recipe.prepare.some((step) => step.link)) return undefined
     const linked = await linkedEntries(checkout, read.recipe.prepare)
     return linked.length
-      ? `${linked.join(", ")} link each package to the main checkout's. Call app_own_packages before you install, add, remove or upgrade a dependency here; an install over the links writes into the main checkout.`
+      ? `${linked.join(", ")} link each entry to the main checkout's. Call app_own_packages before you install, add, remove or upgrade a dependency here; an install over the links writes into the main checkout.`
       : "This checkout's own (installed or cloned here, or the main checkout); install as usual."
+  }
+  const sharedSummary = async (read: Read, checkout: string) => {
+    if (read.kind !== "ready") return undefined
+    const shared = await linkedCarry(checkout, read.recipe)
+    return shared.length
+      ? `${shared.join(", ")} ${shared.length === 1 ? "is" : "are"} linked to the main checkout's, so a write there changes it for every Thread. worktree_bring with an entry and no link makes it this checkout's own first.`
+      : undefined
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
     const { done, pending, by } = await deps.processes.prepared(checkout)
@@ -496,6 +511,32 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (runs.some((run) => run.kind === "process" && (run.state.kind === "running" || run.state.kind === "starting"))) found.push(other.app)
     }
     return found
+  }
+  /** Where the file system's history stood as each app came up, and what its checkout's links reach in the main checkout. */
+  const linkMarks = new Map<AppKey, { mark: HistoryMark; reach: LinkReach }>()
+  const markLinks = async (current: Ready) => {
+    const { app } = current.environment
+    linkMarks.delete(app)
+    if (!deps.history) return
+    const reach = await linkReach(await projectRoot(current.checkout), current.recipe).catch(() => undefined)
+    if (!reach?.entries.length) return
+    const mark = await deps.history.mark().catch(() => undefined)
+    if (mark) linkMarks.set(app, { mark, reach })
+  }
+  /** What changed in the main checkout inside what links reach since the app came up; nothing when there's nothing linked to watch. */
+  const linkWrites = async (app: AppKey): Promise<{ root: string; paths: string[] } | undefined> => {
+    const marked = linkMarks.get(app)
+    if (!marked || !deps.history) return undefined
+    const found = await deps.history.since(marked.mark, reachRoots(marked.reach)).catch(() => undefined)
+    return found && { root: marked.reach.root, paths: throughLinks(marked.reach, found.paths) }
+  }
+  const writtenText = (paths: string[]) => (paths.length > 8 ? `${paths.slice(0, 8).join(", ")} and ${paths.length - 8} more` : paths.join(", "))
+  const linkWritesSummary = async (app: AppKey, read: Read, checkout: string) => {
+    if (read.kind !== "ready" || !linkMarks.has(app) || !(await appUp(app))) return undefined
+    const written = await Promise.race([linkWrites(app), new Promise<undefined>((settle) => setTimeout(() => settle(undefined), LINK_WRITES_WAIT_MS).unref())])
+    if (!written?.paths.length) return undefined
+    const here = written.root === checkout
+    return `Since this app came up, ${writtenText(written.paths)} changed in the main checkout (${written.root}), inside what worktrees link to${here ? "" : ", through this checkout's links or another's"}. That changes every linked Thread's copy. If this app or an agent here wrote it, set "link": false for that entry in the recipe${here ? "" : ", and make this checkout's own first: app_own_packages for install outputs, worktree_bring with the entry and no link for carry"}.`
   }
   /** Starts the named processes, or all; under critical memory it joins the line with `again`, unless `anyway`. */
   const startIn = async (current: Ready, names: string[] | undefined, again: () => Promise<StartOutcome>, anyway = false): Promise<StartOutcome> => {
@@ -532,8 +573,9 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     line.delete(app)
     if (idle.length) await deps.processes.ofProject(app, await projectRoot(current.checkout))
-    const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
     const fresh = !before.some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
+    if (fresh) await markLinks(current)
+    const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
     if (fresh && result.started.length && current.read.saved && current.read.version !== undefined)
       await pinRunning(current.read.saved, app, current.read.version)
     const statuses = await deps.processes.settle(app, picked.map((name) => runKey("process", name)), settleMs)
@@ -888,9 +930,6 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const browser = processes.find((entry) => entry.name === "web" && entry.state === "running" && entry.port !== undefined)
       ?? processes.find((entry) => entry.state === "running" && entry.port !== undefined)
     if (found.environment && browser?.port !== undefined) view.address = { host: found.environment.host, port: browser.port }
-    if (deps.recipesRoot && read.recipe.secrets?.length
-      && grantedSecrets(read.recipe, await readAllowedSecrets(deps.recipesRoot, found.checkout)).length < read.recipe.secrets.length)
-      view.credentialsWaiting = true
     const up = processes.filter((entry) => entry.state === "running" || entry.state === "starting")
     const started = runs.filter((entry) => entry.kind === "process" && entry.startedAt !== undefined && (entry.state.kind === "running" || entry.state.kind === "starting"))
     if (started.length) view.startedAt = Math.min(...started.map((entry) => entry.startedAt!))
@@ -1021,13 +1060,6 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const found = await deps.folder(cwd, false)
     const read = await readRecipe(found.checkout, found.environment ?? placeholder(found.app), deps.recipesRoot)
     const view: ProjectAppSetup = { project: found.project, root: found.root, recipe: await recipeState(read, found.app) }
-    const patterns = read.kind === "ready" ? read.recipe.secrets ?? [] : []
-    if (read.kind === "ready" && patterns.length) {
-      const allowed = deps.recipesRoot ? await readAllowedSecrets(deps.recipesRoot, found.checkout) : undefined
-      const granted = grantedSecrets(read.recipe, allowed)
-      view.secrets = { patterns, files: await matchedEntries(found.root, patterns).catch(() => []), allowed: granted.length === patterns.length }
-      if (view.secrets.allowed && allowed) view.secrets.allowedAt = allowed.at
-    }
     return { view, read, checkout: found.checkout }
   }
   /** Proofs of drafts, by app: the one under way or last finished, which a later recipe_publish waits for or finishes. */
@@ -1039,8 +1071,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const save = async (conversationId: string, recipe: Recipe, reason?: string): Promise<string> => {
     if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
     const { environment, checkout, read } = await context(conversationId)
-    const granted = grantedSecrets(recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
-    const carried = await carryReport(recipe, await projectRoot(checkout), granted)
+    const carried = await carryReport(recipe, await projectRoot(checkout))
     const saved = await saveDraft(deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
     const after = await readRecipe(checkout, environment, deps.recipesRoot)
     if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
@@ -1101,6 +1132,22 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       kind: "published",
       text: `Published version ${version} in ${elapsed((deps.now ?? Date.now)() - started)}: ${stepsLine(steps)}. Every Thread of this project uses it from its next app start; apps already running keep the version they started with until then.`,
     }
+  }
+  /**
+   * Whether anything wrote into what the recipe's links reach in the main
+   * checkout while the draft was proven, as a `links` step; the reason it
+   * fails, if it does. Nothing linked, or no history to read, adds no step.
+   */
+  const linksWritten = async (current: Ready, steps: RecipeProofStep[]): Promise<string | undefined> => {
+    const written = await linkWrites(current.environment.app)
+    if (!written) return undefined
+    steps.push({ name: "links", passed: !written.paths.length })
+    if (!written.paths.length) return undefined
+    const here = written.root === current.checkout
+    return [
+      `while it was proven, ${writtenText(written.paths)} changed in the main checkout (${written.root}), inside what the recipe links${here ? " in a worktree" : ", through this checkout's links or another worktree's"}.`,
+      `A linked entry is the main checkout's, shared by every Thread that links it, so nothing may write into it. Set "link": false for the carry entry or install step whose entry that is, so each worktree gets its own copy. If something else wrote it meanwhile, such as an install in the main checkout, recipe_publish again proves the draft afresh.`,
+    ].join(" ")
   }
   /**
    * Mako's part of a draft's proof: stop the app, install what's due, start
@@ -1193,7 +1240,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       if (!passed) return fail(`${verification.label} (${plan.command}) ${checkResult(status)}${took(status)}.\n\n${await runOutput(deps.processes, app, key)}`)
     }
     const checks = verifications.filter((verification) => "check" in verification.verify)
-    if (!checks.length) return publishProved(current, version, steps, by, run.startedAt)
+    if (!checks.length) {
+      const written = await linksWritten(current, steps)
+      return written ? fail(written) : publishProved(current, version, steps, by, run.startedAt)
+    }
     const up = Object.fromEntries((await deps.processes.status(app))
       .filter((status) => status.kind === "process" && names.includes(status.name))
       .map((status) => [status.name, status.startedAt ?? 0]))
@@ -1240,18 +1290,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       proofs.delete(current.environment.app)
       return `Draft ${version} wasn't published: ${failed.map((check) => check.target ?? "the check").join(", ")} didn't pass. It stays this Thread's draft, and every other Thread keeps the published version. Fix the recipe, recipe_save, and recipe_publish again.`
     }
+    const written = await linksWritten(current, steps)
+    if (written) {
+      await recordProof(current.read.saved!, version, proofRecord(current, steps, by))
+      proofs.delete(current.environment.app)
+      return `Draft ${version} wasn't published: ${written}\n\nIt stays this Thread's draft, and every other Thread keeps the published version. Fix it, recipe_save, then recipe_publish again.`
+    }
     return (await publishProved(current, version, steps, by, outcome.startedAt)).text
   }
   const desk: DeskApp = {
     view: deskView,
     async setup(cwd) {
-      return (await setupView(cwd)).view
-    },
-    async allowSecrets(cwd, allow) {
-      if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes.")
-      const { read, checkout } = await setupView(cwd)
-      if (read.kind !== "ready" || !read.recipe.secrets?.length) throw new Error("This project's recipe names no credentials files.")
-      await writeAllowedSecrets(deps.recipesRoot, checkout, allow ? read.recipe.secrets : [], (deps.now ?? Date.now)())
       return (await setupView(cwd)).view
     },
     async start(cwd, target) {
@@ -1369,10 +1418,6 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const shellValues = launched?.values ?? {}
       const shellMatches = JSON.stringify(Object.entries(shellValues).sort()) === JSON.stringify(Object.entries(values).sort())
       const processNames = read.kind === "ready" ? Object.keys(read.recipe.processes) : []
-      const secrets = read.kind === "ready" ? read.recipe.secrets ?? [] : []
-      const granted = secrets.length && deps.recipesRoot && read.kind === "ready"
-        ? grantedSecrets(read.recipe, await readAllowedSecrets(deps.recipesRoot, checkout))
-        : []
       const now = (deps.now ?? Date.now)()
       const recipeProcesses = read.kind === "ready" ? read.recipe.processes : {}
       const targetChecks = read.kind === "ready" ? Object.entries(read.recipe.targets ?? {}).flatMap(([name, target]) => (target.full === undefined ? [] : [[`full for ${name}`, "full", target.full] as const])) : []
@@ -1403,13 +1448,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         ]),
         prepare: read.kind === "ready" && read.recipe.prepare.length ? await prepareSummary(read.recipe, checkout) : undefined,
         packages: await packagesSummary(read, checkout),
+        shared: await sharedSummary(read, checkout),
+        writesThroughLinks: await linkWritesSummary(environment.app, read, checkout),
         room: await roomReport(environment.app, checkout),
         checks: checks.length ? Object.fromEntries(checks) : undefined,
-        credentials: secrets.length
-          ? granted.length === secrets.length
-            ? `The user allows ${secrets.join(", ")}, so worktrees get them from the main checkout. Never read them.`
-            : `${secrets.join(", ")} hold credentials, and the user hasn't allowed worktrees to have them yet (Settings, then Apps, in Mako). A worktree's app starts without them; say so if the app fails for want of them. Never copy or read them yourself.`
-          : undefined,
+        credentials: read.kind === "ready" ? credentialsSummary(read.recipe) : undefined,
       }
       return toolText(report)
     },
@@ -1432,12 +1475,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const steps = current.recipe.prepare.filter((step) => step.link)
       const linked = await linkedEntries(current.checkout, steps)
       if (!linked.length)
-        return "This checkout's packages are its own already (installed or cloned here, or this is the main checkout), so installing here touches nothing else. Install as you normally would."
+        return "This checkout's install outputs are its own already (installed or cloned here, or this is the main checkout), so installing here touches nothing else. Install as you normally would."
       const running = (await deps.processes.status(current.environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
       const owned = await ownPackages(current.checkout, steps)
       return [
-        `${owned.join(", ")} ${owned.length === 1 ? "is" : "are"} now this checkout's own: a copy of the main checkout's packages, so installing here no longer touches the main checkout. Install, add, remove or upgrade packages as you normally would.`,
-        running ? "The running app still has the old packages loaded; app_restart it after installing." : undefined,
+        `${owned.join(", ")} ${owned.length === 1 ? "is" : "are"} now this checkout's own: a copy of the main checkout's, so installing here no longer touches the main checkout. Install, add, remove or upgrade packages as you normally would.`,
+        running ? "The running app still has the old outputs loaded; app_restart it after installing." : undefined,
       ].filter(Boolean).join(" ")
     },
     async logs(conversationId, target, lines) {
@@ -1678,7 +1721,7 @@ async function recipeState(read: Read, app: AppKey): Promise<ProjectRecipeState>
         return check === undefined ? [] : [[tier, Array.isArray(check) ? check : [{ command: check }]]]
       })),
       prepare: recipe.prepare.map((step) => ({ command: step.command, inputs: step.inputs, outputs: step.outputs ?? [], link: step.link === true })),
-      carry: recipe.carry ?? [],
+      carry: (recipe.carry ?? []).map((entry) => ({ ...entry, credentials: holdsCredentials(entry.path) })),
       oneAtATime: recipe.oneAtATime ?? false,
     },
     versions: read.saved ? (await versionHistory(read.saved, app, HISTORY_LISTED)).entries : [],
@@ -1876,7 +1919,7 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     if (value !== undefined) found.set(path, JSON.stringify(value))
   }
   // A field added to the recipe fails to compile here until it's listed below.
-  const { $schema, values, processes, targets, checks, prepare, carry, secrets, oneAtATime, verify, cleanup, ...unlisted } = recipe
+  const { $schema, values, processes, targets, checks, prepare, carry, oneAtATime, verify, cleanup, ...unlisted } = recipe
   const none: Record<string, never> = unlisted
   void none
   put("$schema", $schema)
@@ -1923,8 +1966,7 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     put(`prepare[${index}].outputs`, outputs)
     put(`prepare[${index}].link`, link)
   })
-  put("carry", carry)
-  put("secrets", secrets)
+  for (const entry of carry ?? []) put(`carry[${JSON.stringify(entry.path)}]`, entry.link ? "linked" : "copied")
   put("oneAtATime", oneAtATime)
   putVerify("verify", verify)
   put("cleanup", cleanup)
@@ -2058,7 +2100,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_own_packages",
     {
       description:
-        "Call before you install, add, remove or upgrade any dependency when this checkout's packages link to the main checkout's (your instructions and app_status say when). An install over the links would write into the main checkout's packages; this gives the checkout its own copy of them in a few seconds, after which you install as usual. Mako does the same by itself before its own install step once the lockfile changes.",
+        "Call before you install, add, remove or upgrade any dependency when this checkout's install outputs, such as node_modules, link to the main checkout's (your instructions and app_status say when). An install over the links would write into the main checkout's; this gives the checkout its own copy in a few seconds, after which you install as usual. Mako does the same by itself before its own install step once the step's inputs change.",
       inputSchema: z.object({}).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -2094,7 +2136,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       description:
         "Save a new version of this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run. It's saved as a draft only this Thread runs, so you can iterate with app_restart and app_check; recipe_publish then proves it and publishes it to every Thread. Returns what changed. To go back to an earlier version, pass its number as version instead of a recipe (app_status lists the recent ones): its recipe becomes a new draft, proved again by recipe_publish like any other. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more.",
       inputSchema: z.object({
-        recipe: z.record(z.string(), z.unknown()).optional().describe("The whole recipe: values, processes, checks, prepare, and targets, verify, carry, secrets, cleanup and oneAtATime when it needs them."),
+        recipe: z.record(z.string(), z.unknown()).optional().describe("The whole recipe: values, processes, checks, prepare, and targets, verify, carry, cleanup and oneAtATime when it needs them."),
         version: z.number().int().positive().optional().describe("Instead of recipe: an earlier version's number, to save its recipe as a new draft."),
         reason: z.string().trim().min(1).max(REASON_MAX).describe("Why, in a line, for the project's version history, such as \"Run the API on its own port\", or for a version, why go back to it."),
       }).strict().refine((input) => (input.recipe === undefined) !== (input.version === undefined), "Pass a recipe or a version number, not both"),
@@ -2104,7 +2146,13 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       if (version !== undefined) return tools.restore(conversationId(), version, reason)
       const parsed = RecipeSchema.safeParse(recipe)
       if (!parsed.success) throw new Error(`Not saved: ${recipeIssues(parsed.error)}`)
-      return tools.save(conversationId(), parsed.data, reason)
+      const saving = withLinkDefault(parsed.data)
+      const defaulted = saving.prepare.filter((step, index) => step.link && parsed.data.prepare[index]!.link === undefined).map((step) => step.command)
+      return [
+        await tools.save(conversationId(), saving, reason),
+        recipe && "secrets" in recipe ? "secrets is now part of carry: its files are under carry, copied like any other. Write them in carry from now on." : undefined,
+        defaulted.length ? `${defaulted.join(", ")} didn't say whether to link ${defaulted.length === 1 ? "its" : "their"} outputs, so ${defaulted.length === 1 ? "it links them" : "they link them"}, Mako's default, and the saved version says "link": true.` : undefined,
+      ].filter(Boolean).join("\n")
     })
   )
   server.registerTool(

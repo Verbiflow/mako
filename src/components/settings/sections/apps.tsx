@@ -21,6 +21,8 @@ export const section = {
     "secrets",
     ".env",
     "environment",
+    "carry",
+    "linked",
   ],
   Component: AppsSection,
 } as const satisfies SettingsSection

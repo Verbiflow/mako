@@ -10,8 +10,8 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * A project's app setup against the production components and the fixture
  * desk: the Run control's right-click and its menu, the project's
  * right-click in the sidebar, and Settings › Apps (the list, a project set
- * up with credentials waiting, allowing them, one committed with the
- * project, one not set up). Screenshots of each, dark and light, stay in
+ * up with files copied, linked and holding credentials, one committed
+ * with the project, one not set up). Screenshots of each, dark and light, stay in
  * the printed directory.
  */
 
@@ -139,37 +139,31 @@ async function checkWindow() {
   await until(`document.querySelector('[data-app-control="stopped"]') !== null`, "the Run control rendered")
   await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 500 })
 
-  // 1. The Run control: a click runs it; a right-click offers Run app and the project's setup, with credentials waiting.
+  // 1. The Run control: a click runs it; a right-click offers Run app and the project's setup.
   await rightClick('[data-app-control="stopped"]')
   await until(`document.querySelector('[role="menu"] [data-app-action="app-setup"]') !== null`, "the Run control's right-click menu")
-  assert.deepEqual(await menuItems(), ["Run app", "App setupCredentials not copied"])
+  assert.deepEqual(await menuItems(), ["Run app", "App setup"])
   await both("run-right-click", ['[role="menu"]', '[data-app-control]'])
   await click('[role="menu"] [data-app-action="app-setup"]')
   await until(settingsOpen, "Settings opened on Apps")
   await until(`document.querySelector('[data-app-setup-action="change"]') !== null && document.body.textContent.includes('.env.local')`, "mako's app page")
   const page1 = await evaluate(`document.querySelector('[role="dialog"] main').innerText`)
-  for (const text of ["Runs", "web", "npm run web", "Thread port", "Checks", "Quick check", "Before it starts", "npm install", "Credentials", "Copy into each new Thread", ".env.local", "New Threads also get", "config/dev.local.json", "Values", "MAKO_HOME", "Saved in Mako", "3 earlier versions kept"])
+  for (const text of ["Runs", "web", "npm run web", "Thread port", "Checks", "Quick check", "Before it starts", "npm install", "New Threads also get", "Copied", "config/dev.local.json", ".env.local", "Linked to the main folder", "fixtures/recordings", "Every Thread uses the main folder’s", ".env.local holds credentials", "agents are told never to open it", "Values", "MAKO_HOME", "Version 4, saved in Mako", "3 earlier versions kept"])
     assert.ok(page1.includes(text), `the project's page shows ${text}:\n${page1}`)
-  assert.equal(await evaluate(`document.querySelector('[role="switch"]').getAttribute('aria-checked')`), "false")
+  assert.equal(await evaluate(`document.querySelector('[role="dialog"] main [role="switch"]')`), null, "nothing to allow: credentials are carried as the recipe says")
   await settingsPage("apps-mako")
 
-  // 2. Allowing the credentials: the switch, its sentence and the strip all follow.
-  await click('[role="switch"]')
-  await until(`document.querySelector('[role="switch"]').getAttribute('aria-checked') === 'true' && document.body.textContent.includes('allowed just now')`, "allowed")
-  assert.equal(await evaluate(`import('/src/state/thread-app.ts').then(({threadAppStore}) => threadAppStore.get().byCwd['/Users/you/mako'].credentialsWaiting ?? null)`), null, "the strip stops saying credentials wait")
-  await settingsPage("apps-mako-allowed")
-
-  // 3. Every project, with what state each is in.
+  // 2. Every project, with what state each is in.
   await click('[role="dialog"] main button:first-child')
   await until(`document.querySelectorAll('[data-app-project]').length >= 3`, "the list of projects")
   const rows = await evaluate(`Object.fromEntries([...document.querySelectorAll('[data-app-project]')].map(row => [row.dataset.appProject, row.innerText.replace(/\\s+/g, ' ').trim()]))`)
   assert.match(rows.mako, /web · 2 checks/)
-  assert.doesNotMatch(rows.mako, /Credentials not copied/, "allowed a moment ago")
+  assert.doesNotMatch(rows.mako, /Credentials/)
   assert.match(rows.api, /api, worker, temporal · 1 check/)
   assert.match(rows.site, /Not set up/)
   await settingsPage("apps-list")
 
-  // 4. A recipe committed with the project, with a fixed port and one copy at a time.
+  // 3. A recipe committed with the project, with a fixed port and one copy at a time.
   await click('[data-app-project="api"]')
   await until(`document.body.textContent.includes('One copy at a time')`, "api's page")
   const page2 = await evaluate(`document.querySelector('[role="dialog"] main').innerText`)
@@ -177,7 +171,7 @@ async function checkWindow() {
     assert.ok(page2.includes(text), `api's page shows ${text}:\n${page2}`)
   await settingsPage("apps-api")
 
-  // 5. Not set up: one button that starts it, naming the agent.
+  // 4. Not set up: one button that starts it, naming the agent.
   await click('[role="dialog"] main button:first-child')
   await until(`document.querySelector('[data-app-project="site"]') !== null`)
   await click('[data-app-project="site"]')
@@ -187,7 +181,7 @@ async function checkWindow() {
   await escape()
   await until(`!document.querySelector('[role="dialog"] main h2')`, "Settings closed")
 
-  // 6. The project's right-click in the sidebar opens the same page.
+  // 5. The project's right-click in the sidebar opens the same page.
   const header = `.thread-jump-scope [data-flip-key="folder:/Users/you/api"]`
   await until(`document.querySelector(${JSON.stringify(header)}) !== null`, "api's folder in the sidebar")
   await rightClick(header)
@@ -201,17 +195,17 @@ async function checkWindow() {
   await escape()
   await until(`!document.querySelector('[role="dialog"] main h2')`)
 
-  // 7. The running app's own menu ends with the same row.
+  // 6. The running app's own menu ends with the same row.
   await window.loadURL(`${base}?mock&app=running`)
   await until(`document.querySelector('[data-app-control="running"]') !== null`)
   await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 500 })
   await click('[data-app-control="running"]')
   await until(`document.querySelector('[role="menu"] [data-app-action="app-setup"]') !== null`, "the running app's menu")
   const running = await menuItems()
-  assert.equal(running.at(-1), "App setupCredentials not copied")
+  assert.equal(running.at(-1), "App setup")
   await both("running-menu", ['[role="menu"]', '[data-app-control]'])
 
   clearTimeout(watchdog)
-  console.log("App setup UI checks clean: Run control right-click and menu, project right-click, Settings › Apps (list, set up, credentials allowed, committed, not set up)")
+  console.log("App setup UI checks clean: Run control right-click and menu, project right-click, Settings › Apps (list, set up with copied, linked and credentials files, committed, not set up)")
   app.exit(0)
 }

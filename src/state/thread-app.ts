@@ -52,10 +52,8 @@ export interface ThreadAppDriver {
   watchRoom?(): () => void
   /** Stop each app, as its own Stop does. */
   stopApps?(apps: string[]): Promise<void>
-  /** A project's recipe written out, with its credentials files, for Settings. */
+  /** A project's recipe written out, for Settings. */
   setup?(root: string): Promise<ProjectAppSetup>
-  /** The person's answer on those files: new Threads get all of them, or none. */
-  allowSecrets?(root: string, allow: boolean): Promise<ProjectAppSetup>
   /** What the app touches outside its checkout and ports, as an agent's app_probe sees it. */
   probe?(cwd: string): Promise<AppProbeView>
 }

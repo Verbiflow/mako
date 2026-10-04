@@ -92,8 +92,6 @@ export type ThreadAppView =
        * Nobody hears it until they ask to run this one.
        */
       elsewhere?: string
-      /** The recipe names credentials files the person hasn't allowed new Threads to have yet. */
-      credentialsWaiting?: boolean
     }
 
 /** A list cut at the probe's limit, with how many it left out. */

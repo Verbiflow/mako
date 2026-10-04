@@ -211,7 +211,6 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadAppRoom: () => invokeTrustedHost<RoomView>("mako:thread-app-room"),
     stopThreadApps: (apps: string[]) => invokeTrustedHost<void>("mako:thread-app-stop-apps", apps),
     projectAppSetup: (cwd: string) => invokeTrustedHost<ProjectAppSetup>("mako:project-app-setup", cwd),
-    allowProjectSecrets: (cwd: string, allow: boolean) => invokeTrustedHost<ProjectAppSetup>("mako:project-app-secrets", cwd, allow),
     chatFolders: (paths: string[]) => invokeTrustedHost<ChatFolders>("mako:chat-folders", paths),
     removeWorktree: (path: string) => invokeTrustedHost<ThreadWorktrees>("mako:worktree-remove", path),
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),

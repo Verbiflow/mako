@@ -2,13 +2,12 @@ import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { constants, existsSync } from "node:fs"
 import { copyFile, cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path"
 import { promisify } from "node:util"
 import { belowAgents } from "./background-priority.js"
 import type { Prepared } from "./thread-processes.js"
-import { holdsCredentials } from "./recipe-secrets.js"
 import type { SpareInstall } from "./spare-install.js"
-import { inputsDigest, type PrepareStep, type Recipe } from "./thread-recipe.js"
+import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { git } from "./worktree-git.js"
 
 const execute = promisify(execFile)
@@ -44,8 +43,6 @@ const CLONE_TREES = `function run(argv) {
 export interface CheckoutSetup {
   /** The project's recipe, saved in Mako or committed, for what a new worktree takes from the main one. */
   recipe(checkout: string): Promise<Recipe | undefined>
-  /** The recipe's credentials files the person allows new worktrees to have. */
-  grantedSecrets?(checkout: string, recipe: Recipe | undefined): Promise<string[]>
   prepared(checkout: string): Promise<Prepared>
   savePrepared(checkout: string, prepared: Prepared): Promise<void>
   forgetPrepared?(checkout: string): Promise<void>
@@ -147,25 +144,41 @@ async function sharesBlocks(repoRoot: string, checkout: string): Promise<boolean
   }
 }
 
-/** In a package folder whose packages link to the main checkout's: where they link to. */
+/** In a linked folder of a checkout: the main checkout's folder its entries link to. */
 export const LINKED_MARK = ".mako-linked"
 
+/** A package folder, linked package by package; how npm, pnpm and Yarn lay one out, not a guess about the project. */
+function packageFolder(entry: string): boolean {
+  return basename(entry) === "node_modules"
+}
+
 /**
- * A package folder of this checkout's own whose packages link to the main
- * checkout's, in milliseconds. A link that leads back into the project,
- * such as a workspace package, is copied as it is, so it reaches this
- * checkout's own code; `.bin`'s relative links reach this folder's
- * packages the same way. Other dot entries are caches and the package
- * manager's own state (`.vite`, `.cache`, `.package-lock.json`), and stay
- * each checkout's. An install replaces a changed package's link with a
- * folder of its own, but writes through the link of a package that
- * depends on it, into the main checkout, so no install may run over the
- * links (`ownPackages`). Built at `at`, which is renamed to the entry
- * afterwards. Returns how many links it made.
+ * The main checkout's `entry` linked into `checkout`, in milliseconds: a
+ * file as one link to the main checkout's, a folder as a folder of this
+ * checkout's own whose entries link to the main checkout's, so whatever is
+ * made in it later stays this checkout's. A link in it that leads back
+ * into the project, such as a workspace package, is copied as it is, so it
+ * reaches this checkout's own code.
+ *
+ * A package folder links each package: scoped folders and `.bin`, whose
+ * relative links reach this folder's packages, are made here, and other
+ * dot entries are caches and the package manager's own state (`.vite`,
+ * `.cache`, `.package-lock.json`), which stay each checkout's. An install
+ * replaces a changed package's link with a folder of its own, but writes
+ * through the link of a package that depends on it, into the main
+ * checkout, so no install may run over the links (`ownPackages`).
+ *
+ * Built at `at`, which is renamed to the entry afterwards. Returns how
+ * many links it made.
  */
-export async function linkPackages(repoRoot: string, checkout: string, entry: string, at = join(checkout, entry)): Promise<number> {
+export async function linkEntry(repoRoot: string, checkout: string, entry: string, at = join(checkout, entry)): Promise<number> {
   const from = join(repoRoot, entry)
   const to = at
+  if (!(await lstat(from)).isDirectory()) {
+    await symlink(from, to)
+    return 1
+  }
+  const packages = packageFolder(entry)
   let links = 0
   const place = async (source: string, target: string, asIs: boolean) => {
     const info = await lstat(source)
@@ -183,10 +196,10 @@ export async function linkPackages(repoRoot: string, checkout: string, entry: st
   }
   await mkdir(to, { recursive: true })
   await Promise.all((await readdir(from)).map(async (name) => {
-    if (name === LINKED_MARK || (name.startsWith(".") && name !== ".bin")) return
+    if (name === LINKED_MARK || (packages && name.startsWith(".") && name !== ".bin")) return
     const source = join(from, name)
     const info = await lstat(source)
-    if (info.isDirectory() && (name === ".bin" || name.startsWith("@"))) {
+    if (packages && info.isDirectory() && (name === ".bin" || name.startsWith("@"))) {
       await mkdir(join(to, name))
       await Promise.all((await readdir(source)).map((inner) => place(join(source, inner), join(to, name, inner), name === ".bin")))
     } else await place(source, join(to, name), false)
@@ -195,19 +208,38 @@ export async function linkPackages(repoRoot: string, checkout: string, entry: st
   return links
 }
 
-/** Which of `steps`' package folders in `checkout` link to the main checkout's. */
-export async function linkedEntries(checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
-  const patterns = steps.filter((step) => step.link).flatMap((step) => step.outputs ?? [])
+/** The main checkout's entry that `entry` of a checkout links to, if Mako linked it: a folder with its mark, or a link to the same path there. */
+async function linkedTo(checkout: string, entry: string): Promise<string | undefined> {
+  const path = join(checkout, entry)
+  const info = await lstat(path).catch(() => undefined)
+  if (info?.isDirectory()) return (await readFile(join(path, LINKED_MARK), "utf8").catch(() => undefined))?.trim() || undefined
+  if (!info?.isSymbolicLink()) return undefined
+  const target = await readlink(path).catch(() => "")
+  return isAbsolute(target) && !inside(target, checkout) && target.endsWith(`${sep}${entry}`) ? target : undefined
+}
+
+/** Which entries `patterns` match in `checkout` link to the main checkout's. */
+export async function linkedPaths(checkout: string, patterns: readonly string[]): Promise<string[]> {
   if (!patterns.length) return []
   const entries = await matchedEntries(checkout, patterns)
-  return entries.filter((entry) => existsSync(join(checkout, entry, LINKED_MARK)))
+  return (await Promise.all(entries.map(async (entry) => ((await linkedTo(checkout, entry)) ? [entry] : [])))).flat()
+}
+
+/** Which of `steps`' outputs in `checkout` link to the main checkout's. */
+export function linkedEntries(checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
+  return linkedPaths(checkout, steps.filter((step) => step.link).flatMap((step) => step.outputs ?? []))
+}
+
+/** Which of the recipe's carry entries in `checkout` link to the main checkout's. */
+export function linkedCarry(checkout: string, recipe: Pick<Recipe, "carry">): Promise<string[]> {
+  return linkedPaths(checkout, (recipe.carry ?? []).filter((entry) => entry.link).map((entry) => entry.path))
 }
 
 /**
- * Each linked package folder in `checkout` made its own: a clone of the
- * main checkout's, swapped in whole, so an install can run there. Where
- * the volume can't clone, or the main checkout's folder is gone, the
- * links go and the install makes the folder in full. Returns the entries.
+ * Each linked output in `checkout` made its own: a clone of the main
+ * checkout's, swapped in whole, so an install can run there. Where the
+ * volume can't clone, or the main checkout's copy is gone, the links go
+ * and the install makes it in full. Returns the entries.
  */
 export async function ownPackages(checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
   const entries = await linkedEntries(checkout, steps)
@@ -216,7 +248,7 @@ export async function ownPackages(checkout: string, steps: readonly PrepareStep[
   await mkdir(staging, { recursive: true, mode: 0o700 })
   const staged = await Promise.all(entries.map(async (entry) => {
     const to = join(checkout, entry)
-    const from = (await readFile(join(to, LINKED_MARK), "utf8")).trim()
+    const from = (await linkedTo(checkout, entry))!
     return { entry, from, to, clone: join(staging, randomUUID()), links: join(staging, randomUUID()) }
   }))
   const present = staged.filter(({ from }) => existsSync(from))
@@ -231,24 +263,93 @@ export async function ownPackages(checkout: string, steps: readonly PrepareStep[
   return entries
 }
 
+/**
+ * A linked carry entry made this checkout's own, keeping whatever was made
+ * in it here: each link to the main checkout's replaced by a clone of what
+ * it reaches. Returns whether it was linked.
+ */
+export async function ownLinked(checkout: string, entry: string): Promise<boolean> {
+  const from = await linkedTo(checkout, entry)
+  if (!from) return false
+  const to = join(checkout, entry)
+  const staging = join(dirname(checkout), CARRYING)
+  await mkdir(staging, { recursive: true, mode: 0o700 })
+  const links: Array<{ source: string; link: string }> = []
+  const folder = !(await lstat(to)).isSymbolicLink()
+  if (!folder) links.push({ source: from, link: to })
+  else {
+    const collect = async (inner: string, depth: number) => {
+      for (const name of await readdir(join(to, inner))) {
+        const link = join(to, inner, name)
+        const info = await lstat(link)
+        const source = join(from, inner, name)
+        if (info.isSymbolicLink() && (await readlink(link)) === source) links.push({ source, link })
+        else if (info.isDirectory() && depth === 0 && packageFolder(entry) && name.startsWith("@")) await collect(name, 1)
+      }
+    }
+    await collect("", 0)
+  }
+  // A link whose main checkout entry is gone leads nowhere; it goes.
+  for (const { source, link } of links) if (!existsSync(source)) await rm(link, { force: true })
+  const staged = links.filter(({ source }) => existsSync(source)).map((item) => ({ ...item, clone: join(staging, randomUUID()) }))
+  const cloned = staged.length ? await cloneTrees(staged.map(({ source, clone }) => [source, clone]), false) : []
+  for (const [index, { source, link, clone }] of staged.entries()) {
+    if (!cloned[index]) await cp(source, clone, { recursive: true, verbatimSymlinks: true })
+    await rename(clone, link)
+  }
+  if (folder) await rm(join(to, LINKED_MARK), { force: true })
+  return true
+}
+
 function inside(path: string, root: string): boolean {
   const inner = relative(root, path)
   return inner === "" || (!inner.startsWith("..") && !isAbsolute(inner))
 }
 
+/** `entry` of the main checkout linked into `checkout`, built beside it and renamed in, so a reader sees all of it or none. */
+async function placeLink(repoRoot: string, checkout: string, entry: string): Promise<void> {
+  const staging = join(dirname(checkout), CARRYING)
+  await mkdir(staging, { recursive: true, mode: 0o700 })
+  const temporary = join(staging, randomUUID())
+  try {
+    await linkEntry(repoRoot, checkout, entry, temporary)
+    await mkdir(dirname(join(checkout, entry)), { recursive: true })
+    await rename(temporary, join(checkout, entry))
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true })
+    throw error
+  }
+}
+
+/** Entries `entries` match in the main checkout, each copied or linked; one a linking entry matches links. */
+async function carriedEntries(repoRoot: string, entries: readonly CarryEntry[]): Promise<Map<string, boolean>> {
+  const wanted = entries
+  const [linked, copied] = await Promise.all([
+    matchedEntries(repoRoot, wanted.filter((entry) => entry.link).map((entry) => entry.path)),
+    matchedEntries(repoRoot, wanted.filter((entry) => !entry.link).map((entry) => entry.path)),
+  ])
+  return new Map([...copied.map((entry) => [entry, false] as const), ...linked.map((entry) => [entry, true] as const)])
+}
+
 /**
  * The files the recipe's `carry` names, from the main checkout, before the
- * agent starts. Entries the checkout already has are left alone, so a retry
- * never overwrites what the Thread's agent wrote. Returns how many came.
+ * agent starts: copied, or linked to the main checkout's. Entries the
+ * checkout already has are left alone, so a retry never overwrites what the
+ * Thread's agent wrote. Returns how many came.
  */
-export async function carryFiles(repoRoot: string, checkout: string, patterns: readonly string[]): Promise<number> {
+export async function carryFiles(repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<number> {
   let copied = 0
-  for (const entry of await matchedEntries(repoRoot, patterns)) {
+  for (const [entry, link] of await carriedEntries(repoRoot, entries)) {
     const from = join(repoRoot, entry)
     const to = join(checkout, entry)
     if (await lstat(to).catch(() => undefined)) continue
     const info = await lstat(from).catch(() => undefined)
     if (!info || (info.isDirectory() && virtualEnvironment(from))) continue
+    if (link) {
+      await placeLink(repoRoot, checkout, entry)
+      copied += 1
+      continue
+    }
     await mkdir(dirname(to), { recursive: true })
     if (info.isSymbolicLink() && holdsCredentials(entry)) await copyFile(from, to, constants.COPYFILE_EXCL)
     else if (info.isSymbolicLink()) await symlink(await readlink(from), to)
@@ -276,13 +377,19 @@ export interface BringEntry {
 export interface BringReport {
   copied: string[]
   linked: string[]
+  /** Linked before, now this worktree's own copies. */
+  owned: string[]
   existing: string[]
   missing: string[]
 }
 
-/** One-off ignored files, with no value reads and no replacement of the worktree's own files. */
-export async function bringFiles(repoRoot: string, checkout: string, entries: readonly BringEntry[], granted: readonly string[]) {
-  const report: BringReport = { copied: [], linked: [], existing: [], missing: [] }
+/**
+ * Ignored files from the main checkout, with no value reads and no
+ * replacement of the worktree's own files. Copying an entry that's linked
+ * makes it the worktree's own, keeping what was made in it here.
+ */
+export async function bringFiles(repoRoot: string, checkout: string, entries: readonly BringEntry[]) {
+  const report: BringReport = { copied: [], linked: [], owned: [], existing: [], missing: [] }
   const selected = new Map<string, boolean>()
   for (const request of entries) {
     const matches = await matchedEntries(repoRoot, [request.path])
@@ -297,19 +404,20 @@ export async function bringFiles(repoRoot: string, checkout: string, entries: re
     const source = await realpath(join(repoRoot, path))
     if (!inside(source, repoRoot)) throw new Error(`${path} points outside the main checkout, so it wasn't brought.`)
     if (virtualEnvironment(source)) throw new Error(`${path} is a Python virtual environment. Run its install step in this worktree instead.`)
-    const files = (await git(repoRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", path])).split("\0").filter(Boolean)
-    const credentials = [path, relative(repoRoot, source), ...files].filter((file) => holdsCredentials(file) && !granted.some((pattern) => matchesGlob(file, pattern)))
-    if (credentials.length) throw new Error(`${credentials[0]} holds credentials the user hasn't allowed this worktree to have. List it under recipe secrets and allow it in Mako's App setup; nobody reads its values.`)
     let parent = dirname(join(checkout, path))
     while (!(await lstat(parent).catch(() => undefined))) parent = dirname(parent)
     if (!inside(await realpath(parent), checkout)) throw new Error(`${path}'s destination points outside this worktree, so it wasn't brought.`)
   }
   for (const [path, link] of selected) {
     const to = join(checkout, path)
-    if (await lstat(to).catch(() => undefined)) { report.existing.push(path); continue }
+    if (await lstat(to).catch(() => undefined)) {
+      if (!link && (await ownLinked(checkout, path))) report.owned.push(path)
+      else report.existing.push(path)
+      continue
+    }
     await mkdir(dirname(to), { recursive: true })
     if (link) {
-      await symlink(relative(dirname(to), join(repoRoot, path)), to)
+      await placeLink(repoRoot, checkout, path)
       report.linked.push(path)
     } else {
       // Env files that happen to be symlinks still become independent copies.
@@ -362,12 +470,12 @@ export async function carryOutputs(repoRoot: string, checkout: string, steps: re
     const staged = wanted.map((entry) => ({ entry, from: join(repoRoot, entry), to: join(checkout, entry), temporary: join(staging, randomUUID()) }))
     const entries: string[] = []
     if (step.link) {
-      // The links are the main checkout's packages, so there's nothing for the step to catch up on until the inputs change.
+      // The links are the main checkout's outputs, so there's nothing for the step to catch up on until the inputs change.
       if (staged.length) await mkdir(staging, { recursive: true, mode: 0o700 })
       for (const { entry, to, temporary } of staged) {
         try {
           await mkdir(dirname(to), { recursive: true })
-          await linkPackages(repoRoot, checkout, entry, temporary)
+          await linkEntry(repoRoot, checkout, entry, temporary)
           await rename(temporary, to)
           entries.push(entry)
         } catch {
@@ -407,54 +515,176 @@ export async function carryOutputs(repoRoot: string, checkout: string, steps: re
   return result
 }
 
+/** Committed, value-free templates of an env file. */
+const ENV_TEMPLATE = /^\.env\.(example|sample|template|defaults|dist)$/
+
+/** Whether a file holds credentials by its name: env files, key files and the dotfiles that keep registry or database passwords. */
+export function holdsCredentials(entry: string): boolean {
+  const name = basename(entry).toLowerCase()
+  if (ENV_TEMPLATE.test(name)) return false
+  return name === ".env" || name.startsWith(".env.") || [".envrc", ".npmrc", ".netrc", ".pgpass"].includes(name)
+    || /\.(pem|key|p12|pfx|jks|keystore)$/.test(name) || /credential|secret/.test(name)
+}
+
+/** What `clonefile` manages (85,331 files in 1.4 s, above): what a cloned folder costs each new worktree. */
+const CLONED_FILES_PER_SECOND = 60_000
+/** A copied folder that costs each new worktree this long is worth a word about linking it. */
+const WORTH_LINKING_MS = 1_000
+/** How long a save waits to count what it copies; past it, the report leaves the numbers out. */
+const COUNT_MS = 5_000
+
+interface Size {
+  files: number
+  bytes?: number
+}
+
+/** How many files the main checkout's `entries` hold and their size, or nothing once counting takes longer than `COUNT_MS`. */
+async function sizeOf(repoRoot: string, entries: readonly string[]): Promise<Size | undefined> {
+  const paths = entries.map((entry) => join(repoRoot, entry))
+  const deadline = Date.now() + COUNT_MS
+  const counting = (async () => {
+    let files = 0
+    const folders: string[] = []
+    for (const path of paths) {
+      const info = await lstat(path).catch(() => undefined)
+      if (info?.isDirectory()) folders.push(path)
+      else if (info) files += 1
+    }
+    while (folders.length) {
+      if (Date.now() > deadline) return undefined
+      const batch = folders.splice(0, 64)
+      for (const [index, found] of (await Promise.all(batch.map((folder) => readdir(folder, { withFileTypes: true }).catch(() => [])))).entries()) {
+        for (const item of found) {
+          if (item.isDirectory()) folders.push(join(batch[index]!, item.name))
+          else files += 1
+        }
+      }
+    }
+    return files
+  })()
+  const sizing = execute("du", ["-skc", ...paths], { timeout: COUNT_MS })
+    .then(({ stdout }) => Number(stdout.trim().split("\n").at(-1)?.split("\t")[0]) * 1024, () => undefined)
+  const [files, bytes] = await Promise.all([counting, sizing])
+  if (files === undefined) return undefined
+  return bytes !== undefined && Number.isFinite(bytes) ? { files, bytes } : { files }
+}
+
+function sizeText(size: Size): string {
+  const files = `${size.files.toLocaleString("en-US")} ${size.files === 1 ? "file" : "files"}`
+  if (size.bytes === undefined) return files
+  const bytes = size.bytes >= 1e9 ? `${(size.bytes / 1e9).toFixed(1)} GB` : size.bytes >= 1e6 ? `${Math.round(size.bytes / 1e6)} MB` : `${Math.max(1, Math.round(size.bytes / 1e3))} KB`
+  return `${files}, ${bytes}`
+}
+
+function cloneText(size: Size): string {
+  const ms = (size.files / CLONED_FILES_PER_SECOND) * 1000
+  return ms < WORTH_LINKING_MS ? "under a second" : `about ${(ms / 1000).toFixed(1)} s`
+}
+
+/** Whether Git tracks anything `pattern` names in the main checkout. */
+async function tracked(repoRoot: string, pattern: string): Promise<boolean> {
+  const spec = /[*?[\]{}]/.test(pattern) ? `:(glob)${pattern}` : pattern
+  return (await git(repoRoot, ["ls-files", "-z", "--", spec]).catch(() => "")).length > 0
+}
+
 /**
- * What a recipe's `carry`, `secrets` and `outputs` find in the main
- * checkout, one sentence each, for the agent saving it. A Python virtual
- * environment in carry or outputs is refused, since a copy of one quietly
- * runs the main checkout's; so is a credentials file in carry, which
- * belongs under `secrets` for the person to allow. `granted` is what the
- * person allows of the secrets now.
+ * What a recipe's `carry` and `outputs` find in the main checkout, for the
+ * agent saving it: what each new worktree gets, what that costs, and what
+ * links share. A Python virtual environment is refused, since a copy of one
+ * quietly runs the main checkout's; so is a link to files Git tracks, which
+ * every checkout has on its own branch.
  */
-export async function carryReport(recipe: Recipe, repoRoot: string, granted: readonly string[] = []): Promise<string[]> {
+export async function carryReport(recipe: Recipe, repoRoot: string): Promise<string[]> {
   const listed = (entries: string[]) => entries.length > 6 ? `${entries.slice(0, 6).join(", ")} and ${entries.length - 6} more` : entries.join(", ")
+  const isAre = (entries: readonly unknown[]) => (entries.length === 1 ? "is" : "are")
   const refuse = (entries: string[]) => {
     const unsafe = entries.filter((entry) => virtualEnvironment(join(repoRoot, entry)))
     if (unsafe.length)
       throw new Error(`Not saved: ${listed(unsafe)} ${unsafe.length === 1 ? "is a Python virtual environment, which names its own folder" : "are Python virtual environments, which name their own folders"}, so a copy would run the main checkout's packages. Leave it out of carry and outputs; the install step (such as uv sync) makes one in each checkout.`)
   }
   const lines: string[] = []
-  if (recipe.carry?.length) {
-    const entries = await matchedEntries(repoRoot, recipe.carry)
-    const credentials = [...new Set([...recipe.carry, ...entries].filter(holdsCredentials))]
+  const wanted = recipe.carry ?? []
+  if (wanted.length) {
+    const entries = await carriedEntries(repoRoot, recipe.carry ?? [])
+    refuse([...entries.keys()])
+    for (const { path } of wanted.filter((entry) => entry.link)) {
+      if ([...entries.keys()].some((entry) => entry === path || matchesGlob(entry, path))) continue
+      if (await tracked(repoRoot, path))
+        throw new Error(`Not saved: carry links ${path}, which Git tracks, so every checkout has its own on its own branch, and a link would put this Thread's edits in the main checkout's. Mako links only files Git ignores. Leave it out of carry; to read the main checkout's copy, read it at ${join(repoRoot, path)}.`)
+    }
+    const copies = [...entries].filter(([, link]) => !link).map(([entry]) => entry)
+    const links = [...entries].filter(([, link]) => link).map(([entry]) => entry)
+    const unmatched = wanted.filter(({ path }) => ![...entries.keys()].some((entry) => entry === path || matchesGlob(entry, path))).map(({ path }) => path)
+    if (copies.length) lines.push(`A new worktree gets copies of these from the main checkout before its agent starts: ${listed(copies)}.`)
+    const folders = (await Promise.all(copies.map(async (entry) => ((await lstat(join(repoRoot, entry)).catch(() => undefined))?.isDirectory() ? [entry] : [])))).flat()
+    for (const [index, size] of (await Promise.all(folders.map((entry) => sizeOf(repoRoot, [entry])))).entries()) {
+      if (!size || (size.files / CLONED_FILES_PER_SECOND) * 1000 < WORTH_LINKING_MS) continue
+      lines.push(`${folders[index]} is ${sizeText(size)}, and copying it costs each new worktree ${cloneText(size)}. If nothing the app or an agent runs writes into it, {"path": "${folders[index]}", "link": true} shares the main checkout's instead, at once.`)
+    }
+    if (links.length)
+      lines.push(`A new worktree links ${listed(links)} to the main checkout's instead of copying ${links.length === 1 ? "it" : "them"}, so a write into ${links.length === 1 ? "it" : "one"} changes the main checkout's for every Thread. recipe_publish fails if anything writes through the links while it proves the recipe; set "link": false on what the app or an agent writes into.`)
+    const credentials = [...entries.keys()].filter(holdsCredentials)
     if (credentials.length)
-      throw new Error(`Not saved: ${listed(credentials)} ${credentials.length === 1 ? "holds credentials by its name, so it goes" : "hold credentials by their names, so they go"} under "secrets", not "carry". The user allows secrets in Mako, and new worktrees get them only then; nobody reads them.`)
-    refuse(entries)
-    lines.push(entries.length
-      ? `A new worktree gets these from the main checkout before its agent starts: ${listed(entries)}.`
-      : `carry: nothing Git ignores in the main checkout (${repoRoot}) matches ${recipe.carry.join(", ")} yet; files Git tracks come with every checkout anyway.`)
-  }
-  if (recipe.secrets?.length) {
-    const entries = await matchedEntries(repoRoot, recipe.secrets)
-    refuse(entries)
-    const waiting = recipe.secrets.filter((pattern) => !granted.includes(pattern))
-    if (!entries.length)
-      lines.push(`secrets: nothing Git ignores in the main checkout (${repoRoot}) matches ${recipe.secrets.join(", ")} yet.`)
-    else if (!waiting.length)
-      lines.push(`The user allows these credentials files, so a new worktree gets them from the main checkout before its agent starts: ${listed(entries)}.`)
-    else
-      lines.push(`These hold credentials: ${listed(entries)}. A new worktree gets them only once the user allows it in Mako (Settings, then Apps, then this project); until then, worktrees start without them. Tell the user, in a sentence, which files they are, what the app needs them for, and that they can allow them there. Never ask the user to paste a value.`)
+      lines.push(`${listed(credentials)} ${credentials.length === 1 ? "holds credentials by its name" : "hold credentials by their names"}: Mako brings ${credentials.length === 1 ? "it" : "them"} as ${credentials.length === 1 ? "it is" : "they are"}. Never open, print or copy ${credentials.length === 1 ? "it" : "them"} yourself, and never ask the user to paste a value.`)
+    if (unmatched.length)
+      lines.push(`carry: nothing Git ignores in the main checkout (${repoRoot}) matches ${unmatched.join(", ")} yet; files Git tracks come with every checkout anyway.`)
   }
   for (const step of recipe.prepare) {
     if (!step.outputs?.length) continue
     const entries = await matchedEntries(repoRoot, step.outputs)
     refuse(entries)
-    lines.push(entries.length
-      ? step.link
-        ? `${step.command}: a new worktree's ${listed(entries)} link each package to the main checkout's when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there, so it starts without installing. Prove the app runs on them with app_restart and app_check "full"; if it doesn't, leave link out.`
-        : `${step.command}: ${listed(entries)} ${entries.length === 1 ? "is" : "are"} cloned into a new worktree when ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "is" : "are"} the same there.`
-      : `${step.command}: nothing Git ignores in the main checkout matches ${step.outputs.join(", ")} yet; once the step has run there, new worktrees get them.`)
+    const when = `when ${step.inputs.join(", ")} ${isAre(step.inputs)} the same there`
+    if (!entries.length) lines.push(`${step.command}: nothing Git ignores in the main checkout matches ${step.outputs.join(", ")} yet; once the step has run there, new worktrees get them.`)
+    else if (step.link)
+      lines.push(`${step.command}: a new worktree's ${listed(entries)} link each entry to the main checkout's ${when}, so it starts without running the step. Nothing may write into them: Mako gives the worktree its own copy before the step runs there, and recipe_publish fails if anything else writes through the links while it proves the recipe. Set "link": false for outputs the app or its builds write into, such as a build cache, or that a tool won't follow out of the project; app_restart and app_check "full" show the app runs on them.`)
+    else {
+      const size = await sizeOf(repoRoot, entries)
+      lines.push(`${step.command}: ${listed(entries)}${size ? ` (${sizeText(size)})` : ""} ${isAre(entries)} cloned into a new worktree ${when}${size ? `, ${cloneText(size)} each time` : ""}.`)
+    }
   }
   return lines
+}
+
+/** What a worktree's links reach in the main checkout: each entry the recipe links, and whether it's a folder. */
+export interface LinkReach {
+  root: string
+  entries: { entry: string; folder: boolean }[]
+}
+
+export async function linkReach(repoRoot: string, recipe: Recipe): Promise<LinkReach> {
+  const root = await realpath(repoRoot).catch(() => repoRoot)
+  const patterns = [
+    ...(recipe.carry ?? []).filter((entry) => entry.link).map((entry) => entry.path),
+    ...recipe.prepare.filter((step) => step.link).flatMap((step) => step.outputs ?? []),
+  ]
+  const entries = await Promise.all((await matchedEntries(repoRoot, patterns)).map(async (entry) => {
+    const info = await lstat(join(root, entry)).catch(() => undefined)
+    return info && !virtualEnvironment(join(root, entry)) ? [{ entry, folder: info.isDirectory() }] : []
+  }))
+  return { root, entries: entries.flat() }
+}
+
+/** Where to read the file system's history for writes into what the links reach. */
+export function reachRoots(reach: LinkReach): string[] {
+  return reach.entries.map(({ entry }) => join(reach.root, entry))
+}
+
+/**
+ * Of the paths the file system's history says changed, those in what a
+ * worktree's links reach in the main checkout, relative to it: written
+ * through a link, or in the main checkout where every linked worktree sees
+ * it. What each checkout keeps its own doesn't count: a linked folder's
+ * mark, and a package folder's caches and package manager state.
+ */
+export function throughLinks(reach: LinkReach, paths: readonly string[]): string[] {
+  const found = paths.filter((path) => reach.entries.some(({ entry, folder }) => {
+    const inner = relative(join(reach.root, entry), path)
+    if (inner.startsWith("..") || isAbsolute(inner)) return false
+    if (!folder) return inner === ""
+    const [first] = inner.split(sep)
+    return Boolean(first) && first !== LINKED_MARK && !(packageFolder(entry) && first!.startsWith("."))
+  }))
+  return [...new Set(found.map((path) => relative(reach.root, path)))].sort()
 }
 
 /**

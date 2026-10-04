@@ -68,8 +68,7 @@ Pass it to recipe_save as the recipe, with a one-line reason. Mako checks it aga
   },
   "checks": { "quick": "npm run typecheck && npm test", "full": "npm run e2e" },
   "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"], "outputs": ["**/node_modules"] }],
-  "carry": ["config/dev.local.json"],
-  "secrets": [".env.local", "server/.env"],
+  "carry": ["config/dev.local.json", ".env.local", "server/.env", { "path": "fixtures/recordings", "link": true }],
   "verify": { "check": "Open {url}, sign in with the seeded user, and see the inbox list load." }
 }
 \`\`\`
@@ -98,16 +97,20 @@ The fields:
 - prepare: install in a new worktree, and catch up after the branch moves. Each step runs again only when one of its inputs changes. Only add it if a new worktree can't start without it.
   - Use the command a developer runs after pulling, in the project's own tool: npm install, pnpm install, bun install, uv sync, bundle install, cargo fetch. Never a clean reinstall (npm ci, or deleting what it installs first): it throws away what a new worktree was given.
   - inputs: the files the step reads, usually the lockfiles. A folder counts only the files Git tracks or would track there.
-  - outputs: what the step writes, as paths or patterns (* stays in one folder, ** crosses folders), such as **/node_modules. A new worktree gets them cloned from the main checkout when its inputs are the same there, which costs no disk and takes a second or two, so its first install only catches up. List only what still works in another folder. Never a Python virtual environment (.venv): it names its own folder, so a copy quietly runs the main checkout's code, and Mako refuses it; uv sync makes one from its cache in well under a second anyway. A build cache that checks itself works: with Rust's target/ cloned in, Cargo keeps the dependencies and rebuilds only the project's own crates.
-  - link: package folders (outputs that are all node_modules, such as **/node_modules) are linked by default. A new worktree's node_modules is then a folder of its own whose packages link to the main checkout's: under a second instead of a clone of every file, which for a large project is several seconds and hundreds of thousands of files per Thread. The project's own packages (npm, pnpm or Yarn workspaces) and caches such as .vite stay the worktree's own. If the app doesn't start or the full check fails because a bundler refuses packages that live outside the project, such as Next.js with Turbopack ("couldn't find the Next.js package"), set "link": false to clone them instead.
-  - With link, an install must never run over the links, since it writes through them into the main checkout's packages. Mako gives the worktree its own copy before its own prepare step runs, and an agent calls app_own_packages before installing or changing a dependency; every agent in such a worktree is told.
-- carry: files Git ignores that a worktree gets copied from the main checkout before its agent starts, such as a local settings file. Existing worktrees catch up at their next app start or check; their own files are never overwritten. Paths or patterns. Never credentials: recipe_save refuses a file that holds them by its name, such as .env, and says to list it under secrets.
-- secrets: files Git ignores that hold credentials, such as .env.local or server/.env. A worktree gets them from the main checkout only once the user allows it in Mako, where they see the list; until then, worktrees' apps start without them. Nobody reads them, you included.
+  - outputs: what the step writes, as paths or patterns (* stays in one folder, ** crosses folders), such as **/node_modules. A new worktree gets them from the main checkout when its inputs are the same there, so the step doesn't need to run, or only catches up. List only what still works in another folder. Never a Python virtual environment (.venv): it names its own folder, so a copy quietly runs the main checkout's code, and Mako refuses it; uv sync makes one from its cache in well under a second anyway.
+  - link: outputs link by default, and recipe_save writes "link": true for a step that doesn't say. A new worktree's output folder is then a folder of its own whose entries link to the main checkout's: under a second, where a clone of every file takes about a second per 60,000 files, per Thread. A node_modules folder links package by package, and the project's own packages (npm, pnpm or Yarn workspaces) and caches such as .vite stay the worktree's own.
+  - Nothing may write into linked outputs, since a write goes through the links into the main checkout's, for every Thread. Mako gives the worktree its own copy before its own prepare step runs there, and an agent calls app_own_packages before installing or changing a dependency; every agent in such a worktree is told. Set "link": false, so each worktree gets a clone of its own, for outputs that something writes into after the step: a build cache such as Rust's target/ or Next's .next, which every build rewrites (Cargo keeps a cloned target/'s dependencies and rebuilds only the project's crates). Set it too for packages a tool won't follow out of the project, such as Next.js with Turbopack ("couldn't find the Next.js package"). recipe_publish fails when anything writes through a link while it proves the recipe, and names what changed.
+- carry: files and folders Git ignores that a worktree gets from the main checkout before its agent starts: a local settings file, env files such as .env.local or server/.env, a folder of fixtures or models. Paths or patterns.
+  - Each is copied, so the worktree has its own to change as it likes. That's right for anything a Thread may write, such as a settings or env file.
+  - { "path": "fixtures/recordings", "link": true } links it instead: the worktree uses the main checkout's, so it costs nothing however large it is, and a write into it changes the main checkout's for every Thread. Link only what nothing writes into: not the app, its tests, or an agent. recipe_save counts each copied folder and says when linking it would save each new worktree time; recipe_publish fails when anything writes through a link while it proves the recipe.
+  - Only files Git ignores. Everything Git tracks comes with every checkout, on its own branch, so recipe_save refuses to link it; to read the main checkout's copy of a tracked file, read it at the main checkout's path.
+  - Env and key files are carried like any other file; Mako brings them as they are, and nobody opens them, you included (section 6).
+  - Existing worktrees catch up at their next app start or check, and their own files are never overwritten.
 - oneAtATime: true for an app whose fixed port, local database or Docker stack copies can't split (rung 4 above).
 - verify: how a new version of the recipe is proven before every Thread gets it (section 5). The recipe's own, or one per target.
 - cleanup: a command that undoes what a Thread's app leaves outside its checkout, run in the worktree with the Thread's values when the worktree is removed: its containers' volumes (docker compose down -v, with COMPOSE_PROJECT_NAME set to {thread}), its own database (dropdb), its simulator device. Only what's the Thread's own; never anything shared. A stop needs no cleanup: Mako stops every process the app started.
-- Nothing else comes from the main checkout: without carry, secrets and outputs, a new worktree has only what Git checks out.
-- worktree_status lists ignored paths in the originating main checkout, without reading their values. worktree_bring copies carry and approved secrets into this Thread's existing worktree now, or takes entries such as [{"path":"config/dev.local.json"}] for a one-off need without changing the recipe. Copies are independent, including env files; an entry with "link": true explicitly shares it with the main checkout. Existing files stay untouched. Credentials still need the user's App setup grant. Use prepare outputs for dependency folders that need matching inputs.
+- Nothing else comes from the main checkout: without carry and outputs, a new worktree has only what Git checks out.
+- worktree_status lists ignored paths in the originating main checkout, without reading their values. worktree_bring brings the recipe's carry into this Thread's existing worktree now, or takes entries such as [{"path":"config/dev.local.json"}] for a one-off need without changing the recipe; "link": true shares one with the main checkout instead. Bringing an entry that's linked here without link makes it this worktree's own, so you can change it here alone; other existing files stay untouched. Use prepare outputs for dependency folders that need matching inputs.
 
 Keep it small, and name the project's own scripts. Add a script to the project only when none exists. Nothing Mako-specific goes inside a command, so every command still works without Mako.
 
@@ -117,7 +120,7 @@ Publishing reaches every Thread of the project, including ones on other branches
 
 Never run the app with & or nohup in your own shell. Use the tools, so it stays this Thread's. That's for the app's own processes. A helper server only a test needs is started and stopped by that test, not added to the recipe.
 
-1. Call app_status: the recipe is ready, and the values resolved as you meant. If it has carry or outputs, saving it said what each found in the main checkout; check that's what you meant.
+1. Call app_status: the recipe is ready, and the values resolved as you meant. If it has carry or outputs, saving it said what each found in the main checkout, what copying it costs each new worktree, and what links share; check that's what you meant, and link or copy as it suggests where nothing writes, or where something does.
 2. Call app_start: every process is running, on its port if it has one. If one isn't, call app_logs, fix the cause, and try again.
 3. Show that this copy is the one running. An app with a URL: fetch it at MAKO_THREAD_URL, or at 127.0.0.1 on its port, from your shell, and check that it's this copy answering, such as the page title or a health endpoint. An app without one, such as a desktop or mobile app, a terminal program or a worker: its log (app_logs) shows it started with this Thread's values, such as its data folder, or look at it through Mako's computer control.
 4. Show it keeps out of the way, with app_probe while it runs:
@@ -167,15 +170,15 @@ Several services can share one server this way. A queue or workflow server (Temp
 
 Every project that reads credentials gets the same treatment:
 
-1. List them under secrets, by file, never in carry and never by value.
+1. List them in carry, by file and never by value, copied rather than linked, so a Thread that changes one changes only its own. Mako copies them into each new worktree; never open, print or copy one yourself.
 2. If the project can also run without them (a local, isolated or mock mode), say so and ask the user which every Thread should run: with the credentials copied in, against what they reach, or without them.
-3. Tell the user they allow the files in Mako, under Settings, then Apps. Never ask them to paste a value, and never copy a file yourself.
+3. If a file the app needs is missing from the main checkout, name it and the variables it needs, and ask the user to create it there. Never ask them to paste a value.
 
 ## 7. Stop and ask
 
 Ask before any of these:
 
-- A secret: never read .env values or any file under secrets. Name the file or variable the app needs; the user allows the file in Mako or supplies the value.
+- A secret: never read .env values or any credentials file. Name the file or variable the app needs; the user puts it in the main checkout's file.
 - A paid service.
 - A change bigger than a small one.
 - sudo, or installing anything globally.
@@ -188,7 +191,8 @@ Never write to production data, delete data, or stop a process you didn't start.
 2. Tell the user in full, plain sentences, not fragments, someone who hasn't read the code:
    - what every Thread now gets;
    - what stays shared, and the rule for it; each database's pattern;
-   - the credentials files, what the app needs them for, and that they allow them in Settings, then Apps;
+   - the credentials files every Thread gets copied, and what the app needs them for;
+   - anything linked rather than copied, and why nothing writes there;
    - each change to the project, which rung it used, and what it buys; fixes to things that were already broken, separately;
    - the proof: the version published, the processes that ran and their ports, and how it was verified.
 3. If you changed the project, say that other branches run the recipe without that change until it's merged, and what that means for them, such as two copies still sharing one port. Offer to merge or open a pull request; the user decides.

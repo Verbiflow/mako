@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Actor } from "../electron/contracts/thread-identity.js"
@@ -10,8 +10,7 @@ import { inputsDigest, RecipeSchema, type Recipe } from "../electron/thread-reci
 import { ThreadStore } from "../electron/thread-store.js"
 import { worktreeSlug } from "../electron/contracts/thread-worktrees.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
-import { carryOutputs, carryReport, type CheckoutSetup, outputNames } from "../electron/worktree-carry.js"
-import { holdsCredentials } from "../electron/recipe-secrets.js"
+import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "../electron/worktree-carry.js"
 
 /**
  * A Thread's worktree against a real repository: where it goes, what the
@@ -58,12 +57,10 @@ const threads = new ThreadStore(join(root, "threads.sqlite"))
 // This suite proves cloned outputs and inherited install records; package-link
 // defaults are exercised separately by test-package-links.
 const INSTALL = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: false }
-let recipe: Recipe | undefined = RecipeSchema.parse({ secrets: [".env", ".env.*"], prepare: [INSTALL] })
-let secretsAllowed = true
+let recipe: Recipe | undefined = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
 const records = new Map<string, Prepared>()
 const setup: CheckoutSetup = {
   recipe: async () => recipe,
-  grantedSecrets: async (_checkout, wanted) => secretsAllowed ? wanted?.secrets ?? [] : [],
   prepared: async (checkout) => records.get(checkout) ?? { done: {} },
   savePrepared: async (checkout, prepared) => {
     records.set(checkout, prepared)
@@ -466,7 +463,7 @@ for (const venvFolder of [".env.venv", ".venv"]) {
   writeFileSync(join(shop, venvFolder, "pyvenv.cfg"), "home = /usr/bin\n")
   writeFileSync(join(shop, venvFolder, "bin", "python"), "#!/bin/sh\n")
 }
-recipe = RecipeSchema.parse({ secrets: [".env", ".env.*"], prepare: [INSTALL, { command: "uv sync", inputs: ["uv.lock"], outputs: [".venv"] }] })
+recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL, { command: "uv sync", inputs: ["uv.lock"], outputs: [".venv"] }] })
 const venvId = randomUUID()
 const venv = await worktrees.prepare(venvId, shop, "Virtualenv left behind")
 assert.equal(existsSync(join(venv.path, ".env")), true)
@@ -477,25 +474,78 @@ assert.ok(venvOutputs?.skipped.includes(".venv is a Python virtual environment, 
 await assert.rejects(carryReport(recipe, shop), /^Error: Not saved: \.env\.venv is a Python virtual environment, which names its own folder, so a copy would run the main checkout's packages/)
 assert.deepEqual(readdirSync(venv.path).filter((name) => name.includes("mako-")), [], "nothing half-made is left in the checkout")
 for (const venvFolder of [".env.venv", ".venv"]) rmSync(join(shop, venvFolder), { recursive: true })
-assert.deepEqual(await carryReport(recipe, shop, [".env", ".env.*"]), [
-  "The user allows these credentials files, so a new worktree gets them from the main checkout before its agent starts: .env, .env.local.",
-  "npm install: node_modules, web/node_modules are cloned into a new worktree when package-lock.json is the same there.",
+const venvReport = await carryReport(recipe, shop)
+assert.deepEqual([venvReport[0], venvReport[1], venvReport[3]], [
+  "A new worktree gets copies of these from the main checkout before its agent starts: .env, .env.local.",
+  ".env, .env.local hold credentials by their names: Mako brings them as they are. Never open, print or copy them yourself, and never ask the user to paste a value.",
   "uv sync: nothing Git ignores in the main checkout matches .venv yet; once the step has run there, new worktrees get them.",
 ])
+assert.match(venvReport[2]!, /^npm install: node_modules, web\/node_modules \(2 files, \d+ KB\) are cloned into a new worktree when package-lock\.json is the same there, under a second each time\.$/, "cloned outputs say what they cost")
+assert.equal(venvReport.length, 4)
 
-// Credentials: carry refuses a file named like one, and secrets reach a new checkout only once the person allows them.
-await assert.rejects(carryReport(RecipeSchema.parse({ carry: [".env.*"] }), shop), /^Error: Not saved: \.env\.\*, \.env\.local hold credentials by their names, so they go under "secrets", not "carry"/)
-await assert.rejects(carryReport(RecipeSchema.parse({ carry: ["certs/dev.pem"] }), shop), /dev\.pem holds credentials by its name/)
-assert.deepEqual(await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop), ["A new worktree gets these from the main checkout before its agent starts: dist/app.js."], "a file that isn't named like credentials carries as before")
-const [waitingLine] = await carryReport(RecipeSchema.parse({ secrets: [".env", ".env.*"] }), shop, [".env"])
-assert.match(waitingLine!, /^These hold credentials: \.env, \.env\.local\. A new worktree gets them only once the user allows it in Mako .* Never ask the user to paste a value\.$/, "allowing some patterns isn't allowing the list")
+// Credentials are carried like any other file, copied, and the save names them so nobody opens one.
+assert.deepEqual(await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop), ["A new worktree gets copies of these from the main checkout before its agent starts: dist/app.js."])
 for (const [name, held] of [[".env", true], [".env.production", true], ["web/.env.local", true], [".env.example", false], [".env.sample", false], [".npmrc", true], ["deploy/key.pem", true], ["client_secret.json", true], ["gcloud-credentials.json", true], ["config.json", false], ["README.md", false]] as const)
   assert.equal(holdsCredentials(name), held, name)
-secretsAllowed = false
-const notAllowed = await worktrees.prepare(randomUUID(), shop, "Before allowing")
-assert.equal(existsSync(join(notAllowed.path, ".env")), false, "secrets stay behind until the person allows them")
-assert.equal(existsSync(join(notAllowed.path, ".env.local")), false)
-secretsAllowed = true
+assert.deepEqual(RecipeSchema.parse({ carry: ["local.json", { path: "data" }, { path: "models", link: true }], secrets: [".env"] }).carry, [
+  { path: "local.json", link: false }, { path: "data", link: false }, { path: "models", link: true }, { path: ".env", link: false },
+], "a path alone is copied, and a recipe saved with secrets reads them as copied carry")
+assert.equal("secrets" in RecipeSchema.parse({ secrets: [".env"] }), false)
+assert.match(RecipeSchema.safeParse({ carry: [".env", { path: ".env", link: true }] }).error?.issues[0]?.message ?? "", /\.env/, "one path is copied or linked, not both")
+assert.match(RecipeSchema.safeParse({ carry: ["dist"], secrets: ["dist"] }).error?.issues[0]?.message ?? "", /dist/)
+
+// A linked carry entry: a folder of the worktree's own whose entries link to the main checkout's,
+// so a file made in it stays here; copying it with worktree_bring makes it all the worktree's own.
+recipe = RecipeSchema.parse({ carry: [{ path: "dist", link: true }, ".env"] })
+const sharing = await worktrees.prepare(randomUUID(), shop, "Shared build output")
+assert.equal(lstatSync(join(sharing.path, "dist")).isDirectory(), true)
+assert.equal(readlinkSync(join(sharing.path, "dist", "app.js")), join(shop, "dist", "app.js"))
+assert.equal(lstatSync(join(sharing.path, ".env")).isFile(), true, "what isn't linked is copied")
+assert.deepEqual(await linkedCarry(sharing.path, recipe), ["dist"])
+assert.equal(git(sharing.path, "status", "--porcelain"), "", "the links and their mark are ignored with the folder")
+writeFileSync(join(sharing.path, "dist", "made-here.js"), "here\n")
+assert.equal(existsSync(join(shop, "dist", "made-here.js")), false)
+assert.deepEqual(await bringFiles(shop, sharing.path, [{ path: "dist" }]), { copied: [], linked: [], owned: ["dist"], existing: [], missing: [] })
+assert.equal(lstatSync(join(sharing.path, "dist", "app.js")).isFile(), true)
+assert.equal(readFileSync(join(sharing.path, "dist", "made-here.js"), "utf8"), "here\n", "what the worktree made stays")
+assert.equal(existsSync(join(sharing.path, "dist", LINKED_MARK)), false)
+assert.deepEqual(await linkedCarry(sharing.path, recipe), [])
+assert.deepEqual(await bringFiles(shop, sharing.path, [{ path: "dist" }]), { copied: [], linked: [], owned: [], existing: ["dist"], missing: [] }, "an entry of its own is never replaced")
+writeFileSync(join(sharing.path, "dist", "app.js"), "changed here\n")
+assert.equal(readFileSync(join(shop, "dist", "app.js"), "utf8"), "\n", "the main checkout's is untouched")
+
+// A linked file is one link; bringing it unlinked makes it a copy.
+recipe = RecipeSchema.parse({ carry: [{ path: "dist/app.js", link: true }] })
+const oneLink = await worktrees.prepare(randomUUID(), shop, "One shared file")
+assert.equal(readlinkSync(join(oneLink.path, "dist", "app.js")), join(shop, "dist", "app.js"))
+assert.deepEqual(await linkedCarry(oneLink.path, recipe), ["dist/app.js"])
+assert.deepEqual((await bringFiles(shop, oneLink.path, [{ path: "dist/app.js" }])).owned, ["dist/app.js"])
+assert.equal(lstatSync(join(oneLink.path, "dist", "app.js")).isFile(), true)
+writeFileSync(join(shop, "dist", "big.js"), "\n")
+assert.deepEqual((await bringFiles(shop, oneLink.path, [{ path: "dist/big.js", link: true }])).linked, ["dist/big.js"], "worktree_bring links a one-off entry")
+
+// Links are for what Git ignores: one to a tracked file is refused, saying where to read it.
+await assert.rejects(carryReport(RecipeSchema.parse({ carry: [{ path: "web/index.ts", link: true }] }), shop), /^Error: Not saved: carry links web\/index\.ts, which Git tracks, .* read it at .*\/shop\/web\/index\.ts\.$/)
+await assert.rejects(carryReport(RecipeSchema.parse({ carry: [{ path: "web/generated/*", link: true }] }), shop), /carry links web\/generated\/\*, which Git tracks/)
+assert.match((await carryReport(RecipeSchema.parse({ carry: [{ path: "dist", link: true }] }), shop))[0]!, /^A new worktree links dist to the main checkout's instead of copying it, so a write into it changes the main checkout's for every Thread\. recipe_publish fails/)
+
+// A copied folder that costs each new worktree a second or more says so, and how to link it.
+const bulky = repository("bulky")
+mkdirSync(join(bulky, "dist", "corpus"), { recursive: true })
+execFileSync("/bin/sh", ["-c", "seq 1 61000 | xargs touch"], { cwd: join(bulky, "dist", "corpus") })
+const bulkyReport = await carryReport(RecipeSchema.parse({ carry: ["dist"] }), bulky)
+assert.match(bulkyReport[1]!, /^dist is 61,001 files, \d+(\.\d)? (KB|MB|GB), and copying it costs each new worktree about 1\.0 s\. If nothing the app or an agent runs writes into it, \{"path": "dist", "link": true\} shares the main checkout's instead, at once\.$/)
+assert.equal((await carryReport(RecipeSchema.parse({ carry: [{ path: "dist", link: true }] }), bulky)).some((line) => line.startsWith("dist is")), false, "a linked folder costs nothing to count")
+rmSync(bulky, { recursive: true, force: true })
+
+// The file system's history counts only writes into what the links reach, not each checkout's own caches or the mark.
+const reach = await linkReach(shop, RecipeSchema.parse({ carry: [{ path: "dist", link: true }, ".env"], prepare: [{ ...INSTALL, link: true }] }))
+assert.deepEqual(reach.entries, [{ entry: "dist", folder: true }, { entry: "node_modules", folder: true }, { entry: "web/node_modules", folder: true }])
+assert.deepEqual(throughLinks(reach, [
+  join(shop, "dist", "app.js"), join(shop, "dist", "app.js"), join(shop, "dist", LINKED_MARK), join(shop, "dist"),
+  join(shop, "node_modules", ".vite", "deps.json"), join(shop, "node_modules", "left-pad", "index.js"), join(shop, "web", "node_modules", ".package-lock.json"),
+  join(shop, ".env"), join(shop, "web", "index.ts"), join(sharing.path, "dist", "app.js"),
+]), ["dist/app.js", "node_modules/left-pad/index.js"])
 assert.deepEqual(outputNames(RecipeSchema.parse({ prepare: [{ command: "make", inputs: ["Makefile"], outputs: ["**/node_modules", "target", "dist/*", "build/*.o"] }] })), ["node_modules", "target"], "a wildcard name would leave the whole checkout out of its size")
 
 // A path inside an ignored folder is taken as it is; the rest of the folder stays.
@@ -524,7 +574,7 @@ const bare = await worktrees.prepare(bareId, shop, "No recipe")
 assert.equal(bare.copied, 0)
 assert.deepEqual(await worktrees.outputs(bareId), { carried: [], skipped: [] })
 for (const entry of [".env", ".env.local", "node_modules", "dist"]) assert.equal(existsSync(join(bare.path, entry)), false, `${entry} stays behind`)
-recipe = RecipeSchema.parse({ secrets: [".env", ".env.*"], prepare: [INSTALL] })
+recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
 
 // Output clones are staged beside the checkout, where Git can't see them, and ones a stopped host left go.
 const staging = join(venv.path, "..", ".carrying")
@@ -563,4 +613,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials refused in carry and copied from secrets only once allowed, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, refusals")

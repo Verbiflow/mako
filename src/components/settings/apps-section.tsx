@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
-import { toast } from "sonner"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
 import type { ProjectAppSetup, RecipeVersionView, RecipeView } from "../../../electron/contracts/project-app"
 import { environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
-import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow, Toggle } from "@/components/ui/kit"
+import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { recipeChangeContext } from "@/lib/app-setup-context"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -138,15 +137,10 @@ function ProjectRow({ root, setup, onOpen }: { root: string; setup: ProjectAppSe
 function ProjectState({ setup }: { setup: ProjectAppSetup | null | undefined }) {
   if (setup === undefined) return <span className="h-[18px] w-16 shrink-0 animate-pulse rounded bg-raised" />
   if (setup === null) return <span className="shrink-0 text-label text-faint">Couldn’t read</span>
-  const { recipe, secrets } = setup
+  const { recipe } = setup
   if (recipe.kind === "none") return <Chip>Not set up</Chip>
   if (recipe.kind === "invalid") return <Chip tone="negative">Recipe broken</Chip>
-  return (
-    <span className="flex shrink-0 items-center gap-2">
-      {secrets && !secrets.allowed ? <Chip tone="caution">Credentials not copied</Chip> : null}
-      <span className="max-w-[16rem] truncate text-label text-muted-foreground">{runsSummary(recipe.recipe)}</span>
-    </span>
-  )
+  return <span className="max-w-[16rem] shrink-0 truncate text-label text-muted-foreground">{runsSummary(recipe.recipe)}</span>
 }
 
 function runsSummary(recipe: RecipeView): string {
@@ -163,7 +157,6 @@ function runsSummary(recipe: RecipeView): string {
 function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
   const [setup, setSetup] = useState<ProjectAppSetup | null>(null)
   const [failure, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
   const error = threadAppDriver()?.setup ? failure : "This Mako can't run apps."
   const read = useCallback(() => {
     const driver = threadAppDriver()
@@ -179,21 +172,6 @@ function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
     window.addEventListener("focus", again)
     return () => window.removeEventListener("focus", again)
   }, [read])
-
-  const allow = async (next: boolean) => {
-    const driver = threadAppDriver()
-    if (!driver?.allowSecrets || !setup?.secrets) return
-    setSaving(true)
-    setSetup({ ...setup, secrets: { ...setup.secrets, allowed: next } })
-    try {
-      setSetup(await driver.allowSecrets(root, next))
-    } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : String(reason))
-      read()
-    } finally {
-      setSaving(false)
-    }
-  }
 
   return (
     <div className="flex flex-col gap-7">
@@ -219,9 +197,7 @@ function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
       {!setup && !error ? <p className="text-ui text-faint"><Shimmer text="Reading the recipe…" /></p> : null}
       {setup?.recipe.kind === "none" ? <NotSetUp setup={setup} /> : null}
       {setup?.recipe.kind === "invalid" ? <Broken setup={setup} message={setup.recipe.message} file={setup.recipe.file} /> : null}
-      {setup?.recipe.kind === "ready" ? (
-        <Recipe setup={setup} state={setup.recipe} saving={saving} onAllow={(next) => void allow(next)} />
-      ) : null}
+      {setup?.recipe.kind === "ready" ? <Recipe state={setup.recipe} /> : null}
     </div>
   )
 }
@@ -296,7 +272,7 @@ function Broken({ setup, message, file }: { setup: ProjectAppSetup; message: str
 
 type ReadyRecipe = Extract<ProjectAppSetup["recipe"], { kind: "ready" }>
 
-function Recipe({ setup, state, saving, onAllow }: { setup: ProjectAppSetup; state: ReadyRecipe; saving: boolean; onAllow: (allow: boolean) => void }) {
+function Recipe({ state }: { state: ReadyRecipe }) {
   const { recipe } = state
   const checks = (["quick", "full"] as const).flatMap((tier) => (recipe.checks[tier] ? [{ tier, command: recipe.checks[tier] }] : []))
   const values = Object.entries(recipe.values)
@@ -347,22 +323,14 @@ function Recipe({ setup, state, saving, onAllow }: { setup: ProjectAppSetup; sta
           {recipe.prepare.map((step) => (
             <Line key={step.command} name={<Command className="text-foreground">{step.command}</Command>}>
               {step.link
-                ? `A new Thread’s ${list(step.outputs.map(atAnyDepth))} link to the main folder’s packages, so it starts without installing while ${list(step.inputs)} ${step.inputs.length === 1 ? "is" : "are"} the same there. Before anything installs in a Thread, it gets its own copy.`
+                ? `A new Thread’s ${list(step.outputs.map(atAnyDepth))} link to the main folder’s, so it starts without running this while ${list(step.inputs)} ${step.inputs.length === 1 ? "is" : "are"} the same there. Before anything installs in a Thread, it gets its own copy.`
                 : <>Runs once in each Thread’s checkout, and again after a change to {list(step.inputs, "or")}.{step.outputs.length ? ` A new Thread starts with ${list(step.outputs.map(atAnyDepth))} cloned from the main folder while ${list(step.inputs)} ${step.inputs.length === 1 ? "is" : "are"} the same there.` : ""}</>}
             </Line>
           ))}
         </Part>
       ) : null}
 
-      {setup.secrets ? <Credentials setup={setup} secrets={setup.secrets} saving={saving} onAllow={onAllow} /> : null}
-
-      {recipe.carry.length ? (
-        <Part title="New Threads also get" hint="Files Git ignores, copied from the main folder as they are.">
-          <ListCardRow className="flex flex-wrap gap-1.5">
-            {recipe.carry.map((entry) => <FileName key={entry}>{entry}</FileName>)}
-          </ListCardRow>
-        </Part>
-      ) : null}
+      {recipe.carry.length ? <Carried carry={recipe.carry} /> : null}
 
       {values.length ? (
         <Part title="Values" hint="Set in every process’s and agent’s environment, for each Thread.">
@@ -422,33 +390,38 @@ function VersionProof({ entry }: { entry: RecipeVersionView }) {
   return <>{entry.state === "draft" ? "Passed its proof, not published" : "Proved"}</>
 }
 
-function Credentials({ setup, secrets, saving, onAllow }: {
-  setup: ProjectAppSetup
-  secrets: NonNullable<ProjectAppSetup["secrets"]>
-  saving: boolean
-  onAllow: (allow: boolean) => void
-}) {
-  const shown = secrets.files.length ? secrets.files : secrets.patterns
+/** What a new Thread's checkout gets from the main folder besides Git's files: copies of its own, and links to the main folder's. */
+function Carried({ carry }: { carry: RecipeView["carry"] }) {
+  const copied = carry.filter((entry) => !entry.link)
+  const linked = carry.filter((entry) => entry.link)
+  const credentials = carry.filter((entry) => entry.credentials).map((entry) => entry.path)
   return (
-    <Part title="Credentials">
-      <ListCardRow className="flex items-center gap-8">
-        <div className="min-w-0 flex-1">
-          <div className="text-ui font-medium">Copy into each new Thread</div>
-          <p className="mt-0.5 max-w-[34rem] text-label leading-relaxed text-muted-foreground">
-            {secrets.allowed
-              ? `Mako copies these from ${setup.project}’s main folder into each Thread’s own checkout${secrets.allowedAt ? `; allowed ${ago(secrets.allowedAt)}` : ""}. Agents never open them.`
-              : `Threads in their own checkout start without these until you allow it. Mako copies them from ${setup.project}’s main folder; agents never open them.`}
-          </p>
-        </div>
-        <Toggle label="Copy credentials into each new Thread" on={secrets.allowed} disabled={saving} onChange={() => onAllow(!secrets.allowed)} />
-      </ListCardRow>
-      <ListCardRow className="flex flex-wrap items-center gap-1.5">
-        {shown.map((entry) => <FileName key={entry}>{entry}</FileName>)}
-        {secrets.files.length ? null : (
-          <span className="text-label text-faint">Nothing in the main folder matches yet.</span>
-        )}
-      </ListCardRow>
+    <Part title="New Threads also get" hint="Files Git ignores, from the main folder.">
+      {copied.length ? (
+        <Line name="Copied">
+          <Files entries={copied} />
+        </Line>
+      ) : null}
+      {linked.length ? (
+        <Line name="Linked to the main folder">
+          <p className="mb-1.5">Every Thread uses the main folder’s, so a change to one changes it for all of them.</p>
+          <Files entries={linked} />
+        </Line>
+      ) : null}
+      {credentials.length ? (
+        <Line name="Credentials" muted>
+          {list(credentials)} {credentials.length === 1 ? "holds" : "hold"} credentials. Mako brings {credentials.length === 1 ? "it" : "them"} into each Thread as {credentials.length === 1 ? "it is" : "they are"}, and agents are told never to open {credentials.length === 1 ? "it" : "them"}.
+        </Line>
+      ) : null}
     </Part>
+  )
+}
+
+function Files({ entries }: { entries: RecipeView["carry"] }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {entries.map((entry) => <FileName key={entry.path}>{entry.path}</FileName>)}
+    </div>
   )
 }
 

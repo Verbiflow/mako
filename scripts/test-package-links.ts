@@ -7,8 +7,10 @@ import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thre
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { publishDraft, recipePath, RecipeSchema, saveDraft } from "../electron/thread-recipe.js"
+import { publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "../electron/thread-recipe.js"
+import { childHistory } from "../electron/watch-backend.js"
 import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, ownPackages } from "../electron/worktree-carry.js"
+import { parse as parseYaml } from "yaml"
 
 /**
  * A new checkout's packages linked to the main checkout's instead of
@@ -26,7 +28,7 @@ const write = (path: string, text: string) => {
 }
 mkdirSync(main)
 git(main, "init", "-q", "-b", "main")
-write(join(main, ".gitignore"), "node_modules/\n")
+write(join(main, ".gitignore"), "node_modules/\ndist/\n")
 write(join(main, "package.json"), JSON.stringify({ name: "shop", workspaces: ["packages/*"] }))
 write(join(main, "package-lock.json"), "{\"v\":1}\n")
 write(join(main, "packages", "ui", "index.js"), "module.exports = 'main ui'\n")
@@ -49,17 +51,32 @@ const worktree = (name: string, ui: string) => {
 
 const install = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: true }
 try {
-  // The recipe allows link only for package folders.
+  // link is for any outputs; a step without outputs has nothing to link.
   assert.ok(RecipeSchema.safeParse({ prepare: [install] }).success)
-  assert.match(JSON.stringify(RecipeSchema.safeParse({ prepare: [{ ...install, outputs: ["**/node_modules", "dist"] }] }).error?.issues), /link is for package folders/)
-  assert.equal(RecipeSchema.safeParse({ prepare: [{ command: "npm install", inputs: ["package-lock.json"], link: true }] }).success, false)
-  // Package folders link unless the step says not to; other outputs never do.
+  assert.ok(RecipeSchema.safeParse({ prepare: [{ ...install, outputs: ["**/node_modules", "dist"] }] }).success)
+  assert.match(JSON.stringify(RecipeSchema.safeParse({ prepare: [{ command: "npm install", inputs: ["package-lock.json"], link: true }] }).error?.issues), /link is for a step's outputs/)
+  // Saving fills in the default, so every stored version says; one that doesn't, written before the default, clones.
   const { link: _, ...unsaid } = install
-  assert.equal(RecipeSchema.parse({ prepare: [unsaid] }).prepare[0]!.link, true, "linking is the default for package folders")
-  assert.equal(RecipeSchema.parse({ prepare: [{ ...install, link: false }] }).prepare[0]!.link, false, "link: false clones them instead")
-  assert.equal(RecipeSchema.parse({ prepare: [{ command: "cargo fetch", inputs: ["Cargo.lock"], outputs: ["target"] }] }).prepare[0]!.link, undefined)
-  assert.equal(RecipeSchema.parse({ prepare: [{ ...unsaid, outputs: ["**/node_modules", "dist"] }] }).prepare[0]!.link, undefined, "a step that writes more than package folders is cloned")
-  assert.match((await carryReport(RecipeSchema.parse({ prepare: [install] }), main)).join("\n"), /link each package to the main checkout's when package-lock.json is the same there/)
+  assert.equal(RecipeSchema.parse({ prepare: [unsaid] }).prepare[0]!.link, undefined, "a stored version without link keeps its meaning: cloned")
+  assert.equal(withLinkDefault(RecipeSchema.parse({ prepare: [unsaid] })).prepare[0]!.link, true, "linking is the default a save writes out")
+  assert.equal(withLinkDefault(RecipeSchema.parse({ prepare: [{ command: "cargo fetch", inputs: ["Cargo.lock"], outputs: ["target"] }] })).prepare[0]!.link, true, "for any outputs")
+  assert.equal(withLinkDefault(RecipeSchema.parse({ prepare: [{ ...install, link: false }] })).prepare[0]!.link, false, "link: false clones them instead")
+  assert.equal(withLinkDefault(RecipeSchema.parse({ prepare: [{ command: "make", inputs: ["Makefile"] }] })).prepare[0]!.link, undefined, "a step without outputs has nothing to link")
+  const bare = RecipeSchema.parse({ prepare: [{ ...install, link: false }] })
+  assert.equal(withLinkDefault(bare), bare, "nothing to fill in returns the recipe as it is")
+  assert.match((await carryReport(RecipeSchema.parse({ prepare: [install] }), main)).join("\n"), /npm install: a new worktree's node_modules link each entry to the main checkout's when package-lock.json is the same there/)
+
+  // Other outputs link entry by entry: what's made in the folder later stays the checkout's own.
+  const built = worktree("built", "built ui")
+  mkdirSync(join(main, "dist", "assets"), { recursive: true })
+  writeFileSync(join(main, "dist", "index.html"), "<html></html>\n")
+  const build = { command: "npm run build", inputs: ["package-lock.json"], outputs: ["dist"], link: true }
+  assert.deepEqual((await carryOutputs(main, built, [build])).carried.map((entry) => entry.entries), [["dist"]])
+  assert.equal(readlinkSync(join(built, "dist", "index.html")), join(main, "dist", "index.html"))
+  assert.equal(readlinkSync(join(built, "dist", "assets")), join(main, "dist", "assets"))
+  assert.deepEqual(await ownPackages(built, [build]), ["dist"], "app_own_packages makes any linked output the checkout's own")
+  assert.ok(lstatSync(join(built, "dist", "index.html")).isFile())
+  rmSync(join(main, "dist"), { recursive: true })
 
   // Linking: each package a link to the main checkout's, the rest this checkout's own.
   const fix = worktree("fix", "fix ui")
@@ -82,7 +99,7 @@ try {
 
   // The agent is told, in its note and in app_status.
   const note = threadEnvironmentInstructions({ app: AppKeySchema.parse("folder-0123456789abcdef"), host: "fix.thread.localhost", port: 20_020, ports: 10, dataDir: join(root, "data"), recipe: { kind: "ready", processes: [], checks: [], linked: ["node_modules"] } })
-  assert.match(note, /node_modules link each package to the main checkout's/)
+  assert.match(note, /node_modules link each entry to the main checkout's/)
   assert.match(note, /call app_own_packages/)
 
   // Mako's own install step doesn't run over the links while the lockfile matches the main checkout's.
@@ -101,7 +118,7 @@ try {
   const inFix = tools(fix)
   assert.match(await inFix.check("c1", "quick"), /passed/i)
   assert.equal(existsSync(ran), false, "no install ran over the links")
-  assert.match(await inFix.status("c1"), /node_modules link each package to the main checkout's\. Call app_own_packages/)
+  assert.match(await inFix.status("c1"), /node_modules link each entry to the main checkout's\. Call app_own_packages/)
   assert.match(await inFix.status("c1"), /prepare:\n {2}.*: up to date\n/, "a linked checkout whose lockfile matches the main checkout's has nothing to install")
 
   // Asked first, the checkout gets its own copy and the main checkout's stays as it was.
@@ -128,7 +145,38 @@ try {
   // The main checkout is never linked, and owning there changes nothing.
   assert.deepEqual(await ownPackages(main, linking), [])
   assert.equal(existsSync(join(main, "node_modules", LINKED_MARK)), false)
-  console.log("package links: linked in under 2 seconds with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were")
+
+  // Proving a draft reads the file system's history under what the links reach in the main checkout:
+  // an app that only runs its linked packages passes, one that writes through a link fails, naming the file.
+  if (process.platform === "darwin") {
+    const history = childHistory()
+    const proving = worktree("prove", "prove ui")
+    await carryOutputs(main, proving, linking)
+    const provingEnvironment = { ...environment(join(root, "data-prove")), app: AppKeySchema.parse("folder-00000000000000bb") }
+    mkdirSync(provingEnvironment.dataDir, { recursive: true })
+    const inProve = environmentTools({ cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, recipesRoot: recipes, settleMs: 15_000, history })
+    const server = (write: boolean) => RecipeSchema.parse({
+      ...recipe,
+      processes: { web: {
+        command: `node -e "require('left-pad'); require('@scope/ui'); ${write ? "require('fs').appendFileSync('node_modules/left-pad/index.js', '// written here\\n');" : ""} require('fs').writeFileSync(process.env.MAKO_THREAD_DATA_DIR + '/up', ''); setInterval(() => {}, 1e9)"`,
+        ready: "test -f \"$MAKO_THREAD_DATA_DIR/up\"",
+      } },
+      verify: { run: "node -e \"require('left-pad')\"" },
+    })
+    await inProve.save("c3", server(false), "Only reads its packages")
+    const clean = await inProve.publish("c3")
+    assert.match(clean, /^Published version \d+ in [\d.]+ s: (install passed in [\d.]+ s, )?start passed in [\d.]+ s, verify passed in [\d.]+ s, links passed\./, "running and reading linked packages writes nothing through them")
+    assert.deepEqual(await linkedEntries(proving, linking), ["node_modules"], "the proof ran on the links")
+    await inProve.stop("c3")
+    rmSync(join(provingEnvironment.dataDir, "up"), { force: true })
+    await inProve.save("c3", server(true), "Writes into a package")
+    const dirty = await inProve.publish("c3")
+    assert.match(dirty, /while it was proven, node_modules\/left-pad\/index\.js changed in the main checkout \(.*\/shop\), inside what the recipe links, through this checkout's links or another worktree's\./, dirty)
+    assert.match(dirty, /Set "link": false/)
+    assert.match(parseYaml(await inProve.status("c3")).writesThroughLinks, /^Since this app came up, node_modules\/left-pad\/index\.js changed in the main checkout/, "app_status says so while the app runs")
+    await inProve.stop("c3")
+  }
+  console.log("package links: linked in under 2 seconds with workspace packages, .bin and caches this checkout's own; the agent told; no install over the links; owned on request or before a changed lockfile's install, leaving the main checkout's packages as they were; any outputs link entry by entry; a proof that writes through the links fails, one that only runs them passes")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

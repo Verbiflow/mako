@@ -88,7 +88,6 @@ import { moveablePlace, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
 import { projectRecipe } from "./thread-recipe.js"
-import { grantedSecrets, readAllowedSecrets } from "./recipe-secrets.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { installThreadAppIpc } from "./ipc/thread-app.js"
 import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
@@ -460,7 +459,6 @@ const threadWorktrees = threadStore
       },
     } : undefined, threadProcesses ? {
       recipe: (checkout) => projectRecipe(checkout, threadRecipes),
-      grantedSecrets: async (checkout, recipe) => threadRecipes ? grantedSecrets(recipe, await readAllowedSecrets(threadRecipes, checkout)) : [],
       prepared: (checkout) => threadProcesses.prepared(checkout),
       savePrepared: (checkout, prepared) => threadProcesses.savePrepared(checkout, prepared),
       forgetPrepared: (checkout) => threadProcesses.forgetPrepared(checkout),

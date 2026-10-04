@@ -14,7 +14,6 @@ import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
 import { RECIPE_PATH } from "../electron/thread-recipe.js"
-import { writeAllowedSecrets } from "../electron/recipe-secrets.js"
 import { moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
@@ -214,13 +213,12 @@ try {
   assert.equal(inventory.folder, project)
   assert.ok(inventory.paths.includes(".env") && inventory.paths.includes("local.json"))
   const bring = async (entries?: { path: string; link?: boolean }[]) => agent.callTool({ name: "worktree_bring", arguments: entries ? { entries } : {} })
-  assert.deepEqual(parseYaml(text(await bring())).copied, ["local.json"])
-  const deniedBring = await bring([{ path: "shared.json" }, { path: ".env" }])
-  assert.equal(deniedBring.isError, true)
-  assert.match(text(deniedBring), /hasn't allowed/)
+  const carried = parseYaml(text(await bring()))
+  assert.deepEqual([carried.copied, carried.missing], [["local.json", ".env"], [".env.local", ".env.alias"]], "a recipe saved with secrets brings them as carry")
+  const refusedBring = await bring([{ path: "shared.json" }, { path: "local.json" }, { path: "local.json", link: true }])
+  assert.equal(refusedBring.isError, true)
+  assert.match(text(refusedBring), /Both copy and link were requested for local\.json/)
   assert.equal(existsSync(join(worktreePath, "shared.json")), false, "validate the whole request before changing anything")
-  await writeAllowedSecrets(recipesRoot, worktreePath, [".env", ".env.local", ".env.alias"])
-  assert.deepEqual(parseYaml(text(await bring())).copied, [".env"])
   assert.equal(lstatSync(join(worktreePath, ".env")).isSymbolicLink(), false, "env files are independent copies by default")
   writeFileSync(join(worktreePath, ".env"), "TOKEN=worktree-only")
   assert.ok(parseYaml(text(await bring())).existing.includes(".env"))
@@ -232,6 +230,10 @@ try {
   assert.equal(lstatSync(join(worktreePath, ".env.alias")).isSymbolicLink(), false, "a source env symlink still becomes a copy")
   assert.deepEqual(parseYaml(text(await bring([{ path: "shared.json", link: true }]))).linked, ["shared.json"])
   assert.equal(lstatSync(join(worktreePath, "shared.json")).isSymbolicLink(), true)
+  assert.deepEqual(parseYaml(text(await bring([{ path: "shared.json" }]))).owned, ["shared.json"], "bringing a linked entry without link makes it the worktree's own")
+  assert.equal(lstatSync(join(worktreePath, "shared.json")).isFile(), true)
+  writeFileSync(join(worktreePath, "shared.json"), "changed here")
+  assert.equal(readFileSync(join(project, "shared.json"), "utf8"), "shared")
   symlinkSync("missing", join(worktreePath, ".env.local"))
   assert.deepEqual(parseYaml(text(await bring([{ path: ".env.local" }]))).existing, [".env.local"], "a broken destination link stays untouched")
   const outside = join(root, "outside")
@@ -241,8 +243,6 @@ try {
   symlinkSync(outside, join(worktreePath, "config"))
   assert.match(text(await bring([{ path: "config/local.json" }])), /destination points outside/)
   assert.equal(existsSync(join(outside, "local.json")), false)
-  writeFileSync(join(project, "config", ".env"), "nested")
-  assert.match(text(await bring([{ path: "config" }])), /holds credentials/, "a directory selection can't bypass its credential files")
   mkdirSync(join(project, "assets"))
   writeFileSync(join(project, "assets", "one.json"), "one")
   writeFileSync(join(project, "assets", "two.txt"), "two")
