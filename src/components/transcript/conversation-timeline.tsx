@@ -168,10 +168,12 @@ type HistoryEdgeState = "loading" | "more" | "start"
  */
 function HistoryEdge({
   state,
+  opening,
   ref,
 }: {
   state: HistoryEdgeState
-  ref: Ref<HTMLDivElement>
+  opening?: ReactNode
+  ref?: Ref<HTMLDivElement>
 }) {
   return (
     <div
@@ -185,6 +187,8 @@ function HistoryEdge({
           <Orb state="breathing" size={20} />
           <span>Loading earlier turns…</span>
         </span>
+      ) : state === "start" && opening ? (
+        opening
       ) : state === "start" ? (
         <>
           <span aria-hidden className="h-px min-w-0 flex-1 bg-hairline" />
@@ -214,6 +218,7 @@ export function ConversationTimeline({
   failedId,
   empty,
   footer,
+  opening,
   hasEarlier = false,
   loadingEarlier = false,
   onLoadEarlier,
@@ -231,6 +236,8 @@ export function ConversationTimeline({
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
+  /** The transcript's first line in place of "Beginning of conversation", once its start is on screen. */
+  opening?: ReactNode
   hasEarlier?: boolean
   loadingEarlier?: boolean
   onLoadEarlier?: () => Promise<void>
@@ -879,7 +886,11 @@ export function ConversationTimeline({
                 "mx-auto flex w-full max-w-content flex-col gap-7 px-6 py-6"
               )}
             >
-              {edge ? <HistoryEdge ref={edgeRow} state={edgeState} /> : null}
+              {edge ? (
+                <HistoryEdge ref={edgeRow} state={edgeState} opening={opening} />
+              ) : opening ? (
+                <HistoryEdge state="start" opening={opening} />
+              ) : null}
               {windowed ? (
                 <div
                   data-virtual-transcript

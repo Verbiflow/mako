@@ -14,6 +14,10 @@ import { TransferStatus } from "./transfer-status"
 import { LiveActionStatus } from "./live-action-status"
 import { loadEarlierLive } from "@/state/live-recovery"
 import { sendTo } from "@/state/acp-queue"
+import { skipWorktree } from "@/state/acp-start"
+import { WorktreeOpening } from "@/components/viewer/worktree-opening"
+import { rowThread, useThreadGroups } from "@/state/thread-groups"
+import { useStartedWorktree } from "@/state/worktrees"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { RecoveryNotice } from "./recovery-notice"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
@@ -170,6 +174,11 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
   const madeByMako = useMemo(() => makoPrompts(requests), [requests])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
   const lastExchangeId = exchanges.at(-1)?.id
+  const row = useAcp((state) => {
+    const current = scopedAcp(state, scope)
+    return { threadId: current?.threadId, sessionId: current?.sessionId, cwd: scopedLiveAcp(state, scope)?.session.cwd ?? current?.cwd }
+  }, shallowEqual)
+  const worktree = useStartedWorktree(useThreadGroups((state) => rowThread(row, state.threadOf)), row.cwd)
 
   return (
     <ConversationTimeline
@@ -184,6 +193,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       interruptedRequests={interruptedRequests}
       makoPrompts={madeByMako}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
+      opening={worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined}
       empty={
         <div className="mx-auto flex w-full max-w-content flex-col gap-4 px-6 py-6">
           <p className="pt-8 text-center text-ui leading-relaxed text-faint">
@@ -229,22 +239,38 @@ function AcpActivity({
   const quietForMs = useQuietFor(running ? activityAt : undefined)
   const making = useAcp((state) => {
     const current = scopedAcp(state, scope)
-    return current?.kind === "starting" && current.worktree === "making"
+    return current?.kind === "starting" && current.worktree === "making" ? current.key : undefined
   })
-  const makingWorktree = useLasting(making, MAKING_WORKTREE_SHOWN_AFTER_MS)
+  const worktreeStep = useAcp((state) => {
+    const current = scopedAcp(state, scope)
+    return current?.kind === "starting" ? current.worktreeStep : undefined
+  })
+  const makingWorktree = useLasting(Boolean(making), MAKING_WORKTREE_SHOWN_AFTER_MS)
+  const slowWorktree = useLasting(Boolean(making), SLOW_WORKTREE_MS)
   const activity = useAcp((state) => {
     const live = scopedLiveAcp(state, scope)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
     // The approval notice, or the plan bar for a plan's approval, owns this
     // status; do not repeat it in the transcript.
     if (approval || live?.permission?.implementsPlan) return { kind: "idle" as const, label: "" }
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, preparing, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, worktreeStep, preparing, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
       <ActivityMark state={activity.kind} size={20} />
       {activity.since === undefined ? (
-        <span className="truncate">{activity.label}</span>
+        <>
+          <span key={activity.label} className="truncate animate-in fade-in-0 duration-200 ease-[var(--ease-out)]">{activity.label}</span>
+          {making && slowWorktree && (
+            <button
+              type="button"
+              onClick={() => skipWorktree(making)}
+              className="pressable ml-1 shrink-0 rounded-md px-1.5 py-0.5 text-label text-faint animate-in fade-in-0 duration-200 ease-[var(--ease-out)] hover:bg-fill-hover hover:text-foreground"
+            >
+              Use the project folder instead
+            </button>
+          )}
+        </>
       ) : (
         <span data-native-activity className="flex min-w-0 items-baseline gap-1">
           <Shimmer text={activity.label} className="shrink-0" />
@@ -274,6 +300,8 @@ function NativeClock({ since, retryAt }: { since: number; retryAt?: number }) {
 
 /** A spare worktree is ready in well under this; only a checkout made on the spot is worth naming. */
 const MAKING_WORKTREE_SHOWN_AFTER_MS = 400
+/** A start still making its worktree after this offers to go ahead in the project folder. */
+const SLOW_WORKTREE_MS = 2_000
 
 /** `value`, once it has held for `ms`; false again as soon as it stops. */
 function useLasting(value: boolean, ms: number): boolean {

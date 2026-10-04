@@ -6,6 +6,7 @@ import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
+import type { WorktreeStep } from "./thread-worktrees.js"
 import {
   type ControlActivity,
   type BrowserControlStatus,
@@ -69,6 +70,7 @@ export type HostEventBody =
   | { type: "checkout-heads"; heads: CheckoutHeads }
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
+  | { type: "worktree-step"; conversationId: string; step: WorktreeStep }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */

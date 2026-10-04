@@ -10,6 +10,9 @@ export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | nul
   registerIpc("mako:worktree-branches", async (_event, cwd: string): Promise<WorktreeBranch[]> =>
     (await worktrees?.branches(cwd)) ?? [])
   registerIpc("mako:worktree-pulls", (_event, cwd: string): Promise<WorktreePull[] | null> => pulls(cwd))
+  registerIpc("mako:worktree-skip", (_event, conversationId: string): void => {
+    worktrees?.skip(conversationId)
+  })
   registerIpc("mako:worktrees", (): Promise<ThreadWorktrees> | ThreadWorktrees =>
     worktrees ? worktrees.list() : { root: "", worktrees: [] })
   registerIpc("mako:worktree-inventory", (): Promise<WorktreeInventory> | WorktreeInventory =>

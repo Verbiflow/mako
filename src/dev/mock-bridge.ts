@@ -4,8 +4,8 @@ import { harnessOrder, workDefault } from "../../electron/contracts/harness-defa
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
-import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
-import type { ThreadWorktree, WorktreeStartPoint } from "../../electron/contracts/thread-worktrees"
+import { ThreadIdSchema, type ThreadId } from "../../electron/contracts/thread-identity"
+import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeStartPoint } from "../../electron/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
@@ -202,6 +202,49 @@ export function installMockBridge() {
   }
   /** The setup Thread's worktree, once its Session has started in one. */
   let setupWorktree: ThreadWorktree | undefined
+  /** `?making=slow|fast`: a new Thread on its own branch gets a worktree, slowly through each step or at once from a spare. */
+  const making = "location" in window ? new URLSearchParams(window.location.search).get("making") : null
+  const madeWorktrees: ThreadWorktree[] = []
+  const worktreeSkips = new Map<string, () => void>()
+  const makeWorktree = async (conversationId: string, cwd: string, thread: ThreadId, name: string | undefined, start: WorktreeStart | undefined): Promise<ThreadWorktree | undefined> => {
+    const began = performance.now()
+    let skipped = false
+    const skip = new Promise<void>((resolve) => worktreeSkips.set(conversationId, () => {
+      skipped = true
+      resolve()
+    }))
+    const pause = (ms: number) => Promise.race([new Promise((resolve) => setTimeout(resolve, ms)), skip])
+    if (making === "slow") {
+      emit({ type: "worktree-step", conversationId, step: "checkout" })
+      await pause(3_200)
+      if (!skipped) emit({ type: "worktree-step", conversationId, step: "carry" })
+      if (!skipped) await pause(1_400)
+    } else await pause(380)
+    worktreeSkips.delete(conversationId)
+    if (skipped) return undefined
+    const point = mockStartPoint()
+    const adopted = start?.kind === "pull" ? (start.cross ? `pr-${start.number}` : start.branch) : start?.kind === "branch" ? start.branch.replace(/^origin\//, "") : undefined
+    const slug = worktreeSlug(adopted?.replace(/[/_.]+/g, " ") ?? name ?? "")
+    const worktree: ThreadWorktree = {
+      path: `${SETUP_WORKTREE_ROOT}/${slug}`,
+      thread,
+      repoRoot: cwd,
+      project: cwd,
+      branch: adopted ?? `mako/${slug}`,
+      base: point.commit,
+      createdAt: Date.now(),
+      start: {
+        from: adopted ? null : start?.kind === "from" ? start.ref : point.from,
+        adopted: Boolean(adopted),
+        tookMs: Math.round(performance.now() - began),
+        copied: 2,
+        spare: making !== "slow",
+      },
+    }
+    madeWorktrees.push(worktree)
+    emit({ type: "worktree-ready", conversationId })
+    return worktree
+  }
   /** Threads started for a purpose, as the host records them on start. */
   const purposes: ThreadPurpose[] = scene === "rail" ? [...RAIL_PURPOSES] : []
   /** Threads renamed in this page, as the Thread store keeps them. */
@@ -259,7 +302,7 @@ export function installMockBridge() {
       return entry
     },
     importThreadTitles: async () => [],
-    worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
+    worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
       Object.fromEntries(
@@ -292,6 +335,7 @@ export function installMockBridge() {
     },
     wantWorktree: async () => {},
     worktreeStartPoint: async () => mockStartPoint(),
+    skipWorktree: async (conversationId: string) => worktreeSkips.get(conversationId)?.(),
     worktreeBranches: async () => {
       const hours = (count: number) => Date.now() - count * 3_600_000
       return [
@@ -1270,6 +1314,11 @@ export function installMockBridge() {
         beginSetup(session.id, options.title ?? "Set up", harness, working.cwd)
         return snapshot
       }
+      const thread = ThreadIdSchema.parse(crypto.randomUUID())
+      if (making && options.worktree && !options.resume && !options.session) {
+        const made = await makeWorktree(options.conversationId, cwd, thread, options.title ?? options.initialRequest?.text, options.worktreeStart)
+        if (made) session.cwd = made.path
+      }
       const request: LiveRequest | undefined = options.initialRequest
         ? { ...options.initialRequest, status: "completed" }
         : undefined
@@ -1279,7 +1328,7 @@ export function installMockBridge() {
         revision: 0,
         createdAt: Date.now(),
         // The host files every session under a Thread; the mock stamps one so a new tab can open beside it.
-        threadId: crypto.randomUUID(),
+        threadId: thread,
         threadPath: options.threadPath,
         base,
         permissions: reply?.permission ? [reply.permission] : [],

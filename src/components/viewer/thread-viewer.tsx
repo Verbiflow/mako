@@ -3,6 +3,9 @@ import { NativeRequestNotice } from "./native-request-notice"
 import { useConversationScope } from "@/state/conversation-scope"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
+import { WorktreeOpening } from "@/components/viewer/worktree-opening"
+import { rowThread, useThreadGroups } from "@/state/thread-groups"
+import { useStartedWorktree } from "@/state/worktrees"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { Action } from "@/components/ui/kit"
@@ -319,9 +322,11 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
       status?.kind === "observed" ||
       status?.kind === "external-active")
   const lastExchangeId = exchanges.at(-1)?.id
+  const worktree = useStartedWorktree(useThreadGroups((state) => rowThread(ref, state.threadOf)), ref.cwd)
   return (
     <ConversationTimeline
       source={{ threadPath: thread.ref.path }}
+      opening={worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined}
       identity={thread.ref.path}
       exchanges={exchanges}
       streamingId={live ? lastExchangeId : undefined}

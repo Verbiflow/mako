@@ -217,6 +217,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeStartPoint: (cwd: string, fetch: boolean) => invokeTrustedHost<WorktreeStartPoint | null>("mako:worktree-start-point", cwd, fetch),
     worktreeBranches: (cwd: string) => invokeTrustedHost<WorktreeBranch[]>("mako:worktree-branches", cwd),
     worktreePulls: (cwd: string) => invokeTrustedHost<WorktreePull[] | null>("mako:worktree-pulls", cwd),
+    skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),
     worktreeAhead: (path: string) => invokeTrustedHost<number | null>("mako:worktree-ahead", path),
     worktreeInventory: () => invokeTrustedHost<WorktreeInventory>("mako:worktree-inventory"),
     worktreeReview: (path: string) => invokeTrustedHost<WorktreeReview>("mako:worktree-review", path),

@@ -3,7 +3,7 @@ import type { ThreadGroup } from "../../electron/contracts/thread-groups"
 import type { ThreadRunState } from "../../electron/contracts/conversation-session"
 import type { AppMark, RoomApp, RoomView } from "../../electron/contracts/thread-app"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
-import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
+import type { ThreadWorktree, WorktreeStartReceipt } from "../../electron/contracts/thread-worktrees"
 
 /**
  * The fixture desk's `?mock&app=rail`: four of the api project's Threads in
@@ -15,22 +15,26 @@ import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
 const ROOT = "/Users/you/.mako/worktrees"
 const PROJECT = "/Users/you/api"
 
-const MOVED: { thread: string; folder: string; branch: string; mark: Omit<AppMark, "checkout">; setup?: true }[] = [
-  { thread: "/mock/claude-2.jsonl", folder: "api-billing-webhooks", branch: "mako/billing-webhooks", mark: { state: "running", port: 20_180 } },
+const MOVED: { thread: string; folder: string; branch: string; mark: Omit<AppMark, "checkout">; setup?: true; start?: WorktreeStartReceipt }[] = [
+  { thread: "/mock/claude-2.jsonl", folder: "api-billing-webhooks", branch: "mako/billing-webhooks", mark: { state: "running", port: 20_180 }, start: { from: "main", adopted: false, tookMs: 412, copied: 2, spare: true } },
   { thread: "/mock/codex.jsonl", folder: "api-set-up", branch: "mako/set-up-api", mark: { state: "starting" }, setup: true },
-  { thread: "/mock/devin.jsonl", folder: "api-payments-queue", branch: "mako/payments-queue", mark: { state: "crashed" } },
-  { thread: "/mock/grok-0.jsonl", folder: "api-retry-budget", branch: "mako/retry-budget", mark: { state: "waiting" } },
+  { thread: "/mock/devin.jsonl", folder: "api-payments-queue", branch: "mako/payments-queue", mark: { state: "crashed" }, start: { from: "origin/main", adopted: false, tookMs: 3_840, copied: 0, spare: false } },
+  { thread: "/mock/grok-0.jsonl", folder: "api-retry-budget", branch: "fix/retry-budget", mark: { state: "waiting" }, start: { from: null, adopted: true, tookMs: 1_260, copied: 2, spare: false } },
 ]
 
-export const RAIL_WORKTREES: ThreadWorktree[] = MOVED.map((entry, index) => ({
-  path: `${ROOT}/${entry.folder}`,
-  thread: ThreadIdSchema.parse(`00000000-0000-4000-8000-00000000000${index + 1}`),
-  repoRoot: PROJECT,
-  project: PROJECT,
-  branch: entry.branch,
-  base: "4f1c2e9",
-  createdAt: Date.now() - (index + 1) * 3_600_000,
-}))
+export const RAIL_WORKTREES: ThreadWorktree[] = MOVED.map((entry, index) => {
+  const worktree: ThreadWorktree = {
+    path: `${ROOT}/${entry.folder}`,
+    thread: ThreadIdSchema.parse(`00000000-0000-4000-8000-00000000000${index + 1}`),
+    repoRoot: PROJECT,
+    project: PROJECT,
+    branch: entry.branch,
+    base: "4f1c2e9",
+    createdAt: Date.now() - (index + 1) * 3_600_000,
+  }
+  if (entry.start) worktree.start = entry.start
+  return worktree
+})
 
 export const RAIL_MARKS: AppMark[] = [
   ...MOVED.map((entry) => ({ checkout: `${ROOT}/${entry.folder}`, ...entry.mark })),

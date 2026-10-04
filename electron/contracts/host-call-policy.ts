@@ -146,6 +146,8 @@ const replays = [
   "mako:harness-order",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
+  /** `ThreadWorktreeService.skip`: a start already skipped, or past its worktree, ignores a repeat. */
+  "mako:worktree-skip",
   /** `WorktreeStarts.point`: at most a fetch of the upstream, which a repeat within a minute skips. */
   "mako:worktree-start-point",
   /** `WorkspaceMoves.answer`: the request id; an answered request ignores a repeat. */

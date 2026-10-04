@@ -98,6 +98,14 @@ function outsideKey(outside: readonly OutsideWorktree[]): string {
 export const worktreesStore = createStore<WorktreesState>(stateOf([]))
 export const useWorktrees = createHook(worktreesStore)
 
+/** The worktree this device made at `thread`'s start, when `cwd` is in it. */
+export function useStartedWorktree(thread: string | undefined, cwd: string | undefined): ThreadWorktree | undefined {
+  return useWorktrees((state) => {
+    const found = worktreeAt(state.worktrees, cwd)?.worktree
+    return found?.start && thread !== undefined && found.thread === thread ? found : undefined
+  })
+}
+
 mapWorktreeFolders((path) => worktreesStore.get().folderMap(path))
 chatFoldersStore.subscribe(() => worktreesStore.set(stateOf(worktreesStore.get().worktrees)))
 function refreshOutside(): void {

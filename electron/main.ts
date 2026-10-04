@@ -1771,9 +1771,16 @@ function bindIpc() {
       const fresh = !options.resume && !options.session
       const chat = fresh && standsForNoProject(cwd) ? newChatFolder() : undefined
       if (options.worktree && !chat && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Choose Project folder to work in the folder itself.")
-      const worktree = options.worktree && fresh && !chat && threadWorktrees
-        ? await threadWorktrees.prepare(options.conversationId, cwd, options.title ?? options.displayPrompt ?? options.initialRequest?.text, options.worktreeStart ?? { kind: "newest" })
+      const making = options.worktree && fresh && !chat && threadWorktrees
+        ? threadWorktrees.prepare(
+            options.conversationId,
+            cwd,
+            options.title ?? options.displayPrompt ?? options.initialRequest?.text,
+            options.worktreeStart ?? { kind: "newest" },
+            (step) => emit({ type: "worktree-step", conversationId: options.conversationId, step })
+          )
         : undefined
+      const worktree = making && threadWorktrees ? await threadWorktrees.unlessSkipped(options.conversationId, making) : undefined
       if (worktree) {
         trace("worktree")
         emit({ type: "worktree-ready", conversationId: options.conversationId })

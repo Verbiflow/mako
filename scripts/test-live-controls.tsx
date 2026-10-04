@@ -624,7 +624,8 @@ const pendingTool = {type:"tool" as const,id:"build",toolKind:"execute",title:"n
 assert.equal(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:59_999}).label,"npm run build","a minute of quiet is ordinary")
 assert.deepEqual(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:3*60_000+10_000}),{kind:"executing",label:"No output for 3m · npm run build"})
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"thinking",text:"Weighing"}],quietForMs:65*60_000}),{kind:"reasoning",label:"No output for 1h 5m"})
-assert.deepEqual(agentActivity({...activityBase,connecting:true,makingWorktree:true}),{kind:"connecting",label:"Making a worktree"},"a checkout made on the spot is named until the provider starts")
+assert.deepEqual(agentActivity({...activityBase,connecting:true,makingWorktree:true}),{kind:"connecting",label:"Checking out files"},"a checkout made on the spot is named until the provider starts")
+assert.equal(agentActivity({...activityBase,connecting:true,makingWorktree:true,worktreeStep:"carry"}).label,"Copying files from your folder","each step the host reports is named")
 assert.equal(agentActivity({...activityBase,connecting:true}).label,"Connecting")
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"text",text:"Half an ans"}],quietForMs:2*60_000}),{kind:"working",label:"No output for 2m"},
   "a reply that stopped mid-stream stops reading as responding")

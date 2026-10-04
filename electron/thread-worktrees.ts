@@ -9,7 +9,7 @@ import type { ThreadStore } from "./thread-store.js"
 import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint } from "./contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
@@ -46,6 +46,8 @@ const ReceiptSchema = z.object({
   moving: z.object({ stash: z.string(), files: z.number() }).optional(),
   /** The branch existed before the Thread: it works on it, and nothing Mako does deletes it. */
   adopted: z.literal(true).optional(),
+  /** Where a new branch started, as a person reads it: `main`, `origin/main`, a short commit. */
+  from: z.string().optional(),
 })
 type Receipt = z.infer<typeof ReceiptSchema>
 type WorktreeFrom = { kind: "newest" } | { kind: "head" } | WorktreeStart
@@ -175,6 +177,7 @@ export class ThreadWorktreeService {
   private readonly wanting = new Set<Promise<void>>()
   private readonly spares: WorktreeSpares
   private readonly starts = new WorktreeStarts()
+  private readonly skips = new Map<string, () => void>()
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
@@ -206,11 +209,11 @@ export class ThreadWorktreeService {
    * changes move along and must apply where they were made; a
    * `WorktreeStart`, where the person chose.
    */
-  prepare(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom = { kind: "newest" }): Promise<PreparedWorktree> {
+  prepare(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom = { kind: "newest" }, onStep?: (step: WorktreeStep) => void): Promise<PreparedWorktree> {
     z.string().uuid().parse(conversationId)
     let work = this.pending.get(conversationId)
     if (!work) {
-      work = this.create(conversationId, cwd, name, from)
+      work = this.create(conversationId, cwd, name, from, onStep)
       this.pending.set(conversationId, work)
       void work.finally(() => this.pending.delete(conversationId)).catch(() => {})
     }
@@ -222,6 +225,27 @@ export class ThreadWorktreeService {
       tookMs: receipt.tookMs ?? 0,
       spare: receipt.spare ?? false,
     }))
+  }
+
+  /**
+   * `making`, unless the person chose to start in the project folder while
+   * it was being made: then undefined at once, and the worktree is given
+   * back once its making finishes.
+   */
+  async unlessSkipped(conversationId: string, making: Promise<PreparedWorktree>): Promise<PreparedWorktree | undefined> {
+    const skipped = new Promise<undefined>((resolve) => this.skips.set(conversationId, () => resolve(undefined)))
+    try {
+      const made = await Promise.race([making, skipped])
+      if (!made) void making.then(() => this.abandon(conversationId), () => this.abandon(conversationId)).catch(() => {})
+      return made
+    } finally {
+      this.skips.delete(conversationId)
+    }
+  }
+
+  /** Start this conversation in its project folder instead of the worktree being made for it; nothing once it's made. */
+  skip(conversationId: string): void {
+    this.skips.get(conversationId)?.()
   }
 
   /**
@@ -511,16 +535,25 @@ export class ThreadWorktreeService {
   async list(): Promise<ThreadWorktreeList> {
     const known = new Set(this.threads.worktrees().map((worktree) => worktree.path))
     const receipts = await readdir(this.receipts()).catch(() => [])
+    const made = new Map<string, Receipt>()
     for (const file of receipts) {
       const id = file.endsWith(".json") ? file.slice(0, -5) : ""
       if (!z.string().uuid().safeParse(id).success) continue
-      const receipt = await this.receipt(id)
+      const receipt = await this.receipt(id).catch(() => undefined)
+      if (receipt?.state === "ready") made.set(receipt.path, receipt)
       if (receipt && !known.has(receipt.path) && existsSync(receipt.path)) await this.attach(id)
     }
     const worktrees: ThreadWorktree[] = []
     for (const worktree of this.threads.worktrees()) {
-      if (existsSync(worktree.path)) worktrees.push(worktree)
-      else this.threads.detachWorktree(worktree.path)
+      if (!existsSync(worktree.path)) {
+        this.threads.detachWorktree(worktree.path)
+        continue
+      }
+      const receipt = made.get(worktree.path)
+      worktrees.push(receipt ? {
+        ...worktree,
+        start: { from: receipt.from ?? null, adopted: receipt.adopted ?? false, tookMs: receipt.tookMs ?? 0, copied: receipt.copied ?? 0, spare: receipt.spare ?? false },
+      } : worktree)
     }
     return { root: this.root, worktrees }
   }
@@ -667,7 +700,7 @@ export class ThreadWorktreeService {
     await rename(pending, target)
   }
 
-  private async create(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom): Promise<Receipt> {
+  private async create(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom, onStep?: (step: WorktreeStep) => void): Promise<Receipt> {
     const began = performance.now()
     const source = await realpath(cwd)
     let receipt = await this.receipt(conversationId)
@@ -684,11 +717,14 @@ export class ThreadWorktreeService {
         throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or choose Project folder.", { cause: error })
       }
       let adopted: string | undefined
-      if (from.kind === "newest") base = (await this.starts.point(repoRoot, false)).commit
+      let started: string | undefined
+      if (from.kind === "newest") ({ commit: base, from: started } = await this.starts.point(repoRoot, false))
       else if (from.kind === "from") {
         base = await git(repoRoot, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${from.ref}^{commit}`]).catch(() => "")
         if (!base) throw new Error(`${from.ref} isn't in ${basename(repoRoot)} anymore. Choose another branch to start from.`)
-      } else if (from.kind !== "head") ({ branch: adopted, base } = await this.adopt(repoRoot, from))
+        started = from.ref
+      } else if (from.kind === "head") started = await git(source, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => base.slice(0, 7))
+      else ({ branch: adopted, base } = await this.adopt(repoRoot, from))
       const parent = this.projectFolder(repoRoot)
       const slug = adopted
         ? this.freeFolder(parent, worktreeSlug(adopted.replace(/[/_.]+/g, " ")))
@@ -706,8 +742,10 @@ export class ThreadWorktreeService {
         state: "creating",
       }
       if (adopted) receipt.adopted = true
+      if (started) receipt.from = started
       await this.save(receipt)
     }
+    onStep?.("checkout")
     let spare: Spare | undefined
     // A receipt from before names were held by their branch may not have one yet.
     if (!(await succeeds(receipt.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${receipt.branch}`])))
@@ -731,6 +769,7 @@ export class ThreadWorktreeService {
     if (existed && !(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"])))
       await git(receipt.path, ["checkout", "-q", receipt.branch])
     const recipe = await this.setup?.recipe(receipt.path).catch(() => undefined)
+    if (recipe?.carry?.length) onStep?.("carry")
     const copied = await carryFiles(receipt.repoRoot, receipt.path, recipe?.carry ?? [])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
     if (spare) ready.spare = true

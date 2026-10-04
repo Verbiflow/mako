@@ -13,7 +13,23 @@ export interface ThreadWorktree {
   /** The commit the branch started at. */
   base: string
   createdAt: number
+  /** How its start went, when this device made it. */
+  start?: WorktreeStartReceipt
 }
+
+export interface WorktreeStartReceipt {
+  /** Where a new branch started (`main`, `origin/main`), or null on a branch that existed already. */
+  from: string | null
+  adopted: boolean
+  tookMs: number
+  /** Files the project's recipe copies from the main checkout. */
+  copied: number
+  /** Taken from a checkout made ahead of time. */
+  spare: boolean
+}
+
+/** What the start of a Thread's worktree is doing, past the first moment. */
+export type WorktreeStep = "checkout" | "carry"
 
 export interface ThreadWorktrees {
   /** Where Mako keeps worktrees; a Session whose folder is under it may be in one. */

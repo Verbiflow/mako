@@ -12,6 +12,7 @@ import { getMako } from "@/lib/bridge"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
+import type { WorktreeStep } from "../../electron/contracts/thread-worktrees"
 import type { LiveStartOptions, LiveSnapshot, PromptAttachment } from "@/lib/types"
 import {
   acpStore,
@@ -121,6 +122,21 @@ export function updateStarting(
         }
       : conversation
   )
+}
+
+export function worktreeStepped(key: string, step: WorktreeStep): void {
+  updateAcpConversation(key, (conversation) =>
+    conversation.kind === "starting" && conversation.worktree === "making" ? { ...conversation, worktreeStep: step } : conversation
+  )
+}
+
+/**
+ * The person chose the project folder while the worktree was being made:
+ * the host starts there at once and gives the worktree back.
+ */
+export function skipWorktree(key: string): void {
+  worktreeMade(key)
+  void getMako().skipWorktree(key).catch(() => {})
 }
 
 /** The host checked out the starting Thread's worktree; what's left is connecting. */

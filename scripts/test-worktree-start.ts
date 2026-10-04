@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ThreadStore } from "../electron/thread-store.js"
@@ -110,11 +110,18 @@ git(project, "reset", "-q", "--hard", "origin/main~1")
 assert.deepEqual((await starts.point(project, false)).standing, { kind: "behind", behind: 1 })
 const threads = new ThreadStore(join(root, "threads.sqlite"))
 const service = new ThreadWorktreeService(join(root, "worktrees"), threads)
+const placed = () => {
+  const conversationId = randomUUID()
+  threads.registerJournal({ conversationId, createdAt: Date.now(), bindings: [], harness: "codex" }, { kind: "service", name: "migration" })
+  return conversationId
+}
 assert.equal((await service.startPoint(project, false))?.from, "origin/main")
 assert.equal(await service.startPoint(root, false), null, "outside Git there is nothing to start from")
-const fresh = await service.prepare(randomUUID(), project, "Newest", { kind: "newest" })
+const freshId = placed()
+const fresh = await service.prepare(freshId, project, "Newest", { kind: "newest" })
 assert.equal(git(fresh.path, "rev-parse", "HEAD"), git(project, "rev-parse", "origin/main"))
-const moved = await service.prepare(randomUUID(), project, "Here", { kind: "head" })
+const movedId = placed()
+const moved = await service.prepare(movedId, project, "Here", { kind: "head" })
 assert.equal(git(moved.path, "rev-parse", "HEAD"), git(project, "rev-parse", "HEAD"))
 
 // Branches to choose from: local ones, and a remote's only where no local one has the name.
@@ -139,7 +146,8 @@ assert.equal(branches.find((branch) => branch.name === "feature")?.checkedOut, n
 assert.ok(branches.find((branch) => branch.name === fresh.branch)?.checkedOut, "a Thread's branch is checked out in its worktree")
 
 // A new branch from another one.
-const fromFeature = await service.prepare(randomUUID(), project, "On top of feature", { kind: "from", ref: "feature" })
+const fromFeatureId = placed()
+const fromFeature = await service.prepare(fromFeatureId, project, "On top of feature", { kind: "from", ref: "feature" })
 assert.match(fromFeature.branch, /^mako\//)
 assert.equal(git(fromFeature.path, "rev-parse", "HEAD"), git(project, "rev-parse", "feature"))
 await assert.rejects(service.prepare(randomUUID(), project, "Gone", { kind: "from", ref: "no-such-branch" }), /isn't in project anymore/)
@@ -154,7 +162,8 @@ assert.equal(git(project, "rev-parse", "--verify", "--quiet", "refs/heads/featur
 await assert.rejects(service.prepare(randomUUID(), project, "Main", { kind: "branch", branch: "main" }), /checked out in your project folder/)
 
 // A remote's branch gets a local one that tracks it.
-const onRemote = await service.prepare(randomUUID(), project, "Remote", { kind: "branch", branch: "origin/remote-only" })
+const onRemoteId = placed()
+const onRemote = await service.prepare(onRemoteId, project, "Remote", { kind: "branch", branch: "origin/remote-only" })
 assert.equal(onRemote.branch, "remote-only")
 assert.equal(git(project, "rev-parse", "--abbrev-ref", "remote-only@{upstream}"), "origin/remote-only")
 
@@ -165,6 +174,29 @@ assert.equal(git(onPull.path, "rev-parse", "HEAD"), git(seed, "rev-parse", "pr-b
 const onFork = await service.prepare(randomUUID(), project, "Fork", { kind: "pull", number: 7, branch: "patch-1", cross: true })
 assert.equal(onFork.branch, "pr-7")
 assert.equal(git(onFork.path, "rev-parse", "HEAD"), git(seed, "rev-parse", "pr-branch"))
+
+// Each worktree says where its branch started and how the start went.
+const listed = (await service.list()).worktrees
+const startOf = (path: string) => listed.find((worktree) => worktree.path === path)?.start
+assert.equal(startOf(fresh.path)?.from, "origin/main")
+assert.equal(startOf(moved.path)?.from, "main")
+assert.equal(startOf(fromFeature.path)?.from, "feature")
+assert.deepEqual([startOf(onRemote.path)?.from, startOf(onRemote.path)?.adopted], [null, true])
+assert.ok((startOf(fresh.path)?.tookMs ?? -1) >= 0)
+
+// Choosing the project folder while the worktree is made: the start goes ahead at once, and the worktree is given back.
+const skippedId = randomUUID()
+const making = service.prepare(skippedId, project, "Skipped", { kind: "newest" })
+const waiting = service.unlessSkipped(skippedId, making)
+service.skip(skippedId)
+assert.equal(await waiting, undefined)
+const skipped = await making
+for (let tries = 0; existsSync(skipped.path) && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 20))
+assert.ok(!existsSync(skipped.path), "a skipped worktree is removed once it's made")
+const kept = randomUUID()
+const keptPath = (await service.unlessSkipped(kept, service.prepare(kept, project, "Kept", { kind: "newest" })))?.path
+service.skip(kept)
+assert.ok(keptPath && existsSync(keptPath), "skipping after the worktree is ready changes nothing")
 
 threads.close()
 rmSync(root, { recursive: true, force: true })

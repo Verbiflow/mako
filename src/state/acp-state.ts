@@ -4,6 +4,7 @@ import type { LiveSnapshot, LiveStartOptions, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
+import type { WorktreeStep } from "../../electron/contracts/thread-worktrees"
 import type {
   LivePermissionRequest,
   PromptAttachment,
@@ -58,6 +59,8 @@ export interface StartingAcpConversation extends AcpConversationBase {
   kind: "starting"
   /** A new Thread starting in its own worktree, and whether the host has checked it out yet. */
   worktree?: "making" | "made"
+  /** What making it is doing now, once the host says. */
+  worktreeStep?: WorktreeStep
   /** What Mako starts this Thread for; its row shows it until the host's record of the Thread arrives. */
   purpose?: ThreadPurposeKind
 }

@@ -2,6 +2,7 @@ import type { AcpBlock } from "@/lib/acp-blocks"
 import { liveToolIdentity } from "@/lib/tools"
 import { toolKindActivity } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
+import type { WorktreeStep } from "../../electron/contracts/thread-worktrees"
 
 export type AgentActivityKind = "working" | "connecting" | "reasoning" | "searching" | "executing" | "editing" | "responding" | "waiting" | "failed" | "complete" | "idle"
 
@@ -27,9 +28,14 @@ export interface AgentActivity {
  */
 export const QUIET_AFTER_MS = 60_000
 
-export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, preparing, quietForMs = 0, native, harness }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; preparing: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
+const WORKTREE_STEPS = {
+  checkout: "Checking out files",
+  carry: "Copying files from your folder",
+} satisfies Record<WorktreeStep, string>
+
+export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, quietForMs = 0, native, harness }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
-  if (connecting) return { kind: "connecting", label: makingWorktree ? "Making a worktree" : "Connecting" }
+  if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : "Connecting" }
   if (preparing) return { kind: "connecting", label: "Sending" }
   if (native) return nativeAgentActivity(native)
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
