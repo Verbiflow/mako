@@ -35,8 +35,8 @@ const INK = ["bg-foreground/75", "bg-foreground/55", "bg-foreground/40", "bg-for
 
 /**
  * How full the running session's context is, beside the send button: a ring
- * when the harness reports the fill, the tokens spent when it reports only
- * those (Cursor), nothing when it reports neither. The popover itemizes
+ * when the harness reports the fill, a dashed ring when it reports only the
+ * tokens spent (Cursor), nothing when it reports neither. The popover itemizes
  * what the harness itemizes and says plainly what it does not report.
  */
 export function ContextMeter() {
@@ -51,7 +51,7 @@ export function ContextMeter() {
   if (fraction === undefined && spent === undefined) return null
   const summary = fraction !== undefined
     ? `Context ${Math.round(fraction * 100)}% full${usage.compacted ? ", compacted since" : ""}`
-    : `Session token spend: ${formatTokens(spent ?? 0)} tokens`
+    : "Context usage unavailable"
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Tooltip>
@@ -61,12 +61,12 @@ export function ContextMeter() {
               type="button"
               aria-label={summary}
               data-context-meter
-              className="pressable flex h-8 min-w-8 shrink-0 items-center justify-center gap-1 rounded-none px-2 text-label text-faint tabular-nums hover:bg-fill-hover hover:text-foreground focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-ring data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
+              className="pressable flex size-8 shrink-0 items-center justify-center rounded-none text-faint hover:bg-fill-hover hover:text-foreground focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-ring data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
             >
               {fraction !== undefined ? (
                 <Ring fraction={fraction} compacted={usage.compacted === true} />
               ) : (
-                <span>Tokens {formatTokens(spent ?? 0)}</span>
+                <UnmeasuredRing />
               )}
             </button>
           </PopoverTrigger>
@@ -101,6 +101,25 @@ function Ring({ fraction, compacted }: { fraction: number; compacted: boolean })
   )
 }
 
+/** The ring's place for a harness that reports spend but no fill: dashed, so it cannot read as an empty context. */
+function UnmeasuredRing() {
+  const radius = 6
+  const dash = (2 * Math.PI * radius) / 12
+  return (
+    <svg viewBox="0 0 16 16" className="size-4 -rotate-90" aria-hidden data-unmeasured-ring>
+      <circle
+        cx="8"
+        cy="8"
+        r={radius}
+        fill="none"
+        strokeWidth="2"
+        strokeDasharray={`${dash * 0.55} ${dash * 0.45}`}
+        className="stroke-foreground/30"
+      />
+    </svg>
+  )
+}
+
 /** The popover's body; also what the conversation menu showed before the meter moved here. */
 export function UsageDetails({
   usage,
@@ -120,10 +139,10 @@ export function UsageDetails({
     <div className="flex flex-col" data-usage-details>
       <section className="flex flex-col gap-2 px-3 pt-3 pb-2.5">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-ui">{fraction !== undefined ? "Context" : "Token spend"}</span>
-          {fraction !== undefined ? (
-            <span className="text-label text-faint tabular-nums">{Math.round(fraction * 100)}%</span>
-          ) : null}
+          <span className="text-ui">Context</span>
+          <span className="text-label text-faint tabular-nums">
+            {fraction !== undefined ? `${Math.round(fraction * 100)}%` : "Unavailable"}
+          </span>
         </div>
         {fraction !== undefined && usage.used !== undefined && usage.size ? (
           <>
@@ -135,7 +154,7 @@ export function UsageDetails({
           </>
         ) : (
           <span className="text-label text-faint">
-            {harnessLabel(harness)} reports the tokens each turn spends, not how full the context is.
+            {harnessLabel(harness)} doesn't report how full the context is.
           </span>
         )}
       </section>
