@@ -15,6 +15,8 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import type { LiveSessionState } from "../electron/shared.js"
 import { TITLE_ANSWER_CHARS, TITLE_PROMPT_CHARS, ThreadStore } from "../electron/thread-store.js"
 import { resolveTitleModel } from "../electron/thread-title-model.js"
+import { UtilityWork, type UtilityAgent } from "../electron/utility-work.js"
+import { UtilityModelError } from "../electron/utility-model-error.js"
 import { ThreadTitler, TitleModelError, completedExchange, parseTitle, titlePrompt, type TitleModel } from "../electron/thread-titles.js"
 import { UtilityModelStore, type UtilityKeyEncryption } from "../electron/utility-model-store.js"
 
@@ -415,7 +417,8 @@ async function boundedVolume(): Promise<void> {
   await until(() => title(store, thread) === "epsilon work", "a burst is named from its end")
   assert.equal(model.calls.length, 1, "a burst of exchanges is one request")
   const prompt = model.calls[0] ?? ""
-  assert.ok(prompt.includes("delta") && prompt.includes("epsilon") && !prompt.includes("gamma"), "the window is the latest two exchanges")
+  assert.ok(prompt.includes("gamma") && prompt.includes("delta") && prompt.includes("epsilon") && !prompt.includes("beta"), "the window is the latest three exchanges")
+  assert.ok(prompt.includes("How the work began") && prompt.includes("alpha"), "and how the work began, kept past the window")
 
   const started = Date.now()
   finish(named, conversation, "Work on zeta")
@@ -428,12 +431,15 @@ async function boundedVolume(): Promise<void> {
     { type: "user", text: big, requestId: "r" },
     { type: "thinking", text: "secret reasoning" },
     { type: "tool", id: "t", title: "Read", status: "completed", output: "tool output" },
-    { type: "text", text: big },
+    { type: "text", text: `OPENING ${big}` },
+    { type: "text", text: `${big} CLOSING` },
   ], { id: "r", text: big, attachments: [], status: "completed" })
   assert.ok(exchange && exchange.prompt.length <= TITLE_PROMPT_CHARS && exchange.answer.length <= TITLE_ANSWER_CHARS, "an exchange is bounded")
   assert.ok(!exchange.answer.includes("secret") && !exchange.answer.includes("tool output"), "only the answer's prose is kept")
-  const window = titlePrompt({ current: "A title", exchanges: [0, 1].map((index) => ({ session: store.journalPlacement(conversation)!.session, exchange: String(index), completedAt: index, ...exchange })) })
-  assert.ok(window.length < 2 * (TITLE_PROMPT_CHARS + TITLE_ANSWER_CHARS) + 200, `a request is bounded (${window.length} characters)`)
+  assert.ok(exchange.answer.startsWith("OPENING") && exchange.answer.endsWith("CLOSING"), "a long answer keeps its start and its end, where the agent says what it did")
+  const entry = (index: number) => ({ session: store.journalPlacement(conversation)!.session, exchange: String(index), completedAt: index, ...exchange })
+  const window = titlePrompt({ current: "A title", opening: entry(0), exchanges: [1, 2, 3].map(entry) })
+  assert.ok(window.length < 4 * (TITLE_PROMPT_CHARS + TITLE_ANSWER_CHARS) + 300, `a request is bounded (${window.length} characters)`)
   named.close()
   store.close()
 }
@@ -482,7 +488,9 @@ async function multiSession(): Promise<void> {
   const prompt = model.calls[2] ?? ""
   assert.ok(prompt.indexOf("Write the backfill") >= 0 && prompt.indexOf("Write the backfill") < prompt.indexOf("Verify the rollback"),
     "exchanges across Sessions are ordered by when they finished")
-  assert.ok(!prompt.includes("Plan the migration"), "the window holds only the latest two")
+  assert.ok(prompt.indexOf("Plan the migration") >= 0 && prompt.indexOf("Plan the migration") < prompt.indexOf("Write the backfill"),
+    "the window is the latest three exchanges, oldest first, across Sessions")
+  assert.ok(!prompt.includes("How the work began"), "an opening still in the window isn't repeated")
 
   const calls = model.calls.length
   store.createSession({ operationId: randomUUID(), thread: first.thread, actor: store.person() })
@@ -514,23 +522,42 @@ async function modelChoice(): Promise<void> {
     decrypt: (value) => value.toString(),
   }
   const models = new UtilityModelStore(directory, encryption)
-  assert.deepEqual(await resolveTitleModel(models), { kind: "off" }, "with no choice, titles are off")
-  await assert.rejects(models.setTitleModel("google/gemini-flash"), /Connect this model/, "only a connected model can be chosen")
+  let agents: UtilityAgent[] = []
+  const work = () => new UtilityWork({ models, agents: async () => agents })
+  const unavailable = await resolveTitleModel(work())
+  assert.equal(unavailable.kind, "unavailable", "titles are on by default; with nothing to run them they wait")
   const { mkdirSync } = await import("node:fs")
   mkdirSync(directory, { recursive: true })
   writeFileSync(join(directory, "google.enc"), JSON.stringify({ provider: "google", model: "gemini-flash", contextTokens: 100_000, apiKey: "test-key" }))
   writeFileSync(join(directory, "openai.enc"), JSON.stringify({ provider: "openai", model: "gpt-mini", contextTokens: 100_000, apiKey: "test-key" }))
-  await models.setTitleModel("google/gemini-flash")
-  assert.equal((await models.settings()).titleModel, "google/gemini-flash")
-  const ready = await resolveTitleModel(models)
+  await work().choose("title", "google/gemini-flash")
+  assert.equal((await work().settings()).title.choice, "google/gemini-flash")
+  const ready = await resolveTitleModel(work())
   assert.equal(ready.kind === "ready" && ready.id, "google/gemini-flash")
   writeFileSync(join(directory, "google.enc"), JSON.stringify({ provider: "google", model: "gemini-pro", contextTokens: 100_000, apiKey: "test-key" }))
-  const moved = await resolveTitleModel(models)
+  const moved = await resolveTitleModel(work())
   assert.equal(moved.kind, "unavailable", "a connection now naming another model doesn't stand in for the chosen one")
   assert.ok(moved.kind === "unavailable" && /no longer connected/.test(moved.reason))
-  await models.disconnect("google")
-  assert.equal(await models.titleModel(), null, "disconnecting the chosen provider turns titles off rather than moving them")
-  assert.deepEqual(await resolveTitleModel(models), { kind: "off" }, "the other connection is not used")
+  await work().choose("title", "off")
+  assert.deepEqual(await resolveTitleModel(work()), { kind: "off" })
+  await work().choose("title", "auto")
+  agents = [{
+    harness: "claude",
+    label: "Claude Code",
+    models: [{ id: "haiku", label: "Haiku", description: "Fastest model", options: [] }],
+    runner: {
+      provider: "claude",
+      light: (list) => list[0],
+      complete: async () => { throw new UtilityModelError("rate-limit", "Usage limit reached") },
+    },
+  }]
+  const agentModel = await resolveTitleModel(work())
+  assert.equal(agentModel.kind === "ready" && agentModel.id, "agent:claude/haiku", "Automatic takes a signed-in agent's light model before a connection")
+  await assert.rejects(
+    agentModel.kind === "ready" ? agentModel.complete("Name it", "work", AbortSignal.timeout(1_000)) : Promise.reject(new Error("not ready")),
+    (error: Error) => error instanceof TitleModelError && error.kind === "rate-limit" && error.pause,
+    "an agent's usage limit pauses titles like a connection's"
+  )
 }
 
 /** A harness's turn, in the shape its decoder produces: prose, reasoning, tools and streamed chunks. */

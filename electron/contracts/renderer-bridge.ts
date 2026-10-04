@@ -34,6 +34,7 @@ import type {
   UtilityCatalogInput,
   UtilityCatalog,
 } from "./utility-models.js"
+import type { UtilityTask } from "./utility-work.js"
 import type { RewindInput, RewindPreview } from "./workspace-snapshots.js"
 import type {
   DesktopNotification,
@@ -193,7 +194,6 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<ThreadTitleEntry>("mako:thread-rename", operationId, thread, title, original),
     importThreadTitles: (entries: Array<{ thread: string; title: string }>) =>
       invokeTrustedHost<ThreadTitleEntry[]>("mako:thread-titles-import", entries),
-    setThreadTitleModel: (model: string | null) => invokeTrustedHost<void>("mako:thread-title-model", model),
     worktrees: () => invokeTrustedHost<ThreadWorktrees>("mako:worktrees"),
     checkoutHeads: (folders: string[]) => invokeTrustedHost<CheckoutHeads>("mako:checkout-heads", folders),
     threadApp: (cwd: string, target?: string) => invokeTrustedHost<ThreadAppView>("mako:thread-app", cwd, target),
@@ -663,6 +663,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:git-cancel-generation", requestId),
     utilityModelSettings: () =>
       invokeTrustedHost<UtilityModelSettings>("mako:utility-model-settings"),
+    /** What does a small task: `auto`, `off` for titles, or a model `utilityModelSettings` lists. */
+    chooseUtilityModel: (task: UtilityTask, choice: string) =>
+      invokeTrustedHost<void>("mako:utility-choice", task, choice),
     utilityModelCatalog: (input: UtilityCatalogInput) =>
       invokeTrustedHost<UtilityCatalog>("mako:utility-model-catalog", input),
     connectUtilityModel: (input: UtilityConnectionInput) =>

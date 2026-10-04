@@ -77,6 +77,9 @@ import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadTitlesIpc } from "./ipc/thread-titles.js"
 import { ThreadTitler } from "./thread-titles.js"
 import { resolveTitleModel } from "./thread-title-model.js"
+import { UtilityWork } from "./utility-work.js"
+import { utilityAgents } from "./utility-agents.js"
+import { OFF } from "./contracts/utility-work.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { installChatFoldersIpc } from "./ipc/chat-folders.js"
 import { installWorkspaceMovesIpc } from "./ipc/workspace-moves.js"
@@ -377,16 +380,23 @@ if (threadStoreProblem) hostWarn("threads", "Thread store problem", { problem: t
 installThreadStore(threadStore)
 const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event) => emit(event)) : () => {}
 const utilityModels = openUtilityModels()
-/** Names Threads from their latest exchanges, with the model chosen in Settings and only then. */
+/** Which model does each small task: Thread titles and commit messages. */
+const utilityWork = new UtilityWork({ models: utilityModels, agents: utilityAgents })
+/**
+ * Names Threads from their work, with the model `utilityWork` picks for
+ * titles. A fixture desk's store is read-only and its Threads aren't the
+ * person's, so it names none.
+ */
+const titlesWanted = async () => !fixtureDesk && (await utilityModels.choices()).title !== OFF
 const threadTitler = threadStore
   ? new ThreadTitler({
       store: threadStore,
-      model: () => resolveTitleModel(utilityModels),
-      chosen: async () => (await utilityModels.titleModel()) !== null,
+      model: () => resolveTitleModel(utilityWork),
+      chosen: titlesWanted,
       emit: (titles) => emit({ type: "thread-titles", titles }),
     })
   : undefined
-if (threadTitler) void utilityModels.titleModel().then((model) => threadTitler.configure(model !== null))
+if (threadTitler) void titlesWanted().then((wanted) => threadTitler.configure(wanted))
 const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
 /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
 const conversationsIn = (path: string, status: (value: string) => boolean) => liveConversations
@@ -1257,7 +1267,14 @@ function bindIpc() {
   })
 
   installWorkspaceIpc({ withHost, emit })
-  installGitIpc({ withHost, models: utilityModels })
+  installGitIpc({
+    withHost,
+    models: utilityModels,
+    work: utilityWork,
+    chosen: (task) => {
+      if (task === "title") void titlesWanted().then((wanted) => threadTitler?.configure(wanted))
+    },
+  })
 
   handle("mako:list-plugins", () => listPlugins())
   handle("mako:plugins-dir", () => pluginsDir())
@@ -2387,7 +2404,7 @@ app.whenReady().then(async () => {
   installThreadLifecycleIpc(threadLifecycle, threadArchives, emit)
   followNativeArchives(threadLifecycle, subscribeThreadEvents, emit)
   installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
-  installThreadTitlesIpc({ store: threadStore, titler: threadTitler, models: utilityModels, emit })
+  installThreadTitlesIpc({ store: threadStore, titler: threadTitler, emit })
   installThreadWorktreesIpc(threadWorktrees)
   installChatFoldersIpc()
   installWorkspaceMovesIpc(moves)

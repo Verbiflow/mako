@@ -1,3 +1,5 @@
+import type { UtilityWorkSettings } from "./utility-work.js"
+
 export type UtilityProvider =
   "google" | "openai" | "anthropic" | "openai-compatible"
 
@@ -48,8 +50,8 @@ export interface UtilityModelSettings {
   connections: UtilityConnection[]
   issues: Array<{ provider: UtilityProvider; message: string }>
   secureStorage: boolean
-  /** The connected model that names Threads (`provider/model`); absent while automatic titles are off. */
-  titleModel?: string
+  /** Which model does each small task, and what could. */
+  work?: UtilityWorkSettings
 }
 
 export type CommitAnalysisMode = "fast" | "deep"
@@ -59,12 +61,15 @@ export interface CommitGenerationInput {
   requestId: string
   cwd: string
   prompt?: string
+  /** `auto`, or a model id from `UtilityWorkSettings`; without one, the saved choice. */
   model?: string
 }
 
 export interface CommitGenerationResult {
   message: string
   model: string
+  /** The model and who ran it, as a person reads them. */
+  modelLabel: string
   scope: "staged" | "working-tree"
   files: number
   warnings: string[]

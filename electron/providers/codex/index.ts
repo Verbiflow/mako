@@ -10,6 +10,7 @@ import { codexProcessProbe } from "./process-probe.js"
 import { codexProfileLoader } from "./profile.js"
 import { codexSkillSource } from "./skills.js"
 import { resolveCodexExecutable } from "./executable.js"
+import { codexUtilityRunner } from "./utility.js"
 import { npmInstall } from "../update-source.js"
 
 export const installCodex: ProviderModule = (host) => installHarness(host, {
@@ -50,5 +51,6 @@ export const installCodex: ProviderModule = (host) => installHarness(host, {
       { label: "Install with Homebrew", command: "brew", args: ["install", "codex"] },
     ],
   },
+  utility: codexUtilityRunner,
   artifactPreview: lacks("Writes no artifact Mako previews"),
 })

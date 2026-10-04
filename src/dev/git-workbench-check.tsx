@@ -167,7 +167,7 @@ window.mako = {
   gitDiff: async (path) => { calls.diffs += 1; return { path, binary: false, oldFile: null, newFile: null, preview: { kind: "patch", contents: "diff --git a/large.ts b/large.ts\n@@ -1 +1 @@\n-old\n+new\n", limited: true } } },
 }
 
-prefsStore.set({ theme: "dark", autoOpenDiff: false, commitModel: "google/gemini-3.8-flash" })
+prefsStore.set({ theme: "dark", autoOpenDiff: false })
 bindTheme()
 selectProject(cwd)
 

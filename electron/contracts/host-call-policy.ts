@@ -137,8 +137,8 @@ const replays = [
   "mako:thread-rename",
   /** Importing names only fills Threads that have none, so a repeat changes nothing. */
   "mako:thread-titles-import",
-  /** Choosing the model a second time is the same choice. */
-  "mako:thread-title-model",
+  /** Choosing a task's model a second time is the same choice. */
+  "mako:utility-choice",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
   /** `WorkspaceMoves.answer`: the request id; an answered request ignores a repeat. */

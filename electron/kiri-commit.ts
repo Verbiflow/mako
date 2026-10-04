@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto"
-import { z } from "zod"
 import type {
   CaptureScope,
   CommitDraft,
@@ -7,17 +6,14 @@ import type {
   KiriRepository,
   RepoPath,
 } from "@kiri/client"
-import type { UtilityTokenCounter } from "./utility-token-count.js"
 import type {
   CommitAnalysisMode,
   CommitGenerationResult,
-  UtilityConnection,
 } from "./shared.js"
-import {
-  completeUtilityText,
-  UtilityModelError,
-  type UtilityLanguageModel,
-} from "./utility-models.js"
+import { UtilityModelError } from "./utility-model-error.js"
+import { utilityModelName } from "./contracts/utility-work.js"
+import type { UtilityModel } from "./utility-work.js"
+import { JsonSchemaSchema } from "./providers/utility-runner.js"
 import {
   registerKiriModel,
   withKiriRepository,
@@ -28,11 +24,9 @@ import { hostWarn } from "./host-log.js"
 interface ProposalInput {
   client: string
   cwd: string
-  model: UtilityLanguageModel
+  model: UtilityModel
   mode?: CommitAnalysisMode
-  connection: UtilityConnection
   prompt?: string
-  countTokens?: UtilityTokenCounter
   signal: AbortSignal
 }
 
@@ -61,21 +55,22 @@ export class KiriCommitEngine {
   ): Promise<{ proposal: T; files: number }> {
     const mode = input.mode ?? "fast"
     const reasoning = mode === "deep" ? "high" : "low"
+    const { model } = input
     const outputTokens = Math.min(
       mode === "deep" ? 8_192 : 2_048,
-      Math.floor(input.connection.contextTokens / 4)
+      Math.floor(model.contextTokens / 4)
     )
     return withKiriRepository(input.cwd, async (repo, client) => {
       if (!repo) throw new Error("This folder is not a Git repository")
       const binding = registerKiriModel(async (call, signal) => {
         try {
           const instructions = `${call.system}\nReturn only JSON matching this schema:\n${JSON.stringify(call.schema)}`
-          const budget = input.connection.contextTokens - outputTokens - 256
+          const budget = model.contextTokens - outputTokens - 256
           if (
             Buffer.byteLength(instructions) + Buffer.byteLength(call.input) >
             budget
           ) {
-            const tokens = await input.countTokens?.({
+            const tokens = await model.countTokens?.({
               instructions,
               prompt: call.input,
               signal,
@@ -86,18 +81,13 @@ export class KiriCommitEngine {
                 "The request exceeds this model's context window."
               )
           }
-          const schema = z.fromJSONSchema(
-            z.record(z.string(), z.unknown()).parse(call.schema)
-          )
-          return await completeUtilityText(
-            input.model,
+          return await model.complete({
             instructions,
-            call.input,
-            signal,
-            outputTokens,
-            schema,
-            reasoning
-          )
+            prompt: call.input,
+            schema: JsonSchemaSchema.parse(call.schema),
+            maxOutputTokens: outputTokens,
+            reasoning,
+          }, signal)
         } catch (error) {
           const { KiriError } = await import("@kiri/client")
           const kind =
@@ -109,7 +99,7 @@ export class KiriCommitEngine {
           hostWarn("commit-model", "Kiri model call failed", {
             kind,
             message,
-            model: `${input.connection.provider}/${input.connection.model}`,
+            model: model.id,
             mode,
             schema: JSON.stringify(call.schema).slice(0, 200),
             cause:
@@ -131,7 +121,7 @@ export class KiriCommitEngine {
               1_048_576,
               Math.max(
                 4_096,
-                (input.connection.contextTokens - outputTokens - 2_048) * 4
+                (model.contextTokens - outputTokens - 2_048) * 4
               )
             ),
             max_calls: 80,
@@ -141,15 +131,7 @@ export class KiriCommitEngine {
         )
         prepared = evidence.prepared
         const identity = createHash("sha256")
-          .update(
-            JSON.stringify([
-              input.connection.provider,
-              input.connection.model,
-              input.connection.baseUrl,
-              input.connection.contextTokens,
-              mode,
-            ])
-          )
+          .update(JSON.stringify([model.identity, mode]))
           .digest("hex")
         return {
           proposal: await create(repo, prepared, binding.handle, identity),
@@ -176,7 +158,8 @@ export class KiriCommitEngine {
     this.drafts.set(key, draft)
     return {
       message: draft.message,
-      model: `${input.connection.provider}/${input.connection.model}`,
+      model: input.model.id,
+      modelLabel: utilityModelName(input.model),
       scope: draft.snapshot.source === "staged" ? "staged" : "working-tree",
       files,
       warnings: draft.warnings,

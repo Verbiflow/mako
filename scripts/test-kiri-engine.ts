@@ -9,6 +9,7 @@ import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { KiriCommitEngine } from "../electron/kiri-commit.ts"
 import { utilityLanguageModel } from "../electron/utility-models.ts"
+import { languageUtilityModel } from "../electron/utility-work.ts"
 import type { UtilityConnection } from "../electron/shared.ts"
 
 const run = promisify(execFile)
@@ -90,8 +91,7 @@ try {
   const result = await engine.generate({
     client: "window",
     cwd: root,
-    connection,
-    model: utilityLanguageModel(connection, "fixture-key"),
+    model: languageUtilityModel(utilityLanguageModel(connection, "fixture-key"), { connection, via: "Fixture" }),
     signal: AbortSignal.timeout(20_000),
   })
   assert.equal(result?.message, "feat: describe the complete selected change")
@@ -120,8 +120,7 @@ try {
   const plan = await engine.plan({
     client: "window",
     cwd: root,
-    connection,
-    model: utilityLanguageModel(connection, "fixture-key"),
+    model: languageUtilityModel(utilityLanguageModel(connection, "fixture-key"), { connection, via: "Fixture" }),
     paths: [[...Buffer.from("selected")]],
     scope: "staged",
     signal: AbortSignal.timeout(20_000),
@@ -158,8 +157,7 @@ try {
   const workingPlan = await engine.plan({
     client: "window",
     cwd: root,
-    connection,
-    model: utilityLanguageModel(connection, "fixture-key"),
+    model: languageUtilityModel(utilityLanguageModel(connection, "fixture-key"), { connection, via: "Fixture" }),
     paths: [[...Buffer.from("working")]],
     scope: "worktree",
     signal: AbortSignal.timeout(20_000),

@@ -8,6 +8,7 @@ import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
+import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { ContextBreakdown, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
@@ -113,6 +114,24 @@ async function mockThreadContexts(
 
 /** What the page staged, so a pasted or reloaded attachment reads back the words it was given. */
 const STAGED_TEXT = new Map<string, string>()
+
+const utilityChoices: UtilityWorkChoices = { title: "auto", commit: "auto" }
+const MOCK_UTILITY_OPTIONS: UtilityModelOption[] = [
+  { id: "agent:claude/claude-haiku-4-5", label: "Haiku 4.5", via: "Claude Code", kind: "agent", source: "claude", light: true },
+  { id: "agent:claude/claude-sonnet-5", label: "Sonnet 5", via: "Claude Code", kind: "agent", source: "claude" },
+  { id: "agent:codex/gpt-6-luna", label: "GPT-6 Luna", via: "Codex", kind: "agent", source: "codex", light: true },
+  { id: "google/gemini-3.8-flash", label: "gemini-3.8-flash", via: "Google", kind: "connection", source: "google" },
+]
+
+/** Automatic resolves to the first agent's light model, as the host's `UtilityWork` does. */
+function mockUtilityWork(): UtilityWorkSettings {
+  const state = (task: UtilityTask): UtilityTaskState => {
+    const choice = utilityChoices[task]
+    const resolved = choice === "off" ? undefined : MOCK_UTILITY_OPTIONS.find((option) => option.id === (choice === "auto" ? "agent:claude/claude-haiku-4-5" : choice))
+    return { choice, options: MOCK_UTILITY_OPTIONS, resolved }
+  }
+  return { title: state("title"), commit: state("commit") }
+}
 
 export function installMockBridge() {
   const listeners = new Set<(event: HostEvent) => void>()
@@ -221,7 +240,6 @@ export function installMockBridge() {
       return entry
     },
     importThreadTitles: async () => [],
-    setThreadTitleModel: async () => {},
     worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
@@ -527,13 +545,17 @@ export function installMockBridge() {
     ],
     generateCommitMessage: async () => ({
       message: "Reserve a gutter for the turn navigator",
-      model: "google/gemini-2.5-flash",
+      model: "agent:claude/claude-haiku-4-5",
+      modelLabel: "Haiku 4.5 · Claude Code",
       scope: "staged",
       files: 2,
       warnings: [],
       requests: 1,
     }),
     cancelCommitGeneration: async () => {},
+    chooseUtilityModel: async (task: UtilityTask, choice: string) => {
+      utilityChoices[task] = choice
+    },
     utilityModelSettings: async () => ({
       providers: [
         {
@@ -553,6 +575,7 @@ export function installMockBridge() {
       ],
       issues: [],
       secureStorage: true,
+      work: mockUtilityWork(),
     }),
     utilityModelCatalog: async (input) => ({
       source: input.source,

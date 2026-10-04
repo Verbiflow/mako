@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { collectCommitPatch } from "../electron/commit-patch.ts"
 import { KiriCommitEngine } from "../electron/kiri-commit.ts"
+import { languageUtilityModel } from "../electron/utility-work.ts"
 import { MockLanguageModelV4 } from "ai/test"
 
 const run = promisify(execFile)
@@ -53,7 +54,7 @@ try {
     }
     return { content: [{ type: "text", text: JSON.stringify(summary ? { summary: text.match(/LATE_[A-Z_]+CHANGE/g)?.join("\n") || "Other changes in this part." } : { action: "finish", result: { message: "Include every change area" }, requests: [], notes: "" }) }], finishReason: { unified: "stop", raw: "stop" }, usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } }, warnings: [] }
   } })
-  const drafted = await engine.generate({ client: "test", cwd: root, model, connection: { provider: "openai-compatible", model: "fixture", contextTokens: 32_000 }, signal })
+  const drafted = await engine.generate({ client: "test", cwd: root, model: languageUtilityModel(model, { connection: { provider: "openai-compatible", model: "fixture", contextTokens: 32_000 }, via: "Fixture" }), signal })
   assert.ok(rawParts.length > 1)
   assert.ok(drafted.requests >= rawParts.length + 1)
   assert.equal((patch.text.match(/Large diff line/g) ?? []).length, 160_000)

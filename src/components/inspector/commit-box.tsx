@@ -74,8 +74,7 @@ function CommitEditor({
   const message = draftState.text
   const drafting = draftState.requestId !== null
   const theme = useOrbTheme()
-  const pref = usePrefs((prefs) => prefs.commitModel)
-  const { model, status: connection } = useResolvedCommitModel(pref)
+  const { model, label: modelLabel, status: connection } = useResolvedCommitModel()
   const hasModel = Boolean(model)
   const disconnected = connection.kind === "disconnected"
   const [busy, setBusy] = useState(false)
@@ -98,14 +97,14 @@ function CommitEditor({
     node.style.height = `${Math.min(node.scrollHeight, 160)}px`
   }, [message])
 
-  // The connections are read when the box appears, when the window comes
-  // back (Settings may have changed them) and whenever the preference moves.
+  // The host's choice is read when the box appears and when the window comes
+  // back, since Settings or a sign-in elsewhere may have changed it.
   useEffect(() => {
     void refreshCommitModel()
     const focus = () => void refreshCommitModel()
     window.addEventListener("focus", focus)
     return () => window.removeEventListener("focus", focus)
-  }, [pref])
+  }, [])
 
   const draft = useCallback(
     async function draftCommitMessage() {
@@ -277,12 +276,12 @@ function CommitEditor({
               <Action
                 size="xs"
                 tone="quiet"
-                aria-label="Reconnect commit model"
-                title={`${model}: ${connection.reason}`}
+                aria-label="Choose a commit model"
+                title={connection.reason}
                 onClick={openModelSettings}
               >
                 <DraftMark />
-                Reconnect model
+                Choose model
               </Action>
             ) : hasModel ? (
               <>
@@ -290,7 +289,7 @@ function CommitEditor({
                   size="xs"
                   tone="quiet"
                   aria-label="Draft a message from the diff"
-                  title={`Generate (${draftState.mode}) with ${model} · ${formatChord(draftKeys).join(" ")}`}
+                  title={`Generate (${draftState.mode}) with ${modelLabel ?? model} · ${formatChord(draftKeys).join(" ")}`}
                   disabled={total === 0 || busy}
                   onClick={() => void draft()}
                 >
@@ -298,7 +297,7 @@ function CommitEditor({
                   <span className="@max-[22rem]/commit:hidden">Generate</span>
                 </Action>
                 <GenerationSettings
-                  model={model ?? ""}
+                  model={modelLabel ?? model ?? ""}
                   mode={draftState.mode}
                   disabled={busy}
                   onMode={(mode) => commitDrafts.setMode(cwd, mode)}
@@ -422,7 +421,7 @@ function GenerationSettings({
   onMode: (mode: CommitAnalysisMode) => void
   onChangeModel: () => void
 }) {
-  const shortName = model.split("/").slice(1).join("/") || model
+  const shortName = model.split(" · ")[0] || model
   return (
     <Popover>
       <PopoverTrigger asChild>

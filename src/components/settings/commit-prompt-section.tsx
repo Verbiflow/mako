@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from "react"
 import { Action, Keys } from "@/components/ui/kit"
-import { SearchSelect } from "@/components/ui/search-select"
 import { ProviderIcon } from "@/components/ui/provider-icon"
 import { ConnectCommitModel } from "./connect-commit-model"
+import { UtilityModelPicker } from "./utility-model-picker"
 import { formatChord } from "@/extend/commands"
 import { setPref, usePrefs } from "@/state/prefs"
 import { git } from "@/state/git"
 import { utilityModels } from "@/state/model-runtime"
-import { refreshCommitModel, resolveCommitModel } from "@/state/commit-model"
+import { refreshCommitModel } from "@/state/commit-model"
 import type {
   UtilityModelSettings,
   UtilityProvider,
@@ -17,7 +17,6 @@ import { CheckIcon, PlusIcon, RotateCcwIcon } from "lucide-react"
 
 export function CommitPromptSection() {
   const stored = usePrefs((prefs) => prefs.commitPrompt)
-  const commitModel = usePrefs((prefs) => prefs.commitModel)
   const draftKeys = usePrefs(
     (prefs) => prefs.keybindings["workspace.generate-commit"] ?? "mod+shift+g"
   )
@@ -31,9 +30,8 @@ export function CommitPromptSection() {
   const [draft, setDraft] = useState<string | null>(null)
   const value = draft ?? stored ?? fallback
   const customized = Boolean(stored && stored !== fallback)
-  // With no explicit choice the first connection drafts, and this page says
-  // so rather than showing an empty picker beside a connected provider.
-  const draftingModel = resolveCommitModel(settings, commitModel).model
+  const commit = settings?.work?.commit
+  const draftingModel = commit?.resolved?.id
 
   const refresh = useCallback(async () => {
     try {
@@ -44,8 +42,8 @@ export function CommitPromptSection() {
       setSettings(next)
       setFallback(prompt)
       setError(null)
-      // The commit box reads the same connections; a change made here
-      // reaches its toolbar without waiting for a window focus.
+      // The commit box reads the same choice; a change made here reaches
+      // its toolbar without waiting for a window focus.
       void refreshCommitModel()
     } catch (caught) {
       setError(
@@ -66,8 +64,6 @@ export function CommitPromptSection() {
   async function disconnect(provider: UtilityProvider) {
     try {
       await utilityModels.disconnect(provider)
-      if (commitModel?.startsWith(`${provider}/`))
-        setPref("commitModel", undefined)
       setDisconnecting(null)
       await refresh()
     } catch (caught) {
@@ -79,11 +75,25 @@ export function CommitPromptSection() {
     }
   }
 
+  async function choose(choice: string) {
+    try {
+      await utilityModels.choose("commit", choice)
+      await refresh()
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "The choice could not be saved. Try again."
+      )
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <p className="text-ui leading-relaxed text-muted-foreground">
-        Draft from your changes using a model you connect here. No agent session
-        is started and no conversation context is used.
+        Draft from your changes with a light model from an agent app you're
+        signed in to, on your own subscription, or with a model you connect
+        here. No conversation is started or read.
       </p>
       {error ? (
         <div
@@ -107,33 +117,22 @@ export function CommitPromptSection() {
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-ui font-medium">Drafting model</span>
-              <SearchSelect
-                value={draftingModel ?? ""}
+              <UtilityModelPicker
+                task="commit"
+                state={commit}
                 label="Commit drafting model"
-                placeholder="Choose a connected model"
-                searchPlaceholder="Search connected models"
-                className="w-64 max-w-full"
-                options={settings.connections.map((connection) => ({
-                  value: `${connection.provider}/${connection.model}`,
-                  label: connection.model,
-                  detail: settings.providers.find(
-                    (provider) => provider.id === connection.provider
-                  )?.name,
-                  icon: (
-                    <ProviderIcon
-                      provider={connection.provider}
-                      tinted={false}
-                      className="size-3.5"
-                    />
-                  ),
-                }))}
-                onChange={(next) => setPref("commitModel", next)}
+                onChoose={(next) => void choose(next)}
               />
             </div>
+            {commit && !commit.resolved ? (
+              <p role="alert" className="text-label leading-relaxed text-caution">
+                {commit.reason}
+              </p>
+            ) : null}
             <p className="text-label leading-relaxed text-faint">
-              Generating sends the complete diff to this provider. Only context
-              overflow uses parallel summaries. Sensitive-file exclusions are
-              reported with the draft.
+              Generating sends the complete diff to the model's provider. Only
+              context overflow uses parallel summaries. Sensitive-file
+              exclusions are reported with the draft.
             </p>
           </section>
           <section
@@ -281,9 +280,8 @@ export function CommitPromptSection() {
           )}
           onClose={() => setEditing(null)}
           onConnected={(connection) => {
-            setPref("commitModel", `${connection.provider}/${connection.model}`)
             setEditing(null)
-            void refresh()
+            void choose(`${connection.provider}/${connection.model}`)
           }}
         />
       ) : null}

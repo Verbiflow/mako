@@ -49,5 +49,6 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   },
   connection: lacks("Signs in through OpenCode’s own providers"),
   updates: openCodeUpdateSource,
+  utility: notBuilt("OpenCode keeps every prompt as a session in its own database; a one-off request would have to be deleted after, which Mako doesn't do yet"),
   artifactPreview: lacks("Writes no artifact Mako previews"),
 })

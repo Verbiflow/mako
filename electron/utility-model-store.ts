@@ -19,6 +19,7 @@ import {
   utilityProviderSchema,
   UtilityModelError,
 } from "./utility-models.js"
+import { AUTOMATIC, OFF, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "./contracts/utility-work.js"
 
 export interface UtilityKeyEncryption {
   available(): boolean | Promise<boolean>
@@ -32,7 +33,19 @@ const apiKeySchema = z
   .max(16_384)
   .regex(/^[\x20-\x7e]*$/)
 const storedSchema = connectionSchema.extend({ apiKey: apiKeySchema })
-const titleChoiceSchema = z.object({ model: z.string().min(1).max(400) })
+const choiceSchema = z.string().min(1).max(400)
+const choicesSchema = z.object({ title: choiceSchema.optional(), commit: choiceSchema.optional() })
+const legacyTitleSchema = z.object({ model: choiceSchema })
+
+/** A small JSON file read with `schema`, or undefined when it's missing, too big or not that shape. */
+async function readSmallJson<T>(path: string, schema: z.ZodType<T>): Promise<T | undefined> {
+  try {
+    if ((await stat(path)).size > 4_096) return undefined
+    return schema.parse(JSON.parse(await readFile(path, "utf8")))
+  } catch {
+    return undefined
+  }
+}
 const credentialSchema = z.object({
   provider: utilityProviderSchema,
   baseUrl: z.string().max(2_048).optional(),
@@ -83,49 +96,38 @@ export class UtilityModelStore {
         })
       }
     }
-    const settings: UtilityModelSettings = {
+    return {
       providers: utilityProviders,
       connections,
       issues,
       secureStorage: await this.encryption.available(),
     }
-    const titleModel = await this.titleModel()
-    if (titleModel) settings.titleModel = titleModel
-    return settings
   }
 
   /**
-   * The model chosen to name Threads, as `provider/model`, or null while
-   * automatic titles are off. It is a choice, not a key, so it is stored in
-   * the clear beside the connections and every host reads the same one.
+   * What the person chose for each small task: `auto`, `off` for titles, or
+   * a model's id. Choices aren't keys, so they are stored in the clear beside
+   * the connections and every host reads the same ones. A task never chosen
+   * is `auto`, except titles chosen before this file existed, which keep the
+   * model `thread-titles.json` named.
    */
-  async titleModel(): Promise<string | null> {
+  async choices(): Promise<UtilityWorkChoices> {
     await this.ready
-    try {
-      const info = await stat(this.titleModelPath())
-      if (info.size > 4_096) return null
-      return titleChoiceSchema.parse(JSON.parse(await readFile(this.titleModelPath(), "utf8"))).model
-    } catch {
-      return null
-    }
+    const stored = await readSmallJson(this.choicesPath(), choicesSchema)
+    const legacy = stored?.title === undefined ? (await readSmallJson(this.legacyTitlePath(), legacyTitleSchema))?.model : undefined
+    return { title: stored?.title ?? legacy ?? AUTOMATIC, commit: stored?.commit ?? AUTOMATIC }
   }
 
-  /** Choose the connected model that names Threads, or null to turn automatic titles off. */
-  async setTitleModel(model: string | null): Promise<void> {
+  async choose(task: UtilityTask, choice: string): Promise<void> {
     await this.ready
-    if (model === null) {
-      await rm(this.titleModelPath(), { force: true })
-      return
-    }
-    const provider = utilityProviders.find(({ id }) => model.startsWith(`${id}/`))
-    const connection = provider ? await this.load(provider.id) : null
-    if (!connection || `${connection.provider}/${connection.model}` !== model)
-      throw new Error("Connect this model in Settings > Commit messages before choosing it for Thread titles.")
+    if (choice === OFF && task !== "title") throw new Error("Commit messages can't be turned off; choose Automatic or a model.")
+    const next = { ...(await this.choices()), [task]: choice }
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    const temporary = `${this.titleModelPath()}.${randomUUID()}.tmp`
+    const temporary = `${this.choicesPath()}.${randomUUID()}.tmp`
     try {
-      await writeFile(temporary, JSON.stringify({ model }), { mode: 0o600, flag: "wx" })
-      await rename(temporary, this.titleModelPath())
+      await writeFile(temporary, JSON.stringify(next), { mode: 0o600, flag: "wx" })
+      await rename(temporary, this.choicesPath())
+      await rm(this.legacyTitlePath(), { force: true })
     } finally {
       await rm(temporary, { force: true })
     }
@@ -211,8 +213,10 @@ export class UtilityModelStore {
     this.lock(provider)
     try {
       await rm(this.path(provider), { force: true })
-      // Titles stop with the connection rather than moving to another provider.
-      if ((await this.titleModel())?.startsWith(`${provider}/`)) await rm(this.titleModelPath(), { force: true })
+      // A task that used this connection goes back to Automatic, which Settings shows resolved.
+      const choices = await this.choices()
+      for (const task of UTILITY_TASKS)
+        if (choices[task].startsWith(`${provider}/`)) await this.choose(task, AUTOMATIC)
     } finally {
       this.writing.delete(provider)
     }
@@ -222,7 +226,12 @@ export class UtilityModelStore {
     return join(this.directory, `${utilityProviderSchema.parse(provider)}.enc`)
   }
 
-  private titleModelPath() {
+  private choicesPath() {
+    return join(this.directory, "utility-work.json")
+  }
+
+  /** Where the title model was chosen before every task had a choice. */
+  private legacyTitlePath() {
     return join(this.directory, "thread-titles.json")
   }
 

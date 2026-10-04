@@ -5,7 +5,6 @@ import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
 import type { ThreadStore } from "../thread-store.js"
 import type { ThreadTitler } from "../thread-titles.js"
-import type { UtilityModelStore } from "../utility-model-store.js"
 
 const TitleSchema = z.string().max(400)
 const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSchema })).max(5_000)
@@ -13,16 +12,16 @@ const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSche
 /**
  * Threads' names for every window: the ones to draw, a person's rename
  * (or giving the name back to automatic titles with `null`), a window's
- * renames from before the store kept them, and which model names Threads.
+ * renames from before the store kept them. Which model names Threads is
+ * chosen with every other small task's model, through `mako:utility-choice`.
  * Every change is told to every window as `thread-titles`.
  */
 export function installThreadTitlesIpc(input: {
   store: ThreadStore | null
   titler?: ThreadTitler
-  models: UtilityModelStore
   emit(event: HostEvent): void
 }) {
-  const { store, titler, models, emit } = input
+  const { store, titler, emit } = input
   const tell = (titles: ThreadTitleEntry[]) => {
     if (titles.length) emit({ type: "thread-titles", titles })
   }
@@ -45,10 +44,5 @@ export function installThreadTitlesIpc(input: {
     const imported = store.importThreadTitles(ImportSchema.parse(entries))
     tell(imported)
     return imported
-  })
-  registerIpc("mako:thread-title-model", async (_event, model: string | null): Promise<void> => {
-    const chosen = TitleSchema.nullable().parse(model)
-    await models.setTitleModel(chosen)
-    titler?.configure(chosen !== null)
   })
 }

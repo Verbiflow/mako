@@ -1,18 +1,23 @@
 import { z } from "zod"
 import type { CommitGenerationInput, CommitGenerationResult } from "./shared.js"
-import { UtilityModelError, utilityLanguageModel, utilityProviders } from "./utility-models.js"
-import type { UtilityModelStore } from "./utility-model-store.js"
+import { parseAgentModelId } from "./contracts/utility-work.js"
+import { UtilityModelError } from "./utility-model-error.js"
+import type { UtilityWork } from "./utility-work.js"
 import { KiriCommitEngine } from "./kiri-commit.js"
-import { utilityTokenCounter } from "./utility-token-count.js"
 
 const inputSchema = z.object({ mode: z.enum(["fast", "deep"]).default("fast"), requestId: z.string().uuid(), cwd: z.string().min(1).max(4_096), prompt: z.string().max(12_000).optional(), model: z.string().max(400).optional() })
 
+/** A model connection answers each of Kiri's calls in seconds. */
+const CONNECTION_TIMEOUT_MS = 120_000
+/** An agent app starts a process for each call, so the same work takes longer. */
+const AGENT_TIMEOUT_MS = 300_000
+
 export class CommitGeneration {
   private readonly active = new Map<string, { id: string; controller: AbortController }>()
-  private readonly models: UtilityModelStore
+  private readonly work: UtilityWork
   private readonly engine: KiriCommitEngine
-  constructor(models: UtilityModelStore, engine = new KiriCommitEngine()) {
-    this.models = models
+  constructor(work: UtilityWork, engine = new KiriCommitEngine()) {
+    this.work = work
     this.engine = engine
   }
 
@@ -23,13 +28,14 @@ export class CommitGeneration {
     const request = parsed.data
     const controller = new AbortController()
     this.active.set(client, { id: request.requestId, controller })
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)])
+    let signal = controller.signal
     try {
-      const provider = utilityProviders.find(({ id }) => request.model?.startsWith(`${id}/`))
-      if (!provider) throw new Error("Connect a model in Settings > Commit messages, then choose it for drafting.")
-      const connection = await this.models.load(provider.id)
-      if (!connection || `${connection.provider}/${connection.model}` !== request.model) throw new Error("The selected model connection has changed. Choose a connected model in Settings > Commit messages.")
-      return await this.engine.generate({ client, cwd: request.cwd, mode: request.mode, model: utilityLanguageModel(connection, connection.apiKey), connection, prompt: request.prompt, countTokens: utilityTokenCounter(connection, connection.apiKey), signal })
+      const resolved = await this.work.resolve("commit", request.model)
+      if (resolved.kind === "unavailable") throw new Error(resolved.reason)
+      if (resolved.kind === "off") throw new Error("Choose a model for commit messages in Settings › Commit messages.")
+      const { model } = resolved
+      signal = AbortSignal.any([controller.signal, AbortSignal.timeout(parseAgentModelId(model.id) ? AGENT_TIMEOUT_MS : CONNECTION_TIMEOUT_MS)])
+      return await this.engine.generate({ client, cwd: request.cwd, mode: request.mode, model, prompt: request.prompt, signal })
     } catch (error) {
       if (signal.aborted) throw new UtilityModelError("timeout", controller.signal.aborted ? "Generation cancelled." : "Generation timed out. Completed analysis can be reused on retry.")
       throw error

@@ -43,5 +43,6 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
     managedBy: [["external_agents", "Zed"]],
     install: [scriptInstall("https://cli.devin.ai/install.sh")],
   },
+  utility: notBuilt("Devin's agent keeps each session it opens in Devin's history; a one-off request that leaves none behind isn't built yet"),
   artifactPreview: lacks("Writes no artifact Mako previews"),
 })

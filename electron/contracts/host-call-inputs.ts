@@ -880,7 +880,6 @@ export const hostCallInputs = {
       }),
     ]),
   ]),
-  "mako:thread-title-model": z.tuple([z.union([z.null(), z.string()])]),
   "mako:thread-titles": z.tuple([]),
   "mako:thread-titles-import": z.tuple([
     z.array(z.object({ thread: z.string(), title: z.string() })),
@@ -902,6 +901,7 @@ export const hostCallInputs = {
   "mako:update-state": z.tuple([]),
   "mako:usage": z.tuple([]),
   "mako:user-avatar": z.tuple([]),
+  "mako:utility-choice": z.tuple([z.string(), z.string()]),
   "mako:utility-model-catalog": z.tuple([
     z.union([
       z.object({

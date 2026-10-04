@@ -62,10 +62,10 @@ export interface ThreadTitlerOptions {
 }
 
 export const TITLE_INSTRUCTIONS = [
-  "You name conversations between a person and a coding agent, for a list of conversations.",
+  "You name a piece of work a person is doing with coding agents, for a list of such pieces of work.",
   "Reply with the title only: two to six words in sentence case, with no quotes, no markdown and no closing period.",
-  "Name what the conversation is about now. When the topic has changed, the latest exchange decides.",
-  "If the current title still describes the conversation, reply with the current title unchanged.",
+  "Name the work as a whole: what it set out to do, and where it is now. Prefer the subject (the feature, bug or area) over the latest step.",
+  "If the current title still describes the work, reply with the current title unchanged. Change it only when the work has moved to a different subject; then name what the recent exchanges are working toward together, not the last request.",
 ].join(" ")
 const TITLE_MAX_CHARS = 80
 
@@ -86,15 +86,13 @@ export function completedExchange(blocks: readonly LiveBlock[], request: LiveReq
   if (start < 0) return undefined
   const prompt = request.continues?.auto ? "" : boundedText(promptText(blocks[start], request), TITLE_PROMPT_CHARS)
   const parts: string[] = []
-  let length = 0
-  for (let index = start + 1; index < blocks.length && length < TITLE_ANSWER_CHARS; index += 1) {
+  for (let index = start + 1; index < blocks.length; index += 1) {
     const block = blocks[index]
     if (isTurnStart(block)) break
     if (block?.type !== "text" || !block.text.trim()) continue
     parts.push(block.text.trim())
-    length += block.text.length
   }
-  return { prompt, answer: boundedText(parts.join("\n\n"), TITLE_ANSWER_CHARS) }
+  return { prompt, answer: headAndTail(parts.join("\n\n"), TITLE_ANSWER_CHARS) }
 }
 
 function promptText(block: LiveBlock | undefined, request: LiveRequest): string {
@@ -106,14 +104,26 @@ function boundedText(text: string, limit: number): string {
   return trimmed.length > limit ? `${trimmed.slice(0, limit - 1)}…` : trimmed
 }
 
-/** The words a model is asked about: the current title and the window, oldest first. */
-export function titlePrompt(context: Pick<TitleContext, "current" | "exchanges">): string {
-  const exchanges = context.exchanges.map((exchange, index) => [
-    index === context.exchanges.length - 1 ? "Latest exchange" : "Earlier exchange",
-    `Person: ${exchange.prompt || "(Mako continued an interrupted turn.)"}`,
-    `Agent: ${exchange.answer || "(The agent answered with tool calls only.)"}`,
-  ].join("\n"))
-  return [context.current ? `Current title: ${context.current}` : "The conversation has no title yet.", ...exchanges].join("\n\n")
+/** An answer's start and, at twice the length, its end, where agents say what they did. */
+function headAndTail(text: string, limit: number): string {
+  const trimmed = text.trim()
+  if (trimmed.length <= limit) return trimmed
+  const head = Math.floor((limit - 3) / 3)
+  return `${trimmed.slice(0, head)} … ${trimmed.slice(trimmed.length - (limit - 3 - head))}`
+}
+
+/** The words a model is asked about: the current title, how the work began, and the window, oldest first. */
+export function titlePrompt(context: Pick<TitleContext, "current" | "exchanges" | "opening">): string {
+  const exchange = (heading: string, entry: TitleContext["exchanges"][number]) => [
+    heading,
+    `Person: ${entry.prompt || "(Mako continued an interrupted turn.)"}`,
+    `Agent: ${entry.answer || "(The agent answered with tool calls only.)"}`,
+  ].join("\n")
+  return [
+    context.current ? `Current title: ${context.current}` : "The work has no title yet.",
+    ...(context.opening ? [exchange("How the work began", context.opening)] : []),
+    ...context.exchanges.map((entry, index) => exchange(index === context.exchanges.length - 1 ? "Latest exchange" : "Earlier exchange", entry)),
+  ].join("\n\n")
 }
 
 /**

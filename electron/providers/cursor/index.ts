@@ -92,6 +92,7 @@ export const installCursor: ProviderModule = (host) => {
       },
       install: [scriptInstall("https://cursor.com/install")],
     },
+    utility: notBuilt("Cursor's SDK keeps every agent it runs in a store; a one-off request would need a store of its own, removed after, which Mako doesn't build yet"),
     artifactPreview: cursorCanvasPreview,
   })
 }

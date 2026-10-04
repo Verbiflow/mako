@@ -282,7 +282,7 @@ const DESK_COMMANDS: DeskCommand[] = [
     title: "Draft a commit message",
     section: "Workspace",
     keys: "mod+shift+g",
-    hint: "From the diff, using your connected drafting model",
+    hint: "From the diff, using your drafting model",
     run: async () => {
       stage.open("changes")
       const { model, status } = await currentCommitModel()

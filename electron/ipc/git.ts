@@ -5,6 +5,8 @@ import { COMMIT_PROMPT, type AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
 import { CommitGeneration } from "../commit-generation.js"
 import { UtilityModelStore } from "../utility-model-store.js"
+import type { UtilityWork } from "../utility-work.js"
+import { UTILITY_TASKS, type UtilityTask } from "../contracts/utility-work.js"
 import {
   legacyUtilityModelDirectory,
   migrateUtilityModels,
@@ -12,6 +14,7 @@ import {
 } from "../utility-model-location.js"
 import { UtilityModelCatalog } from "../utility-model-catalog.js"
 import { hostLog, hostWarn } from "../host-log.js"
+import { z } from "zod"
 import type {
   CommitGenerationInput,
   GitPushInput,
@@ -28,10 +31,15 @@ export interface GitIpcContext {
     operation: (host: AgentHost) => TResult | Promise<TResult>
   ): Promise<TResult>
   models: UtilityModelStore
+  work: UtilityWork
+  /** After a task's model is chosen, so whatever does that task can follow. */
+  chosen?(task: UtilityTask, choice: string): void
 }
 
+const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).max(400)])
+
 export function installGitIpc(context: GitIpcContext): void {
-  const { withHost, models } = context
+  const { withHost, models, work, chosen } = context
   configureKiriCache(join(app.getPath("userData"), "kiri-analysis-cache"))
   registerIpc("mako:git-select-repository", (_event, cwd: string, root: string) => withHost((host) => host.selectGitRepository(cwd, root)))
   registerIpc("mako:git-status", () => withHost((host) => host.gitStatus()))
@@ -84,9 +92,17 @@ export function installGitIpc(context: GitIpcContext): void {
   registerIpc("mako:git-commit-diff-all", (_event, hash: string) =>
     withHost((host) => host.gitCommitDiffAll(hash))
   )
-  const generation = new CommitGeneration(models)
+  const generation = new CommitGeneration(work)
   const catalog = new UtilityModelCatalog(models)
-  registerIpc("mako:utility-model-settings", () => models.settings())
+  registerIpc("mako:utility-model-settings", async () => {
+    const [settings, tasks] = await Promise.all([models.settings(), work.settings()])
+    return { ...settings, work: tasks }
+  })
+  registerIpc("mako:utility-choice", async (_event, task: string, choice: string) => {
+    const [parsedTask, parsedChoice] = UtilityChoiceSchema.parse([task, choice])
+    await work.choose(parsedTask, parsedChoice)
+    chosen?.(parsedTask, parsedChoice)
+  })
   registerIpc(
     "mako:utility-model-catalog",
     (_event, input: UtilityCatalogInput) => catalog.list(input)

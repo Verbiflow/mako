@@ -19,6 +19,7 @@ import {
   type UtilityKeyEncryption,
 } from "../electron/utility-model-store.ts"
 import { CommitGeneration } from "../electron/commit-generation.ts"
+import { UtilityWork } from "../electron/utility-work.ts"
 
 const secret = randomBytes(32)
 const encryption: UtilityKeyEncryption = {
@@ -142,7 +143,7 @@ try {
   await run("git", ["init", "-q"], { cwd: root })
   await writeFile(join(root, ".gitignore"), "connections/\n")
   await writeFile(join(root, "feature.ts"), "New feature for the commit\n")
-  const service = new CommitGeneration(store)
+  const service = new CommitGeneration(new UtilityWork({ models: store, agents: async () => [] }))
   const generation = {
     requestId: randomUUID(),
     cwd: root,

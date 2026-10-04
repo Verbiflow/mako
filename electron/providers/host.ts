@@ -13,6 +13,7 @@ import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderSessionEmitter } from "./session-emitter.js"
 import type { ProviderSkillSource } from "./skill-source.js"
 import type { ProviderUpdateSource } from "./update-source.js"
+import type { ProviderUtilityRunner } from "./utility-runner.js"
 import { ProviderRegistry } from "./registry.js"
 import { validateLiveDriver } from "./live-driver.js"
 import { withNativeExclusion } from "./native-exclusion.js"
@@ -30,6 +31,7 @@ export interface ProviderHost {
   /** Each harness's native-event decoder, for fixtures and the decode tool. */
   decoders: ProviderRegistry<ProviderDecoderSource>
   nativeRunners: ProviderRegistry<NativeRunner>
+  utilityRunners: ProviderRegistry<ProviderUtilityRunner>
   acpSources: ProviderRegistry<ProviderAcpSource>
   profiles: ProviderRegistry<ProviderProfileLoader>
   processProbes: ProviderRegistry<ProviderProcessProbe>
@@ -57,6 +59,7 @@ export function createProviderHost(): ProviderHost {
     liveDrivers: new ProviderRegistry(validateLiveDriver, withNativeExclusion),
     decoders: new ProviderRegistry(),
     nativeRunners: new ProviderRegistry(),
+    utilityRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),
     profiles: new ProviderRegistry(),
     processProbes: new ProviderRegistry(),

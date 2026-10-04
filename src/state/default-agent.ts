@@ -1,3 +1,4 @@
+import { agentOrder, harnessesByRecency } from "../../electron/contracts/agent-order"
 import type { HarnessDescriptor, HarnessProfile, ThreadRef } from "@/lib/types"
 import { acpStore, activeAcp } from "@/state/acp-state"
 import { prefsStore } from "@/state/prefs"
@@ -15,18 +16,13 @@ export function isSignedIn(profile: HarnessProfile | undefined): boolean {
  * history; with no history, the first signed-in one.
  */
 export function firstRunAgent(profiles: Record<string, HarnessProfile>, threads: readonly ThreadRef[], descriptors: readonly HarnessDescriptor[] = threadsStore.get().descriptors): string | undefined {
-  let recent: ThreadRef | undefined
-  for (const ref of threads) {
-    if (!isSignedIn(profiles[ref.harness])) continue
-    if (!recent || (ref.updatedAt ?? "") > (recent.updatedAt ?? "")) recent = ref
-  }
-  if (recent) return recent.harness
+  const signedIn = Object.keys(profiles).filter((harness) => isSignedIn(profiles[harness]))
+  const recent = harnessesByRecency(threads)
   // Profiles may arrive before identity metadata. Do not pick an arbitrary
   // first-run default while the declared preference order is still loading.
-  if (descriptors.some((entry) => !entry.presentation)) return undefined
-  return [...descriptors]
-    .sort((left, right) => (left.presentation?.firstRunPriority ?? Infinity) - (right.presentation?.firstRunPriority ?? Infinity))
-    .find(({ provider }) => isSignedIn(profiles[provider]))?.provider
+  if (!recent.some((harness) => signedIn.includes(harness)) && descriptors.some((entry) => !entry.presentation)) return undefined
+  const priority = Object.fromEntries(descriptors.map((entry) => [entry.provider, entry.presentation?.firstRunPriority ?? Number.POSITIVE_INFINITY]))
+  return agentOrder({ signedIn, recent, priority })[0]
 }
 
 /**

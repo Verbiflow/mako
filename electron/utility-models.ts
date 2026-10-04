@@ -15,6 +15,7 @@ import {
 } from "ai"
 import { z } from "zod"
 import type { UtilityConnectionInput, UtilityProviderInfo } from "./shared.js"
+import { UtilityModelError } from "./utility-model-error.js"
 
 export const utilityProviders: UtilityProviderInfo[] = [
   {
@@ -130,18 +131,7 @@ export function utilityLanguageModel(
   }
 }
 
-type UtilityErrorKind =
-  "context" | "auth" | "rate-limit" | "timeout" | "output" | "request"
-
-export class UtilityModelError extends Error {
-  readonly kind: UtilityErrorKind
-
-  constructor(kind: UtilityErrorKind, message: string) {
-    super(message)
-    this.kind = kind
-    this.name = "UtilityModelError"
-  }
-}
+export { UtilityModelError } from "./utility-model-error.js"
 
 function outputLimitError(): UtilityModelError {
   return new UtilityModelError(

@@ -203,7 +203,10 @@ export interface TitleContext {
   /** Which window the automatic title last answered. */
   answered?: string
   revision: number
+  /** The latest `TITLE_WINDOW` exchanges finished in any of the Thread's Sessions, oldest first. */
   exchanges: TitleExchange[]
+  /** The Thread's first exchange, when the window no longer holds it: what the work set out to do. */
+  opening?: TitleExchange
   /** Names the window's exchanges; the same window always has the same digest. */
   digest: string
 }
@@ -420,8 +423,8 @@ const TITLE_COLUMNS = [
   "title_pending_by TEXT",
 ]
 /**
- * The last `TITLE_WINDOW` finished exchanges of each Session, cut to
- * `TITLE_PROMPT_CHARS` and `TITLE_ANSWER_CHARS`, and every change of a
+ * Each Session's first finished exchange and its last `TITLE_WINDOW`, cut
+ * to `TITLE_PROMPT_CHARS` and `TITLE_ANSWER_CHARS`, and every change of a
  * Thread's name in commit order, for other hosts' windows.
  */
 const TITLE_TABLES = `
@@ -434,9 +437,9 @@ CREATE TRIGGER IF NOT EXISTS thread_title_changed AFTER UPDATE OF title, title_s
   WHEN OLD.title IS NOT NEW.title OR OLD.title_source IS NOT NEW.title_source OR OLD.auto_title IS NOT NEW.auto_title
   BEGIN INSERT INTO title_changes (thread_id) VALUES (NEW.id); END;
 `
-export const TITLE_WINDOW = 2
-export const TITLE_PROMPT_CHARS = 1_200
-export const TITLE_ANSWER_CHARS = 1_600
+export const TITLE_WINDOW = 3
+export const TITLE_PROMPT_CHARS = 2_000
+export const TITLE_ANSWER_CHARS = 2_400
 export const TITLE_LEASE_MS = 90_000
 const TitleRowSchema = z.object({
   id: z.string(),
@@ -1045,7 +1048,7 @@ export class ThreadStore {
   /**
    * Keep a Session's finished exchange for naming its Thread. False when it
    * was kept before: a report repeated by a replay or a second host is one
-   * exchange. Only the Session's latest `TITLE_WINDOW` are kept.
+   * exchange. Only the Session's first and its latest `TITLE_WINDOW` are kept.
    */
   noteExchange(input: TitleExchange): boolean {
     return this.write(() => {
@@ -1056,8 +1059,9 @@ export class ThreadStore {
         input.prompt.slice(0, TITLE_PROMPT_CHARS), input.answer.slice(0, TITLE_ANSWER_CHARS))
       if (!inserted.changes) return false
       this.sql(`DELETE FROM title_exchanges WHERE session_id = ? AND exchange NOT IN (
-        SELECT exchange FROM title_exchanges WHERE session_id = ? ORDER BY completed_at DESC, exchange DESC LIMIT ?)`)
-        .run(session, session, TITLE_WINDOW)
+        SELECT exchange FROM title_exchanges WHERE session_id = ? ORDER BY completed_at DESC, exchange DESC LIMIT ?)
+        AND exchange NOT IN (SELECT exchange FROM title_exchanges WHERE session_id = ? ORDER BY completed_at, exchange LIMIT 1)`)
+        .run(session, session, TITLE_WINDOW, session)
       return true
     })
   }
@@ -1065,20 +1069,16 @@ export class ThreadStore {
   /**
    * What naming a Thread would start from: the latest `TITLE_WINDOW`
    * exchanges finished in any of its Sessions now, by when they finished,
-   * oldest first. Which tab is open plays no part.
+   * oldest first, and the Thread's first exchange when it is older than
+   * those. Which tab is open plays no part.
    */
   titleContext(id: ThreadId): TitleContext | undefined {
     const thread = this.thread(id)
     const row = thread && this.titleRow(thread.id)
     if (!thread || !row) return undefined
-    const exchanges = this.sql(`SELECT e.session_id, e.exchange, e.completed_at, e.prompt, e.answer FROM title_exchanges e
-      JOIN memberships m ON m.session_id = e.session_id WHERE m.thread_id = ?
-      ORDER BY e.completed_at DESC, e.exchange DESC LIMIT ?`).all(thread.id, TITLE_WINDOW)
-      .map((found): TitleExchange => {
-        const exchange = TitleExchangeRowSchema.parse(found)
-        return { session: SessionIdSchema.parse(exchange.session_id), exchange: exchange.exchange, completedAt: exchange.completed_at, prompt: exchange.prompt, answer: exchange.answer }
-      })
-      .reverse()
+    const exchanges = this.titleExchanges(thread.id, "DESC", TITLE_WINDOW).reverse()
+    const [first] = this.titleExchanges(thread.id, "ASC", 1)
+    const opening = first && !exchanges.some((exchange) => exchange.session === first.session && exchange.exchange === first.exchange) ? first : undefined
     const entry = titleEntry(row)
     return {
       thread: thread.id,
@@ -1087,8 +1087,19 @@ export class ThreadStore {
       answered: row.auto_context ?? undefined,
       revision: row.title_revision,
       exchanges,
+      opening,
       digest: createHash("sha256").update(JSON.stringify(exchanges.map((exchange) => [exchange.session, exchange.exchange]))).digest("hex"),
     }
+  }
+
+  private titleExchanges(thread: string, order: "ASC" | "DESC", limit: number): TitleExchange[] {
+    return this.sql(`SELECT e.session_id, e.exchange, e.completed_at, e.prompt, e.answer FROM title_exchanges e
+      JOIN memberships m ON m.session_id = e.session_id WHERE m.thread_id = ?
+      ORDER BY e.completed_at ${order}, e.exchange ${order} LIMIT ?`).all(thread, limit)
+      .map((found): TitleExchange => {
+        const exchange = TitleExchangeRowSchema.parse(found)
+        return { session: SessionIdSchema.parse(exchange.session_id), exchange: exchange.exchange, completedAt: exchange.completed_at, prompt: exchange.prompt, answer: exchange.answer }
+      })
   }
 
   /**
