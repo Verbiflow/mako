@@ -166,7 +166,7 @@
     "probe:plan-turn": "node scripts/probe-plan-turn.mjs",
     "test:file-previews": "tsx scripts/test-diagnostic-preview.ts && tsx scripts/test-file-open.ts && tsx scripts/test-file-response.ts && tsx scripts/test-office-preview.ts",
     "test:native-authoring": "tsx scripts/test-native-authoring.ts && tsx scripts/test-native-authoring-claude.ts",
-    "test:recovery-admission": "tsx scripts/test-recovery-probe-scope.ts && tsx scripts/test-native-admission.ts && tsx scripts/test-cursor-native-runner.ts",
+    "test:recovery-admission": "tsx scripts/test-native-exclusion.ts && tsx scripts/test-execution-context.ts && tsx scripts/test-recovery-probe-scope.ts && tsx scripts/test-native-admission.ts && tsx scripts/test-cursor-native-runner.ts",
     "test:native-wake": "npm run build:electron && node scripts/test-native-wake-acceptance.mjs",
     "benchmark:recovery-checkpoint": "tsx scripts/benchmark-recovery-checkpoint.ts",
     "test:native-uncertain": "npm run build:electron && MAKO_WAKE_SCENARIO=uncertain node scripts/test-native-wake-acceptance.mjs"

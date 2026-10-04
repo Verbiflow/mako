@@ -88,6 +88,15 @@ export type {
 }
 
 /**
+ * The answer a fork follows. One still in the live record is named by its
+ * request; one the panel shows from native history, read after a checkpoint,
+ * by its message.
+ */
+export type ForkAnswer =
+  | { kind: "run"; requestId: string }
+  | { kind: "native"; anchor: MessageAnchor }
+
+/**
  * A title Mako chose rather than read from the prompt stays the Thread's
  * name: agents that title their own sessions (Grok, Devin) would replace it.
  */
@@ -476,22 +485,18 @@ export const acp = {
     }
   },
 
-  /**
-   * A fork joins this conversation's Thread as a tab unless `thread` is `new`.
-   * An answer still in the live record is named by its request; one the panel
-   * shows from native history, read after a checkpoint, by its message.
-   */
+  /** A fork joins this conversation's Thread as a tab unless `thread` is `new`. */
   async fork(
-    answer: string | MessageAnchor,
+    answer: ForkAnswer,
     thread: "parent" | "new" = "parent",
     current = activeLiveAcp(acpStore.get())
   ): Promise<boolean> {
     if (!current || !hasBridge()) return false
     const base = current.base
-    const point = typeof answer === "string"
-      ? { kind: "run" as const, requestId: answer }
+    const point = answer.kind === "run"
+      ? { kind: "run" as const, requestId: answer.requestId }
       : base
-        ? { kind: "native" as const, index: answer.index, revision: JSON.stringify([base.ref.revision, base.ref.bytes, base.ref.updatedAt]), anchor: answer }
+        ? { kind: "native" as const, index: answer.anchor.index, revision: JSON.stringify([base.ref.revision, base.ref.bytes, base.ref.updatedAt]), anchor: answer.anchor }
         : undefined
     if (!point) return false
     try {
