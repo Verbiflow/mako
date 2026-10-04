@@ -737,6 +737,21 @@ export function processValues(recipe: Recipe, spec: RecipeProcess, environment: 
   return { ...recipeValues(recipe, environment), ...Object.fromEntries(own) }
 }
 
+/** What a cleanup runs with: the recipe's values and its processes' own, which name what they made; a name processes set differently is left out. */
+export function cleanupValues(recipe: Recipe, environment: ThreadEnvironment) {
+  const agreed = new Map<string, string>()
+  const differ = new Set<string>()
+  for (const spec of Object.values(recipe.processes)) {
+    for (const [name, text] of Object.entries(spec.values ?? {})) {
+      const value = expandTemplate(text, environment)
+      if (agreed.has(name) && agreed.get(name) !== value) differ.add(name)
+      agreed.set(name, value)
+    }
+  }
+  for (const name of differ) agreed.delete(name)
+  return { ...recipeValues(recipe, environment), ...Object.fromEntries(agreed) }
+}
+
 export function processPort(spec: RecipeProcess, environment: ThreadEnvironment): number | undefined {
   return spec.port === undefined ? undefined : Number(expandTemplate(spec.port, environment))
 }

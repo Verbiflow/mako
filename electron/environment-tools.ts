@@ -23,6 +23,7 @@ import { installedDigests, installsDue, movableInstalls } from "./checkout-insta
 import { installStatus, settleHanded } from "./spare-install.js"
 import {
   checkoutOf,
+  cleanupValues,
   inputsDigest,
   processCwd,
   processPort,
@@ -1072,7 +1073,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const save = async (conversationId: string, recipe: Recipe, reason?: string): Promise<string> => {
     if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
     const { environment, checkout, read } = await context(conversationId)
-    const carried = await carryReport(recipe, await projectRoot(checkout))
+    const root = await projectRoot(checkout)
+    const carried = await carryReport(recipe, root)
+    const worktrees = await lstat(join(root, ".git")).then(() => true, () => false)
+    const named = recipe.cleanup || !worktrees ? [] : perThreadValues(recipe)
     const saved = await saveDraft(deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
     const after = await readRecipe(checkout, environment, deps.recipesRoot)
     if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
@@ -1094,6 +1098,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
             : undefined,
       after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; once this is published, Mako's recipe comes first and that file is ignored.` : undefined,
       ...carried,
+      named.length ? `${named.join(", ")} ${named.length === 1 ? "names" : "name"} something for each Thread, and the recipe has no cleanup. Whatever the app makes under ${named.length === 1 ? "that name" : "those names"}, such as a database, a Compose project's volumes or a profile folder, stays after the Thread's worktree is removed. Add a cleanup that removes the Thread's own and nothing shared; none is needed if nothing is kept under the name.` : undefined,
       running ? "This Thread's processes still run as they were started; app_restart runs them with the draft." : undefined,
       "Iterate with app_restart and app_check as you need. Once it works, recipe_publish proves it and publishes it to every Thread.",
     ].filter(Boolean).join("\n")
@@ -1561,7 +1566,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const { app } = found.environment
       const command = read.recipe.cleanup
       const key = runKey("check", "cleanup")
-      await deps.processes.start(app, [{ kind: "check", name: "cleanup", command, cwd: found.checkout, env: env({ environment: found.environment, checkout: found.checkout }, read.recipe) }])
+      await deps.processes.start(app, [{ kind: "check", name: "cleanup", command, cwd: found.checkout, env: env({ environment: found.environment, checkout: found.checkout }, read.recipe, cleanupValues(read.recipe, found.environment)) }])
       const [status] = await deps.processes.settle(app, [key], CLEANUP_MS)
       if (status?.state.kind === "running" || status?.state.kind === "starting") {
         await deps.processes.stop(app, [key])
@@ -2149,12 +2154,10 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       if (!parsed.success) throw new Error(`Not saved: ${recipeIssues(parsed.error)}`)
       const saving = withLinkDefault(parsed.data)
       const defaulted = saving.prepare.filter((step, index) => step.link && parsed.data.prepare[index]!.link === undefined).map((step) => step.command)
-      const named = saving.cleanup ? [] : perThreadValues(saving)
       return [
         await tools.save(conversationId(), saving, reason),
         recipe && "secrets" in recipe ? "secrets is now part of carry: its files are under carry, copied like any other. Write them in carry from now on." : undefined,
         defaulted.length ? `${defaulted.join(", ")} didn't say whether to link ${defaulted.length === 1 ? "its" : "their"} outputs, so ${defaulted.length === 1 ? "it links them" : "they link them"}, Mako's default, and the saved version says "link": true.` : undefined,
-        named.length ? `${named.join(", ")} ${named.length === 1 ? "names" : "name"} something for each Thread, and the recipe has no cleanup. Whatever the app makes under ${named.length === 1 ? "that name" : "those names"}, such as a database, a Compose project's volumes or a profile folder, stays after the Thread's worktree is removed. Add a cleanup that removes the Thread's own and nothing shared; none is needed if nothing is kept under the name.` : undefined,
       ].filter(Boolean).join("\n")
     })
   )

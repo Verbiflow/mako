@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import { mkdir, open, rename, stat, type FileHandle } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { HOST_LOG_MAX_BYTES } from "./host-log.js"
 import { ensurePrivateDirectory } from "./private-directory.js"
@@ -9,6 +9,18 @@ import { probeRuntime, settleRuntime } from "./runtime-connection.js"
 
 /** A host that exits during launch may be losing a race to another launcher's host. */
 const EXITED_GRACE_MS = 5_000
+
+/** Where Electron keeps every app's data on this platform, as `app.getPath("appData")` says. */
+export function appDataFolder(env: NodeJS.ProcessEnv = process.env): string {
+  if (process.platform === "darwin") return join(homedir(), "Library", "Application Support")
+  if (process.platform === "win32") return env.APPDATA ?? join(homedir(), "AppData", "Roaming")
+  return env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
+}
+
+/** The profile a fixture desk launched from the checkout at `root` runs on. */
+export function fixtureProfile(root: string, env: NodeJS.ProcessEnv): string {
+  return env.MAKO_PROFILE || `fixture-${createHash("sha256").update(root).digest("hex").slice(0, 8)}`
+}
 
 export function runtimeDataRoot(appData: string, env: NodeJS.ProcessEnv): string {
   if (env.MAKO_DATA_ROOT) return resolve(env.MAKO_DATA_ROOT)

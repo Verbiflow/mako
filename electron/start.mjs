@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { createServer } from "vite"
 import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir, homedir } from "node:os"
-import { ensureRuntime, runtimeDataRoot } from "../dist-electron/runtime-service.js"
+import { tmpdir } from "node:os"
+import { appDataFolder, ensureRuntime, fixtureProfile, runtimeDataRoot } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
 import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
 import { fixtureDeskRefusal } from "../dist-electron/contracts/fixture-desk-policy.js"
@@ -54,9 +54,8 @@ if (fixture) {
     throw new Error("A fixture desk runs on a fixture- profile; unset MAKO_PROFILE or name one that starts with fixture-.")
   delete env.MAKO_DATA_ROOT
 }
-const profile = env.MAKO_PROFILE || (fixture ? `fixture-${checkout}` : process.argv.includes("--sandbox") ? `sandbox-${checkout}` : shared ? undefined : "dev")
-const appData = process.platform === "darwin" ? join(homedir(), "Library", "Application Support") : process.platform === "win32" ? process.env.APPDATA ?? join(homedir(), "AppData", "Roaming") : process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
-const dataRoot = runtimeDataRoot(appData, { ...env, MAKO_PROFILE: profile })
+const profile = fixture ? fixtureProfile(root, env) : env.MAKO_PROFILE || (process.argv.includes("--sandbox") ? `sandbox-${checkout}` : shared ? undefined : "dev")
+const dataRoot = runtimeDataRoot(appDataFolder(), { ...env, MAKO_PROFILE: profile })
 const runtimeEnv = { ...env, MAKO_PROFILE: profile }
 if (fixture) runtimeEnv.MAKO_FIXTURE_DESK = "1"
 const startRuntime = () => ensureRuntime({ dataRoot, executable: electronPath, args: [root], cwd: root, env: runtimeEnv })

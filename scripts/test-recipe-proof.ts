@@ -223,10 +223,26 @@ try {
   assert.ok(existsSync(join(mine.dataDir, "cleaned")))
   await tools.save(conversation, recipe({ cleanup: "echo volume in use; exit 2" }), "Clean up badly")
   assert.match(await tools.cleanup(project) ?? "", /^cleanup \(echo volume in use; exit 2\) failed \(exit 2\) in [\d.]+ s: volume in use$/)
+  await tools.save(conversation, recipe({
+    processes: {
+      web: { ...web, values: { PROFILE: "app-{thread}", SIDE: "web" } },
+      worker: { command: "node -e \"setInterval(() => {}, 1000)\"", values: { PROFILE: "app-{thread}", SIDE: "worker" } },
+    },
+    cleanup: "printf '%s,%s' \"$PROFILE\" \"${SIDE-unset}\" > \"$MAKO_THREAD_DATA_DIR/cleaned-values\"",
+  }), "Clean up what a process names")
+  assert.match(await tools.cleanup(project) ?? "", /passed/)
+  assert.equal(readFileSync(join(mine.dataDir, "cleaned-values"), "utf8"), `app-${mine.app},unset`, "cleanup sees a value its processes set alike, and not one they set differently")
   await tools.save(conversation, recipe(), "No cleanup")
   assert.equal(await tools.cleanup(project), undefined, "nothing to run, nothing said")
 
-  console.log("recipe proof: a ready command decides when a process runs; targets pick processes and full checks; a failed verify keeps the draft; the agent's own check publishes once it says how it went, refused after a restart; a running app keeps its version until a whole restart; a draft from a replaced version is refused with what changed; app_status and Settings list the versions, and going back to one saves it as a new draft that's proved and published like any other, refused with why when it can't run here; cleanup runs with the Thread's values")
+  // A value named for the Thread asks for a cleanup, where worktrees can be removed.
+  const unasked = /DB \(app_\{thread\}\) names something for each Thread, and the recipe has no cleanup/
+  assert.doesNotMatch(await tools.save(conversation, recipe({ values: { PORT: "{port}", DB: "app_{thread}" } }), "Name a database"), unasked, "a folder without Git has no worktrees to clean up after")
+  mkdirSync(join(project, ".git"))
+  assert.match(await tools.save(conversation, recipe({ values: { PORT: "{port}", DB: "app_{thread}", MORE: "1" } }), "Name a database"), unasked)
+  assert.doesNotMatch(await tools.save(conversation, recipe({ values: { PORT: "{port}", DB: "app_{thread}" }, cleanup: "dropdb --if-exists \"$DB\"" }), "Drop it"), /no cleanup/)
+
+  console.log("recipe proof: a ready command decides when a process runs; targets pick processes and full checks; a failed verify keeps the draft; the agent's own check publishes once it says how it went, refused after a restart; a running app keeps its version until a whole restart; a draft from a replaced version is refused with what changed; app_status and Settings list the versions, and going back to one saves it as a new draft that's proved and published like any other, refused with why when it can't run here; cleanup runs with the Thread's values and its processes' own, and a save asks for one when a value names something for each Thread")
 } finally {
   await processes.stop(mine.app).catch(() => {})
   await processes.stop(theirs.app).catch(() => {})
