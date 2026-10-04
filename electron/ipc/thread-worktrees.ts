@@ -1,12 +1,15 @@
 import { registerIpc } from "./register.js"
 import type { ThreadWorktreeService } from "../thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktrees, WorktreeInventory, WorktreeReview, WorktreeStartPoint } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint } from "../contracts/thread-worktrees.js"
 
 const UNAVAILABLE = "This Mako couldn't open its Thread store, so it can't keep worktrees."
 
 /** This device's Thread worktrees, removing one that has nothing uncommitted, and keeping spares of a project ready. */
-export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | null) {
+export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | null, pulls: (cwd: string) => Promise<WorktreePull[] | null>) {
+  registerIpc("mako:worktree-branches", async (_event, cwd: string): Promise<WorktreeBranch[]> =>
+    (await worktrees?.branches(cwd)) ?? [])
+  registerIpc("mako:worktree-pulls", (_event, cwd: string): Promise<WorktreePull[] | null> => pulls(cwd))
   registerIpc("mako:worktrees", (): Promise<ThreadWorktrees> | ThreadWorktrees =>
     worktrees ? worktrees.list() : { root: "", worktrees: [] })
   registerIpc("mako:worktree-inventory", (): Promise<WorktreeInventory> | WorktreeInventory =>

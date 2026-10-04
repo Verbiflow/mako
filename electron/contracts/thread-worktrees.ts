@@ -98,6 +98,39 @@ export interface WorktreeReview {
   merge: WorktreeMergeCheck
 }
 
+/**
+ * What a new Thread's worktree is made on, when the person chose: a new
+ * branch from somewhere other than the start point, or a branch that exists
+ * already, which the Thread works on and Mako never deletes.
+ */
+export type WorktreeStart =
+  | { kind: "from"; ref: string }
+  | { kind: "branch"; branch: string }
+  /** `cross`: from a fork, so its branch isn't on this repository's remote. */
+  | { kind: "pull"; number: number; branch: string; cross: boolean }
+
+/** A branch a new Thread can start from or work on. */
+export interface WorktreeBranch {
+  /** `main`, or `origin/feature` for a branch only on a remote. */
+  name: string
+  remote: boolean
+  /** Its last commit, in milliseconds. */
+  at: number
+  /** The checkout it is checked out in; Git keeps a branch in one at a time. */
+  checkedOut: string | null
+}
+
+/** An open pull request a new Thread can work on. */
+export interface WorktreePull {
+  number: number
+  title: string
+  branch: string
+  draft: boolean
+  author: string | null
+  updatedAt: string | null
+  cross: boolean
+}
+
 /** The project folder's branch against its upstream. */
 export type WorktreeStanding =
   | { kind: "level" }

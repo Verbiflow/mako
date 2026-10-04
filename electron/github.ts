@@ -11,6 +11,7 @@ import type {
   CheckSummary,
   ReviewSummary,
 } from "./shared.js"
+import type { WorktreePull } from "./contracts/thread-worktrees.js"
 
 const run = promisify(execFile)
 
@@ -387,6 +388,35 @@ export async function listPulls(
     parseRawPullList
   )
   return raw ? raw.map(toPull) : []
+}
+
+/** Open pull requests a new Thread can work on: just what names and finds each branch. Null when `gh` can't answer here. */
+export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null> {
+  return ghJson(
+    cwd,
+    ["pr", "list", "--state", "open", "--limit", "50", "--json", "number,title,headRefName,isDraft,author,updatedAt,isCrossRepository"],
+    (value) => {
+      if (!Array.isArray(value)) return null
+      const pulls: WorktreePull[] = []
+      for (const entry of value) {
+        if (!isJsonObject(entry)) continue
+        const number = numberValue(entry.number)
+        const title = stringValue(entry.title)
+        const branch = stringValue(entry.headRefName)
+        if (number === undefined || title === undefined || !branch) continue
+        pulls.push({
+          number,
+          title,
+          branch,
+          draft: booleanValue(entry.isDraft) ?? false,
+          author: parseOptionalUser(entry.author)?.login ?? null,
+          updatedAt: stringValue(entry.updatedAt) ?? null,
+          cross: booleanValue(entry.isCrossRepository) ?? false,
+        })
+      }
+      return pulls
+    }
+  )
 }
 
 export async function listRemoteBranches(cwd: string): Promise<string[]> {

@@ -3,7 +3,7 @@ import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
 import type { GitStatus, ThreadRef } from "@/lib/types"
-import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview, WorktreeStartPoint } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStart, WorktreeStartPoint } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
@@ -258,6 +258,30 @@ export function useWorktreeStart(cwd: string, active: boolean, asked: string): W
     }
   }, [cwd, active, asked])
   return shown?.cwd === cwd ? shown.point : undefined
+}
+
+/** What the person chose for the next Thread's worktree in a project folder, until that Thread starts. */
+export interface WorktreeStartChoice {
+  start: WorktreeStart
+  /** The branch, or `#812` and its title, as the composer names it. */
+  label: string
+  title?: string
+}
+
+export const worktreeStartChoices = createStore<{ byFolder: Readonly<Record<string, WorktreeStartChoice>> }>({ byFolder: {} })
+export const useWorktreeStartChoices = createHook(worktreeStartChoices)
+
+export function chooseWorktreeStart(cwd: string, choice: WorktreeStartChoice | null): void {
+  const rest = Object.fromEntries(Object.entries(worktreeStartChoices.get().byFolder).filter(([folder]) => folder !== cwd))
+  worktreeStartChoices.set({ byFolder: choice ? { ...rest, [cwd]: choice } : rest })
+}
+
+export function readWorktreeBranches(cwd: string): Promise<WorktreeBranch[]> {
+  return hasBridge() ? getMako().worktreeBranches(cwd) : Promise.resolve([])
+}
+
+export function readWorktreePulls(cwd: string): Promise<WorktreePull[] | null> {
+  return hasBridge() ? getMako().worktreePulls(cwd) : Promise.resolve(null)
 }
 
 type RemovableWorktree = Pick<ThreadWorktree, "path" | "branch">

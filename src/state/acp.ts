@@ -1,4 +1,5 @@
 import { answerLiveApproval } from "./live-approvals"
+import type { WorktreeStart } from "../../electron/contracts/thread-worktrees.ts"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
 import { stagePrompt } from "@/state/acp-pending"
 import { autoContinuePending } from "@/state/prompt-delivery"
@@ -60,7 +61,7 @@ import {
   type StartingAcpConversation,
 } from "@/state/acp-state"
 import { prefsStore, setPref } from "@/state/prefs"
-import { refreshWorktrees } from "@/state/worktrees"
+import { chooseWorktreeStart, refreshWorktrees, worktreeStartChoices } from "@/state/worktrees"
 import {
   markThreadReviewed,
   setThreadAttention,
@@ -406,7 +407,9 @@ export const acp = {
     threadPath?: string,
     placement?: { thread: string; session: string },
     /** Start in a new worktree of `cwd`'s repository; only a new Thread asks. */
-    worktree = false
+    worktree = false,
+    /** Where that worktree starts, when the person chose. */
+    worktreeStart?: WorktreeStart
   ): Promise<boolean> {
     if (!hasBridge()) return false
     const existing = threadPath
@@ -431,6 +434,7 @@ export const acp = {
     })
     const options: AcpStartOptions = title ? { title } : {}
     if (worktree) options.worktree = true
+    if (worktree && worktreeStart) options.worktreeStart = worktreeStart
     const sent = await launch(starting, options, prompt, attachments)
     if (sent && worktree) void refreshWorktrees().catch(() => {})
     return sent
@@ -457,9 +461,16 @@ export const acp = {
     return sent
   },
 
-  /** A new Thread from the composer, in its own worktree when that's the choice for new Threads. */
-  startThread(harness: string, cwd: string, prompt: string, attachments: PromptAttachment[] = []): Promise<boolean> {
-    return acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, prefsStore.get().newThreadsInWorktree)
+  /**
+   * A new Thread from the composer, in its own worktree when that's the
+   * choice for new Threads, started where the person chose if they did.
+   */
+  async startThread(harness: string, cwd: string, prompt: string, attachments: PromptAttachment[] = []): Promise<boolean> {
+    const own = prefsStore.get().newThreadsInWorktree
+    const chosen = own ? worktreeStartChoices.get().byFolder[cwd]?.start : undefined
+    const sent = await acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, own, chosen)
+    if (sent && chosen) chooseWorktreeStart(cwd, null)
+    return sent
   },
 
   async cancelChild(childId: string): Promise<void> {

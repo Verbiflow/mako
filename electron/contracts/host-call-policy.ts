@@ -50,6 +50,8 @@ const reads = [
   "mako:worktree-inventory",
   "mako:worktree-review",
   "mako:worktree-review-diffs",
+  "mako:worktree-branches",
+  "mako:worktree-pulls",
   "mako:checkout-heads",
   "mako:chat-folders",
   "mako:workspace-moves",

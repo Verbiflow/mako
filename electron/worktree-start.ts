@@ -9,6 +9,15 @@ const FETCH_EVERY_MS = 60_000
 /** A remote that hasn't answered by now is treated as unreachable; the start uses what was fetched before. */
 const FETCH_TIMEOUT_MS = 15_000
 
+/** `git fetch` that never asks for credentials and gives up after the timeout. */
+export async function fetchQuietly(repoRoot: string, args: string[]): Promise<void> {
+  await execute(gitExecutable(), ["fetch", "--quiet", "--no-tags", ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    timeout: FETCH_TIMEOUT_MS,
+  })
+}
+
 interface Fetch {
   at: number
   failed: string | null
@@ -54,8 +63,9 @@ export class WorktreeStarts {
     return { from, commit, branch, upstream, standing, fetched }
   }
 
-  /** The remote and branch the folder's branch pulls from, when that is another repository. */
-  private async tracked(repoRoot: string, branch: string): Promise<{ remote: string; ref: string } | null> {
+  /** The remote and branch `branch` pulls from, when that is another repository. */
+  async tracked(repoRoot: string, branch: string): Promise<{ remote: string; ref: string } | null> {
+    if (!branch) return null
     const [remote, ref] = await Promise.all([
       git(repoRoot, ["config", "--get", `branch.${branch}.remote`]).catch(() => ""),
       git(repoRoot, ["config", "--get", `branch.${branch}.merge`]).catch(() => ""),
@@ -74,11 +84,7 @@ export class WorktreeStarts {
     if (last?.running) return last.running
     if (last && this.now() - last.at < FETCH_EVERY_MS) return
     const entry: Fetch = { at: last?.at ?? 0, failed: last?.failed ?? null }
-    entry.running = execute(gitExecutable(), ["fetch", "--quiet", "--no-tags", tracked.remote, tracked.ref], {
-      cwd: repoRoot,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      timeout: FETCH_TIMEOUT_MS,
-    }).then(
+    entry.running = fetchQuietly(repoRoot, [tracked.remote, tracked.ref]).then(
       () => {
         entry.failed = null
       },

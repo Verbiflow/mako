@@ -292,6 +292,26 @@ export function installMockBridge() {
     },
     wantWorktree: async () => {},
     worktreeStartPoint: async () => mockStartPoint(),
+    worktreeBranches: async () => {
+      const hours = (count: number) => Date.now() - count * 3_600_000
+      return [
+        { name: "main", remote: false, at: hours(1), checkedOut: "/Users/you/mako" },
+        { name: "mako/retry-budget", remote: false, at: hours(3), checkedOut: "/Users/you/.mako/worktrees/mako-1a2b3c4d/retry-budget" },
+        { name: "fix/login-redirect", remote: false, at: hours(20), checkedOut: null },
+        { name: "origin/billing-webhooks", remote: true, at: hours(30), checkedOut: null },
+        { name: "release/2026.10", remote: false, at: hours(80), checkedOut: null },
+        { name: "origin/docs-refresh", remote: true, at: hours(200), checkedOut: null },
+      ]
+    },
+    worktreePulls: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
+      return [
+        { number: 812, title: "Fix the login redirect after SSO", branch: "fix/login-redirect", draft: false, author: "ann", updatedAt: ago(2), cross: false },
+        { number: 809, title: "Billing webhooks retry with backoff", branch: "billing-webhooks", draft: true, author: "kashyab", updatedAt: ago(26), cross: false },
+        { number: 801, title: "Typo in the README", branch: "patch-1", draft: false, author: "outside-contributor", updatedAt: ago(120), cross: true },
+      ]
+    },
     worktreeAhead: async () => null,
     worktreeInventory: async () => ({ worktrees: [], spares: { count: 0, bytes: null } }),
     worktreeReview: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },

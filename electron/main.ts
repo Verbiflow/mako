@@ -146,6 +146,7 @@ import {
 import {
   createPull,
   githubStatus,
+  listPullHeads,
   listPulls,
   listRemoteBranches,
   mergePull,
@@ -1771,7 +1772,7 @@ function bindIpc() {
       const chat = fresh && standsForNoProject(cwd) ? newChatFolder() : undefined
       if (options.worktree && !chat && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Choose Project folder to work in the folder itself.")
       const worktree = options.worktree && fresh && !chat && threadWorktrees
-        ? await threadWorktrees.prepare(options.conversationId, cwd, options.title ?? options.displayPrompt ?? options.initialRequest?.text, "newest")
+        ? await threadWorktrees.prepare(options.conversationId, cwd, options.title ?? options.displayPrompt ?? options.initialRequest?.text, options.worktreeStart ?? { kind: "newest" })
         : undefined
       if (worktree) {
         trace("worktree")
@@ -2383,7 +2384,7 @@ app.whenReady().then(async () => {
   followNativeArchives(threadLifecycle, subscribeThreadEvents, emit)
   installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
   installThreadTitlesIpc({ store: threadStore, emit })
-  installThreadWorktreesIpc(threadWorktrees)
+  installThreadWorktreesIpc(threadWorktrees, listPullHeads)
   installChatFoldersIpc()
   installWorkspaceMovesIpc(moves)
   installPlanBuildsIpc(planBuilds)

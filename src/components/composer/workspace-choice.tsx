@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { RadioGroup } from "radix-ui"
-import { CheckIcon, FolderIcon, GitBranchIcon, LoaderCircleIcon } from "lucide-react"
+import { CheckIcon, ChevronRightIcon, FolderIcon, GitBranchIcon, GitPullRequestIcon, LoaderCircleIcon, XIcon } from "lucide-react"
 import { WORKTREE_BRANCH_PREFIX, worktreeSlug, type WorktreeStartPoint } from "../../../electron/contracts/thread-worktrees.ts"
 import { Keys } from "@/components/ui/kit"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -16,7 +16,8 @@ import { useSession } from "@/state/session"
 import { moveReadiness, moveToWorktree } from "@/state/thread-workspace"
 import { useOnScreen } from "@/state/thread-sessions"
 import { threadsStore, useThreads } from "@/state/threads"
-import { useWorktrees, useWorktreeStart, wantSpareWorktrees, worktreeAt } from "@/state/worktrees"
+import { chooseWorktreeStart, useWorktrees, useWorktreeStart, useWorktreeStartChoices, wantSpareWorktrees, worktreeAt, type WorktreeStartChoice } from "@/state/worktrees"
+import { BranchSearch } from "./branch-search"
 
 /**
  * Where a Thread makes its changes: the project folder itself, or its own
@@ -54,59 +55,99 @@ function WorkspaceMenu({
   choices,
   trigger,
   footer,
+  panel,
+  open: controlled,
+  onOpenChange,
+  onEscape,
   onChoose,
-  onOpen,
 }: {
   heading: string
   value: Workspace
   choices: Record<Workspace, Choice>
   trigger: ReactNode
   footer?: ReactNode
+  /** Shown in place of the choice while set: a step inside the menu, which Escape leaves first. */
+  panel?: ReactNode
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  onEscape?: () => void
   onChoose: (value: Workspace) => void
-  onOpen?: () => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [own, setOwn] = useState(false)
+  const open = controlled ?? own
+  const setOpen = (next: boolean) => {
+    setOwn(next)
+    onOpenChange?.(next)
+  }
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next)
-        if (next) onOpen?.()
-      }}
-    >
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
-        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-          <p className="text-label text-faint">{heading}</p>
-          <ShortcutKeys />
-        </div>
-        <RadioGroup.Root
-          aria-label={heading}
-          value={value}
-          onValueChange={(next) => {
-            setOpen(false)
-            const chosen = OPTIONS.find((option) => option.value === next)?.value
-            if (chosen && chosen !== value) onChoose(chosen)
-          }}
-        >
-          {OPTIONS.map(({ value: option, label, Icon }) => (
-            <RadioGroup.Item key={option} value={option} disabled={choices[option].disabled} data-workspace-option={option} className={optionClass}>
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="flex items-center gap-1.5 text-ui">
-                  <Icon className="size-3 shrink-0" />
-                  {label}
-                </span>
-                <span className="text-label text-faint">{choices[option].detail}</span>
-              </span>
-              <RadioGroup.Indicator className="mt-0.5">
-                <CheckIcon className="size-3.5" />
-              </RadioGroup.Indicator>
-            </RadioGroup.Item>
-          ))}
-        </RadioGroup.Root>
-        {footer}
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-80 p-1"
+        onEscapeKeyDown={(event) => {
+          if (!panel) return
+          event.preventDefault()
+          onEscape?.()
+        }}
+      >
+        {panel ?? (
+          <WorkspaceChoices
+            heading={heading}
+            value={value}
+            choices={choices}
+            footer={footer}
+            onChoose={(next) => {
+              setOpen(false)
+              onChoose(next)
+            }}
+          />
+        )}
       </PopoverContent>
     </Popover>
+  )
+}
+
+function WorkspaceChoices({ heading, value, choices, footer, onChoose }: {
+  heading: string
+  value: Workspace
+  choices: Record<Workspace, Choice>
+  footer?: ReactNode
+  onChoose: (value: Workspace) => void
+}) {
+  return (
+    <div className="animate-in fade-in-0 duration-150 ease-[var(--ease-out)]">
+      <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+        <p className="text-label text-faint">{heading}</p>
+        <ShortcutKeys />
+      </div>
+      <RadioGroup.Root
+        aria-label={heading}
+        value={value}
+        onValueChange={(next) => {
+          const chosen = OPTIONS.find((option) => option.value === next)?.value
+          if (chosen && chosen !== value) onChoose(chosen)
+        }}
+      >
+        {OPTIONS.map(({ value: option, label, Icon }) => (
+          <RadioGroup.Item key={option} value={option} disabled={choices[option].disabled} data-workspace-option={option} className={optionClass}>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="flex items-center gap-1.5 text-ui">
+                <Icon className="size-3 shrink-0" />
+                {label}
+              </span>
+              <span className="text-label text-faint">{choices[option].detail}</span>
+            </span>
+            <RadioGroup.Indicator className="mt-0.5">
+              <CheckIcon className="size-3.5" />
+            </RadioGroup.Indicator>
+          </RadioGroup.Item>
+        ))}
+      </RadioGroup.Root>
+      {footer}
+    </div>
   )
 }
 
@@ -124,23 +165,57 @@ function startNotes(point: WorktreeStartPoint): { text: string; caution?: boolea
   return notes
 }
 
-/** Where the next Thread's branch starts, under the choice that makes one. */
-function StartPoint({ point }: { point: WorktreeStartPoint }) {
-  const notes = startNotes(point)
+/**
+ * Where the next Thread's branch starts, under the choice that makes one:
+ * the start point and why, or what the person chose instead. Opens the
+ * search for another branch or a pull request.
+ */
+function StartPoint({ point, choice, onSearch, onReset }: {
+  point: WorktreeStartPoint | null | undefined
+  choice: WorktreeStartChoice | undefined
+  onSearch: () => void
+  onReset: () => void
+}) {
+  const start = choice?.start
+  const verb = start && start.kind !== "from" ? "Works on" : "Starts from"
+  const PlaceIcon = start?.kind === "pull" ? GitPullRequestIcon : GitBranchIcon
+  const place = choice ? (start?.kind === "pull" ? `${choice.label} ${choice.title ?? ""}` : choice.label) : point?.from
+  const notes = start?.kind === "branch"
+    ? [{ text: "Its commits go on that branch, which stays when the worktree goes" }]
+    : start?.kind === "pull"
+      ? [{ text: start.cross ? `Fetched from its fork as pr-${start.number}` : `On its branch, ${start.branch}` }]
+      : !choice && point ? startNotes(point) : []
+  if (!place) return null
   return (
-    <div data-start-point={point.standing.kind} className="mx-1 mt-1 border-t border-hairline px-2 pt-2 pb-1.5">
-      <p className="flex min-w-0 items-center gap-1.5 text-ui">
-        <span className="shrink-0 text-faint">Starts from</span>
-        <span title={point.commit.slice(0, 12)} className="flex min-w-0 items-center gap-1 text-foreground">
-          <GitBranchIcon className="size-3 shrink-0 text-faint" />
-          <span className="truncate">{point.from}</span>
+    <div data-start-point={start?.kind ?? point?.standing.kind} className="mt-1 flex items-start border-t border-hairline pt-1">
+      <button type="button" onClick={onSearch} aria-label={`${verb} ${place}. Choose another branch or a pull request`} className="pressable group flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-1.5 text-ui">
+            <span className="shrink-0 text-faint">{verb}</span>
+            <span title={!choice && point ? point.commit.slice(0, 12) : undefined} className="flex min-w-0 items-center gap-1 text-foreground">
+              <PlaceIcon className="size-3 shrink-0 text-faint" />
+              {start?.kind === "pull" && choice?.title ? (
+                <span className="truncate">
+                  <span className="tabular text-faint">{choice.label}</span> {choice.title}
+                </span>
+              ) : (
+                <span className="truncate">{place}</span>
+              )}
+            </span>
+          </span>
+          {notes.map((note) => (
+            <span key={note.text} className={cn("text-label", note.caution ? "text-caution" : "text-faint")}>
+              {note.text}
+            </span>
+          ))}
         </span>
-      </p>
-      {notes.map((note) => (
-        <p key={note.text} className={cn("mt-0.5 text-label", note.caution ? "text-caution" : "text-faint")}>
-          {note.text}
-        </p>
-      ))}
+        <ChevronRightIcon className="mt-0.5 size-3.5 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)] group-hover:translate-x-0.5" />
+      </button>
+      {choice && (
+        <button type="button" onClick={onReset} aria-label="Start from the newest instead" title="Start from the newest instead" className="pressable mt-1 ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-fill-hover hover:text-foreground">
+          <XIcon className="size-3" />
+        </button>
+      )}
     </div>
   )
 }
@@ -269,10 +344,19 @@ function NewThreadWorkspace() {
   }, [inRepository, ownBranch, cwd])
   // Opening the menu and starting to write each read it again, so the send finds the upstream fetched.
   const [opened, setOpened] = useState(0)
+  const [open, setOpen] = useState(false)
+  const [searching, setSearching] = useState(false)
   const start = useWorktreeStart(cwd, inRepository && ownBranch, `${opened}:${slug ? 1 : 0}`)
+  const choice = useWorktreeStartChoices((choices) => (ownBranch ? choices.byFolder[cwd] : undefined))
   if (!inRepository) return null
-  const branch = slug ? `${slug}${taken ? "-2" : ""}` : ""
   const value: Workspace = ownBranch ? "own-branch" : "project-folder"
+  const existing = choice && choice.start.kind !== "from" ? choice : undefined
+  const branch = existing ? existing.label : slug ? `${WORKTREE_BRANCH_PREFIX}${slug}${taken ? "-2" : ""}` : ""
+  const label = existing ? existing.label : slug ? `${slug}${taken ? "-2" : ""}` : ownBranch ? "Own branch" : "Project folder"
+  const from = choice?.start.kind === "from" ? `, from ${choice.label}` : ""
+  const describe = existing?.start.kind === "pull"
+    ? `Works on pull request ${existing.label}${existing.title ? `, ${existing.title}` : ""}`
+    : existing ? `Works on ${existing.label}, a branch that exists` : branch ? `Starts on its own branch, ${branch}${from}` : ownBranch ? `Starts on its own branch${from}` : "Starts in the project folder"
   return (
     <WorkspaceMenu
       heading="Where new threads make changes"
@@ -281,22 +365,42 @@ function NewThreadWorkspace() {
         "project-folder": { detail: `Edits ${homeRelative(cwd)} directly, beside you and anything else running there` },
         "own-branch": { detail: OWN_BRANCH },
       }}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setOpened((count) => count + 1)
+        else setSearching(false)
+      }}
       onChoose={(next) => setPref("newThreadsInWorktree", next === "own-branch")}
-      onOpen={() => setOpened((count) => count + 1)}
-      footer={ownBranch && start ? <StartPoint point={start} /> : undefined}
+      footer={ownBranch ? (
+        <StartPoint point={start} choice={choice} onSearch={() => setSearching(true)} onReset={() => chooseWorktreeStart(cwd, null)} />
+      ) : undefined}
+      panel={searching ? (
+        <BranchSearch
+          cwd={cwd}
+          onBack={() => setSearching(false)}
+          onChoose={(chosen) => {
+            chooseWorktreeStart(cwd, chosen)
+            setOpen(false)
+            setSearching(false)
+          }}
+        />
+      ) : undefined}
+      onEscape={() => setSearching(false)}
       trigger={
         <button
           type="button"
           data-workspace={value}
           data-workspace-scope="new"
           data-worktree-branch={branch || undefined}
-          aria-label={branch ? `Starts on its own branch, ${WORKTREE_BRANCH_PREFIX}${branch}` : ownBranch ? "Starts on its own branch" : "Starts in the project folder"}
-          title={branch ? `A new worktree on ${WORKTREE_BRANCH_PREFIX}${branch}` : ownBranch ? OWN_BRANCH : "Makes changes in the project folder"}
+          data-worktree-start={choice?.start.kind}
+          aria-label={describe}
+          title={ownBranch ? describe : "Makes changes in the project folder"}
           className={triggerClass}
         >
-          {ownBranch ? <GitBranchIcon className="size-3 shrink-0" /> : <FolderIcon className="size-3 shrink-0" />}
+          {!ownBranch ? <FolderIcon className="size-3 shrink-0" /> : existing?.start.kind === "pull" ? <GitPullRequestIcon className="size-3 shrink-0" /> : <GitBranchIcon className="size-3 shrink-0" />}
           <span data-collapse="1" className="truncate">
-            {branch || (ownBranch ? "Own branch" : "Project folder")}
+            {label}
           </span>
         </button>
       }

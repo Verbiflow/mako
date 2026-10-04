@@ -413,6 +413,18 @@ export const hostCallInputs = {
         .optional(),
       session: z.string().optional(),
       worktree: z.boolean().optional(),
+      worktreeStart: z
+        .union([
+          z.object({ kind: z.literal("from"), ref: z.string() }),
+          z.object({ kind: z.literal("branch"), branch: z.string() }),
+          z.object({
+            kind: z.literal("pull"),
+            number: z.number(),
+            branch: z.string(),
+            cross: z.boolean(),
+          }),
+        ])
+        .optional(),
       purpose: z.literal("setup").optional(),
     }),
   ]),
@@ -962,8 +974,10 @@ export const hostCallInputs = {
   "mako:workspace-move-forget": z.tuple([z.string()]),
   "mako:workspace-moves": z.tuple([]),
   "mako:worktree-ahead": z.tuple([z.string()]),
+  "mako:worktree-branches": z.tuple([z.string()]),
   "mako:worktree-inventory": z.tuple([]),
   "mako:worktree-merge": z.tuple([z.string()]),
+  "mako:worktree-pulls": z.tuple([z.string()]),
   "mako:worktree-remove": z.tuple([z.string()]),
   "mako:worktree-review": z.tuple([z.string()]),
   "mako:worktree-review-diffs": z.tuple([z.string()]),

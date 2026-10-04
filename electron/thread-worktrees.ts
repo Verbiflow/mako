@@ -9,12 +9,12 @@ import type { ThreadStore } from "./thread-store.js"
 import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStartPoint } from "./contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
 import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
-import { WorktreeStarts } from "./worktree-start.js"
+import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 
 const execute = promisify(execFile)
 /** Git's own markers for work under way, which a removal would throw away. */
@@ -23,6 +23,8 @@ const UNDER_WAY: readonly (readonly [string, string])[] = [
   ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["BISECT_LOG", "bisect"],
 ]
 const MAX_REMEMBERED_CARRIES = 64
+/** A new Thread's branch search lists this many branches, the most recently committed. */
+const LISTED_BRANCHES = 200
 
 const ReceiptSchema = z.object({
   conversation: z.string().uuid(),
@@ -42,8 +44,11 @@ const ReceiptSchema = z.object({
   moved: z.union([z.object({ files: z.number() }), z.object({ stash: z.string() })]).optional(),
   /** Written before the changes are stashed, so a start cut short after that finds the stash and finishes the move. */
   moving: z.object({ stash: z.string(), files: z.number() }).optional(),
+  /** The branch existed before the Thread: it works on it, and nothing Mako does deletes it. */
+  adopted: z.literal(true).optional(),
 })
 type Receipt = z.infer<typeof ReceiptSchema>
+type WorktreeFrom = { kind: "newest" } | { kind: "head" } | WorktreeStart
 
 export interface PreparedWorktree {
   /** Where the conversation runs: the worktree, or the same subfolder in it the Thread was started from. */
@@ -198,9 +203,10 @@ export class ThreadWorktreeService {
   /**
    * `from`: `newest` starts a new Thread's branch where `startPoint` says;
    * `head`, at the folder's own commit, for a Thread whose uncommitted
-   * changes move along and must apply where they were made.
+   * changes move along and must apply where they were made; a
+   * `WorktreeStart`, where the person chose.
    */
-  prepare(conversationId: string, cwd: string, name: string | undefined, from: "newest" | "head" = "newest"): Promise<PreparedWorktree> {
+  prepare(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom = { kind: "newest" }): Promise<PreparedWorktree> {
     z.string().uuid().parse(conversationId)
     let work = this.pending.get(conversationId)
     if (!work) {
@@ -232,7 +238,39 @@ export class ThreadWorktreeService {
       if (busy.length)
         throw new Error(`${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in ${basename(repoRoot)}. Moving its changes would pull files from under ${busy.length === 1 ? "it" : "them"}; continue once ${busy.length === 1 ? "it stops" : "they stop"}.`)
     }
-    return this.prepare(forkId, cwd, name, "head")
+    return this.prepare(forkId, cwd, name, { kind: "head" })
+  }
+
+  /**
+   * The branches a new Thread in this folder's project can start from or
+   * work on, most recently committed first: local ones, and a remote's that
+   * have no local branch of the same name.
+   */
+  async branches(cwd: string): Promise<WorktreeBranch[]> {
+    const repoRoot = await realpath(cwd).then((source) => git(source, ["rev-parse", "--show-toplevel"])).catch(() => "")
+    if (!repoRoot) return []
+    const [listed, remotes] = await Promise.all([
+      git(repoRoot, ["for-each-ref", "--sort=-committerdate", `--count=${LISTED_BRANCHES * 2}`, "--format=%(refname)%00%(committerdate:unix)%00%(worktreepath)", "refs/heads", "refs/remotes"]),
+      git(repoRoot, ["remote"]).then((text) => text.split("\n").filter(Boolean)),
+    ])
+    const local = new Set<string>()
+    const found: (WorktreeBranch & { short: string })[] = []
+    for (const line of listed.split("\n")) {
+      const [ref = "", at = "0", checkedOut = ""] = line.split("\0")
+      const entry = { at: Number(at) * 1000, checkedOut: checkedOut || null }
+      if (ref.startsWith("refs/heads/")) {
+        const name = ref.slice("refs/heads/".length)
+        local.add(name)
+        found.push({ ...entry, name, short: name, remote: false })
+        continue
+      }
+      const name = ref.slice("refs/remotes/".length)
+      const remote = remotes.find((candidate) => name.startsWith(`${candidate}/`))
+      const short = remote ? name.slice(remote.length + 1) : name
+      if (short !== "HEAD") found.push({ ...entry, name, short, remote: true })
+    }
+    return found.filter((branch) => !branch.remote || !local.has(branch.short)).slice(0, LISTED_BRANCHES)
+      .map(({ name, remote, at, checkedOut }) => ({ name, remote, at, checkedOut }))
   }
 
   /** Where a new Thread's branch in this folder's project would start now; null outside Git or before a first commit. */
@@ -585,7 +623,7 @@ export class ThreadWorktreeService {
       if (on !== receipt.branch || (await this.inUse(receipt.path)).length || await removalBlocker(receipt.path)) return
       await setAside(receipt.repoRoot, receipt.path, this.trash())
     }
-    const commits = await git(receipt.repoRoot, ["rev-list", "--count", `${receipt.base}..${receipt.branch}`]).then(Number, () => 1)
+    const commits = receipt.adopted ? 1 : await git(receipt.repoRoot, ["rev-list", "--count", `${receipt.base}..${receipt.branch}`]).then(Number, () => 1)
     if (commits === 0) await git(receipt.repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
     await rm(join(this.receipts(), `${conversationId}.json`), { force: true })
   }
@@ -629,7 +667,7 @@ export class ThreadWorktreeService {
     await rename(pending, target)
   }
 
-  private async create(conversationId: string, cwd: string, name: string | undefined, from: "newest" | "head"): Promise<Receipt> {
+  private async create(conversationId: string, cwd: string, name: string | undefined, from: WorktreeFrom): Promise<Receipt> {
     const began = performance.now()
     const source = await realpath(cwd)
     let receipt = await this.receipt(conversationId)
@@ -645,9 +683,16 @@ export class ThreadWorktreeService {
           throw new Error(`${basename(source)} isn't in a Git repository, so it can't have a worktree. Choose Project folder to work in the folder itself.`, { cause: error })
         throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or choose Project folder.", { cause: error })
       }
-      if (from === "newest") base = (await this.starts.point(repoRoot, false)).commit
+      let adopted: string | undefined
+      if (from.kind === "newest") base = (await this.starts.point(repoRoot, false)).commit
+      else if (from.kind === "from") {
+        base = await git(repoRoot, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${from.ref}^{commit}`]).catch(() => "")
+        if (!base) throw new Error(`${from.ref} isn't in ${basename(repoRoot)} anymore. Choose another branch to start from.`)
+      } else if (from.kind !== "head") ({ branch: adopted, base } = await this.adopt(repoRoot, from))
       const parent = this.projectFolder(repoRoot)
-      const slug = await this.reserveSlug(repoRoot, parent, worktreeSlug(name), base)
+      const slug = adopted
+        ? this.freeFolder(parent, worktreeSlug(adopted.replace(/[/_.]+/g, " ")))
+        : await this.reserveSlug(repoRoot, parent, worktreeSlug(name), base)
       const path = join(parent, slug)
       const inside = relative(repoRoot, source)
       receipt = {
@@ -656,10 +701,11 @@ export class ThreadWorktreeService {
         repoRoot,
         path,
         cwd: inside && !inside.startsWith("..") ? join(path, inside) : path,
-        branch: `${BRANCH_PREFIX}${slug}`,
+        branch: adopted ?? `${BRANCH_PREFIX}${slug}`,
         base,
         state: "creating",
       }
+      if (adopted) receipt.adopted = true
       await this.save(receipt)
     }
     let spare: Spare | undefined
@@ -675,6 +721,8 @@ export class ThreadWorktreeService {
         try {
           await git(receipt.repoRoot, [...PARALLEL_CHECKOUT, "worktree", "add", receipt.path, receipt.branch])
         } catch (error) {
+          if (error instanceof GitError && /already (checked out|used by worktree)/i.test(error.stderr))
+            throw new Error(`${receipt.branch} is checked out in another folder. Git keeps a branch in one checkout at a time, so start a new branch from it instead.`, { cause: error })
           throw new Error(`Git couldn't create the worktree: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
         }
       }
@@ -742,6 +790,61 @@ export class ThreadWorktreeService {
       if (this.carrying.size <= MAX_REMEMBERED_CARRIES) break
       this.carrying.delete(key)
     }
+  }
+
+  /**
+   * The local branch a Thread working on an existing branch or pull request
+   * checks out, made to track the remote's when only the remote has it, and
+   * its commit. Refused while another checkout has it.
+   */
+  private async adopt(repoRoot: string, start: Exclude<WorktreeStart, { kind: "from" }>): Promise<{ branch: string; base: string }> {
+    const has = (branch: string) => succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])
+    // A pull request is on the remote the project folder's branch pulls from.
+    const pullRemote = async () =>
+      (await this.starts.tracked(repoRoot, await git(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")))?.remote ?? "origin"
+    let branch: string
+    if (start.kind === "pull" && start.cross) {
+      branch = `pr-${start.number}`
+      if (!(await has(branch))) {
+        const remote = await pullRemote()
+        try {
+          await fetchQuietly(repoRoot, [remote, `refs/pull/${start.number}/head:refs/heads/${branch}`])
+        } catch (error) {
+          throw new Error(`Couldn't fetch #${start.number} from ${remote}. Check your connection, then try again.`, { cause: error })
+        }
+      }
+    } else if (start.kind === "pull") {
+      branch = start.branch
+      if (!(await has(branch))) {
+        const remote = await pullRemote()
+        try {
+          await fetchQuietly(repoRoot, [remote, `refs/heads/${branch}:refs/remotes/${remote}/${branch}`])
+        } catch (error) {
+          throw new Error(`Couldn't fetch ${branch} for #${start.number} from ${remote}. Check your connection, then try again.`, { cause: error })
+        }
+        await git(repoRoot, ["branch", "--track", branch, `${remote}/${branch}`])
+      }
+    } else if (await has(start.branch)) branch = start.branch
+    else {
+      const remote = (await git(repoRoot, ["remote"])).split("\n").find((candidate) => candidate && start.branch.startsWith(`${candidate}/`))
+      if (!remote || !(await succeeds(repoRoot, ["show-ref", "--verify", "--quiet", `refs/remotes/${start.branch}`])))
+        throw new Error(`${start.branch} isn't in ${basename(repoRoot)} anymore. Choose another branch.`)
+      branch = start.branch.slice(remote.length + 1)
+      if (!(await has(branch))) await git(repoRoot, ["branch", "--track", branch, start.branch])
+    }
+    const holder = await git(repoRoot, ["for-each-ref", "--format=%(worktreepath)", `refs/heads/${branch}`]).catch(() => "")
+    if (holder)
+      throw new Error(`${branch} is checked out in ${holder === repoRoot ? "your project folder" : basename(holder)}. Git keeps a branch in one checkout at a time, so start a new branch from it instead.`)
+    return { branch, base: await git(repoRoot, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]) }
+  }
+
+  /** A folder name under `parent` nothing has yet, for a worktree on a branch that already has its name. */
+  private freeFolder(parent: string, slug: string): string {
+    for (let index = 1; index <= 50; index += 1) {
+      const candidate = index === 1 ? slug : `${slug}-${index}`
+      if (!existsSync(join(parent, candidate))) return candidate
+    }
+    return `${slug}-${randomUUID().slice(0, 6)}`
   }
 
   /**
