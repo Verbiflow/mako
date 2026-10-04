@@ -216,7 +216,11 @@ function command(method, params = {}) {
   return new Promise((done, fail) => {
     const id = ++counter
     const timer = setTimeout(() => { callbacks.delete(id); fail(new Error(`Timed out: ${method}`)) }, 120_000)
-    callbacks.set(id, (message) => { clearTimeout(timer); message.error ? fail(new Error(JSON.stringify(message.error))) : done(message.result) })
+    callbacks.set(id, (message) => {
+      clearTimeout(timer)
+      if (message.error) fail(new Error(JSON.stringify(message.error)))
+      else done(message.result)
+    })
     socket.send(JSON.stringify({ id, method, params }))
   })
 }
@@ -345,7 +349,7 @@ try {
   await log("launched", launch)
   const stored = prefs ? JSON.parse(prefs) : {}
   stored.composerHarness = harness
-  stored.providerModes = { ...(stored.providerModes ?? {}), claude: "bypassPermissions", codex: "access:full" }
+  stored.providerModes = { ...stored.providerModes, claude: "bypassPermissions", codex: "access:full" }
   await evaluate(`localStorage.setItem('mako.prefs.v1', ${JSON.stringify(JSON.stringify(stored))}); location.reload(); true`).catch(() => {})
   await delay(1500)
   await waitFor(() => evaluate("Boolean(window.mako && document.querySelector('.composer-input'))"), "composer after reload")

@@ -107,7 +107,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   }
 }
 
-async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close-during-preparation" = false) {
+async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close-during-preparation" | "changed-store" = false) {
   const root = mkdtempSync(join(tmpdir(), "mako-live-hibernate-"))
   const memoryPath = join(root, "session-memory.sqlite")
   const memory = new SessionMemory(memoryPath, {
@@ -143,7 +143,7 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
   ): LiveSessionState => ({
     id: bindingId,
     nativeId: "native-hibernate",
-    nativePath,
+    nativePath: missingAssessment === "changed-store" && starts > 1 ? join(root, "another-account-store") : nativePath,
     harness: "test-provider",
     cwd: root,
     status: "ready",
@@ -162,7 +162,10 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
       if (options.emit) emitters.push(options.emit)
       startModes.push(options.modeId)
       startTunings.push(options.tuning)
-      return session(options.conversationId, options.modeId ?? null)
+      const opened = session(options.conversationId, options.modeId ?? null)
+      if (missingAssessment === "changed-store" && starts > 1)
+        options.emit?.({ type: "live-session", session: opened })
+      return opened
     },
     prompt: async (bindingId, text) => {
       prompts.push(text)
@@ -260,6 +263,16 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
       assert.equal(observer.heldBy("test-provider", "native-hibernate"), null)
       return
     }
+    if (missingAssessment === "changed-store") {
+      owner.submit(id, randomUUID(), "must not send to another store")
+      await waitFor(() => owner.snapshot(id)?.requests[1]?.status === "failed", "a changed native source did not refuse wake")
+      assert.equal(starts, 2, "the native runtime reported its actual reopened source")
+      assert.equal(prompts.length, 1, "no queued prompt reaches a different account's store")
+      assert.equal(owner.snapshot(id)?.control?.bindings[0]?.path, nativePath, "a refused wake preserves its admitted binding")
+      assert.equal(closes, 2, "the incompatible native session closes once")
+      assert.equal(observer.heldBy("test-provider", "native-hibernate"), null)
+      return
+    }
     if (missingAssessment) {
       delete dependencies.resumeVerdict
       const refused = randomUUID()
@@ -344,6 +357,36 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
     observer.close()
     memory.close()
     rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function closeBeforeNativeSpawn() {
+  for (const phase of ["tools", "environment"] as const) {
+    const f = fixture()
+    const entered = deferred<void>()
+    const released = deferred<void>()
+    let starts = 0
+    const driver: ProviderLiveDriver = { ...f.dependencies.driver(), start: async () => { starts++; return f.state } }
+    const prepare = async () => { entered.resolve(); await released.promise; return undefined }
+    const owner = new LiveConversations({ ...f.dependencies, driver: () => driver,
+      tools: phase === "tools" ? prepare : undefined,
+      threadEnvironment: phase === "environment" ? prepare : undefined,
+    })
+    try {
+      await owner.start(driver.provider, f.state.cwd, { conversationId: f.id })
+      owner.submit(f.id, randomUUID(), "must remain unsent")
+      await entered.promise
+      const closing = owner.close(f.id)
+      released.resolve()
+      await closing
+      assert.equal(starts, 0, `Close during ${phase} preparation prevents a native spawn`)
+      assert.equal(f.sent.length, 0)
+      assert.equal(owner.snapshot(f.id)!.session.status, "closed")
+    } finally {
+      released.resolve()
+      await owner.stop()
+      f.cleanup()
+    }
   }
 }
 
@@ -1625,10 +1668,12 @@ await failureIsolationAndAssets()
 await queuedSettings()
 await acceptanceAndRaces()
 await closeDuringStartup()
+await closeBeforeNativeSpawn()
 await durabilityAndBatching()
 await hibernatesAndWakesExactlyOnce()
 await hibernatesAndWakesExactlyOnce(true)
 await hibernatesAndWakesExactlyOnce("close-during-preparation")
+await hibernatesAndWakesExactlyOnce("changed-store")
 await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()
 await failedCloseKeepsOwnership()

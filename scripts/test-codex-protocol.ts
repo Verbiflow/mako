@@ -22,6 +22,7 @@ import {
 } from "../electron/codex-app-parse.ts"
 import {
   consumeStdout,
+  retainStoppedTurn,
   rpcRequest,
   MAX_STDOUT_BUFFER,
   CodexDecoder,
@@ -640,6 +641,57 @@ assert.equal(resolvePermission(permissionContext, { ...permissionCallbacks, send
   kind: "answers", answers: { environment: ["Staging"] },
 }).kind, "uncertain", "a failed pipe write is never a submitted receipt")
 console.log("PASS: Codex approval missing request, validation refusal and unconfirmed write evidence")
+
+// Stop ownership follows native turn/terminal IDs even when command startup
+// arrives after interruption. Repeated notifications must not repeat mutation.
+{
+  const terminal = spawn(process.execPath, ["-e", `
+    require("node:readline").createInterface({input:process.stdin}).on("line", line => {
+      const request = JSON.parse(line);
+      process.stdout.write(JSON.stringify({id:request.id,result:{terminated:request.params.processId !== "refused",seen:request}})+"\\n");
+    });
+  `], { stdio: ["pipe", "pipe", "pipe"] })
+  const seen: Array<{method: string; params: {threadId: string; processId: string}}> = []
+  const failures: string[] = []
+  const localState = { ...state, backgroundTasks: 0 }
+  const late: ProtocolContext = { ...context, child: terminal, pending: new Map(), state: localState,
+    decoder: new CodexDecoder({threadId:"thread-1",state:localState}),
+    stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER), background: {running:new Set()},
+    protocol: {...context.protocol, updateState: patch => Object.assign(localState,patch), handleFatal: message => failures.push(message)} }
+  terminal.stdout.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().trim().split("\n")) seen.push(JSON.parse(line).result.seen)
+    consumeStdout(late, chunk)
+  })
+  const command = (threadId: string, turnId: string, processId: string) => consumeStdout(late,Buffer.from(JSON.stringify({method:"item/started",params:{threadId,turnId,item:{type:"commandExecution",id:`item-${turnId}`,processId,command:"fixture",cwd:"/tmp",status:"inProgress",aggregatedOutput:null,exitCode:null}}})+"\n"))
+  const wait = async (done: () => boolean) => {
+    for (let i=0;i<200&&!done();i++) await new Promise(resolve=>setTimeout(resolve,5))
+    assert.ok(done())
+  }
+  try {
+    retainStoppedTurn(late,"stopped")
+    command("thread-1","stopped","native-17")
+    command("thread-1","stopped","native-17")
+    command("thread-1","next-turn","native-18")
+    await wait(()=>seen.length===1&&localState.backgroundTasks===0)
+    assert.deepEqual(seen.map(call=>({method:call.method,params:call.params})),[{method:"thread/backgroundTerminals/terminate",params:{threadId:"thread-1",processId:"native-17"}}])
+    retainStoppedTurn(late,"child-stopped")
+    command("child-thread","child-stopped","native-17")
+    await wait(()=>seen.length===2)
+    assert.equal(seen[1]?.params.threadId,"child-thread","child cleanup never targets the root thread")
+    retainStoppedTurn(late,"reused-id")
+    command("thread-1","reused-id","native-17")
+    await wait(()=>seen.length===3)
+    retainStoppedTurn(late,"failed-stop")
+    command("thread-1","failed-stop","refused")
+    await wait(()=>failures.length===1)
+    assert.match(failures[0]!,/not ended/)
+    assert.equal(seen.length,4,"a refused native mutation is not automatically retried")
+    for (let i=0;i<508;i++) retainStoppedTurn(late,`bounded-${i}`)
+    assert.throws(()=>retainStoppedTurn(late,"overflow"),/bound/)
+    assert.ok(late.stoppedTurns?.has("stopped"),"bounded Stop evidence never evicts a turn that may still emit commands")
+  } finally { terminal.kill("SIGTERM") }
+  console.log("PASS: Late stopped-turn commands use exact native IDs once, child scope and reused IDs hold, new turns are untouched, refusal and evidence bounds fail explicitly")
+}
 
 // A terminal a turn left running keeps the session busy until Codex completes
 // its item. A completion that races the list must not be counted again.

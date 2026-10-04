@@ -724,6 +724,16 @@ assert.match(staleMarkup, /before compacting\. The next reply updates this\./)
 const spendOnly = renderToStaticMarkup(
   <UsageDetails usage={{ tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } }} harness="cursor" conversationId={conversation.session.id} />
 )
-assert.match(spendOnly, /Cursor reports the tokens each turn spends, not how full the context is\./)
+assert.match(spendOnly, />Unavailable</)
+assert.match(spendOnly, /Cursor doesn&#x27;t report how full the context is\./)
 assert.doesNotMatch(spendOnly, /Cache write/)
+const readingUsage = conversation.session.usage
+conversation.session = { ...conversation.session, usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
+publish()
+const spendOnlyMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
+assert.match(spendOnlyMeter, /aria-label="Context usage unavailable"/)
+assert.match(spendOnlyMeter, /data-unmeasured-ring/)
+assert.doesNotMatch(spendOnlyMeter, />Tokens /)
+conversation.session = { ...conversation.session, usage: readingUsage }
+publish()
 console.log("Activity feedback: contextual recovery, distinct main states, tuned inline project/thread orbs, idle cleanup, and explicit external-running labels verified")

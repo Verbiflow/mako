@@ -468,11 +468,12 @@ async function runHarness(provider) {
         const snap = await snapshot(ids.s2)
         status = snap.requests.find((item) => item.id === request.id)?.status
         const turn = turnOf(snap)
-        samples.push({
+        const sample = {
           atMs: Date.now() - sentAt, status, live: view?.live, length: view?.text.length ?? 0, answered: view?.text.includes(expected) ?? false,
           hostTurnBlocks: turn.length, hostTurnTools: turn.filter((block) => block.type === "tool").length,
-          ...(samples.at(-1)?.length !== (view?.text.length ?? 0) ? { tail: view?.text.slice(-240) } : {}),
-        })
+        }
+        if (samples.at(-1)?.length !== sample.length) sample.tail = view?.text.slice(-240)
+        samples.push(sample)
         // The live picture is taken mid-turn, and counts only if the turn was still running once it was taken.
         if (!liveShotConfirmed && status === "dispatching" && view?.live && Date.now() - sentAt > 8000) {
           liveShot = await shot("4-transcript-tab-live")

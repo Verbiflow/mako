@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process"
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
@@ -56,6 +56,22 @@ try {
   const probe = openCodeProcessProbeFor(root)
   const poll = () => probe.probe(AbortSignal.timeout(1000))
   assert.deepEqual(await poll(), { kind: "available", sessions: [] })
+  if (process.platform !== "win32") {
+    const command = join(root, "opencode")
+    await copyFile("/bin/sleep", command)
+    const unregistered = spawn(command, ["300"], { stdio: "ignore" })
+    try {
+      await new Promise<void>((resolve, reject) => { unregistered.once("spawn", resolve); unregistered.once("error", reject) })
+      const observed = await probe.probe(AbortSignal.timeout(2000), { nativeId: "ses_fixture", path: "/fixture/native.db#ses_fixture" })
+      assert.deepEqual(observed, { kind: "unavailable", reason: "incomplete" }, "a live unregistered stdio server cannot be cleared by absent service registration")
+    } finally {
+      if (unregistered.exitCode === null && unregistered.signalCode === null) {
+        const closed = new Promise<void>(resolve => unregistered.once("exit", () => resolve()))
+        unregistered.kill("SIGTERM")
+        await closed
+      }
+    }
+  }
   await writeFile(
     join(root, "service.json"),
     JSON.stringify({

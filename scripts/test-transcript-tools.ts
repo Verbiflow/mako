@@ -5,6 +5,25 @@ import { isInterruptedNote, notesBesideStop, promptLabel, responseSections, toEx
 import { textOf } from "../src/lib/format.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
 import type { AttachmentContent } from "@mako/sessions"
+import { CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
+import { reduceLiveUpdates } from "../electron/contracts/live-content.ts"
+
+// SDK wire -> canonical live blocks -> shared row, and retained blocks -> the same row.
+// The SDK's MCP envelope differs from Desktop's CallDynamicTool, even in one harness.
+{
+  const projection = new CursorSdkProjection("mcp-parity")
+  const input = { providerIdentifier: "mako", toolName: "app_status", args: {} }
+  const updates = projection.message({ type: "tool_call", agent_id: "agent", run_id: "run", call_id: "status", name: "mcp", status: "completed", args: input, result: { status: "success", value: {} } })
+  const blocks = reduceLiveUpdates([], updates)
+  const liveRows = acpBlocksToMessages(blocks, false, "cursor")
+  const liveRow = pairTools(liveRows.messages[0]!.blocks)[0]!
+  const savedRows = threadToMessages([{ kind: "assistant", blocks: [{ type: "tool", id: "status", name: "mcp", input: JSON.stringify(input), output: "" }] }], 0, "cursor")
+  const savedRow = pairTools(savedRows[0]!.blocks)[0]!
+  assert.equal(liveRow.tool.label, "App status")
+  assert.equal(savedRow.tool.label, liveRow.tool.label)
+  assert.equal(liveRow.tool.server, "mako")
+  assert.equal(liveRow.tool.tool, "app_status")
+}
 
 const image: AttachmentContent = {
   type: "attachment",

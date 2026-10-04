@@ -99,6 +99,31 @@ async function check() {
     await codexAppClose(conversation.id)
     console.log("PASS: Stop ends the turn, the terminals the thread left running, and the command the interrupt turned into one; the thread answers afterwards")
 
+    const late = await open()
+    void late.prompt("late")
+    await late.until("the unannounced foreground command", () => late.pid("foreground ") > 0 && late.session()?.status === "running")
+    const latePid = late.pid("foreground ")
+    leftovers.push(latePid)
+    await codexAppCancel(late.id)
+    await late.until("the command announced after interruption to end", () => !running(latePid))
+    await late.prompt("after")
+    await late.until("same-session answer after late cleanup", () => late.texts().includes("answered after"))
+    await codexAppClose(late.id)
+    console.log("PASS: A foreground terminal announced after interruption is ended by its exact native ID and the session answers afterwards")
+
+    for (const text of ["work", "late", "late-acceptance"]) {
+      const activeClose = await open()
+      void activeClose.prompt(text)
+      await activeClose.until("active Close foreground", () => activeClose.pid("foreground ") > 0 && activeClose.session()?.status === "running")
+      const activePid = activeClose.pid("foreground ")
+      leftovers.push(activePid)
+      await Promise.all([codexAppClose(activeClose.id), codexAppClose(activeClose.id)])
+      assert.equal(running(activePid), false, "Close drains foreground cleanup before retiring its native transport")
+      assert.equal(running(activeClose.background), false)
+      assert.equal(activeClose.session()?.status, "closed")
+    }
+    console.log("PASS: Repeated active Close drains foreground and late-command cleanup once before native retirement")
+
     const idle = await open()
     await codexAppCancel(idle.id)
     await idle.until("the background command to end", () => !running(idle.background))

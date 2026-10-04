@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -25,6 +25,11 @@ try {
   assert.ok(checkpoint)
   const binding: ProviderBinding = {id:"binding",provider:"devin",nativeId:"one",path,checkpoint,coveredBlocks:2,includesBase:true}
   assert.equal(await canResume(binding), true)
+  const alias = join(root, "alias.db")
+  await symlink(join(root, "sessions.db"), alias)
+  assert.equal(await policy.checkpoint(`${alias}#one`), checkpoint, "a DB alias preserves exact native record identity")
+  assert.equal((await verdict({ ...binding, path: `${alias}#one` })).kind, "resumable")
+  assert.equal(await policy.checkpoint(`${alias}#two`), await policy.checkpoint(`${join(root, "sessions.db")}#two`))
   assert.deepEqual(await verdict({...binding,checkpoint:undefined}), { kind: "resumable", record: "unknown" }, "Legacy records can load an existing unlocked native session")
   db.prepare("UPDATE sessions SET main_chain_id = 99 WHERE id = ?").run("two")
   assert.equal(await policy.checkpoint(path), checkpoint, "Another session cannot invalidate this session's checkpoint")

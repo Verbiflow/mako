@@ -96,6 +96,7 @@ const setup: CheckoutSetup = {
 }
 const worktrees = new ThreadWorktreeService(join(root, "worktrees"), threads, async () => [], async () => [], undefined, setup)
 const spareRecords = join(root, "worktrees", "spares")
+// SAFETY: the worktree service above writes every record here, with at least these fields.
 const spares = () => readdirSync(spareRecords).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(spareRecords, name), "utf8")) as {
   id: string; repoRoot: string; path: string; state: string; install?: { app: AppKey; state: string }
 })
@@ -182,6 +183,7 @@ try {
   assert.equal(lstatSync(installing.path).isSymbolicLink() && readlinkSync(installing.path), claimed.path, "a link where the spare was keeps the run's paths working")
   const claimedThread = threadIn(claimed.path, "Claimed mid-install")
   assert.match(await tools.start(claimedThread), /Preparing this checkout \(.+\); the app starts by itself once it's done/)
+  // SAFETY: app_status lists unfinished prepare steps as step → sentence; the assertion below reads it.
   const status = parseYaml(await tools.status(claimedThread)) as { prepare?: Record<string, string> }
   assert.match(status.prepare?.[INSTALL] ?? "", /installing now, in a run that started before this Thread took the checkout/)
   const handedRow = (await tools.desk.room()).apps.find((entry) => entry.app === installing.install!.app)
@@ -213,6 +215,7 @@ try {
       await processes.memory()
     }
   }
+  // SAFETY: ThreadProcesses writes every memory record here, each with its project and runs.
   const recorded = () => readdirSync(join(records, "memory"))
     .map((name) => JSON.parse(readFileSync(join(records, "memory", name), "utf8")) as { project: string; runs: { bytes: number; steady?: boolean }[] })
     .find((entry) => entry.project === project)!.runs
@@ -238,6 +241,7 @@ try {
   const memoryConversation = randomUUID()
   conversations.set(memoryConversation, project)
   appsByCheckout.set(realpathSync(project), app)
+  // SAFETY: String() makes any value a line; the match below fails if app_status left `room` out.
   const line = String((parseYaml(await tools.status(memoryConversation)) as { room: string }).room)
   assert.match(line, /each copy of this app peaks around .+ \(the median of its last 3 runs\); with .+ free, about 11 fit at once, counting the 1 running now/)
 

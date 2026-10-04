@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  realpath,
   symlink,
   writeFile,
 } from "node:fs/promises"
@@ -68,13 +69,16 @@ try {
   earlier.track(finished, { kind: "acp:test", owner: "conv-2" })
   await new Promise<void>((resolve) => finished.once("exit", () => resolve()))
   const deadline = Date.now() + 10_000
+  const wrappedExecutable = await realpath("/bin/sleep")
   while (true) {
     const records = JSON.parse(await readFile(earlier.path, "utf8")).children
     if (
       records.length === 4 &&
       records.every(
         (entry: { executableIdentity?: string }) => entry.executableIdentity
-      )
+      ) &&
+      records.find((entry: { owner: string }) => entry.owner === "conv-wrapper")
+        ?.executableIdentity === wrappedExecutable
     )
       break
     assert.ok(
@@ -108,6 +112,10 @@ try {
   const raw = JSON.parse(
     await readFile(join(dir, "runtime", "provider-children.json"), "utf8")
   )
+  // The abandoned host must stop writing before constructing the restart
+  // snapshot; otherwise its scheduled identity refresh overwrites the forged
+  // recycled-PID record while the next host is inspecting it.
+  for (const child of owned) if (child.pid) earlier.untrackPid(child.pid)
   for (const entry of raw.children)
     if (entry.owner === "conv-shebang") delete entry.executableIdentity
   for (const entry of raw.children)
@@ -171,6 +179,25 @@ try {
     "leftovers are cleared whether killed or already gone"
   )
 
+  // An executable mismatch does not prove death. Preserve it across later
+  // registry writes, and let a later verified observation authorize cleanup.
+  const uncertain = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
+  owned.push(uncertain)
+  uncertain.unref()
+  const uncertainRecord = {
+    ...written.children[0],
+    pid: uncertain.pid,
+    startedAt: Date.now(),
+    processStartedAt: undefined,
+    executableIdentity: "/not-the-spawned-executable",
+    owner: "uncertain-image",
+  }
+  await writeFile(next.path, JSON.stringify({ children: [uncertainRecord] }))
+  assert.deepEqual(await next.reap(), [])
+  assert.equal(alive(uncertain.pid!), true, "unknown executable never authorizes a signal")
+  next.untrackPid(-1)
+  assert.equal(JSON.parse(await readFile(next.path, "utf8")).children[0].owner, "uncertain-image")
+
   // This host's own live children are never reaped by this host.
   const mine = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
   owned.push(mine)
@@ -178,6 +205,43 @@ try {
   next.track(mine, { kind: "acp:test", owner: "conv-4" })
   assert.deepEqual(await next.reap(), [])
   assert.equal(alive(mine.pid!), true)
+  assert.ok(
+    JSON.parse(await readFile(next.path, "utf8")).children.some(
+      (entry: { owner: string }) => entry.owner === "uncertain-image"
+    ),
+    "tracking new children retains unresolved foreign ownership"
+  )
+  const retry = JSON.parse(await readFile(next.path, "utf8"))
+  retry.children.find((entry: { owner: string }) => entry.owner === "uncertain-image").executableIdentity = wrappedExecutable
+  await writeFile(next.path, JSON.stringify(retry))
+  assert.deepEqual((await next.reap()).map((entry) => entry.owner), ["uncertain-image"])
+  await settle()
+  assert.equal(alive(uncertain.pid!), false)
+
+  const activeHost = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
+  const activeChild = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
+  owned.push(activeHost, activeChild)
+  activeHost.unref()
+  activeChild.unref()
+  const liveForeign = JSON.parse(await readFile(next.path, "utf8"))
+  liveForeign.children.push({
+    ...uncertainRecord,
+    host: activeHost.pid,
+    pid: activeChild.pid,
+    startedAt: Date.now(),
+    executableIdentity: wrappedExecutable,
+    owner: "living-foreign-host",
+  })
+  await writeFile(next.path, JSON.stringify(liveForeign))
+  assert.deepEqual(await next.reap(), [])
+  assert.equal(alive(activeChild.pid!), true, "a living foreign host owns its children")
+  activeHost.ref()
+  const foreignHostExited = new Promise<void>(resolve => activeHost.once("exit", () => resolve()))
+  activeHost.kill("SIGTERM")
+  await foreignHostExited
+  assert.deepEqual((await next.reap()).map(entry => entry.owner), ["living-foreign-host"])
+  await settle()
+  assert.equal(alive(activeChild.pid!), false, "verified orphan is reaped after its host exits")
   process.kill(reused.pid!, "SIGTERM")
   process.kill(mine.pid!, "SIGTERM")
 } finally {

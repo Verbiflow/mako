@@ -10,7 +10,9 @@ import {
 } from "../electron/native-continuation.ts"
 import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
-import { assessProviderResume } from "../electron/provider-recovery.ts"
+import { assessProviderResume, verifyRecoveredSession } from "../electron/provider-recovery.ts"
+import { launchContext } from "../electron/execution-context.ts"
+import type { LiveSessionState } from "../electron/shared.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { resumable } from "../electron/contracts/conversation-control.ts"
 import type { NativeResumeEvidence } from "../electron/native-continuation.ts"
@@ -100,7 +102,7 @@ try {
     const saved = { ...binding, provider: driver.provider }
     let reads = 0
     let evidence: NativeResumeEvidence = { kind: "available", checkpoint: checkpoint!, strategy: "same-session" }
-    const adapter = { ...driver, inspectNativeSession: async () => { reads++; return evidence } }
+    const adapter = { ...driver, nativeSource: undefined, inspectNativeSession: async () => { reads++; return evidence } }
     assert.deepEqual(await assessProviderResume(saved, adapter), { kind: "resumable", record: "same" })
     assert.deepEqual(await assessProviderResume({ ...saved, checkpoint: undefined }, adapter), { kind: "resumable", record: "unknown" })
     evidence = { kind: "available", checkpoint: "new revision", strategy: "copy" }
@@ -113,6 +115,31 @@ try {
     assert.equal((await assessProviderResume(saved, { ...adapter, provider: "wrong-owner" })).kind, "unavailable")
     assert.equal(reads, 4, "invalid ownership/implementation is refused before native I/O")
     assert.equal((await assessProviderResume(saved, { ...adapter, inspectNativeSession: async () => { throw new Error("read failed") } })).kind, "unavailable")
+    const oldContext = launchContext("native-fixture", driver.nativeIdentity, { name: "managed-a", dir: "/account-a" })
+    oldContext.store = { kind: "located", path: saved.path! }
+    const observedContext = { ...oldContext, account: { kind: "configured" as const, name: "managed-b", managed: true } }
+    const retained = { ...saved, executionContext: oldContext }
+    const session: LiveSessionState = { id: saved.id, harness: driver.provider, nativeId: saved.nativeId, nativePath: saved.path,
+      executionContext: observedContext, cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
+    const same = { ...adapter, inspectNativeSession: async (): Promise<NativeResumeEvidence> => ({ kind: "available", checkpoint: checkpoint!, strategy: "same-session" }) }
+    await verifyRecoveredSession(retained, session, same)
+    await assert.rejects(verifyRecoveredSession(retained, { ...session, nativeId: "wrong-id" }, same), /different native session/)
+    await assert.rejects(verifyRecoveredSession(retained, { ...session, nativePath: "/other/store", executionContext: { ...observedContext, store: {kind:"located",path:"/other/store"} } }, same), /different native store/)
+    await assert.rejects(verifyRecoveredSession(retained, { ...session, nativePath: "/other/store" }, same), /disagrees/)
+    await assert.rejects(verifyRecoveredSession(retained, { ...session, nativePath: undefined, executionContext: {...observedContext,store:{kind:"unavailable",reason:"not located"}} }, same), /did not locate/)
+    await assert.rejects(verifyRecoveredSession(saved, { ...session, nativePath: undefined, executionContext: undefined }, same), /did not locate/, "legacy context cannot bypass locating the actual reopened source")
+    const inconsistent = { ...retained, executionContext: {...oldContext,store:{kind:"located" as const,path:"/other/store"}} }
+    assert.equal((await assessProviderResume(inconsistent, same)).kind, "unavailable", "a stale context cannot be silently replaced before native admission")
+    const copy = { ...same, inspectNativeSession: async (): Promise<NativeResumeEvidence> => ({ kind: "available", checkpoint: checkpoint!, strategy: "copy" }) }
+    await assert.rejects(verifyRecoveredSession(retained, { ...session, nativePath: "/copied/store", executionContext: undefined }, copy), /exact import receipt/, "copy support cannot authorize an arbitrary destination")
+    const imported = { ...session, nativePath: "/copied/store", executionContext: { ...observedContext, store: { kind: "located" as const, path: "/copied/store" }, sourceImport: { source: saved.path!, destination: "/copied/store", nativeId: saved.nativeId!, via: "native import response" } } }
+    await verifyRecoveredSession(retained, imported, copy)
+    await assert.rejects(verifyRecoveredSession(retained, { ...imported, executionContext: { ...imported.executionContext, sourceImport: { ...imported.executionContext.sourceImport, destination: "/unrelated/store" } } }, copy), /exact import receipt/)
+    await assert.rejects(verifyRecoveredSession(retained, { ...imported, executionContext: { ...imported.executionContext, sourceImport: { ...imported.executionContext.sourceImport, nativeId: "other-native-id" } } }, copy), /exact import receipt/)
+    await assert.rejects(verifyRecoveredSession(retained, imported, same), /verify the imported/)
+    await assert.rejects(verifyRecoveredSession(retained, { ...session, executionContext: { ...observedContext, transport: "other-transport" } }, same), /transport changed/)
+    // Old journals predate execution context; native identity/source readers remain their admission evidence.
+    await verifyRecoveredSession(saved, { ...session, executionContext: undefined }, same)
   }
   console.log(
     "Native continuation: unchanged file accepted; moved record reconnects but is not reused; missing, active, unavailable and failed probes denied"

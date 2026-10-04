@@ -71,7 +71,7 @@ if (process.versions.electron) {
     logLevel: "warn",
   }
   if (production) await build(config)
-  const server = production ? await preview(config) : await createServer(config)
+  const server = fileMode ? undefined : production ? await preview(config) : await createServer(config)
   if (!production) await server.listen()
   await writeFile(
     join(root, "package.json"),
@@ -104,9 +104,10 @@ if (process.versions.electron) {
       child.once("exit", (code) => resolve(code ?? 1))
     })
   } finally {
-    if (production)
-      await new Promise((resolve) => server.httpServer.close(resolve))
-    else await server.close()
+    if (server) {
+      if (production) await new Promise((resolve) => server.httpServer.close(resolve))
+      else await server.close()
+    }
   }
   console.log(`Renderer audit evidence: ${root}`)
 }
@@ -235,6 +236,32 @@ async function auditWindow() {
         rssKb < 2 * 1024 * 1024,
         "Audit stopped at its 2 GiB working-set limit"
       )
+    }
+    if (process.env.MAKO_PERF_SOAK === "1") {
+      stage = "sustained-renderer-stream"
+      await evaluate("window.performanceAudit.setup(5000)")
+      const resources = []
+      const began = performance.now()
+      const sample = () => resources.push({ elapsedMs: performance.now() - began,
+        processes: app.getAppMetrics().map(entry => ({ pid: entry.pid, type: entry.type,
+          cpuPercent: entry.cpu.percentCPUUsage, workingSetBytes: entry.memory.workingSetSize * 1024 })) })
+      sample()
+      const sampling = setInterval(sample, 1000)
+      let streamed
+      try {
+        // Fifty fixture deltas a second for one minute through the production
+        // components and reducer. This includes Chromium paint and worker cost.
+        streamed = await evaluate("window.performanceAudit.stream(3000)")
+      } finally { clearInterval(sampling); sample() }
+      const elapsedMs = performance.now() - began
+      const peakWorkingSetBytes = Math.max(...resources.map(sample => sample.processes.reduce((sum, entry) => sum + entry.workingSetBytes, 0)))
+      const receipt = { kind: "sustained-renderer-stream", elapsedMs, peakWorkingSetBytes, resources, ...streamed }
+      cases.push(receipt)
+      await writeFile(join(root, "soak.json"), JSON.stringify(receipt, null, 2))
+      await writeFile(join(root, "sustained-stream.png"), (await page.capturePage()).toPNG())
+      assert.ok(elapsedMs >= 60_000, "resource acceptance requires a sustained sample")
+      assert.ok(peakWorkingSetBytes < 2 * 1024 ** 3, "renderer soak exceeded its 2 GiB working-set bound")
+      assert.ok(streamed.frameGaps.p95Ms < 100, "renderer soak p95 frame gap exceeded 100 ms")
     }
     stage = "inactive-stream"
     await evaluate("window.performanceAudit.setup(5000)")

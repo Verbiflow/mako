@@ -153,6 +153,10 @@ try {
   store.prepare("INSERT INTO blobs (id, data) VALUES ('b2', x'00')").run()
   const sdkSecond = cursorSdkCheckpoint(stateRoot, directoryName)
   assert.ok(sdkSecond && sdkSecond !== sdkFirst, "a new turn moves the checkpoint")
+  // Admission now observes the source inode across executables. The fixture
+  // writer must finish before expecting an idle native store.
+  index.close()
+  store.close()
 
   // The driver's verdicts, for both kinds of store.
   const auth = new CursorSdkAuth({
@@ -183,8 +187,6 @@ try {
   assert.equal((await verdict({ ...acpBinding, path: undefined })).kind, "unavailable")
   rmSync(acpPath)
   assert.equal((await verdict(acpBinding)).kind, "unavailable", "a missing store cannot be resumed")
-  index.close()
-  store.close()
   console.log(
     "Cursor resume: SDK agents checkpoint by index root, cursor-agent stores by meta root; acp-sessions and chats stores resume through import, once per store, with the chats fork under its own agent"
   )

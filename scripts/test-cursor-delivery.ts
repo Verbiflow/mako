@@ -96,6 +96,32 @@ const dispatch = () => ({
   report: (e: PromptDeliveryEvidence) => evidence.push(e),
 })
 try {
+  await auth.status()
+  const identity = Promise.withResolvers<SdkResult<"me">>()
+  const opened = Promise.withResolvers<void>()
+  const delayedClient: CursorSdkLiveClient = {
+    ...client,
+    request: async (method, params) => {
+      const answers: FixtureAnswers = {
+        me: () => identity.promise,
+        open: () => { opened.resolve(); return { agentId: "fixture-agent", model: { id: "fixture-model" }, imported: false, importSource: "/native/previous-import.db" } },
+      }
+      const respond = answers[method]
+      return respond ? respond() : client.request(method, params)
+    },
+  }
+  const delayed = createCursorSdkDriver({ auth, stateRoot: () => root, home: root, client: () => delayedClient, models: async () => [{ id: "fixture-model", displayName: "Fixture" }] })
+  const delayedId = randomUUID()
+  let ready = false
+  const starting = delayed.start(root, { conversationId: delayedId, emit() {} }).then(state => { ready = true; return state })
+  await opened.promise
+  await tick()
+  assert.equal(ready, false, "native open cannot admit input before effective identity settles")
+  identity.resolve({ email: "effective@example.test", apiKeyName: "fixture", createdAt: "2026-10-03" })
+  const identified = await starting
+  assert.equal(identified.executionContext?.identity.kind, "reported")
+  assert.equal(identified.executionContext?.sourceImport?.source, "/native/previous-import.db", "a previously indexed import retains native provenance even when no new copy occurred")
+  await delayed.close(delayedId)
   await driver.start(root, { conversationId: id, emit() {} })
   const pending = driver.prompt(id, "first", [], undefined, dispatch())
   await tick()

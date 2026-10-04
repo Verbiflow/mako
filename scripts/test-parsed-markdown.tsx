@@ -80,21 +80,27 @@ assert.deepEqual(paths, [
   "~/.mako/thread-data/run/tool-row-options/0-today-codex-claude.jpg",
   "~/.mako/thread-data/run/tool-row-options/0-today-cursor-grok.jpg",
   "~/.mako/thread-data/run/tool-row-options/tool-rows-interactions.mp4",
-  "src/app.ts", "elsewhere.png",
+  "src/app.ts",
 ])
 const unrelated: string[] = []
 const unrelatedTree = parseProse("Use `~/examples/` as an example.\n\n`report.xlsx`\n\n```txt\nshot.png\n```")
 paths.length = 0
 collectLinks(unrelatedTree)
 unrelated.push(...paths)
-assert.deepEqual(unrelated, ["report.xlsx"], "ordinary prose and code samples never invent an asset directory")
+assert.deepEqual(unrelated, [], "ordinary filenames and code samples never invent an asset directory")
 assert.notDeepEqual(parseProse("**bold**"), parseProse("__ital__"))
-const lists = parseProse("- Parent `guide.md`\n  - Child `requests.har`")
+const lists = parseProse("- Parent `docs/guide.md`\n  - Child `traces/requests.har`")
 const listPaths: string[][] = []
 visit(lists, "element", node => {
   if (node.tagName === "li") listPaths.push(inlineFileLinks(node))
 })
-assert.deepEqual(listPaths, [["guide.md"], ["requests.har"]], "Each list item discovers only its own previews")
+assert.deepEqual(listPaths, [["docs/guide.md"], ["traces/requests.har"]], "Each list item discovers only its own previews")
+
+// The reported T3 discussion names other repositories' files, not workspace paths.
+const filenameDiscussion = "Their model list (`CursorProvider.ts`) renames the context option. `TraitsPicker.tsx`, `ContextWindowMeter.tsx`, `AcpAdapterV2.ts`, `sample.yas`, `README.md`, `guide.md#setup`, and `app.ts:42` are names.\n\n[Explicit file](app.ts:42) and [guide](guide.md#setup).\n\n`src/app.ts`\n\n```12:14:app.ts\nconst x = 1\n```"
+paths.length = 0
+collectLinks(parseProse(filenameDiscussion))
+assert.deepEqual(paths, ["app.ts:42", "guide.md#setup", "src/app.ts", "app.ts#L12-L14"], "Only authored links, paths and native code citations carry file intent")
 console.log(
   "Worker Markdown pipeline preserves heading IDs/source lines, lists, setext, GFM, references, code, citations, escaping, Unicode, incomplete syntax and immutable reuse"
 )

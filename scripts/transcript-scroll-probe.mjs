@@ -76,9 +76,10 @@ await send("Page.enable")
 await send("Runtime.enable")
 await send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 900, deviceScaleFactor: 1, mobile: false })
 
-async function open(count = turns) {
+async function open(count = turns, paged = 0) {
   const url = new URL("/scripts/transcript-scroll-browser.html", app)
   url.searchParams.set("turns", String(count))
+  if (paged) url.searchParams.set("paged", String(paged))
   await send("Page.navigate", { url: url.href })
   for (let attempt = 0; attempt < 200; attempt += 1) {
     await sleep(100)
@@ -93,7 +94,10 @@ function markAnchor() {
   const scroller = document.querySelector(".scroll-fade-scroller")
   const box = scroller.getBoundingClientRect()
   document.querySelector("[data-probe-anchor]")?.removeAttribute("data-probe-anchor")
-  let element = document.elementFromPoint(box.left + 200, box.top + box.height / 2)
+  // A point in the gap between turns hits the column, whose top moves with any history added above.
+  let element = null
+  for (let y = box.height / 2; y < box.height - 20 && !element?.closest("[data-exchange]"); y += 13)
+    element = document.elementFromPoint(box.left + 200, box.top + y)
   while (element && element.parentElement && !element.parentElement.matches("article, [data-exchange] > *")) {
     if (element.getBoundingClientRect().height > 8) break
     element = element.parentElement
@@ -148,6 +152,31 @@ async function scrollUpThrough(label, step = -120, settle = 220) {
   for (const jump of jumps.slice(0, 25)) console.log("  ", JSON.stringify(jump))
   if (jumps.length > 25) console.log(`   … ${jumps.length - 25} more`)
   return jumps
+}
+
+/** A short session whose source serves earlier turns in pages, read to its beginning. */
+async function sourcePages(paged, delta = Number(process.env.DELTA ?? -60)) {
+  await open(turns, paged)
+  const jumps = []
+  let gesture = 0
+  const requested = 20 * delta
+  for (; gesture < 600; gesture += 1) {
+    const before = await evaluate(markAnchor)
+    for (let event = 0; event < 20; event += 1) {
+      await wheel(delta)
+      await sleep(16)
+    }
+    await sleep(450)
+    const after = await evaluate(readAnchor)
+    if (before.top !== null && after.top !== null && before.scrollTop + requested > 0) {
+      const jump = after.top - before.top + requested
+      if (Math.abs(jump) > 3) jumps.push({ gesture, jump: Math.round(jump), scrollTop: Math.round(after.scrollTop), edge: after.edge, mounted: after.mounted, height: after.scrollHeight - before.scrollHeight })
+    }
+    if (after.edge === "start" && after.scrollTop <= 0) break
+  }
+  const end = await evaluate(readAnchor)
+  console.log(`\nSource paging from ${paged} turns (${turns} in all): reached ${end.edge === "start" ? "the beginning" : `edge "${end.edge}"`} after ${gesture} gestures with ${end.mounted} turns mounted; ${jumps.length} unasked movements`)
+  for (const jump of jumps.slice(0, 20)) console.log("  ", JSON.stringify(jump))
 }
 
 /** Trackpad-like gestures: a stream of small wheel events, then a pause. */
@@ -296,9 +325,13 @@ async function traceJump(index) {
 
 /** The UI pilot page's own checks, which include prepending history around the reading anchor. */
 async function pilot() {
+  await send("Emulation.setFocusEmulationEnabled", { enabled: true })
   await send("Page.navigate", { url: new URL("/scripts/ui-pilot-browser.html", app).href })
-  await sleep(2500)
-  await evaluate(() => document.querySelector("button")?.click())
+  for (let wait = 0; wait < 100; wait += 1) {
+    await sleep(200)
+    if (await evaluate(() => document.querySelector("#root > button") !== null).catch(() => false)) break
+  }
+  await evaluate(() => document.querySelector("#root > button").click())
   let text = ""
   for (let wait = 0; wait < 120; wait += 1) {
     await sleep(500)
@@ -318,6 +351,7 @@ try {
     await scrollUpThrough(`Wheel up from the end (${turns} turns)`, -240, 140)
   }
   if (want("gesture")) await gestures(Number(process.env.GESTURES ?? 60))
+  if (want("paged")) for (const paged of (process.env.PAGED ?? "12,45").split(",")) await sourcePages(Number(paged))
   if (want("finish")) await turnFinishesWhileReading()
   if (want("bottom")) await turnFinishesAtBottom()
   if (want("inturn")) await turnFinishesWhileReadingIt()

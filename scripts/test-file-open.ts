@@ -14,14 +14,10 @@ import { registeredHarnessIds } from "./registered-harnesses.ts"
 /**
  * Opening a file the transcript linked.
  *
- * An answer writes `test-notifications.ts` in prose, `inlineFileTarget` turns
- * that inline code into a link, and the file is in `scripts/`. Resolving the
- * name against the workspace root read nothing and reported
- * `Error invoking remote method 'mako:read-live-file': Error: ENOENT … stat
- * '/Users/you/project/test-notifications.ts'` — an internal channel name in
- * front of an absolute path the reader never typed, about a file that exists.
- * Both halves are checked here: the host resolves the name, and no host error
- * reaches the UI wearing Electron's IPC wrapper.
+ * Explicit links and native citations may carry a basename, which the host
+ * resolves through its ignore-aware index. Mere filenames in inline prose
+ * carry no location and must remain text. Host failures reach the UI without
+ * Electron's IPC wrapper.
  */
 
 const run = promisify(execFile)
@@ -56,12 +52,9 @@ try {
     { cwd: root }
   )
 
-  // The input that starts this: bare inline code becomes a file link.
-  assert.deepEqual(inlineFileTarget("test-notifications.ts"), {
-    path: "test-notifications.ts",
-    line: undefined,
-    endLine: undefined,
-  })
+  assert.equal(inlineFileTarget("test-notifications.ts"), null,
+    "An unlocated filename in prose never starts a file lookup")
+  assert.ok(inlineFileTarget("scripts/test-notifications.ts"))
 
   await writeFile(join(root, ".gitignore"), "ignored/\n")
   await mkdir(join(root, "ignored"))
@@ -220,7 +213,10 @@ try {
   const absentHome = `~/${relative(homedir(), join(root, "absent.ts"))}`
   assert.equal(await refused(absentHome), `No file at ${absentHome}`, "missing home paths never fall back to unrelated project names")
   for (const pattern of ["1-option-a-ledger-*.jpg", "shot?.png", "shot[12].png"]) assert.equal(inlineFileTarget(pattern), null, "file patterns remain literal")
-  for (const name of ["report.docx", "measurements.xlsx", "review.pptx", "requests.har", "render.cpuprofile"]) assert.ok(inlineFileTarget(name), "shared preview formats become file links")
+  for (const name of ["report.docx", "measurements.xlsx", "review.pptx", "requests.har", "render.cpuprofile"]) {
+    assert.equal(inlineFileTarget(name), null, "A preview format does not supply a file location")
+    assert.ok(inlineFileTarget(`./${name}`), "Shared preview formats with a path remain file links")
+  }
   assert.equal(await refused("scripts"), "scripts is a directory")
   assert.match(
     await refused("../outside.ts"),

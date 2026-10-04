@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -7,6 +7,8 @@ import { readOpenCodeResumeRecord } from "../electron/providers/opencode/resume-
 import { resumeVerdict, type NativeResumeReader } from "../electron/native-continuation.ts"
 import { resumable, type ProviderBinding } from "../electron/contracts/conversation-control.ts"
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
+import { sameNativeSource } from "../electron/native-source.ts"
+import { providerHost } from "../electron/providers/index.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-resume-"))
 const idle: ProviderProcessProbe = { provider: "opencode", probe: async () => ({ kind: "available", sessions: [] }) }
@@ -36,6 +38,14 @@ try {
       }
       assert.equal(initial.kind, "available", layout)
       if (initial.kind !== "available") throw new Error(initial.reason)
+      const alias = join(root, `${layout}-alias.db`)
+      await symlink(path, alias)
+      const aliasPath = `${alias}#${layout === "mixed-v2" ? "v2:" : ""}ses_one`
+      assert.deepEqual(await read({ ...binding, path: aliasPath }), initial, "DB aliases preserve schema and native source evidence")
+      const driver = providerHost.liveDrivers.get("opencode")!
+      assert.equal(await sameNativeSource(driver, binding.path!, aliasPath, binding.nativeId), true)
+      assert.equal(await sameNativeSource(driver, binding.path!, `${alias}#v2:ses_other`, binding.nativeId), false, "a matching physical DB cannot authorize another native record")
+      assert.equal(await sameNativeSource(driver, binding.path!, `${alias}#v2:ses_one`, binding.nativeId), layout === "mixed-v2", "schema namespaces cannot collapse into one identity")
       assert.equal((await resumeVerdict(binding, idle)).kind, "unavailable", "the former generic file fallback cannot read a database-row locator")
       assert.deepEqual(await resumeVerdict(binding, idle, read), { kind: "resumable", record: "unknown" })
       assert.equal(resumable(await resumeVerdict(binding, idle, read), "same"), false)
