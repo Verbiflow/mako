@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
-import { open } from "node:fs/promises"
+import { open, realpath } from "node:fs/promises"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
@@ -12,12 +12,24 @@ const rowSchema = z.object({ main_chain_id: z.number().nullable(), model: z.stri
 
 export function devinResumePolicy(directory = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "devin", "cli")) {
   const database = join(directory, "sessions.db")
-  const identity = (path: string) => {
-    const id = path.startsWith(`${database}#`) ? path.slice(database.length + 1) : ""
-    return /^[\w-]+$/.test(id) ? id : undefined
+  const nativeSource = (path: string, nativeId: string | undefined) => {
+    const split = path.lastIndexOf("#")
+    const file = path.slice(0, split)
+    const id = path.slice(split + 1)
+    return split > 0 && isAbsolute(file) && /^[\w-]+$/.test(id) && id === nativeId
+      ? { path: file, record: id } : undefined
+  }
+  const identity = async (path: string) => {
+    const source = nativeSource(path, path.slice(path.lastIndexOf("#") + 1))
+    if (!source) return undefined
+    if (source.path !== database) {
+      const files = await Promise.all([realpath(source.path).catch(() => undefined), realpath(database).catch(() => undefined)])
+      if (!files[0] || files[0] !== files[1]) return undefined
+    }
+    return source.record
   }
   const checkpoint = async (path: string): Promise<string | undefined> => {
-    const id = identity(path)
+    const id = await identity(path)
     if (!id) return undefined
     let db: DatabaseSync | undefined
     try {
@@ -59,7 +71,7 @@ export function devinResumePolicy(directory = join(process.env.XDG_DATA_HOME || 
     return null
   }
   const inspectNativeSession = async (binding: ProviderBinding): Promise<NativeResumeEvidence> => {
-    if (!binding.nativeId || !binding.path || identity(binding.path) !== binding.nativeId)
+    if (!binding.nativeId || !binding.path || await identity(binding.path) !== binding.nativeId)
       return { kind: "unavailable", reason: "The saved binding does not name a Devin session." }
     const locked = await lockVerdict(binding.nativeId)
     if (locked) return locked
@@ -81,5 +93,5 @@ export function devinResumePolicy(directory = join(process.env.XDG_DATA_HOME || 
       db?.close()
     }
   }
-  return { checkpoint, inspectNativeSession, locateSession }
+  return { checkpoint, inspectNativeSession, locateSession, nativeSource }
 }
