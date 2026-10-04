@@ -7,8 +7,9 @@ const TITLE_OUTPUT_TOKENS = 512
 
 /**
  * The model that names Threads, as `UtilityWork` decides for every small
- * task: by default the first signed-in agent's light model, on the person's
- * own account; or the model chosen in Settings › Conversation.
+ * task: by default the light model of the first signed-in harness in the
+ * harness order, on the person's own account; or the model chosen in
+ * Settings › Models.
  */
 export async function resolveTitleModel(work: UtilityWork): Promise<TitleModel> {
   const resolved = await work.resolve("title")
