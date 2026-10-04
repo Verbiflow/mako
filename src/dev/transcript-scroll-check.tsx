@@ -91,22 +91,40 @@ function conversation(turns: number): ChatMessage[] {
 
 const params = new URL(location.href).searchParams
 const TURNS = Number(params.get("turns") ?? 90)
+/** With `paged=N`, the source holds back all but the newest N turns and serves 20 per request. */
+const PAGED = Number(params.get("paged") ?? 0)
 const base = conversation(TURNS)
 
 interface ProbeState {
   messages: ChatMessage[]
+  earlier: ChatMessage[]
+  loading: boolean
   streamingId?: string
 }
 
 let setProbe: (update: (state: ProbeState) => ProbeState) => void = () => {}
 
 export function Probe() {
-  const [state, set] = useState<ProbeState>({ messages: base })
+  const [state, set] = useState<ProbeState>(() => ({
+    messages: PAGED ? base.slice(-2 * PAGED) : base,
+    earlier: PAGED ? base.slice(0, -2 * PAGED) : [],
+    loading: false,
+  }))
   useEffect(() => {
     setProbe = set
     return () => { setProbe = () => {} }
   }, [set])
   const exchanges = toExchanges(state.messages)
+  const loadEarlier = async () => {
+    set((current) => ({ ...current, loading: true }))
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    set((current) => ({
+      ...current,
+      loading: false,
+      earlier: current.earlier.slice(0, -40),
+      messages: [...current.earlier.slice(-40), ...current.messages],
+    }))
+  }
   return (
     <TooltipProvider>
       <main className="agent-surface relative isolate flex h-screen flex-col overflow-hidden">
@@ -114,6 +132,9 @@ export function Probe() {
           identity="scroll-probe"
           exchanges={exchanges}
           streamingId={state.streamingId}
+          hasEarlier={state.earlier.length > 0}
+          loadingEarlier={state.loading}
+          onLoadEarlier={PAGED ? loadEarlier : undefined}
           empty={null}
         />
       </main>
@@ -124,7 +145,7 @@ export function Probe() {
 declare global {
   interface Window {
     probe: {
-      /** Starts a new turn whose answer streams in `chunks` pieces. */
+      /** Starts a new turn that streams until `finishTurn`. */
       startTurn: () => string
       appendToTurn: (text: string) => void
       finishTurn: () => void
@@ -136,6 +157,7 @@ window.probe = {
   startTurn() {
     const index = Date.now()
     setProbe((state) => ({
+      ...state,
       streamingId: `u${index}`,
       messages: [
         ...state.messages,

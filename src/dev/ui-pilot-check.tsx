@@ -12,6 +12,7 @@ import { actions, store as sessionStore } from "@/state/session"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import { installMockBridge } from "./mock-bridge"
+import { META } from "./mock-fixtures"
 import "../index.css"
 
 installMockBridge()
@@ -46,7 +47,14 @@ async function until(test: () => boolean) {
 }
 
 async function openingDraft() {
-  sessionStore.set({ messages: [], stream: null })
+  const previous = sessionStore.get()
+  // The composer takes input only once it has a draft to write into; a new
+  // Thread in a folder gives it one.
+  sessionStore.set({
+    meta: { ...META, sessionName: undefined, messageCount: 0 },
+    messages: [],
+    stream: null,
+  })
   flushSync(() =>
     root.render(
       <TooltipProvider>
@@ -85,6 +93,7 @@ async function openingDraft() {
   )
   input.focus({ preventScroll: true })
   await new Promise((resolve) => requestAnimationFrame(resolve))
+  check(document.activeElement === input, "the composer takes focus")
   check(
     input.getBoundingClientRect().height === inputHeight,
     "focusing an empty composer does not change its height"
@@ -120,6 +129,11 @@ async function openingDraft() {
   )
   await new Promise((resolve) => requestAnimationFrame(resolve))
   flushSync(() => root.render(null))
+  sessionStore.set({
+    meta: previous.meta,
+    messages: previous.messages,
+    stream: previous.stream,
+  })
 }
 
 async function paragraphs() {

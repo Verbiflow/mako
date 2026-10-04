@@ -26,6 +26,11 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "claude", name: "mcp__deepwiki__ask_wiki_question", input: json({ repoName: "a/b", question: "how?" }) }, expect: { kind: "mcp", label: "deepwiki: ask wiki question", server: "deepwiki", target: "a/b" } },
 
   // Cursor
+  { source: { harness: "cursor", name: "mcp", input: json({ providerIdentifier: "mako", toolName: "app_status", args: {} }) }, expect: { kind: "mcp", label: "App status", server: "mako", tool: "app_status", via: "mcp" } },
+  { source: { harness: "cursor", name: "mcp", input: json({ providerIdentifier: "mako", toolName: "app_check", args: { tier: "full" } }) }, expect: { kind: "mcp", label: "Check app", server: "mako", tool: "app_check", target: "full" } },
+  { source: { harness: "cursor", name: "mcp", input: json({ providerIdentifier: "mako-computer", toolName: "js", args: { code: "await page.click()", title: "Inspect status" } }) }, expect: { kind: "computer", label: "Computer", target: "Inspect status" } },
+  { source: { harness: "cursor", name: "mcp", input: json({ providerIdentifier: "linear", toolName: "get_issue", args: { id: "ENG-1" } }) }, expect: { kind: "mcp", label: "linear: get issue", server: "linear", tool: "get_issue", target: "ENG-1" } },
+  { source: { harness: "cursor", name: "mcp", input: json({ providerIdentifier: "mako" }) }, expect: { kind: "mcp", label: "MCP tool", tool: undefined } },
   { source: { harness: "cursor", name: "Shell", input: json({ command: "npm test" }) }, expect: { kind: "shell", target: "npm test" } },
   { source: { harness: "cursor", name: "StrReplace", input: json({ path: "src/a.ts", old_string: "a", new_string: "b" }) }, expect: { kind: "edit", label: "Edit", target: "src/a.ts" } },
   { source: { harness: "cursor", name: "Write", input: json({ path: "src/a.ts", contents: "x" }) }, expect: { kind: "write", target: "src/a.ts" } },
@@ -95,4 +100,3 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "grok", name: "frobnicate_widgets" }, expect: { kind: "other", label: "Frobnicate widgets" } },
   { source: { harness: "codex", title: "Run tests", acpKind: "execute" }, expect: { kind: "shell" } },
 ]
-
