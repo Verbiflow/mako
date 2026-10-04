@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { Actor, ThreadPlacement } from "../electron/contracts/thread-identity.js"
 import { MoveIdSchema, RuntimeIdSchema, type ExecutionOwner, type MoveId } from "../electron/contracts/thread-execution.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { assessProviderResume } from "../electron/provider-recovery.js"
 import { MoveNotQuietError } from "../electron/live-moves.js"
@@ -48,6 +49,8 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
     holdTurn: false,
     driver: {
       approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION,
       provider: harness,
       canResume: true,
       checkpoint: async () => "checkpoint",
@@ -58,6 +61,8 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
         const session: LiveSessionState = {
           id: options.conversationId,
           nativeId: options.resume ?? `native-${harness}-${options.conversationId}`,
+          // As every real driver does: a resumed session names the source it reopened.
+          nativePath: options.resume ? options.threadPath : undefined,
           harness,
           cwd,
           status: "ready",

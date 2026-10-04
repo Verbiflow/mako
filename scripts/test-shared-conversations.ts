@@ -16,6 +16,7 @@ import { runtimeLocation } from "../electron/runtime-service.js"
 import { reserveHostReplacement } from "../electron/local-update-installer.js"
 import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import type { HostEvent, LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
 
 const root = mkdtempSync("/tmp/mako-peers-")
@@ -36,11 +37,14 @@ const emitters = new Map<string, (event: LiveDriverEvent) => void>()
 const providers = registeredHarnessIds()
 const drivers = new Map(providers.map((provider) => [provider, {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
   provider, canResume: true, available: () => true,
   start: async (cwd, options) => {
     starts.push(provider)
     if (options.emit) emitters.set(options.conversationId, options.emit)
-    const session: LiveSessionState = { id: options.conversationId, nativeId: `${provider}-native`, harness: provider, cwd, connection: "connected", status: "ready", modes: [], currentMode: null, configOptions: [] }
+    // As every real driver does: a resumed session names the source it reopened.
+    const session: LiveSessionState = { id: options.conversationId, nativeId: `${provider}-native`, nativePath: options.resume ? options.threadPath : undefined, harness: provider, cwd, connection: "connected", status: "ready", modes: [], currentMode: null, configOptions: [] }
     sessions.set(session.id, session)
     return session
   },

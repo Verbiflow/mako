@@ -11,6 +11,7 @@ import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js
 import { ApprovalResponseSchema, describeApprovalResponse, type NativeApprovalIdentity } from "../electron/contracts/approval-response.js"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-native-approval-evidence-"))
 try {
@@ -25,11 +26,14 @@ try {
     const driver: ProviderLiveDriver = {
       approvalAnswerDigest: () => "a".repeat(64),
       approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission", "structured-question"], coverage: "Injected native evidence fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION,
       provider, canResume: true, available: () => true,
       async start(cwd, options) {
         emit = options.emit!
         recoveredIdentities = options.observedApprovals ?? []
-        return { id, nativeId: "native-session", cwd, harness: provider, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] } satisfies LiveSessionState
+        // As every real driver does: a resumed session names the source it reopened.
+        return { id, nativeId: "native-session", nativePath: options.resume ? options.threadPath : undefined, cwd, harness: provider, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] } satisfies LiveSessionState
       },
       async prompt() {}, async cancel() {}, close() {}, async setMode() {},
       async permission(_id, _request, _answer, dispatch) {

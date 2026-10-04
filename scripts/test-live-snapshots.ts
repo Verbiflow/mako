@@ -16,6 +16,7 @@ import { LiveJournal } from "../electron/live-journal.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
 import type { LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-snapshots-"))
 const cwd = join(root, "workspace")
@@ -34,12 +35,16 @@ const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
   provider: "test",
   canResume: true,
   available: () => true,
   async start(directory, options) {
     const state: LiveSessionState = {
       id: options.conversationId,
+      // As every real driver does: a resumed session names the source it reopened.
+      nativePath: options.resume ? options.threadPath : undefined,
       harness: "test",
       cwd: directory,
       status: "ready",
@@ -205,10 +210,32 @@ try {
     "PASS: rewind before the first prompt restores the true baseline and excludes the prompt from history"
   )
 
+  const startingId = randomUUID(),
+    startingRequest = randomUUID()
+  await owner.start("test", cwd, { conversationId: startingId })
+  owner.submit(startingId, startingRequest, "never send this")
+  assert.equal(owner.snapshot(startingId)?.session.status, "starting")
+  await owner.cancelRequest(startingId, startingRequest)
+  await until(() => owner.snapshot(startingId)?.session.status === "ready")
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(sent.length, 2)
+  assert.equal(owner.snapshot(startingId)?.requests[0].status, "interrupted")
+  assert.equal(owner.snapshot(startingId)?.requests[0].snapshots, undefined)
+  console.log(
+    "PASS: cancellation while the provider starts never captures or dispatches"
+  )
+
   const canceledId = randomUUID(),
     canceledRequest = randomUUID()
   await owner.start("test", cwd, { conversationId: canceledId })
+  await until(() => owner.snapshot(canceledId)?.session.status === "ready")
   owner.submit(canceledId, canceledRequest, "never send this")
+  assert.equal(
+    owner.snapshot(canceledId)?.requests[0].status,
+    "dispatching",
+    "the cancel lands while the baseline is captured"
+  )
+  assert.equal(owner.snapshot(canceledId)?.requests[0].snapshots, undefined)
   await owner.cancelRequest(canceledId, canceledRequest)
   await until(
     () =>
