@@ -148,6 +148,8 @@ export interface ContextBreakdown {
 }
 
 export interface LiveSessionState {
+  /** Reported by this launch; absent in journals written before context retention. */
+  executionContext?: import("./execution-context.js").ExecutionContext
   nativeRunId?: string
   nativeForkId?: string
   nativePath?: string

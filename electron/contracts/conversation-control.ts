@@ -2,6 +2,7 @@ import { LiveQuestionSchema } from "./live-questions.js"
 import { ApprovalResponseSchema, NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval } from "./approval-response.js"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
 import { z } from "zod"
+import { ExecutionContextSchema } from "./execution-context.js"
 import { LiveActionSchema } from "./live-actions.js"
 import { PromptAttachmentSchema } from "./prompt-attachments.js"
 import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
@@ -30,6 +31,7 @@ export const TransferInputSchema = z.object({
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 export const ProviderBindingSchema = z.object({
+  executionContext: ExecutionContextSchema.optional(),
   checkpoint: z.string().optional(),
   id: z.string().uuid(),
   provider: z.string(),
