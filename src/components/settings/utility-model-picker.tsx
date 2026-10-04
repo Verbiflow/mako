@@ -1,29 +1,21 @@
 import { SearchSelect, type SearchSelectOption } from "@/components/ui/search-select"
 import { HarnessIcon, ProviderIcon } from "@/components/ui/provider-icon"
 import { parseAgentModelId, utilityModelName } from "../../../electron/contracts/utility-work"
-import {
-  UTILITY_AUTOMATIC,
-  UTILITY_OFF,
-  type UtilityModelOption,
-  type UtilityTask,
-  type UtilityTaskState,
-} from "@/lib/types"
+import { UTILITY_AUTOMATIC, type UtilityModelOption, type UtilityTaskState } from "@/lib/types"
 
 /**
- * The model a small task runs on: Automatic (and what that is now), Off for
- * titles, each signed-in harness's models with its light one first, then
- * each model connection. A choice that went away stays shown, marked
+ * The model a small task runs on: Automatic (and what that is now), each
+ * signed-in harness's models with its light one first, then each model
+ * connection. A choice that went away stays shown, marked
  * unavailable, so the row never pretends something else was chosen.
  */
 export function UtilityModelPicker({
-  task,
   state,
   label,
   className = "w-64 max-w-full",
   disabled = false,
   onChoose,
 }: {
-  task: UtilityTask
   state: UtilityTaskState | undefined
   label: string
   className?: string
@@ -39,7 +31,6 @@ export function UtilityModelPicker({
       detail: state?.choice === UTILITY_AUTOMATIC && state.resolved ? utilityModelName(state.resolved) : "A light model from your first harness",
       keywords: "auto default",
     },
-    ...(task === "title" ? [{ value: UTILITY_OFF, label: "Off", detail: "Keep the names agents give" }] : []),
     ...listed.map((option) => ({
       value: option.id,
       label: option.label,

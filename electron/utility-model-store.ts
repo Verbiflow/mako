@@ -19,7 +19,7 @@ import {
   utilityProviderSchema,
   UtilityModelError,
 } from "./utility-models.js"
-import { AUTOMATIC, HARNESS_ORDER_LIMIT, OFF, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "./contracts/utility-work.js"
+import { AUTOMATIC, HARNESS_ORDER_LIMIT, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "./contracts/utility-work.js"
 
 export interface UtilityKeyEncryption {
   available(): boolean | Promise<boolean>
@@ -36,9 +36,8 @@ const storedSchema = connectionSchema.extend({ apiKey: apiKeySchema })
 const choiceSchema = z.string().min(1).max(400)
 const harnessIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
 const harnessOrderSchema = z.array(harnessIdSchema).max(HARNESS_ORDER_LIMIT)
-const choicesSchema = z.object({ title: choiceSchema.optional(), commit: choiceSchema.optional(), order: harnessOrderSchema.optional() })
+const choicesSchema = z.object({ commit: choiceSchema.optional(), order: harnessOrderSchema.optional() })
 type StoredChoices = z.infer<typeof choicesSchema>
-const legacyTitleSchema = z.object({ model: choiceSchema })
 
 /** A small JSON file read with `schema`, or undefined when it's missing, too big or not that shape. */
 async function readSmallJson<T>(path: string, schema: z.ZodType<T>): Promise<T | undefined> {
@@ -109,21 +108,18 @@ export class UtilityModelStore {
   }
 
   /**
-   * What the person chose for each small task: `auto`, `off` for titles, or
-   * a model's id. Choices aren't keys, so they are stored in the clear beside
-   * the connections and every host reads the same ones. A task never chosen
-   * is `auto`, except titles chosen before this file existed, which keep the
-   * model `thread-titles.json` named.
+   * What the person chose for each small task: `auto` or a model's id.
+   * Choices aren't keys, so they are stored in the clear beside the
+   * connections and every host reads the same ones. A task never chosen is
+   * `auto`.
    */
   async choices(): Promise<UtilityWorkChoices> {
     await this.ready
     const stored = await readSmallJson(this.choicesPath(), choicesSchema)
-    const legacy = stored?.title === undefined ? (await readSmallJson(this.legacyTitlePath(), legacyTitleSchema))?.model : undefined
-    return { title: stored?.title ?? legacy ?? AUTOMATIC, commit: stored?.commit ?? AUTOMATIC }
+    return { commit: stored?.commit ?? AUTOMATIC }
   }
 
   async choose(task: UtilityTask, choice: string): Promise<void> {
-    if (choice === OFF && task !== "title") throw new Error("Commit messages can't be turned off; choose Automatic or a model.")
     await this.update(async (stored) => ({ ...stored, ...(await this.choices()), [task]: choice }))
   }
 
@@ -149,7 +145,6 @@ export class UtilityModelStore {
       try {
         await writeFile(temporary, JSON.stringify(next), { mode: 0o600, flag: "wx" })
         await rename(temporary, this.choicesPath())
-        await rm(this.legacyTitlePath(), { force: true })
       } finally {
         await rm(temporary, { force: true })
       }
@@ -253,11 +248,6 @@ export class UtilityModelStore {
 
   private choicesPath() {
     return join(this.directory, "utility-work.json")
-  }
-
-  /** Where the title model was chosen before every task had a choice. */
-  private legacyTitlePath() {
-    return join(this.directory, "thread-titles.json")
   }
 
   private lock(provider: UtilityProvider) {

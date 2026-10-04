@@ -183,36 +183,6 @@ export interface ThreadRecord {
   sessions: SessionId[]
 }
 
-/** One finished exchange of a Session, kept short enough to name a Thread from. */
-export interface TitleExchange {
-  session: SessionId
-  /** The request that asked it; a second report of the same request is the same exchange. */
-  exchange: string
-  completedAt: number
-  prompt: string
-  answer: string
-}
-
-/** What naming a Thread would start from now. */
-export interface TitleContext {
-  thread: ThreadId
-  /** A user or frozen title: nothing replaces it. */
-  manual: boolean
-  /** The title the row shows now, if the Thread has one of its own. */
-  current?: string
-  /** Which window the automatic title last answered. */
-  answered?: string
-  revision: number
-  /** The latest `TITLE_WINDOW` exchanges finished in any of the Thread's Sessions, oldest first. */
-  exchanges: TitleExchange[]
-  /** The Thread's first exchange, when the window no longer holds it: what the work set out to do. */
-  opening?: TitleExchange
-  /** Names the window's exchanges; the same window always has the same digest. */
-  digest: string
-}
-
-export type AutoTitleOutcome = "applied" | "unchanged" | "manual" | "stale" | "gone"
-
 export interface StoreConflict {
   sessions: [SessionId, SessionId]
   reason: string
@@ -402,15 +372,14 @@ CREATE TABLE IF NOT EXISTS thread_purposes (
 `
 const PurposeRowSchema = z.object({ thread_id: z.string(), purpose: z.string(), project: z.string(), created_at: z.number() })
 /**
- * Migration 3: automatic titles. `title` with `title_source` stays the
- * Thread's own name (a person's, or one Mako chose and `frozen`); a title
- * with no source came from a build that didn't say, and counts as the
- * user's. The model's title is `auto_title`, beside it, so a build that
- * predates it reads every Thread as it did. `original_title` is the name
- * the Thread showed before Mako first named it. `title_revision` rises on
- * every change to any of them, so a result computed before one loses.
- * `title_pending` holds the window a host is asking a model about, for
- * `TITLE_LEASE_MS`, so two hosts don't ask about the same exchanges.
+ * Migration 3, from builds that named Threads automatically. `title` with
+ * `title_source` is the Thread's own name (a person's, or one Mako chose
+ * and `frozen`); a title with no source came from a build that didn't say,
+ * and counts as the user's. `original_title` is the name the Thread showed
+ * before it was first renamed, and `title_revision` rises on every change.
+ * The `auto_*` and `title_pending*` columns and `title_exchanges` held
+ * those builds' automatic titles; this build neither shows nor writes
+ * them, and keeps them for builds that share the store.
  */
 const TITLE_COLUMNS = [
   "original_title TEXT",
@@ -422,11 +391,7 @@ const TITLE_COLUMNS = [
   "title_pending_at INTEGER",
   "title_pending_by TEXT",
 ]
-/**
- * Each Session's first finished exchange and its last `TITLE_WINDOW`, cut
- * to `TITLE_PROMPT_CHARS` and `TITLE_ANSWER_CHARS`, and every change of a
- * Thread's name in commit order, for other hosts' windows.
- */
+/** `title_exchanges` as migration 3 made it, and every change of a Thread's name in commit order, for other hosts' windows. */
 const TITLE_TABLES = `
 CREATE TABLE IF NOT EXISTS title_exchanges (
   session_id TEXT NOT NULL REFERENCES sessions(id), exchange TEXT NOT NULL, completed_at INTEGER NOT NULL,
@@ -437,24 +402,15 @@ CREATE TRIGGER IF NOT EXISTS thread_title_changed AFTER UPDATE OF title, title_s
   WHEN OLD.title IS NOT NEW.title OR OLD.title_source IS NOT NEW.title_source OR OLD.auto_title IS NOT NEW.auto_title
   BEGIN INSERT INTO title_changes (thread_id) VALUES (NEW.id); END;
 `
-export const TITLE_WINDOW = 3
-export const TITLE_PROMPT_CHARS = 2_000
-export const TITLE_ANSWER_CHARS = 2_400
-export const TITLE_LEASE_MS = 90_000
 const TitleRowSchema = z.object({
   id: z.string(),
   title: z.string().nullable(),
   title_source: z.enum(["user", "frozen", "auto"]).nullable(),
-  auto_title: z.string().nullable(),
-  auto_context: z.string().nullable(),
-  title_revision: z.number(),
-  title_pending: z.string().nullable(),
-  title_pending_at: z.number().nullable(),
-  title_pending_by: z.string().nullable(),
 })
 type TitleRow = z.infer<typeof TitleRowSchema>
-const TITLE_ROW = "SELECT id, title, title_source, auto_title, auto_context, title_revision, title_pending, title_pending_at, title_pending_by FROM threads"
-const TitleExchangeRowSchema = z.object({ session_id: z.string(), exchange: z.string(), completed_at: z.number(), prompt: z.string(), answer: z.string() })
+const TITLE_ROW = "SELECT id, title, title_source FROM threads"
+/** A Thread without a name of its own; a title an older build wrote automatically isn't one. */
+const UNNAMED = "(title IS NULL OR title_source IS 'auto')"
 const TitleChangeRowSchema = z.object({ seq: z.number(), thread_id: z.string() })
 const ColumnRowSchema = z.object({ name: z.string() })
 const PurposeKindSchema = z.enum(["setup"])
@@ -942,9 +898,9 @@ export class ThreadStore {
   }
 
   /**
-   * The person's name for a Thread. From this commit no automatic title
-   * replaces it, including one a model is writing now. `original` is the
-   * name the row showed, kept if the Thread had none recorded.
+   * The person's name for the Thread as a whole: the rail shows it, and
+   * each Session keeps its own title on its tab. `original` is the name the
+   * row showed, kept if the Thread had none recorded.
    */
   renameThread(input: { operationId: string; thread: ThreadId; title: string; actor: Actor; original?: string }): ThreadRecord {
     const title = input.title.trim()
@@ -954,7 +910,7 @@ export class ThreadStore {
         const thread = this.thread(input.thread)
         if (!thread) throw new Error("That Thread no longer exists")
         this.sql(`UPDATE threads SET title = ?, title_source = 'user', original_title = coalesce(original_title, ?),
-          title_revision = title_revision + 1, title_pending = NULL, revision = revision + 1 WHERE id = ?`)
+          title_revision = title_revision + 1, revision = revision + 1 WHERE id = ?`)
           .run(title, input.original?.trim() || null, thread.id)
         return { thread: thread.id }
       }, z.object({ thread: ThreadIdSchema }))
@@ -964,7 +920,7 @@ export class ThreadStore {
     })
   }
 
-  /** Give a Thread's name back to automatic titles: its last automatic title, or its Session's own. */
+  /** Drop the Thread's own name; its row shows its first Session's title again. */
   clearThreadTitle(input: { operationId: string; thread: ThreadId; actor: Actor }): ThreadTitleEntry {
     return this.write(() => {
       const cleared = this.receipt(input.operationId, "clear-thread-title", { thread: input.thread }, input.actor, () => {
@@ -979,9 +935,9 @@ export class ThreadStore {
   }
 
   /**
-   * A name Mako chose for a Thread it started (a setup Thread's), which
-   * neither its agent nor a model replaces. A Thread that already has a name
-   * of its own keeps it.
+   * A name Mako chose for a Thread it started (a setup Thread's), which its
+   * agent's titles don't replace. A Thread that already has a name of its
+   * own keeps it.
    */
   keepThreadTitle(thread: ThreadId, title: string): ThreadTitleEntry | undefined {
     const name = title.trim()
@@ -990,7 +946,7 @@ export class ThreadStore {
       const current = this.thread(thread)
       if (!current) return undefined
       this.sql(`UPDATE threads SET title = ?, title_source = 'frozen', title_revision = title_revision + 1
-        WHERE id = ? AND title IS NULL`).run(name, current.id)
+        WHERE id = ? AND ${UNNAMED}`).run(name, current.id)
       return this.titleEntry(current.id)
     })
   }
@@ -1009,7 +965,7 @@ export class ThreadStore {
         const title = entry.title.trim()
         if (!current || !title) continue
         const updated = this.sql(`UPDATE threads SET title = ?, title_source = 'user', title_revision = title_revision + 1
-          WHERE id = ? AND title IS NULL`).run(title, current.id)
+          WHERE id = ? AND ${UNNAMED}`).run(title, current.id)
         const found = updated.changes ? this.titleEntry(current.id) : undefined
         if (found) changed.push(found)
       }
@@ -1017,9 +973,9 @@ export class ThreadStore {
     })
   }
 
-  /** Every Thread with a name of its own or an automatic one. */
+  /** Every Thread with a name of its own. */
   titles(): ThreadTitleEntry[] {
-    return this.sql(`${TITLE_ROW} WHERE merged_into IS NULL AND (title IS NOT NULL OR auto_title IS NOT NULL)`).all()
+    return this.sql(`${TITLE_ROW} WHERE merged_into IS NULL AND NOT ${UNNAMED}`).all()
       .map((row) => titleEntry(TitleRowSchema.parse(row)))
   }
 
@@ -1042,124 +998,6 @@ export class ThreadStore {
     return threads.flatMap((id) => {
       const row = this.titleRow(id)
       return row ? [titleEntry(row)] : []
-    })
-  }
-
-  /**
-   * Keep a Session's finished exchange for naming its Thread. False when it
-   * was kept before: a report repeated by a replay or a second host is one
-   * exchange. Only the Session's first and its latest `TITLE_WINDOW` are kept.
-   */
-  noteExchange(input: TitleExchange): boolean {
-    return this.write(() => {
-      const session = this.canonical(input.session)
-      if (!session) return false
-      const inserted = this.sql("INSERT OR IGNORE INTO title_exchanges VALUES (?, ?, ?, ?, ?)").run(
-        session, input.exchange, input.completedAt,
-        input.prompt.slice(0, TITLE_PROMPT_CHARS), input.answer.slice(0, TITLE_ANSWER_CHARS))
-      if (!inserted.changes) return false
-      this.sql(`DELETE FROM title_exchanges WHERE session_id = ? AND exchange NOT IN (
-        SELECT exchange FROM title_exchanges WHERE session_id = ? ORDER BY completed_at DESC, exchange DESC LIMIT ?)
-        AND exchange NOT IN (SELECT exchange FROM title_exchanges WHERE session_id = ? ORDER BY completed_at, exchange LIMIT 1)`)
-        .run(session, session, TITLE_WINDOW, session)
-      return true
-    })
-  }
-
-  /**
-   * What naming a Thread would start from: the latest `TITLE_WINDOW`
-   * exchanges finished in any of its Sessions now, by when they finished,
-   * oldest first, and the Thread's first exchange when it is older than
-   * those. Which tab is open plays no part.
-   */
-  titleContext(id: ThreadId): TitleContext | undefined {
-    const thread = this.thread(id)
-    const row = thread && this.titleRow(thread.id)
-    if (!thread || !row) return undefined
-    const exchanges = this.titleExchanges(thread.id, "DESC", TITLE_WINDOW).reverse()
-    const [first] = this.titleExchanges(thread.id, "ASC", 1)
-    const opening = first && !exchanges.some((exchange) => exchange.session === first.session && exchange.exchange === first.exchange) ? first : undefined
-    const entry = titleEntry(row)
-    return {
-      thread: thread.id,
-      manual: manualTitle(row),
-      current: entry.title ?? undefined,
-      answered: row.auto_context ?? undefined,
-      revision: row.title_revision,
-      exchanges,
-      opening,
-      digest: createHash("sha256").update(JSON.stringify(exchanges.map((exchange) => [exchange.session, exchange.exchange]))).digest("hex"),
-    }
-  }
-
-  private titleExchanges(thread: string, order: "ASC" | "DESC", limit: number): TitleExchange[] {
-    return this.sql(`SELECT e.session_id, e.exchange, e.completed_at, e.prompt, e.answer FROM title_exchanges e
-      JOIN memberships m ON m.session_id = e.session_id WHERE m.thread_id = ?
-      ORDER BY e.completed_at ${order}, e.exchange ${order} LIMIT ?`).all(thread, limit)
-      .map((found): TitleExchange => {
-        const exchange = TitleExchangeRowSchema.parse(found)
-        return { session: SessionIdSchema.parse(exchange.session_id), exchange: exchange.exchange, completedAt: exchange.completed_at, prompt: exchange.prompt, answer: exchange.answer }
-      })
-  }
-
-  /**
-   * Take the window `digest` names for `holder` to ask a model about.
-   * Undefined when there is nothing to ask: the name is the user's, the
-   * window moved on or was already answered, or another host holds it.
-   * Otherwise the title revision the answer must still find.
-   */
-  claimTitle(input: { thread: ThreadId; digest: string; holder: string }): number | undefined {
-    return this.write(() => {
-      const context = this.titleContext(input.thread)
-      if (!context || context.manual || context.digest !== input.digest || context.answered === input.digest) return undefined
-      const row = this.titleRow(context.thread)
-      if (!row) return undefined
-      if (row.title_pending === input.digest && row.title_pending_by !== input.holder &&
-          this.now() - (row.title_pending_at ?? 0) < TITLE_LEASE_MS) return undefined
-      this.sql("UPDATE threads SET title_pending = ?, title_pending_at = ?, title_pending_by = ? WHERE id = ?")
-        .run(input.digest, this.now(), input.holder, context.thread)
-      return context.revision
-    })
-  }
-
-  /** Give a window back unanswered, so another host may ask about it. */
-  releaseTitle(input: { thread: ThreadId; digest: string; holder: string }): void {
-    this.write(() => {
-      this.sql("UPDATE threads SET title_pending = NULL WHERE id = ? AND title_pending = ? AND title_pending_by = ?")
-        .run(input.thread, input.digest, input.holder)
-    })
-  }
-
-  /**
-   * Write a model's title for the window `digest` names, if nothing moved
-   * since `claimTitle` returned `revision`: the Thread still exists under
-   * the same ID, has no name of its own, no other title was written and no
-   * newer exchange finished. `original` is the name the row showed before.
-   */
-  applyAutoTitle(input: { thread: ThreadId; digest: string; revision: number; title: string; holder: string; original?: string }): AutoTitleOutcome {
-    return this.write(() => {
-      const thread = this.thread(input.thread)
-      if (!thread || thread.id !== input.thread) return "gone"
-      const context = this.titleContext(thread.id)
-      const row = this.titleRow(thread.id)
-      if (!context || !row) return "gone"
-      const release = () => this.sql("UPDATE threads SET title_pending = NULL WHERE id = ? AND title_pending_by = ?").run(thread.id, input.holder)
-      if (context.manual) {
-        release()
-        return "manual"
-      }
-      if (context.revision !== input.revision || context.digest !== input.digest) {
-        release()
-        return "stale"
-      }
-      if (row.auto_title === input.title) {
-        this.sql("UPDATE threads SET auto_context = ?, title_pending = NULL WHERE id = ?").run(input.digest, thread.id)
-        return "unchanged"
-      }
-      this.sql(`UPDATE threads SET auto_title = ?, auto_context = ?, auto_at = ?, original_title = coalesce(original_title, ?),
-        title_revision = title_revision + 1, title_pending = NULL WHERE id = ?`)
-        .run(input.title, input.digest, this.now(), input.original?.trim() || null, thread.id)
-      return "applied"
     })
   }
 
@@ -1305,10 +1143,8 @@ export class ThreadStore {
         if (row.parent_session) entry.parent = SessionIdSchema.parse(row.parent_session)
         return entry
       })
-      const auto = this.titleRow(thread.id)?.auto_title
       const original = this.originalTitle(thread.id)
       const moved: Handoff["thread"] = { id: thread.id, owner: thread.owner, title: thread.title, titleSource: thread.titleSource }
-      if (auto) moved.autoTitle = auto
       if (original) moved.originalTitle = original
       const handoff = HandoffSchema.parse({
         move: move.id,
@@ -1634,8 +1470,6 @@ export class ThreadStore {
     const winnerThread = this.placeSession(winner).thread
     for (const table of ["journals", "sources", "locators", "native_claims"])
       this.sql(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`).run(winner, loser)
-    this.sql("UPDATE OR IGNORE title_exchanges SET session_id = ? WHERE session_id = ?").run(winner, loser)
-    this.sql("DELETE FROM title_exchanges WHERE session_id = ?").run(loser)
     this.sql("UPDATE sessions SET parent_session = ? WHERE parent_session = ?").run(winner, loser)
     this.sql("DELETE FROM memberships WHERE session_id = ?").run(loser)
     this.sql("UPDATE sessions SET merged_into = ? WHERE id = ?").run(winner, loser)
@@ -1881,13 +1715,13 @@ export class ThreadStore {
     this.sql("INSERT OR IGNORE INTO principals VALUES (?, 'person', NULL, ?)").run(thread.owner, now)
     const existing = this.sql("SELECT id, owner_id, title, title_source, revision, merged_into FROM threads WHERE id = ?").get(thread.id)
     if (!existing) {
-      this.sql("INSERT INTO threads (id, owner_id, title, title_source, auto_title, original_title, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(thread.id, thread.owner, thread.title ?? null, thread.titleSource ?? null, thread.autoTitle ?? null, thread.originalTitle ?? null, handoff.releasedAt, JSON.stringify(actor))
+      this.sql("INSERT INTO threads (id, owner_id, title, title_source, original_title, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(thread.id, thread.owner, thread.title ?? null, thread.titleSource ?? null, thread.originalTitle ?? null, handoff.releasedAt, JSON.stringify(actor))
     } else {
       if (ThreadRowSchema.parse(existing).merged_into) throw new Error("The Thread in this handoff was merged here")
-      this.sql(`UPDATE threads SET title = ?, title_source = ?, auto_title = coalesce(?, auto_title), original_title = coalesce(original_title, ?),
+      this.sql(`UPDATE threads SET title = ?, title_source = ?, original_title = coalesce(original_title, ?),
         title_revision = title_revision + 1, revision = revision + 1 WHERE id = ?`)
-        .run(thread.title ?? null, thread.titleSource ?? null, thread.autoTitle ?? null, thread.originalTitle ?? null, thread.id)
+        .run(thread.title ?? null, thread.titleSource ?? null, thread.originalTitle ?? null, thread.id)
     }
     for (const session of [...handoff.sessions].sort((left, right) => left.position - right.position)) {
       if (!this.sql("SELECT id FROM sessions WHERE id = ?").get(session.id)) {
@@ -2055,16 +1889,11 @@ export class ThreadStore {
 
 interface JournalPath { path: string; harness: string; nativeId?: string }
 
-/** A title is the Thread's own unless it says it was automatic; an unsourced title is never assumed to be. */
-function manualTitle(row: TitleRow): boolean {
-  return row.title !== null && row.title_source !== "auto"
-}
-
+/** The Thread's own name, as `UNNAMED` reads it: an unsourced title is the user's, an automatic one isn't a name. */
 function titleEntry(row: TitleRow): ThreadTitleEntry {
   const thread = ThreadIdSchema.parse(row.id)
-  if (manualTitle(row)) return { thread, title: row.title, source: row.title_source === "frozen" ? "frozen" : "user" }
-  const auto = row.auto_title ?? row.title
-  return auto === null ? { thread, title: null } : { thread, title: auto, source: "auto" }
+  if (row.title === null || row.title_source === "auto") return { thread, title: null }
+  return { thread, title: row.title, source: row.title_source === "frozen" ? "frozen" : "user" }
 }
 
 function ownerColumns(owner: ExecutionOwner): ["device" | "cloud", string] {

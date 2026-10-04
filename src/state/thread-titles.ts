@@ -7,8 +7,8 @@ import type { ThreadRef } from "@/lib/types"
 
 export interface ThreadTitle {
   title: string
-  /** `auto` is a model's title; `user` and `frozen` are never replaced automatically. */
-  source: "user" | "frozen" | "auto"
+  /** `user` is a person's rename; `frozen` is a name Mako gave a Thread it started. */
+  source: "user" | "frozen"
 }
 
 export interface ThreadTitlesState {
@@ -37,7 +37,7 @@ function merge(byThread: Readonly<Record<string, ThreadTitle>>, entries: readonl
       delete next[entry.thread]
       continue
     }
-    const source = entry.source ?? "auto"
+    const source = entry.source ?? "user"
     if (current?.title === entry.title && current.source === source) continue
     next ??= { ...byThread }
     next[entry.thread] = { title: entry.title, source }
@@ -63,10 +63,11 @@ export async function loadThreadTitles(): Promise<void> {
 }
 
 /**
- * The person's name for a row. A Thread's name lives in the Thread store,
- * so every window and host shows it and automatic titles stop; an empty
- * name gives it back to them. A row the store doesn't place keeps the
- * window's own rename, as before the store kept names.
+ * The person's name for a row. A Thread's name lives in the Thread store
+ * and names the whole Thread, so every window and host shows it and its
+ * Sessions' tabs keep their own titles; an empty name drops it. A row the
+ * store doesn't place is one conversation and keeps the window's own
+ * rename, as before the store kept names.
  */
 export async function renameThreadTitle(input: { thread?: string; path: string; title: string; shown: string; native?: string }): Promise<void> {
   const next = input.title.trim()
@@ -98,7 +99,7 @@ const offered = new Set<string>()
 
 /**
  * A window's renames from before the Thread store kept names are the
- * person's: the store learns them, so no automatic title replaces them.
+ * person's: the store learns them, so every window and host shows them.
  * The window keeps drawing its own until it is renamed again.
  */
 export function offerWindowRenames(refs: readonly ThreadRef[]): void {

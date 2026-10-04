@@ -1425,20 +1425,15 @@ never reads it from caller input. A store with a newer
 schema is refused without writing. `npm run test:thread-store` covers the
 rules, six-harness migration across a restart and actors.
 
-Automatic Thread titles (`electron/thread-titles.ts`) run only with a model
-chosen in Settings > Conversation from the commit-drafting connections
-(`thread-title-model.ts`); no other connection or coding-agent account stands
-in for it. `LiveConversations.flush` reports each request that turned
-`completed` once, harness-independent; the store keeps each Session's last two
-exchanges, bounded, and the window is the Thread's latest two across its
-Sessions by completion time. A quiet period coalesces bursts, and a window
-already answered (`auto_context`) asks nothing. The model's title lives in
-`auto_title` beside `title`, so `title` with any source but `auto`, including
-none from an older build, is the person's or Mako's and is never replaced.
-`applyAutoTitle` is a compare-and-set on `title_revision` and the window's
-digest: a rename, newer exchange, other host's title or merge since the claim
-makes a late answer lose. `scripts/test-thread-titles.ts` covers it with a
-fake model.
+A Thread's own name is `title` with `title_source` in the store: `user` for a
+person's rename (`renameThread`), `frozen` for a name Mako gave a Thread it
+started, and no source for a title an older build wrote, which counts as the
+user's. It names the whole Thread in the rail; each Session's tab keeps its
+own title, and a Thread without a name shows its first Session's. Mako
+doesn't name Threads automatically: the `auto_*` columns and
+`title_exchanges` that older builds wrote are kept for builds sharing the
+store, and a title they mark `auto` isn't shown. `scripts/test-thread-names.ts`
+covers it.
 
 Every Session also has an execution owner (this device or a named cloud
 runtime) and a generation that rises on every owner change, including to

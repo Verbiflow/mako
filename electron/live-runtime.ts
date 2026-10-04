@@ -27,7 +27,6 @@ import type { ThreadEnvironment } from "./contracts/thread-environments.js"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { PlanBuild } from "./contracts/plan-builds.js"
-import type { CompletedExchange } from "./thread-titles.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
   session: LiveSessionState
@@ -117,12 +116,6 @@ export interface Dependencies {
    * run as before and carry no Thread identity.
    */
   threads?: ThreadStore
-  /**
-   * A request finished answering, reported once from the flush that
-   * committed it, whatever the harness. Called on the host's main thread
-   * with the turn's last blocks; it must not block.
-   */
-  exchangeCompleted?(exchange: CompletedExchange): void
   /** Test override for `AUTO_CONTINUE_DELAY_MS`, the wait before Mako continues a dropped turn itself. */
   autoContinueDelayMs?: number
   /** Test override for ready provider residency. */

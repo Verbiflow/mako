@@ -32,7 +32,6 @@ export class CommitGeneration {
     try {
       const resolved = await this.work.resolve("commit", request.model)
       if (resolved.kind === "unavailable") throw new Error(resolved.reason)
-      if (resolved.kind === "off") throw new Error("Choose a model for commit messages in Settings › Models.")
       const { model } = resolved
       signal = AbortSignal.any([controller.signal, AbortSignal.timeout(parseAgentModelId(model.id) ? AGENT_TIMEOUT_MS : CONNECTION_TIMEOUT_MS)])
       return await this.engine.generate({ client, cwd: request.cwd, mode: request.mode, model, prompt: request.prompt, signal })

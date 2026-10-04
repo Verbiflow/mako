@@ -4,24 +4,21 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
 import type { ThreadStore } from "../thread-store.js"
-import type { ThreadTitler } from "../thread-titles.js"
 
 const TitleSchema = z.string().max(400)
 const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSchema })).max(5_000)
 
 /**
- * Threads' names for every window: the ones to draw, a person's rename
- * (or giving the name back to automatic titles with `null`), a window's
- * renames from before the store kept them. Which model names Threads is
- * chosen with every other small task's model, through `mako:utility-choice`.
- * Every change is told to every window as `thread-titles`.
+ * Threads' own names for every window: the ones to draw, a person's rename
+ * of a whole Thread (or dropping it with `null`, so the row shows its first
+ * Session's title again), and a window's renames from before the store kept
+ * them. Every change is told to every window as `thread-titles`.
  */
 export function installThreadTitlesIpc(input: {
   store: ThreadStore | null
-  titler?: ThreadTitler
   emit(event: HostEvent): void
 }) {
-  const { store, titler, emit } = input
+  const { store, emit } = input
   const tell = (titles: ThreadTitleEntry[]) => {
     if (titles.length) emit({ type: "thread-titles", titles })
   }
@@ -31,7 +28,6 @@ export function installThreadTitlesIpc(input: {
     const operation = z.string().uuid().parse(operationId)
     const id = ThreadIdSchema.parse(thread)
     const named = TitleSchema.nullable().parse(title)
-    titler?.cancel(id)
     const entry = named === null
       ? store.clearThreadTitle({ operationId: operation, thread: id, actor: store.person() })
       : store.titleEntry(store.renameThread({ operationId: operation, thread: id, title: named, original: TitleSchema.optional().parse(original), actor: store.person() }).id)

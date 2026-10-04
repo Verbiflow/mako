@@ -5,7 +5,6 @@ import type { JsonSchema, ProviderUtilityRunner } from "./providers/utility-runn
 import { harnessOrder, lightDefault, lightOptions } from "./contracts/harness-defaults.js"
 import {
   AUTOMATIC,
-  OFF,
   agentModelId,
   parseAgentModelId,
   type UtilityModelOption,
@@ -54,7 +53,6 @@ export interface UtilityModel {
 
 export type UtilityResolution =
   | { kind: "ready"; model: UtilityModel }
-  | { kind: "off" }
   | { kind: "unavailable"; reason: string }
 
 export interface UtilityWorkOptions {
@@ -68,10 +66,10 @@ export interface UtilityWorkOptions {
 
 /** A catalog that doesn't say how much a model reads is assumed to read this much. */
 const DEFAULT_CONTEXT_TOKENS = 128_000
-/** Discovering agents can start processes; Settings and every title share one answer this long. */
+/** Discovering agents can start processes; Settings and every draft share one answer this long. */
 const AGENTS_TTL_MS = 30_000
 
-const TASK_NAMES = { title: "Thread titles", commit: "commit messages" } satisfies Record<UtilityTask, string>
+const TASK_NAMES = { commit: "commit messages" } satisfies Record<UtilityTask, string>
 
 /**
  * Which model does each small task, decided in one place. `auto` takes the
@@ -101,13 +99,12 @@ export class UtilityWork {
         reason: found.kind === "unavailable" ? found.reason : undefined,
       }
     }
-    const [title, commit] = await Promise.all([state("title"), state("commit")])
-    return { title, commit, harnessOrder: saved, runners: [...this.options.runners()] }
+    return { commit: await state("commit"), harnessOrder: saved, runners: [...this.options.runners()] }
   }
 
-  /** Save what does `task`: `auto`, `off` for titles, or one of the models Settings lists now. */
+  /** Save what does `task`: `auto`, or one of the models Settings lists now. */
   async choose(task: UtilityTask, choice: string): Promise<void> {
-    if (choice !== AUTOMATIC && choice !== OFF && !(await this.available()).list.some((option) => option.id === choice))
+    if (choice !== AUTOMATIC && !(await this.available()).list.some((option) => option.id === choice))
       throw new Error("That model isn't available now. Sign in to its harness or connect it, then choose it again.")
     await this.options.models.choose(task, choice)
   }
@@ -157,7 +154,6 @@ export class UtilityWork {
   }
 
   private async find(task: UtilityTask, choice: string, available: Available): Promise<Found> {
-    if (choice === OFF) return task === "title" ? { kind: "off" } : this.find(task, AUTOMATIC, available)
     if (choice === AUTOMATIC) {
       for (const agent of available.agents) {
         const light = lightDefault(agent.harness, agent.models, agent.defaultModel)
@@ -271,7 +267,6 @@ interface Available {
 
 type Found =
   | { kind: "ready"; option: UtilityModelOption; open(): Promise<UtilityModel> }
-  | { kind: "off" }
   | { kind: "unavailable"; reason: string }
 
 function connectionId(connection: Pick<UtilityConnection, "provider" | "model">): string {

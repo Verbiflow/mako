@@ -14,11 +14,10 @@ import {
  * since been replaced.
  *
  * - `HARNESS_ORDER` is the order Mako tries harnesses in when it must pick
- *   one itself: setting a project up, naming Threads, drafting commit
- *   messages. Settings › Models lets the person reorder it.
+ *   one itself: setting a project up, drafting commit messages. Settings › Models lets the person reorder it.
  * - `work` is what a new conversation and a project's setup start on.
- * - `light` names Threads and drafts commit messages: a small model at low
- *   reasoning, never the fast lane's surcharge.
+ * - `light` drafts commit messages: a small model at low reasoning, never
+ *   the fast lane's surcharge.
  *
  * Each list is tried in order and the first model the harness's own catalog
  * offers wins, so a harness without the newest model falls back to the one
@@ -105,8 +104,8 @@ export function workDefault(harness: string, models: readonly SessionModel[]): S
 }
 
 /**
- * The model that names Threads and drafts commit messages through this
- * harness, at low reasoning. `ownDefault` is the model the harness itself
+ * The model that drafts commit messages through this harness, at low
+ * reasoning. `ownDefault` is the model the harness itself
  * starts on, from its catalog.
  */
 export function lightDefault(harness: string, models: readonly SessionModel[], ownDefault?: string): HarnessPick | undefined {

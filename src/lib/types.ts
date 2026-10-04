@@ -165,7 +165,7 @@ export type {
 
 export type { NativeRequest, NativeRequestInput } from "../../electron/shared"
 export type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkSettings } from "../../electron/contracts/utility-work"
-export { AUTOMATIC as UTILITY_AUTOMATIC, OFF as UTILITY_OFF } from "../../electron/contracts/utility-work"
+export { AUTOMATIC as UTILITY_AUTOMATIC } from "../../electron/contracts/utility-work"
 export type { ContinuationPlan, ContinuationResolution } from "../../electron/shared"
 
 export type { AccessEnforcement, AccessTier } from "../../electron/contracts/access"

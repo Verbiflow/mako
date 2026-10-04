@@ -1,19 +1,16 @@
 /**
  * Small jobs Mako gives a model outside every conversation. Each runs on a
- * harness's light model at low reasoning (`harness-defaults.ts`): naming a
- * Thread and drafting a commit message need speed, not depth. Setting a
- * project up is a whole Session on the harness's model for new
- * conversations instead. All three take the first signed-in harness in the
- * person's harness order.
+ * harness's light model at low reasoning (`harness-defaults.ts`): drafting a
+ * commit message needs speed, not depth. Setting a project up is a whole
+ * Session on the harness's model for new conversations instead. Both take
+ * the first signed-in harness in the person's harness order.
  */
-export const UTILITY_TASKS = ["title", "commit"] as const
+export const UTILITY_TASKS = ["commit"] as const
 
 export type UtilityTask = (typeof UTILITY_TASKS)[number]
 
 /** The first signed-in harness in the person's order, on its light model; else the first model connection. */
 export const AUTOMATIC = "auto"
-/** Thread titles only: Threads keep the names their agents give them. */
-export const OFF = "off"
 
 /** A harness's model; a model connection's id stays `<provider>/<model>`. */
 export function agentModelId(harness: string, model: string): string {
@@ -45,7 +42,7 @@ export interface UtilityModelOption {
 }
 
 export interface UtilityTaskState {
-  /** What the person chose: `auto`, `off` for titles, or a model's id. */
+  /** What the person chose: `auto` or a model's id. */
   choice: string
   /** What runs the task now. */
   resolved?: UtilityModelOption
@@ -56,17 +53,15 @@ export interface UtilityTaskState {
 }
 
 export interface UtilityWorkSettings {
-  title: UtilityTaskState
   commit: UtilityTaskState
   /** The harness order the person saved; empty until they reorder. */
   harnessOrder: string[]
-  /** The harnesses Mako can name Threads and draft commits through. */
+  /** The harnesses Mako can draft commits through. */
   runners: string[]
 }
 
-/** What each task is set to: `auto`, `off` (titles only) or a model's id. */
+/** What each task is set to: `auto` or a model's id. */
 export interface UtilityWorkChoices {
-  title: string
   commit: string
 }
 

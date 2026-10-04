@@ -86,7 +86,6 @@ import {
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import type { JournalFacts, SourceRef } from "./thread-store.js"
-import { completedExchange } from "./thread-titles.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "./contracts/thread-identity.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
@@ -3283,19 +3282,6 @@ export class LiveConversations {
     }, 16)
   }
 
-  /** Each request this commit saw finish, with the blocks it ended on. */
-  private reportExchanges(previous: LiveSnapshot, snapshot: LiveSnapshot): void {
-    const report = this.dependencies.exchangeCompleted
-    if (!report) return
-    const before = new Map(previous.requests.map((request) => [request.id, request.status]))
-    for (const request of snapshot.requests) {
-      if (request.status !== "completed" || before.get(request.id) === "completed") continue
-      const exchange = completedExchange(snapshot.blocks, request)
-      if (!exchange) continue
-      report({ conversationId: snapshot.session.id, requestId: request.id, completedAt: this.dependencies.now?.() ?? Date.now(), nativeTitle: snapshot.session.title, ...exchange })
-    }
-  }
-
   private flush(resident: Resident): void {
     const session = resident.snapshot.session
     if (session.executionContext?.identity.kind === "pending" &&
@@ -3327,7 +3313,6 @@ export class LiveConversations {
     this.syncMemory(previous.session, snapshot.session)
     if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
       this.registerThread(snapshot, undefined)
-    if (previous.requests !== snapshot.requests) this.reportExchanges(previous, snapshot)
     this.dependencies.emit({
       type: "live-batch",
       batch: {

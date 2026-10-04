@@ -1,7 +1,6 @@
 import { Action, ListCard, SettingRow, Toggle } from "@/components/ui/kit"
 import { togglePref, usePrefs } from "@/state/prefs"
 import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
-import { ThreadTitleSetting } from "./thread-title-setting"
 
 export function ConversationSection() {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
@@ -31,7 +30,6 @@ export function ConversationSection() {
           <Action onClick={() => void workspaceMoves.forget(project)}>Ask again</Action>
         </SettingRow>
       ))}
-      <ThreadTitleSetting />
       <SettingRow
         title="Enter steers a running turn"
         description="Off makes Enter queue behind the turn; Cmd+Enter always does the other. Agents that cannot take a message mid-turn queue either way"

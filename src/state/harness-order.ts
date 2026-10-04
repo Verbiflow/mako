@@ -6,9 +6,9 @@ import { threadsStore, useThreads } from "./thread-store"
 
 /**
  * The order Mako tries harnesses in when it picks one itself: setting a
- * project up, naming Threads, drafting commit messages. The host keeps the
- * person's order, since it names Threads with no window open; until it
- * answers, and until the person reorders, it is Mako's own.
+ * project up, drafting commit messages. The host keeps the person's order,
+ * so every window reads the same one; until it answers, and until the
+ * person reorders, it is Mako's own.
  */
 const saved = createStore<{ order: string[] }>({ order: [] })
 const useSaved = createHook(saved)

@@ -116,7 +116,7 @@ async function mockThreadContexts(
 /** What the page staged, so a pasted or reloaded attachment reads back the words it was given. */
 const STAGED_TEXT = new Map<string, string>()
 
-const utilityChoices: UtilityWorkChoices = { title: "auto", commit: "auto" }
+const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 const MOCK_UTILITY_OPTIONS: UtilityModelOption[] = [
   { id: "agent:claude/claude-haiku-4-5", label: "Haiku 4.5", via: "Claude Code", kind: "agent", source: "claude", light: true },
   { id: "agent:claude/claude-sonnet-5", label: "Sonnet 5", via: "Claude Code", kind: "agent", source: "claude" },
@@ -132,10 +132,10 @@ function mockUtilityWork(): UtilityWorkSettings {
   const first = harnessOrder(mockHarnessOrder, MOCK_RUNNERS)[0]
   const state = (task: UtilityTask): UtilityTaskState => {
     const choice = utilityChoices[task]
-    const resolved = choice === "off" ? undefined : MOCK_UTILITY_OPTIONS.find((option) => choice === "auto" ? option.source === first && option.light : option.id === choice)
+    const resolved = MOCK_UTILITY_OPTIONS.find((option) => choice === "auto" ? option.source === first && option.light : option.id === choice)
     return { choice, options: MOCK_UTILITY_OPTIONS, resolved }
   }
-  return { title: state("title"), commit: state("commit"), harnessOrder: mockHarnessOrder, runners: MOCK_RUNNERS }
+  return { commit: state("commit"), harnessOrder: mockHarnessOrder, runners: MOCK_RUNNERS }
 }
 
 export function installMockBridge() {

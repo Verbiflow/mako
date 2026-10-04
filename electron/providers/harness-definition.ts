@@ -58,7 +58,7 @@ export interface HarnessDefinition {
   acp: ProviderAcpSource | Absent
   /** Headless runs outside a live conversation. */
   nativeRunner: NativeRunner | Absent
-  /** Small requests on a light model that leave nothing in the app's history: titles, commit messages. */
+  /** Small requests on a light model that leave nothing in the app's history, such as commit messages. */
   utility: ProviderUtilityRunner | Absent
   /** Matches the harness's own processes to its sessions. */
   processProbe: ProviderProcessProbe | Absent

@@ -8,7 +8,7 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import { settingValueLabel } from "@/components/composer/settings-source"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { UTILITY_AUTOMATIC, UTILITY_OFF, type HarnessModel, type HarnessProfile, type UtilityModelSettings, type UtilityTaskState } from "@/lib/types"
+import { UTILITY_AUTOMATIC, type HarnessModel, type HarnessProfile, type UtilityModelSettings, type UtilityTaskState } from "@/lib/types"
 import { refreshCommitModel } from "@/state/commit-model"
 import { loadHarnessOrder, saveHarnessOrder, useHarnessOrder, useSavedHarnessOrder } from "@/state/harness-order"
 import { utilityModels } from "@/state/model-runtime"
@@ -21,8 +21,8 @@ const DRAG_TYPE = "application/x-mako-harness"
 
 /**
  * One place for the work Mako hands a harness itself: which harness sets a
- * project up, names Threads and drafts commit messages, in an order the
- * person drags, and the model each small task runs on.
+ * project up and drafts commit messages, in an order the person drags, and
+ * the model commit messages run on.
  */
 export function HarnessOrderSection() {
   useHarnessIdentity()
@@ -58,7 +58,6 @@ export function HarnessOrderSection() {
   const roles = (harness: string) =>
     [
       setup === harness ? "Setup" : undefined,
-      automatic(work?.title) === harness ? "Names" : undefined,
       automatic(work?.commit) === harness ? "Commits" : undefined,
     ].filter((role) => role !== undefined)
 
@@ -119,17 +118,10 @@ export function HarnessOrderSection() {
       </ListCard>
       <ListCard>
         <TaskRow
-          title="Thread names"
-          state={work?.title}
-          error={error}
-          off="Threads keep the names their agents give them"
-          picker={<UtilityModelPicker task="title" state={work?.title} label="Model that names threads" className="w-56 max-w-full" onChoose={(choice) => void choose("title", choice)} />}
-        />
-        <TaskRow
           title="Commit messages"
           state={work?.commit}
           error={error}
-          picker={<UtilityModelPicker task="commit" state={work?.commit} label="Model that drafts commit messages" className="w-56 max-w-full" onChoose={(choice) => void choose("commit", choice)} />}
+          picker={<UtilityModelPicker state={work?.commit} label="Model that drafts commit messages" className="w-56 max-w-full" onChoose={(choice) => void choose("commit", choice)} />}
         />
       </ListCard>
       <p className="text-label text-faint">
@@ -212,7 +204,7 @@ function HarnessOrderRow({
             "Not signed in"
           ) : (
             <>
-              Names and commits{" "}
+              Commits{" "}
               <span className="text-muted-foreground">{light ? summary(light.model, light.options) : "no light model"}</span>
               {light && !runs ? " (not supported yet)" : null}
             </>
@@ -234,24 +226,20 @@ function TaskRow({
   title,
   state,
   error,
-  off,
   picker,
 }: {
   title: string
   state: UtilityTaskState | undefined
   error: string | null
-  off?: string
   picker: ReactNode
 }) {
   const description = error
     ? error
     : !state
       ? "Loading models"
-      : state.choice === UTILITY_OFF
-        ? off
-        : state.resolved
-          ? `${state.resolved.label} · ${state.resolved.via}`
-          : state.reason
+      : state.resolved
+        ? `${state.resolved.label} · ${state.resolved.via}`
+        : state.reason
   return (
     <SettingRow title={title} description={description}>
       {picker}
@@ -285,7 +273,7 @@ function useUtilityWork() {
     window.addEventListener("focus", focus)
     return () => window.removeEventListener("focus", focus)
   }, [refresh])
-  const choose = async (task: "title" | "commit", choice: string) => {
+  const choose = async (task: "commit", choice: string) => {
     try {
       await utilityModels.choose(task, choice)
       await refresh()
