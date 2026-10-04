@@ -58,8 +58,13 @@ export function roomTip(app: RoomApp, now: number): string {
   ].filter(Boolean).join("\n")
 }
 
+export interface FitLine {
+  text: string
+  tip: string
+}
+
 /** A project's line under the apps, short, with the whole sentence for its tip. */
-export function fitLine(fit: RoomFit): { text: string; tip: string } {
+export function fitLine(fit: RoomFit): FitLine {
   const { estimate, name } = fit
   if (estimate.kind === "learning")
     return {

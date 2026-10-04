@@ -133,7 +133,9 @@ export function markdownFileTarget(
  */
 export const anchorLine = markdownAnchorLine
 
-/** Inline code becomes a file action only when the whole span is a recognizable path. */
+/** Inline code needs a path, not merely a filename or known extension. Explicit
+ * links/native citations are handled separately; they already carry intent.
+ */
 export function inlineFileTarget(text: string): FileCitation | null {
   // A bare JavaScript environment expression is code; an explicit file link
   // (or `./process.env`) can still name a file with that spelling.
@@ -141,6 +143,7 @@ export function inlineFileTarget(text: string): FileCitation | null {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /[\n\r`<>|;&=]/.test(text)) return null
   const target = markdownFileTarget(text)
   if (!target || /[*?[\]{}]/.test(target.path) || !filePreviewFormat(target.path)) return null
+  if (!/[\\/]/.test(target.path)) return null
   if (!/^(?:\.{0,2}\/|~\/|[A-Za-z]:[\\/])/.test(target.path) && /\s/.test(target.path)) return null
   return target
 }

@@ -64,12 +64,11 @@ export function remarkFileCitations() {
     })
     visit(tree, "inlineCode", (node, index, parent) => {
       if (index === undefined || !parent || parent.type === "link" || parent.type === "linkReference") return
-      const target = inlineFileTarget(node.value)
-      if (!target) return
       const directory = directories.get(node)
-      const url = directory && !/[\\/]/.test(target.path)
+      const url = directory && !/[\\/]/.test(node.value)
         ? `${directory}${node.value}`
         : node.value
+      if (!inlineFileTarget(url)) return
       parent.children.splice(index, 1, {type: "link", url, children: [node]})
       return index + 1
     })
