@@ -19,7 +19,7 @@ export type ProviderActivityResult =
   | { kind: "available"; sessions: ProviderActivitySession[] }
   | {
       kind: "unavailable"
-      reason: "unsupported" | "timeout" | "permission" | "failed"
+      reason: "unsupported" | "timeout" | "permission" | "failed" | "incomplete"
     }
 
 export interface ProviderProcessProbe extends ProviderCapability {

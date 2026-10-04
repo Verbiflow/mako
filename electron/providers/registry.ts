@@ -5,9 +5,11 @@ export interface ProviderCapability {
 export class ProviderRegistry<T extends ProviderCapability> {
   private readonly values = new Map<string, T>()
   private readonly validate?: (value: T) => void
+  private readonly prepare?: (value: T) => T
 
-  constructor(validate?: (value: T) => void) {
+  constructor(validate?: (value: T) => void, prepare?: (value: T) => T) {
     this.validate = validate
+    this.prepare = prepare
   }
 
   register(value: T): () => void {
@@ -15,6 +17,7 @@ export class ProviderRegistry<T extends ProviderCapability> {
     if (this.values.has(value.provider)) {
       throw new Error(`Provider ${value.provider} already registered this capability`)
     }
+    value = this.prepare?.(value) ?? value
     this.values.set(value.provider, value)
     return () => {
       if (this.values.get(value.provider) === value) this.values.delete(value.provider)

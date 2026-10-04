@@ -15,6 +15,7 @@ import type { ProviderSkillSource } from "./skill-source.js"
 import type { ProviderUpdateSource } from "./update-source.js"
 import { ProviderRegistry } from "./registry.js"
 import { validateLiveDriver } from "./live-driver.js"
+import { withNativeExclusion } from "./native-exclusion.js"
 
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
@@ -53,7 +54,7 @@ export function createProviderHost(): ProviderHost {
     skillEditing: new ProviderRegistry(),
     mcpEditing: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
-    liveDrivers: new ProviderRegistry(validateLiveDriver),
+    liveDrivers: new ProviderRegistry(validateLiveDriver, withNativeExclusion),
     decoders: new ProviderRegistry(),
     nativeRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),

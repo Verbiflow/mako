@@ -36,6 +36,8 @@ export interface AcpLaunchOptions {
 }
 
 export interface AcpLaunch {
+  /** Explicit fallback only when initialize omits agentInfo.version. */
+  versionArgs?: string[]
   command: string
   args: string[]
   configureEnvironment(env: NodeJS.ProcessEnv): void
@@ -61,7 +63,7 @@ export interface AcpApprovalObserver {
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "inspectNativeSession" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop"> {
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "inspectNativeSession" | "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop"> {
   /** Native tool identity supplied by provider extensions to ACP metadata. */
   toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
   /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */

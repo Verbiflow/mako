@@ -1,6 +1,12 @@
 import { acpDefaultMode, acpSessionModes } from "../acp-access.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../contracts/execution-context.js"
+
+export const ACP_NATIVE_IDENTITY = {
+  kind: "unavailable",
+  reason: "ACP initialize/authentication reports methods, not the effective account identity. A verified native extension is required.",
+} as const
 
 /** Shared ACP transport; each provider contributes its own launch capability. */
 export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
@@ -10,6 +16,8 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
     throw new Error(`${source.provider}: a resumable ACP source must locate its sessions, or a new session's dropped first turn cannot be continued`)
   return {
     provider: source.provider,
+    nativeIdentity: ACP_NATIVE_IDENTITY,
+    nativeExclusion: NO_NATIVE_EXCLUSION,
     approvalEvidence: source.approvalEvidence,
     planning: source.planning,
     backgroundStop: source.backgroundStop,
@@ -29,6 +37,7 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       : source.compaction,
     checkpoint: source.checkpoint,
     inspectNativeSession: source.inspectNativeSession,
+    nativeSource: source.nativeSource,
     available: (appPath) => source.available(appPath),
     start: async (cwd, options) =>
       (await import("../acp.js")).liveStart(source.provider, cwd, options),

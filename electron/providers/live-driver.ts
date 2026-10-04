@@ -20,6 +20,7 @@ import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { UNAVAILABLE_RECOVERY, type RecoveryCapabilities } from "../contracts/recovery.js"
+import { NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 
 /** Admission resolves separately from the correlated live-action-result event.
  * A provider must confirm completion, failure, or cancellation; idle is not proof.
@@ -115,6 +116,26 @@ export type PlanningCapability =
   | { via: "setting"; option: string; proposal: string }
 
 export interface ProviderLiveDriver extends ProviderCapability {
+  /** Native principal evidence, separately from configured account selection. */
+  nativeIdentity: NativeIdentityCapability
+  nativeExclusion: NativeExclusionCapability
+  /** Required only for native atomic exclusion. Acquisition must precede
+   * opening/resuming, and protect against the native CLI as well as Mako.
+   * Failed acquisition must leave no executing session behind. Native writes
+   * must themselves remain excluded/fenced; a host assertion is not a lock. */
+  startExclusive?(cwd: string, options: ProviderStartOptions): Promise<{
+    session: LiveSessionState
+    lease: {
+      /** Fail if the native authority no longer grants this executor ownership. */
+      assertHeld(): Promise<void>
+      /** Idempotently release this exact native grant after execution/children
+       * have ended. Never release a replacement executor's grant. */
+      release(): Promise<void>
+    }
+  }>
+  /** Native record identity within a physical file, for DB/SDK locators.
+   * Undefined rejects an invalid locator; ordinary transcript files omit it. */
+  nativeSource?(path: string, nativeId: string | undefined): { path: string; record: string } | undefined
   /** Nonblocking session questions. Ordinary user input retires their Mako forms;
    * exact answers preserve other questions. Native history supplies the same
    * retirement evidence after external continuation. Blocking approvals stay separate. */
@@ -165,6 +186,11 @@ export interface ProviderLiveDriver extends ProviderCapability {
     response: LivePermissionResponse,
     dispatch: ApprovalDispatch
   ): Promise<void>
+  /** Stop owns foreground, background and child effects as declared above.
+   * Native interrupt acknowledgement is not cleanup evidence. Adapters must
+   * retain ownership of late native events from stopped runs, never dispatch
+   * replacement input, and report failed/unknown cleanup instead of readiness.
+   */
   cancel(id: string): Promise<void>
   close(id: string): void | Promise<void>
   setMode(id: string, modeId: string): Promise<void>
@@ -187,6 +213,10 @@ export type ProviderSteerResult =
  * at startup rather than at a call site months later.
  */
 export function validateLiveDriver(driver: ProviderLiveDriver): void {
+  NativeIdentityCapabilitySchema.parse(driver.nativeIdentity)
+  NativeExclusionCapabilitySchema.parse(driver.nativeExclusion)
+  if ((driver.nativeExclusion.kind === "atomic") !== Boolean(driver.startExclusive))
+    throw new Error(`${driver.provider}: native atomic exclusion requires an exclusive start implementation, declared together`)
   if (driver.canResume && (!driver.checkpoint || !driver.inspectNativeSession))
     throw new Error(`${driver.provider}: native recovery requires explicit checkpoint and session evidence`)
   ApprovalEvidenceCapabilitySchema.parse(driver.approvalEvidence)
