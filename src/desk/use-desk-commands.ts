@@ -86,7 +86,7 @@ function onScreenSessionTab(): { tab: Extract<SessionTab, { kind: "session" }>; 
   if (!here.thread || !here.session) return null
   const tab = currentThreadTabs(here.thread).find((candidate) => candidate.kind === "session" && candidate.id === here.session)
   if (tab?.kind !== "session") return null
-  return { tab, thread: here.thread, title: sessionTabTitle(tab, prefsStore.get().titleOverrides) }
+  return { tab, thread: here.thread, title: sessionTabTitle(tab) }
 }
 
 /** Advance to the next effort level the current model actually supports. */

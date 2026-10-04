@@ -149,7 +149,7 @@ assert.equal(rowThread(fork, moved), elsewhere)
 assert.equal(rowThread(fork, {}), thread, "a Session no group names keeps the Thread it was listed with")
 
 assert.deepEqual(
-  whileStarting.map((tab) => sessionTabTitle(tab, {})),
+  whileStarting.map((tab) => sessionTabTitle(tab)),
   ["Fix rail flicker", "Codex", "OpenCode"],
   "an untitled Session's tab names its agent, so two new ones never share a name"
 )

@@ -4,7 +4,6 @@ import { prefetchThreadReferences } from "@/lib/thread-references"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { draftText, rememberDraft, useDrafts } from "@/state/drafts"
-import { usePrefs } from "@/state/prefs"
 import { sessionDraftKey, type SessionDraft } from "@/state/thread-groups"
 import { sessionTabTitle, useThreadTabs } from "@/state/thread-sessions"
 import { threadsStore, useThreads } from "@/state/threads"
@@ -29,7 +28,6 @@ export function SessionDraftReceipt({ draft }: { draft: SessionDraft }) {
 function ThreadTranscripts({ draft }: { draft: SessionDraft }) {
   const tabs = useThreadTabs({ thread: draft.thread, draft })
   const refs = useThreads((state) => state.threads)
-  const overrides = usePrefs((prefs) => prefs.titleOverrides)
   const key = sessionDraftKey(draft)
   const text = useDrafts((state) => state.drafts.find((entry) => entry.key === key)?.text ?? "")
   const sessions = tabs.flatMap((tab) => {
@@ -65,7 +63,7 @@ function ThreadTranscripts({ draft }: { draft: SessionDraft }) {
               )}
             >
               {harness ? <HarnessIcon harness={harness} className="size-3.5 shrink-0" /> : null}
-              <span className="truncate">{sessionTabTitle(tab, overrides)}</span>
+              <span className="truncate">{sessionTabTitle(tab)}</span>
             </button>
           )
         })}

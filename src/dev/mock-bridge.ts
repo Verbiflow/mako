@@ -759,7 +759,7 @@ export function installMockBridge() {
     },
     openThread: async (path: string) => ({
       ref:
-        mockThreads().threads.find((ref) => ref.path === path) ??
+        mockThreads().threads.map((ref) => (scene === "rail" ? railRef(ref) : ref)).find((ref) => ref.path === path) ??
         (path.includes("devin")
           ? {
               harness: "devin" as const,

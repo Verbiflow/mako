@@ -8,7 +8,6 @@ import { formatChord } from "@/extend/commands"
 import { presenceThreadStatus } from "@/lib/thread-fold"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { usePrefs } from "@/state/prefs"
 import {
   closeDraftTab,
   newSessionInThread,
@@ -113,9 +112,8 @@ function SessionTabButton({
   closable: boolean
 }) {
   const [arrived] = useState(() => performance.now() - stripSince > ARRIVAL_MS)
-  const overrides = usePrefs((prefs) => prefs.titleOverrides)
   const composerHarness = useThreads((state) => state.composerHarness)
-  const title = tab.kind === "draft" && !selected ? "Draft" : sessionTabTitle(tab, overrides)
+  const title = tab.kind === "draft" && !selected ? "Draft" : sessionTabTitle(tab)
   const harness =
     tab.kind === "draft"
       ? selected ? composerHarness : tab.draft.harness

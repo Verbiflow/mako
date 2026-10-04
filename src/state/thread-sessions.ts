@@ -197,11 +197,15 @@ export function onScreenTab(here: OnScreen): string | undefined {
   return here.draft ? here.draft.id : here.session
 }
 
-export function sessionTabTitle(tab: SessionTab, overrides: Readonly<Record<string, string>>): string {
+/**
+ * A Session tab's own name, as its agent gave it. A Thread's name, and a
+ * window's renames from before the Thread store kept them (kept by the
+ * first Session's path), name the Thread in the rail, never one of its tabs.
+ */
+export function sessionTabTitle(tab: SessionTab): string {
   if (tab.kind === "draft") return "New session"
-  const path = tab.ref?.path ?? tab.presence?.threadPath
   const harness = tab.presence?.harness ?? tab.ref?.harness
-  return (path ? overrides[path] : undefined) ?? tab.presence?.title ?? tab.ref?.title ?? (harness ? harnessLabel(harness) : "Untitled session")
+  return tab.presence?.title ?? tab.ref?.title ?? (harness ? harnessLabel(harness) : "Untitled session")
 }
 
 function showDraft(draft: SessionDraft): void {
