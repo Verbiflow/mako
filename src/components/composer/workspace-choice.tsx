@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { RadioGroup } from "radix-ui"
 import { CheckIcon, FolderIcon, GitBranchIcon, LoaderCircleIcon } from "lucide-react"
-import { WORKTREE_BRANCH_PREFIX, worktreeSlug } from "../../../electron/contracts/thread-worktrees.ts"
+import { WORKTREE_BRANCH_PREFIX, worktreeSlug, type WorktreeStartPoint } from "../../../electron/contracts/thread-worktrees.ts"
 import { Keys } from "@/components/ui/kit"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { formatChord } from "@/extend/commands"
 import { homeRelative } from "@/lib/skill-matrix"
+import { cn } from "@/lib/utils"
 import { acpStore, useAcp } from "@/state/acp"
 import { titleFromPrompt } from "@/state/acp-start"
 import { checkoutLabel, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
@@ -15,7 +16,7 @@ import { useSession } from "@/state/session"
 import { moveReadiness, moveToWorktree } from "@/state/thread-workspace"
 import { useOnScreen } from "@/state/thread-sessions"
 import { threadsStore, useThreads } from "@/state/threads"
-import { useWorktrees, wantSpareWorktrees, worktreeAt } from "@/state/worktrees"
+import { useWorktrees, useWorktreeStart, wantSpareWorktrees, worktreeAt } from "@/state/worktrees"
 
 /**
  * Where a Thread makes its changes: the project folder itself, or its own
@@ -52,17 +53,27 @@ function WorkspaceMenu({
   value,
   choices,
   trigger,
+  footer,
   onChoose,
+  onOpen,
 }: {
   heading: string
   value: Workspace
   choices: Record<Workspace, Choice>
   trigger: ReactNode
+  footer?: ReactNode
   onChoose: (value: Workspace) => void
+  onOpen?: () => void
 }) {
   const [open, setOpen] = useState(false)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) onOpen?.()
+      }}
+    >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
         <div className="flex items-center justify-between gap-2 px-2 py-1.5">
@@ -93,8 +104,44 @@ function WorkspaceMenu({
             </RadioGroup.Item>
           ))}
         </RadioGroup.Root>
+        {footer}
       </PopoverContent>
     </Popover>
+  )
+}
+
+/** Why the branch starts where it does, in a line each; nothing when the folder's branch and its upstream agree. */
+function startNotes(point: WorktreeStartPoint): { text: string; caution?: boolean }[] {
+  const { standing, branch, upstream } = point
+  const notes: { text: string; caution?: boolean }[] = []
+  if (standing.kind === "behind") notes.push({ text: `${plural(standing.behind, "commit", "commits")} newer than your ${branch}` })
+  if (standing.kind === "ahead" || standing.kind === "diverged")
+    notes.push({ text: `With your ${plural(standing.ahead, "unpushed commit", "unpushed commits")}` })
+  if (standing.kind === "diverged")
+    notes.push({ text: `${upstream} also has ${plural(standing.behind, "commit", "commits")} your ${branch} doesn't`, caution: true })
+  if (standing.kind === "detached") notes.push({ text: "The project folder's commit; it's on no branch" })
+  if (point.fetched?.failed) notes.push({ text: point.fetched.failed })
+  return notes
+}
+
+/** Where the next Thread's branch starts, under the choice that makes one. */
+function StartPoint({ point }: { point: WorktreeStartPoint }) {
+  const notes = startNotes(point)
+  return (
+    <div data-start-point={point.standing.kind} className="mx-1 mt-1 border-t border-hairline px-2 pt-2 pb-1.5">
+      <p className="flex min-w-0 items-center gap-1.5 text-ui">
+        <span className="shrink-0 text-faint">Starts from</span>
+        <span title={point.commit.slice(0, 12)} className="flex min-w-0 items-center gap-1 text-foreground">
+          <GitBranchIcon className="size-3 shrink-0 text-faint" />
+          <span className="truncate">{point.from}</span>
+        </span>
+      </p>
+      {notes.map((note) => (
+        <p key={note.text} className={cn("mt-0.5 text-label", note.caution ? "text-caution" : "text-faint")}>
+          {note.text}
+        </p>
+      ))}
+    </div>
   )
 }
 
@@ -220,6 +267,9 @@ function NewThreadWorkspace() {
   useEffect(() => {
     if (inRepository && ownBranch && cwd) wantSpareWorktrees(cwd)
   }, [inRepository, ownBranch, cwd])
+  // Opening the menu and starting to write each read it again, so the send finds the upstream fetched.
+  const [opened, setOpened] = useState(0)
+  const start = useWorktreeStart(cwd, inRepository && ownBranch, `${opened}:${slug ? 1 : 0}`)
   if (!inRepository) return null
   const branch = slug ? `${slug}${taken ? "-2" : ""}` : ""
   const value: Workspace = ownBranch ? "own-branch" : "project-folder"
@@ -232,6 +282,8 @@ function NewThreadWorkspace() {
         "own-branch": { detail: OWN_BRANCH },
       }}
       onChoose={(next) => setPref("newThreadsInWorktree", next === "own-branch")}
+      onOpen={() => setOpened((count) => count + 1)}
+      footer={ownBranch && start ? <StartPoint point={start} /> : undefined}
       trigger={
         <button
           type="button"

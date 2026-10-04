@@ -3,7 +3,7 @@ import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
 import type { GitStatus, ThreadRef } from "@/lib/types"
-import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeReview, WorktreeStartPoint } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
@@ -223,6 +223,41 @@ export function wantSpareWorktrees(cwd: string): void {
   if (!hasBridge() || now - (wanted.get(cwd) ?? 0) < WANT_EVERY_MS) return
   wanted.set(cwd, now)
   void getMako().wantWorktree(cwd).catch(() => wanted.delete(cwd))
+}
+
+/** A project asks the host to fetch its upstream at most this often; the host holds a fetch for as long. */
+const START_FETCH_EVERY_MS = 60_000
+const startFetched = new Map<string, number>()
+
+/**
+ * Where the next Thread's branch in `cwd`'s project starts, read while
+ * `active` and again whenever `asked` changes. The refs as they are come
+ * back first; the answer after the upstream's fetch follows, at most once a
+ * minute, so the send finds them current without waiting on the network.
+ */
+export function useWorktreeStart(cwd: string, active: boolean, asked: string): WorktreeStartPoint | null | undefined {
+  const [shown, setShown] = useState<{ cwd: string; point: WorktreeStartPoint | null }>()
+  useEffect(() => {
+    if (!active || !cwd || !hasBridge()) return
+    let current = true
+    let fetched = false
+    const mako = getMako()
+    void mako.worktreeStartPoint(cwd, false).then((point) => {
+      if (current && !fetched) setShown({ cwd, point })
+    }, () => {})
+    const now = Date.now()
+    if (now - (startFetched.get(cwd) ?? 0) >= START_FETCH_EVERY_MS) {
+      startFetched.set(cwd, now)
+      void mako.worktreeStartPoint(cwd, true).then((point) => {
+        fetched = true
+        if (current) setShown({ cwd, point })
+      }, () => startFetched.delete(cwd))
+    }
+    return () => {
+      current = false
+    }
+  }, [cwd, active, asked])
+  return shown?.cwd === cwd ? shown.point : undefined
 }
 
 type RemovableWorktree = Pick<ThreadWorktree, "path" | "branch">

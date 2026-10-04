@@ -5,7 +5,7 @@ import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema } from "../../electron/contracts/thread-identity"
-import type { ThreadWorktree } from "../../electron/contracts/thread-worktrees"
+import type { ThreadWorktree, WorktreeStartPoint } from "../../electron/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
@@ -187,6 +187,19 @@ export function installMockBridge() {
   // Node tests install the bridge on a bare `window` with no address.
   const scene = "location" in window ? new URLSearchParams(window.location.search).get("app") : null
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
+  /** `?start=behind|ahead|diverged|level|alone|detached|offline` picks how the project folder's branch stands. */
+  const mockStartPoint = (): WorktreeStartPoint => {
+    const kind = ("location" in window ? new URLSearchParams(window.location.search).get("start") : null) ?? "behind"
+    const commit = "4f1c2a9e0b7d3c5a8e6f1b2d9c0a7e3f5b8d1c2a"
+    const fetched = { at: Date.now(), failed: kind === "offline" ? "Couldn't reach origin; using what was fetched last." : null }
+    const base = { commit, branch: "main", upstream: "origin/main", fetched }
+    if (kind === "ahead") return { ...base, from: "main", standing: { kind: "ahead", ahead: 2 } }
+    if (kind === "diverged") return { ...base, from: "main", standing: { kind: "diverged", ahead: 2, behind: 3 } }
+    if (kind === "level" || kind === "offline") return { ...base, from: "main", standing: { kind: "level" } }
+    if (kind === "alone") return { ...base, from: "main", upstream: null, fetched: null, standing: { kind: "alone" } }
+    if (kind === "detached") return { from: commit.slice(0, 7), commit, branch: null, upstream: null, fetched: null, standing: { kind: "detached" } }
+    return { ...base, from: "origin/main", standing: { kind: "behind", behind: 4 } }
+  }
   /** The setup Thread's worktree, once its Session has started in one. */
   let setupWorktree: ThreadWorktree | undefined
   /** Threads started for a purpose, as the host records them on start. */
@@ -278,6 +291,7 @@ export function installMockBridge() {
       throw new Error("The mock desk has no worktrees to remove.")
     },
     wantWorktree: async () => {},
+    worktreeStartPoint: async () => mockStartPoint(),
     worktreeAhead: async () => null,
     worktreeInventory: async () => ({ worktrees: [], spares: { count: 0, bytes: null } }),
     worktreeReview: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },

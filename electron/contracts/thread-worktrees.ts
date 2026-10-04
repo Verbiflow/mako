@@ -97,3 +97,31 @@ export interface WorktreeReview {
   files: WorktreeReviewFile[]
   merge: WorktreeMergeCheck
 }
+
+/** The project folder's branch against its upstream. */
+export type WorktreeStanding =
+  | { kind: "level" }
+  /** No upstream, or one never fetched. */
+  | { kind: "alone" }
+  /** On no branch. */
+  | { kind: "detached" }
+  | { kind: "behind"; behind: number }
+  | { kind: "ahead"; ahead: number }
+  | { kind: "diverged"; ahead: number; behind: number }
+
+/**
+ * Where a new Thread's branch starts: the project folder's branch, or its
+ * upstream when that has commits the branch lacks and the branch has none
+ * of its own to lose. A branch with unpushed commits keeps them.
+ */
+export interface WorktreeStartPoint {
+  /** As a person reads it: `main`, `origin/main`, or a short commit. */
+  from: string
+  commit: string
+  /** The project folder's branch, or null on no branch. */
+  branch: string | null
+  upstream: string | null
+  standing: WorktreeStanding
+  /** The last fetch of the upstream since Mako started, or null when none was tried. */
+  fetched: { at: number; failed: string | null } | null
+}

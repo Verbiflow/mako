@@ -9,11 +9,12 @@ import type { ThreadStore } from "./thread-store.js"
 import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile } from "./contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStartPoint } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
 import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
+import { WorktreeStarts } from "./worktree-start.js"
 
 const execute = promisify(execFile)
 /** Git's own markers for work under way, which a removal would throw away. */
@@ -168,6 +169,7 @@ export class ThreadWorktreeService {
   private readonly carrying = new Map<string, Promise<OutputsCarry>>()
   private readonly wanting = new Set<Promise<void>>()
   private readonly spares: WorktreeSpares
+  private readonly starts = new WorktreeStarts()
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
@@ -193,11 +195,16 @@ export class ThreadWorktreeService {
     this.spares = new WorktreeSpares(root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
 
-  prepare(conversationId: string, cwd: string, name: string | undefined): Promise<PreparedWorktree> {
+  /**
+   * `from`: `newest` starts a new Thread's branch where `startPoint` says;
+   * `head`, at the folder's own commit, for a Thread whose uncommitted
+   * changes move along and must apply where they were made.
+   */
+  prepare(conversationId: string, cwd: string, name: string | undefined, from: "newest" | "head" = "newest"): Promise<PreparedWorktree> {
     z.string().uuid().parse(conversationId)
     let work = this.pending.get(conversationId)
     if (!work) {
-      work = this.create(conversationId, cwd, name)
+      work = this.create(conversationId, cwd, name, from)
       this.pending.set(conversationId, work)
       void work.finally(() => this.pending.delete(conversationId)).catch(() => {})
     }
@@ -225,7 +232,14 @@ export class ThreadWorktreeService {
       if (busy.length)
         throw new Error(`${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in ${basename(repoRoot)}. Moving its changes would pull files from under ${busy.length === 1 ? "it" : "them"}; continue once ${busy.length === 1 ? "it stops" : "they stop"}.`)
     }
-    return this.prepare(forkId, cwd, name)
+    return this.prepare(forkId, cwd, name, "head")
+  }
+
+  /** Where a new Thread's branch in this folder's project would start now; null outside Git or before a first commit. */
+  async startPoint(cwd: string, fetch: boolean): Promise<WorktreeStartPoint | null> {
+    const repoRoot = await realpath(cwd).then((source) => git(source, ["rev-parse", "--show-toplevel"])).catch(() => "")
+    if (!repoRoot) return null
+    return this.starts.point(repoRoot, fetch).catch(() => null)
   }
 
   /**
@@ -615,7 +629,7 @@ export class ThreadWorktreeService {
     await rename(pending, target)
   }
 
-  private async create(conversationId: string, cwd: string, name: string | undefined): Promise<Receipt> {
+  private async create(conversationId: string, cwd: string, name: string | undefined, from: "newest" | "head"): Promise<Receipt> {
     const began = performance.now()
     const source = await realpath(cwd)
     let receipt = await this.receipt(conversationId)
@@ -631,6 +645,7 @@ export class ThreadWorktreeService {
           throw new Error(`${basename(source)} isn't in a Git repository, so it can't have a worktree. Choose Project folder to work in the folder itself.`, { cause: error })
         throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or choose Project folder.", { cause: error })
       }
+      if (from === "newest") base = (await this.starts.point(repoRoot, false)).commit
       const parent = this.projectFolder(repoRoot)
       const slug = await this.reserveSlug(repoRoot, parent, worktreeSlug(name), base)
       const path = join(parent, slug)

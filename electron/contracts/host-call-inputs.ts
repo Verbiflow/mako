@@ -967,6 +967,7 @@ export const hostCallInputs = {
   "mako:worktree-remove": z.tuple([z.string()]),
   "mako:worktree-review": z.tuple([z.string()]),
   "mako:worktree-review-diffs": z.tuple([z.string()]),
+  "mako:worktree-start-point": z.tuple([z.string(), z.boolean()]),
   "mako:worktree-want": z.tuple([z.string()]),
   "mako:worktrees": z.tuple([]),
   "mako:write-plugin": z.tuple([z.string(), z.string()]),
