@@ -2,6 +2,7 @@ import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import type { HarnessProfile } from "../shared.js"
 import type { ProviderCapability } from "./registry.js"
 import { hostWarn } from "../host-log.js"
+import { workDefault } from "../contracts/harness-defaults.js"
 
 export interface ProviderProfileLoader extends ProviderCapability {
   label: string
@@ -25,12 +26,23 @@ export function availableProviderProfile(
     models: catalog.models,
     capabilities: loader.capabilities,
   }
-  if (catalog.settings) profile.settings = catalog.settings
+  const settings = workDefault(loader.provider, catalog.models) ?? catalog.settings
+  if (settings) profile.settings = settings
   if (catalog.configurationError)
     profile.configurationError = catalog.configurationError
   if (catalog.defaultModel) profile.defaultModel = catalog.defaultModel
   if (catalog.configuredModel) profile.configuredModel = catalog.configuredModel
   return profile
+}
+
+/**
+ * A profile with Mako's model for new conversations (`harness-defaults.ts`)
+ * where its catalog offers it. A snapshot saved by an earlier release keeps
+ * the defaults it was saved with; this gives it the current ones.
+ */
+export function withWorkDefault(profile: HarnessProfile): HarnessProfile {
+  const settings = profile.available ? workDefault(profile.id, profile.models) : undefined
+  return settings ? { ...profile, settings } : profile
 }
 
 export function unavailableProviderProfile(

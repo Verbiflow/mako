@@ -9,7 +9,7 @@ const inputSchema = z.object({ mode: z.enum(["fast", "deep"]).default("fast"), r
 
 /** A model connection answers each of Kiri's calls in seconds. */
 const CONNECTION_TIMEOUT_MS = 120_000
-/** An agent app starts a process for each call, so the same work takes longer. */
+/** A harness starts a process for each call, so the same work takes longer. */
 const AGENT_TIMEOUT_MS = 300_000
 
 export class CommitGeneration {

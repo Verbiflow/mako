@@ -1,19 +1,21 @@
 /**
  * Small jobs Mako gives a model outside every conversation. Each runs on a
- * light model: naming a Thread and drafting a commit message need speed,
- * not depth. Setting a project up is a whole Session on the agent's default
- * model instead, picked in the same agent order (`agent-order.ts`).
+ * harness's light model at low reasoning (`harness-defaults.ts`): naming a
+ * Thread and drafting a commit message need speed, not depth. Setting a
+ * project up is a whole Session on the harness's model for new
+ * conversations instead. All three take the first signed-in harness in the
+ * person's harness order.
  */
 export const UTILITY_TASKS = ["title", "commit"] as const
 
 export type UtilityTask = (typeof UTILITY_TASKS)[number]
 
-/** The first agent in the shared order on its light model, else the first model connection. */
+/** The first signed-in harness in the person's order, on its light model; else the first model connection. */
 export const AUTOMATIC = "auto"
 /** Thread titles only: Threads keep the names their agents give them. */
 export const OFF = "off"
 
-/** An agent app's model; a model connection's id stays `<provider>/<model>`. */
+/** A harness's model; a model connection's id stays `<provider>/<model>`. */
 export function agentModelId(harness: string, model: string): string {
   return `agent:${harness}/${model}`
 }
@@ -31,14 +33,14 @@ export function utilityModelName(option: { label: string; via: string }): string
 /** A model that can do a task, as Settings lists it. */
 export interface UtilityModelOption {
   id: string
-  /** The model's own name, as its agent app or provider gives it. */
+  /** The model's own name, as its harness or provider gives it. */
   label: string
-  /** Where it runs: an agent app's name, or a provider's. */
+  /** Where it runs: a harness's name, or a provider's. */
   via: string
   kind: "agent" | "connection"
-  /** The agent app or model provider, for its icon. */
+  /** The harness or model provider, for its icon. */
   source: string
-  /** The model its agent app offers for small, fast work. */
+  /** Mako's light model for its harness. */
   light?: boolean
 }
 
@@ -49,13 +51,17 @@ export interface UtilityTaskState {
   resolved?: UtilityModelOption
   /** Why nothing runs it, when nothing does. */
   reason?: string
-  /** What can be chosen: each signed-in agent's models, light first, then each model connection. */
+  /** What can be chosen: each signed-in harness's models, light first, then each model connection. */
   options: UtilityModelOption[]
 }
 
 export interface UtilityWorkSettings {
   title: UtilityTaskState
   commit: UtilityTaskState
+  /** The harness order the person saved; empty until they reorder. */
+  harnessOrder: string[]
+  /** The harnesses Mako can name Threads and draft commits through. */
+  runners: string[]
 }
 
 /** What each task is set to: `auto`, `off` (titles only) or a model's id. */
@@ -63,3 +69,6 @@ export interface UtilityWorkChoices {
   title: string
   commit: string
 }
+
+/** The harness order a person saves: harness ids, most preferred first. */
+export const HARNESS_ORDER_LIMIT = 20

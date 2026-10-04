@@ -42,6 +42,7 @@ const fixtureReads = [
   "mako:native-requests",
   "mako:terminal-list",
   "mako:utility-model-settings",
+  "mako:harness-order-saved",
   "mako:default-commit-prompt",
 ] as const
 

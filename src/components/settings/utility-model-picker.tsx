@@ -11,7 +11,7 @@ import {
 
 /**
  * The model a small task runs on: Automatic (and what that is now), Off for
- * titles, each signed-in agent app's models with its light one first, then
+ * titles, each signed-in harness's models with its light one first, then
  * each model connection. A choice that went away stays shown, marked
  * unavailable, so the row never pretends something else was chosen.
  */
@@ -36,7 +36,7 @@ export function UtilityModelPicker({
     {
       value: UTILITY_AUTOMATIC,
       label: "Automatic",
-      detail: state?.choice === UTILITY_AUTOMATIC && state.resolved ? utilityModelName(state.resolved) : "A light model from your agents",
+      detail: state?.choice === UTILITY_AUTOMATIC && state.resolved ? utilityModelName(state.resolved) : "A light model from your first harness",
       keywords: "auto default",
     },
     ...(task === "title" ? [{ value: UTILITY_OFF, label: "Off", detail: "Keep the names agents give" }] : []),

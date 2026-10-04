@@ -15,7 +15,7 @@ import { npmInstall } from "../update-source.js"
 
 export const installCodex: ProviderModule = (host) => installHarness(host, {
   provider: "codex",
-  presentation: { firstRunPriority: 1, icon: { id: "codex-cloud", tint: "currentColor" } },
+  presentation: { icon: { id: "codex-cloud", tint: "currentColor" } },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

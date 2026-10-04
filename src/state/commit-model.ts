@@ -8,8 +8,8 @@ import { utilityModelName } from "../../electron/contracts/utility-work"
  * Which model drafts commits, and whether it can.
  *
  * The host decides, for every window and with every other small task
- * (`UtilityWork`): Automatic is a light model from the first signed-in agent
- * app, on the person's own account, or else the first model connection; a
+ * (`UtilityWork`): Automatic is a light model from the first signed-in harness
+ * in the person's harness order, on the person's own account, or else the first model connection; a
  * model chosen in Settings is used while it's there and is otherwise
  * `disconnected` with the host's reason, so the toolbar offers Settings
  * instead of a Generate that cannot work. Windows once kept their own choice

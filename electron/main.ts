@@ -78,7 +78,7 @@ import { installThreadTitlesIpc } from "./ipc/thread-titles.js"
 import { ThreadTitler } from "./thread-titles.js"
 import { resolveTitleModel } from "./thread-title-model.js"
 import { UtilityWork } from "./utility-work.js"
-import { utilityAgents } from "./utility-agents.js"
+import { utilityAgents, utilityRunners } from "./utility-agents.js"
 import { OFF } from "./contracts/utility-work.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { installChatFoldersIpc } from "./ipc/chat-folders.js"
@@ -381,7 +381,7 @@ installThreadStore(threadStore)
 const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event) => emit(event)) : () => {}
 const utilityModels = openUtilityModels()
 /** Which model does each small task: Thread titles and commit messages. */
-const utilityWork = new UtilityWork({ models: utilityModels, agents: utilityAgents })
+const utilityWork = new UtilityWork({ models: utilityModels, agents: utilityAgents, runners: utilityRunners })
 /**
  * Names Threads from their work, with the model `utilityWork` picks for
  * titles. A fixture desk's store is read-only and its Threads aren't the

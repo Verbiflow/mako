@@ -666,6 +666,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** What does a small task: `auto`, `off` for titles, or a model `utilityModelSettings` lists. */
     chooseUtilityModel: (task: UtilityTask, choice: string) =>
       invokeTrustedHost<void>("mako:utility-choice", task, choice),
+    /** The order Mako tries harnesses in for setup, Thread names and commit messages; empty goes back to Mako's. */
+    saveHarnessOrder: (order: string[]) =>
+      invokeTrustedHost<void>("mako:harness-order", order),
+    /** The harness order the person saved; empty until they reorder. */
+    savedHarnessOrder: () =>
+      invokeTrustedHost<string[]>("mako:harness-order-saved"),
     utilityModelCatalog: (input: UtilityCatalogInput) =>
       invokeTrustedHost<UtilityCatalog>("mako:utility-model-catalog", input),
     connectUtilityModel: (input: UtilityConnectionInput) =>

@@ -8,7 +8,7 @@ import {
   type SessionSettings,
   type SettingValue,
 } from "@mako/sessions/settings"
-import { Chip, Keys, ListCard, Segmented, SettingRow, Toggle } from "@/components/ui/kit"
+import { Action, Chip, Keys, ListCard, Segmented, SettingRow, Toggle } from "@/components/ui/kit"
 import { Collapse } from "@/components/ui/collapse"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
@@ -22,7 +22,9 @@ import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import type { HarnessModel } from "@/lib/types"
 import { settingValueLabel } from "@/components/composer/settings-source"
-import { harnessDefaults, saveHarnessDefaults } from "@/state/composer-settings"
+import { harnessDefaults, resetHarnessDefaults, saveHarnessDefaults } from "@/state/composer-settings"
+import { workDefault } from "../../../electron/contracts/harness-defaults"
+import { HarnessOrderSection } from "./harness-order-section"
 import {
   addToLoadout,
   LOADOUT_LIMIT,
@@ -48,11 +50,14 @@ export function ModelsSection() {
   return (
     <>
       <LoadoutSlots />
+      <HarnessOrderSection />
       <section className="flex flex-col gap-3">
         <div>
           <h3 className="text-ui font-medium">Defaults for new conversations</h3>
           <p className="mt-0.5 text-label text-muted-foreground">
-            Each harness starts here. The composer can still change the model for one conversation.
+            What each harness starts a new conversation on, and sets a project up with. Until you change one, it
+            follows Mako's recommendation, which moves to newer models as they ship. A pick in the composer changes
+            only that conversation.
           </p>
         </div>
         {harnesses.map((harness) => (
@@ -239,7 +244,13 @@ function HarnessDefaults({ harness }: { harness: string }) {
                   : `${models.length} models`}
           </p>
         </div>
-        {preference?.source === "saved" ? <Chip>Saved</Chip> : null}
+        {preference ? (
+          <Action size="xs" onClick={() => resetHarnessDefaults(harness)}>
+            Use recommended
+          </Action>
+        ) : ready && profile.available && workDefault(harness, models) ? (
+          <Chip>Recommended</Chip>
+        ) : null}
       </div>
       {ready && profile.available ? (
         <>

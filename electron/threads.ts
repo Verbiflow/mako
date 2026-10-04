@@ -1,5 +1,4 @@
 import { threadIdentity } from "@mako/sessions"
-import { harnessesByRecency } from "./contracts/agent-order.js"
 import {
   nativeSessionPath,
   type NativeSourceIdentity,
@@ -953,11 +952,6 @@ function catalogRefs(filter: { cwd?: string; harness?: string }): ThreadRef[] {
         )
         .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
     : (catalog?.list(filter) ?? [])
-}
-
-/** Every harness with a catalogued conversation, most recently used first. */
-export function harnessesByUse(): string[] {
-  return harnessesByRecency(catalogRefs({}))
 }
 
 export function listThreads(

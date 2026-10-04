@@ -86,8 +86,8 @@ export function isAbsent<T extends ProviderCapability>(value: T | Absent): value
 }
 
 export function installHarness(host: ProviderHost, harness: HarnessDefinition): void {
-  if (!Number.isFinite(harness.presentation.firstRunPriority) || !harness.presentation.icon.id || !harness.presentation.icon.tint)
-    throw new Error(`${harness.provider} must declare its ordering and icon`)
+  if (!harness.presentation.icon.id || !harness.presentation.icon.tint)
+    throw new Error(`${harness.provider} must declare its icon`)
   // Validate every family before registering anything: an incomplete adapter
   // must not leave half of its capabilities installed.
   const { provider, presentation, ...declarations } = harness

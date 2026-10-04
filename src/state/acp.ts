@@ -15,6 +15,7 @@ import {
   currentSettingsTarget,
   threadSettingsTarget,
   settingsForSend,
+  type ComposerTarget,
 } from "@/state/composer-settings"
 import { submitTransfer } from "@/state/live-transfers"
 import { performLiveAction } from "@/state/live-actions"
@@ -442,7 +443,10 @@ export const acp = {
    */
   async startSetup(harness: string, cwd: string, prompt: string, title: string, worktree: boolean): Promise<boolean> {
     if (!hasBridge()) return false
-    const starting = beginStart({ harness, cwd, title, blocks: [{ type: "user", text: prompt }], hiddenUserPrompt: null, worktree, purpose: "setup" })
+    // Setup runs on the harness's defaults for new conversations, never on a
+    // model picked for some open conversation.
+    const settingsTarget: ComposerTarget = { kind: "new", harness, cwd: "" }
+    const starting = beginStart({ harness, cwd, title, blocks: [{ type: "user", text: prompt }], hiddenUserPrompt: null, worktree, purpose: "setup", settingsTarget })
     const options: AcpStartOptions = { title, purpose: "setup" }
     if (worktree) options.worktree = true
     const sent = await launch(starting, options, prompt)

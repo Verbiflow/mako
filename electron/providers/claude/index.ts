@@ -16,7 +16,7 @@ import { claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
 
 export const installClaude: ProviderModule = (host) => installHarness(host, {
   provider: "claude",
-  presentation: { firstRunPriority: 0, icon: { id: "claude-code", tint: "#D97757" } },
+  presentation: { icon: { id: "claude-code", tint: "#D97757" } },
   hooks: claudeHooks,
   commands: claudeCommands,
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

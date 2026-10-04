@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
-import type { SessionModel } from "@mako/sessions/settings"
+import { optionAccepts, type SessionModel, type SettingValue } from "@mako/sessions/settings"
 import type { JsonSchema, ProviderUtilityRunner } from "./providers/utility-runner.js"
+import { harnessOrder, lightDefault, lightOptions } from "./contracts/harness-defaults.js"
 import {
   AUTOMATIC,
   OFF,
@@ -18,7 +19,7 @@ import { completeUtilityText, utilityLanguageModel, utilityProviders, type Utili
 import type { UtilityModelStore } from "./utility-model-store.js"
 import { utilityTokenCounter, type UtilityTokenCounter } from "./utility-token-count.js"
 
-/** A signed-in agent app that can do small work, with its catalog. */
+/** A signed-in harness that can do small work, with its catalog. */
 export interface UtilityAgent {
   harness: string
   label: string
@@ -32,6 +33,7 @@ export interface UtilityRequest {
   /** A JSON Schema the reply must match; the reply is then that JSON's text. */
   schema?: JsonSchema
   maxOutputTokens: number
+  /** `high` only when the person asks for a deeper answer, such as a deep commit draft. */
   reasoning: "low" | "high"
 }
 
@@ -54,9 +56,11 @@ export type UtilityResolution =
   | { kind: "unavailable"; reason: string }
 
 export interface UtilityWorkOptions {
-  models: Pick<UtilityModelStore, "choices" | "choose" | "settings" | "load">
-  /** Signed-in agent apps that can do small work, in the shared agent order (`agent-order.ts`). */
+  models: Pick<UtilityModelStore, "choices" | "choose" | "harnessOrder" | "saveHarnessOrder" | "settings" | "load">
+  /** Signed-in harnesses that can do small work, in any order. */
   agents(): Promise<UtilityAgent[]>
+  /** Every harness Mako can do small work through, signed in or not. */
+  runners(): readonly string[]
   now?: () => number
 }
 
@@ -69,11 +73,11 @@ const TASK_NAMES = { title: "Thread titles", commit: "commit messages" } satisfi
 
 /**
  * Which model does each small task, decided in one place. `auto` takes the
- * first signed-in agent in the shared order whose catalog offers a light
- * model, on that model and the person's own account; with none, the first
- * model connection. A model the person chose is used only while it is
- * there: when its agent signs out or its connection goes, the task is
- * unavailable and says why, and no other model stands in for it.
+ * first signed-in harness in the person's harness order, on Mako's light
+ * model for it at low reasoning and on the person's own account; with
+ * none, the first model connection. A model the person chose is used only
+ * while it is there: when its harness signs out or its connection goes, the
+ * task is unavailable and says why, and no other model stands in for it.
  */
 export class UtilityWork {
   private readonly options: UtilityWorkOptions
@@ -85,7 +89,7 @@ export class UtilityWork {
   }
 
   async settings(): Promise<UtilityWorkSettings> {
-    const [choices, options] = await Promise.all([this.options.models.choices(), this.available()])
+    const [choices, options, saved] = await Promise.all([this.options.models.choices(), this.available(), this.options.models.harnessOrder()])
     const state = async (task: UtilityTask): Promise<UtilityTaskState> => {
       const found = await this.find(task, choices[task], options)
       return {
@@ -96,14 +100,19 @@ export class UtilityWork {
       }
     }
     const [title, commit] = await Promise.all([state("title"), state("commit")])
-    return { title, commit }
+    return { title, commit, harnessOrder: saved, runners: [...this.options.runners()] }
   }
 
   /** Save what does `task`: `auto`, `off` for titles, or one of the models Settings lists now. */
   async choose(task: UtilityTask, choice: string): Promise<void> {
     if (choice !== AUTOMATIC && choice !== OFF && !(await this.available()).list.some((option) => option.id === choice))
-      throw new Error("That model isn't available now. Sign in to its agent app or connect it, then choose it again.")
+      throw new Error("That model isn't available now. Sign in to its harness or connect it, then choose it again.")
     await this.options.models.choose(task, choice)
+  }
+
+  /** Save the person's harness order; an empty one goes back to Mako's. */
+  saveHarnessOrder(order: readonly string[]): Promise<void> {
+    return this.options.models.saveHarnessOrder(order)
   }
 
   /**
@@ -130,11 +139,13 @@ export class UtilityWork {
   }
 
   private async available(): Promise<Available> {
-    const [agents, settings] = await Promise.all([this.agents(), this.options.models.settings()])
+    const [found, settings, saved] = await Promise.all([this.agents(), this.options.models.settings(), this.options.models.harnessOrder()])
+    const order = harnessOrder(saved, found.map((agent) => agent.harness))
+    const agents = order.flatMap((harness) => found.filter((agent) => agent.harness === harness))
     const connections = settings.connections.filter((connection) => !settings.issues.some(({ provider }) => provider === connection.provider))
     const list: UtilityModelOption[] = []
     for (const agent of agents) {
-      const light = agent.runner.light(agent.models)
+      const light = lightDefault(agent.harness, agent.models)?.model
       for (const model of light ? [light, ...agent.models.filter((entry) => entry !== light)] : agent.models)
         list.push({ id: agentModelId(agent.harness, model.id), label: model.label, via: agent.label, kind: "agent", source: agent.harness, light: model === light || undefined })
     }
@@ -147,28 +158,28 @@ export class UtilityWork {
     if (choice === OFF) return task === "title" ? { kind: "off" } : this.find(task, AUTOMATIC, available)
     if (choice === AUTOMATIC) {
       for (const agent of available.agents) {
-        const light = agent.runner.light(agent.models)
-        if (light) return this.agentModel(agent, light, available)
+        const light = lightDefault(agent.harness, agent.models)
+        if (light) return this.agentModel(agent, light.model, light.options, available)
       }
       const connection = available.connections[0]
       if (connection) return this.connectionModel(connection, available)
-      return { kind: "unavailable", reason: `Nothing can write ${TASK_NAMES[task]}: no signed-in agent app offers a light model, and no model is connected. Sign in to one in Settings › Agents, or connect a model in Settings › Commit messages.` }
+      return { kind: "unavailable", reason: `Nothing can write ${TASK_NAMES[task]}: no signed-in harness offers a light model, and no model is connected. Sign in to one in Settings › Agents, or connect a model in Settings › Commit messages.` }
     }
     const agentChoice = parseAgentModelId(choice)
     if (agentChoice) {
       const agent = available.agents.find((entry) => entry.harness === agentChoice.harness)
       const model = agent?.models.find((entry) => entry.id === agentChoice.model)
       if (!agent || !model)
-        return { kind: "unavailable", reason: `${agentChoice.model} isn't available: its agent app isn't signed in, or no longer offers it. Choose another model for ${TASK_NAMES[task]} in Settings.` }
-      return this.agentModel(agent, model, available)
+        return { kind: "unavailable", reason: `${agentChoice.model} isn't available: its harness isn't signed in, or no longer offers it. Choose another model for ${TASK_NAMES[task]} in Settings › Models.` }
+      return this.agentModel(agent, model, lightOptions(model), available)
     }
     const connection = available.connections.find((entry) => connectionId(entry) === choice)
     if (!connection)
-      return { kind: "unavailable", reason: `${choice} is no longer connected. Choose another model for ${TASK_NAMES[task]} in Settings.` }
+      return { kind: "unavailable", reason: `${choice} is no longer connected. Choose another model for ${TASK_NAMES[task]} in Settings › Models.` }
     return this.connectionModel(connection, available)
   }
 
-  private agentModel(agent: UtilityAgent, model: SessionModel, available: Available): Found {
+  private agentModel(agent: UtilityAgent, model: SessionModel, options: Record<string, SettingValue>, available: Available): Found {
     const id = agentModelId(agent.harness, model.id)
     return {
       kind: "ready",
@@ -182,10 +193,10 @@ export class UtilityWork {
         complete: async (request, signal) => {
           const reply = await agent.runner.complete({
             model: model.launchId ?? model.id,
+            options: request.reasoning === "high" ? deeper(model, options) : options,
             instructions: request.instructions,
             prompt: request.prompt,
             schema: request.schema,
-            reasoning: request.reasoning,
             signal,
           })
           if (request.schema) {
@@ -217,6 +228,12 @@ export class UtilityWork {
       },
     }
   }
+}
+
+/** The light options with the model's reasoning raised to `high`, where it offers that level. */
+function deeper(model: SessionModel, options: Record<string, SettingValue>): Record<string, SettingValue> {
+  const reasoning = model.options.find((option) => option.role === "reasoning")
+  return reasoning && optionAccepts(reasoning, "high") ? { ...options, [reasoning.id]: "high" } : options
 }
 
 /** A model connection's language model as a `UtilityModel`. */

@@ -1,4 +1,4 @@
-import type { SessionModel } from "@mako/sessions/settings"
+import type { SettingValue } from "@mako/sessions/settings"
 import { z } from "zod"
 import type { ProviderCapability } from "./registry.js"
 
@@ -6,46 +6,29 @@ import type { ProviderCapability } from "./registry.js"
 export const JsonSchemaSchema = z.record(z.string(), z.json())
 export type JsonSchema = z.infer<typeof JsonSchemaSchema>
 
-/** One request to a model through an agent app, outside every conversation. */
+/** One request to a model through a harness, outside every conversation. */
 export interface UtilityCompletion {
-  /** The model's id as the agent app's catalog names it. */
+  /** The model's id as the harness's catalog names it. */
   model: string
+  /** The model's options by the catalog's ids: its reasoning level, its fast lane. */
+  options: Readonly<Record<string, SettingValue>>
   instructions: string
   prompt: string
   /** A JSON Schema the reply must match; the reply is then that JSON's text. */
   schema?: JsonSchema
-  reasoning: "low" | "high"
   signal: AbortSignal
 }
 
 /**
- * Small, fast work through an agent app the person is signed in to, on
- * their own account: a Thread's title, a commit message. A request runs no
- * tools and leaves nothing in the app's history, so it never shows up as a
- * conversation and can't change any file.
+ * Small, fast work through a harness the person is signed in to, on their
+ * own account: a Thread's title, a commit message. A request runs no tools
+ * and leaves nothing in the harness's history, so it never shows up as a
+ * conversation and can't change any file. Which model it runs on is
+ * `harness-defaults.ts`'s to say.
  */
 export interface ProviderUtilityRunner extends ProviderCapability {
-  /** The model this app's own catalog offers for small, fast work, if it lists one. */
-  light(models: readonly SessionModel[]): SessionModel | undefined
   /** The reply's text; throws `UtilityModelError` with a reason a person can act on. */
   complete(request: UtilityCompletion): Promise<string>
-}
-
-/** Words a catalog uses for its fast, inexpensive models, and for the ones it has replaced. */
-const LIGHT = /\b(fast(est)?|affordable|cheap(est)?|lightweight|quick(est)?|small(est)?|mini|nano|lite|flash)\b/i
-const RETIRED = /\b(older|legacy|previous|deprecated|retired)\b/i
-
-/**
- * The first model a catalog describes as fast or inexpensive, read from its
- * own ids, names and descriptions rather than a list of known model names,
- * so a newer generation is found without a Mako release. Catalogs list
- * their newest models first; one the catalog calls older or legacy is
- * passed over while a current one qualifies.
- */
-export function lightModel(models: readonly SessionModel[]): SessionModel | undefined {
-  const text = (model: SessionModel) => [model.id, model.label, model.description ?? "", ...(model.aliases ?? [])].join(" ")
-  const light = models.filter((model) => LIGHT.test(text(model)))
-  return light.find((model) => !RETIRED.test(text(model))) ?? light[0]
 }
 
 /** A reply's JSON, without the Markdown fence some models wrap it in. */

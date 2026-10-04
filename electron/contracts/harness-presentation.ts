@@ -8,6 +8,5 @@ export type HarnessIconId =
   | "opencode-mark"
 
 export interface HarnessPresentation {
-  firstRunPriority: number
   icon: { id: HarnessIconId; tint: string }
 }

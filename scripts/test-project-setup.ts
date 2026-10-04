@@ -6,6 +6,7 @@ import { ENVIRONMENT_SETUP_PROMPT } from "../electron/contracts/thread-environme
 import { appSetupContext, appSetupRow } from "../src/lib/app-setup-context"
 import { firstRunAgent } from "../src/state/default-agent"
 import { setupAgent } from "../src/state/project-setup"
+import { HARNESS_ORDER } from "../electron/contracts/harness-defaults"
 
 const profile = (
   id: string,
@@ -40,11 +41,6 @@ const all = profiles(
 )
 
 assert.equal(
-  firstRunAgent(all, [], []),
-  undefined,
-  "wait for registered ordering when profiles arrive first"
-)
-assert.equal(
   firstRunAgent(
     profiles(
       profile("devin", true),
@@ -54,7 +50,12 @@ assert.equal(
     []
   ),
   "opencode",
-  "declared priority differs from installation order"
+  "Mako's harness order, not the order profiles arrive in"
+)
+assert.equal(
+  firstRunAgent(all, [], ["grok", "codex", "claude"]),
+  "grok",
+  "the person's harness order"
 )
 assert.equal(
   firstRunAgent(all, []),
@@ -96,32 +97,31 @@ assert.equal(
 )
 
 assert.deepEqual(
-  setupAgent(all, {}, "codex", []),
-  { harness: "codex", model: "codex model" },
-  "a new setup Thread uses the agent last picked"
+  setupAgent(all, {}, HARNESS_ORDER),
+  { harness: "claude", model: "claude model" },
+  "a project is set up by the first signed-in harness in the order"
 )
 assert.deepEqual(
-  setupAgent(all, {}, undefined, [used("grok", "2026-09-28T10:00:00Z")]),
-  { harness: "grok", model: "grok model" },
-  "before any pick, the first-run choice, and nothing is named as skipped"
+  setupAgent(all, {}, ["codex", "claude", "grok"]),
+  { harness: "codex", model: "codex model" },
+  "the person's order decides, whatever the composer has picked"
+)
+assert.deepEqual(
+  setupAgent(profiles(profile("claude", false), profile("codex", true)), {}, HARNESS_ORDER),
+  { harness: "codex", model: "codex model" },
+  "a harness that isn't signed in is passed over"
 )
 assert.deepEqual(
   setupAgent(
-    profiles(profile("claude", true), profile("codex", false)),
-    {},
-    "codex",
-    []
+    profiles({ ...profile("claude", true), models: [...profile("claude", true).models, { id: "claude-big", label: "Claude big", options: [] }] }),
+    { claude: { source: "saved", settings: { model: "claude-big" } } },
+    HARNESS_ORDER
   ),
-  { harness: "claude", model: "claude model", standingInFor: "codex" },
-  "a picked agent that isn't signed in is skipped for the first-run choice, and named"
+  { harness: "claude", model: "Claude big" },
+  "on the model saved for new conversations"
 )
 assert.equal(
-  setupAgent(all, {}, "gone", [])?.standingInFor,
-  undefined,
-  "an agent Mako no longer has is ignored, not reported"
-)
-assert.equal(
-  setupAgent(profiles(profile("claude", false)), {}, "claude", []),
+  setupAgent(profiles(profile("claude", false)), {}, HARNESS_ORDER),
   undefined,
   "nobody signed in, nobody sets it up"
 )
@@ -169,17 +169,6 @@ assert.equal(
 )
 
 console.log(
-  "default agent: most recently used on this Mac, then the fixed order, signed-in only; a new setup Thread follows the agent last picked"
+  "default agent: most recently used on this Mac, then the harness order, signed-in only; setup takes the first signed-in harness in the order"
 )
 
-assert.equal(
-  firstRunAgent(
-    all,
-    [],
-    threadsStore
-      .get()
-      .descriptors.map(({ presentation: _presentation, ...entry }) => entry)
-  ),
-  undefined,
-  "missing ordering metadata waits rather than selects arbitrary insertion order"
-)

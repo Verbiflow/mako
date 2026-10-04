@@ -80,7 +80,7 @@ export interface Prefs {
   agentHarnessFilter: string[]
   /** The composer's chosen agent, kept across launches. */
   composerHarness?: string
-  /** Intentional new-thread defaults; migrated values retain their uncertain origin. */
+  /** Defaults for new conversations saved in Settings › Models; without one, Mako's (`harness-defaults.ts`). */
   providerSettings: Record<string, SettingsPreference>
   /** Pending selections scoped to a workspace draft or a single conversation. */
   settingsOverrides: Record<string, SessionSettings>
@@ -298,6 +298,16 @@ function readProviderSettings(value: StoredValue, legacy: StoredValue): Prefs["p
   return result
 }
 
+/** A `settingsOverrides` key for a workspace's next new conversation: `[harness, "new", cwd]`. */
+function isNewConversationKey(key: string): boolean {
+  try {
+    const parsed: JsonValue = JSON.parse(key)
+    return Array.isArray(parsed) && parsed[1] === "new"
+  } catch {
+    return false
+  }
+}
+
 function readSettingsOverrides(value: StoredValue): Prefs["settingsOverrides"] {
   if (!isJsonObject(value)) return {}
   const result: Prefs["settingsOverrides"] = {}
@@ -424,6 +434,15 @@ function parsePrefs(value: JsonValue): Prefs | null {
   if (value.transcriptReplayDefaultMigrated !== true) {
     prefs.conversionMode = "transcript"
   }
+  // A model picked for one new conversation used to become its harness's
+  // default everywhere, so nobody ever reached Mako's newer defaults. Those
+  // picks are dropped once; a default is now only what Settings › Models saves.
+  if (value.harnessDefaultsReset !== true) {
+    prefs.providerSettings = {}
+    prefs.settingsOverrides = Object.fromEntries(
+      Object.entries(prefs.settingsOverrides).filter(([key]) => !isNewConversationKey(key))
+    )
+  }
   return prefs
 }
 
@@ -468,6 +487,7 @@ prefsStore.subscribe(() => {
         railScopeMigrated: true,
         transcriptReplayDefaultMigrated: true,
         openCodeProviderDefaultMigrated: true,
+        harnessDefaultsReset: true,
       }
       localStorage.setItem(KEY, JSON.stringify(stored))
     } catch {

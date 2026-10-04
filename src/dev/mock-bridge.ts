@@ -1,5 +1,6 @@
 import { fixtureHarnesses } from "./harness-fixtures"
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
+import { harnessOrder, workDefault } from "../../electron/contracts/harness-defaults.ts"
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
@@ -123,14 +124,18 @@ const MOCK_UTILITY_OPTIONS: UtilityModelOption[] = [
   { id: "google/gemini-3.8-flash", label: "gemini-3.8-flash", via: "Google", kind: "connection", source: "google" },
 ]
 
-/** Automatic resolves to the first agent's light model, as the host's `UtilityWork` does. */
+let mockHarnessOrder: string[] = []
+const MOCK_RUNNERS = ["claude", "codex"]
+
+/** Automatic resolves to the first harness's light model in the saved order, as the host's `UtilityWork` does. */
 function mockUtilityWork(): UtilityWorkSettings {
+  const first = harnessOrder(mockHarnessOrder, MOCK_RUNNERS)[0]
   const state = (task: UtilityTask): UtilityTaskState => {
     const choice = utilityChoices[task]
-    const resolved = choice === "off" ? undefined : MOCK_UTILITY_OPTIONS.find((option) => option.id === (choice === "auto" ? "agent:claude/claude-haiku-4-5" : choice))
+    const resolved = choice === "off" ? undefined : MOCK_UTILITY_OPTIONS.find((option) => choice === "auto" ? option.source === first && option.light : option.id === choice)
     return { choice, options: MOCK_UTILITY_OPTIONS, resolved }
   }
-  return { title: state("title"), commit: state("commit") }
+  return { title: state("title"), commit: state("commit"), harnessOrder: mockHarnessOrder, runners: MOCK_RUNNERS }
 }
 
 export function installMockBridge() {
@@ -190,8 +195,9 @@ export function installMockBridge() {
   const titles = new Map<string, ThreadTitleEntry>()
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false
+  // The host gives every profile Mako's default for new conversations.
   const profiles = () =>
-    MOCK_PROFILES.map((profile) =>
+    MOCK_PROFILES.map((profile) => ({ ...profile, settings: workDefault(profile.id, profile.models) ?? profile.settings })).map((profile) =>
       scene === "setup-fallback" && profile.id === "codex" ? { ...profile, available: false, error: "Not signed in" } : profile
     )
   /** A scripted turn's next updates, delivered the way the host batches them. */
@@ -556,6 +562,10 @@ export function installMockBridge() {
     chooseUtilityModel: async (task: UtilityTask, choice: string) => {
       utilityChoices[task] = choice
     },
+    saveHarnessOrder: async (order: string[]) => {
+      mockHarnessOrder = [...order]
+    },
+    savedHarnessOrder: async () => [...mockHarnessOrder],
     utilityModelSettings: async () => ({
       providers: [
         {
@@ -1970,6 +1980,7 @@ const MOCK_PROFILES = [
     settings: { model: "opus[1m]" },
     capabilities: ["stream", "fork"],
     models: [
+      mockModel("claude-opus-5-5", "Opus 5.5", [mockEffort("medium", ["low", "medium", "high", "xhigh", "max"]), mockFast], 1_000_000),
       mockModel("opus[1m]", "Opus 5", [mockEffort("high", ["low", "medium", "high", "xhigh", "max"]), mockFast], 1_000_000),
       mockModel("claude-fable-5-1", "Fable 5.1", [mockEffort("high", ["low", "medium", "high", "xhigh", "max"])], 1_000_000),
       mockModel("claude-sonnet-5", "Sonnet 5", [mockEffort("medium", ["low", "medium", "high"])], 400_000),
@@ -1985,7 +1996,9 @@ const MOCK_PROFILES = [
     settings: { model: "gpt-5.6-sol" },
     capabilities: ["stream", "fork-at-turn"],
     models: [
+      mockModel("gpt-6.1-sol", "GPT-6.1 Sol", [mockEffort("low", ["low", "medium", "high", "xhigh", "max", "ultra"]), mockFast]),
       mockModel("gpt-6-astra", "GPT-6 Astra", [mockEffort("high", ["low", "medium", "high", "xhigh"]), mockFast]),
+      mockModel("gpt-6-luna", "GPT-6 Luna", [mockEffort("medium", ["low", "medium", "high", "xhigh", "max"]), mockFast]),
       mockModel("gpt-5.6-sol", "GPT-5.6 Sol", [mockEffort("medium", ["low", "medium", "high", "xhigh", "max", "ultra"]), mockFast]),
       mockModel("gpt-5.6-terra", "GPT-5.6 Terra", [mockEffort("medium", ["low", "medium", "high"])]),
       mockModel("gpt-5.6-luna", "GPT-5.6 Luna", [mockEffort("low", ["low", "medium"])]),

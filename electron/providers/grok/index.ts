@@ -19,7 +19,7 @@ import {
 
 export const installGrok: ProviderModule = (host) => installHarness(host, {
   provider: "grok",
-  presentation: { firstRunPriority: 4, icon: { id: "grok-ring", tint: "currentColor" } },
+  presentation: { icon: { id: "grok-ring", tint: "currentColor" } },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

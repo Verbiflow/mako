@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Action, Keys } from "@/components/ui/kit"
 import { ProviderIcon } from "@/components/ui/provider-icon"
 import { ConnectCommitModel } from "./connect-commit-model"
-import { UtilityModelPicker } from "./utility-model-picker"
+import { utilityModelName } from "../../../electron/contracts/utility-work"
 import { formatChord } from "@/extend/commands"
 import { setPref, usePrefs } from "@/state/prefs"
 import { git } from "@/state/git"
@@ -91,7 +91,7 @@ export function CommitPromptSection() {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-ui leading-relaxed text-muted-foreground">
-        Draft from your changes with a light model from an agent app you're
+        Draft from your changes with a light model from a harness you're
         signed in to, on your own subscription, or with a model you connect
         here. No conversation is started or read.
       </p>
@@ -116,13 +116,18 @@ export function CommitPromptSection() {
             aria-label="Commit drafting model"
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-ui font-medium">Drafting model</span>
-              <UtilityModelPicker
-                task="commit"
-                state={commit}
-                label="Commit drafting model"
-                onChoose={(next) => void choose(next)}
-              />
+              <div className="min-w-0">
+                <span className="text-ui font-medium">Drafting model</span>
+                <p className="mt-0.5 truncate text-label text-faint">
+                  {commit?.resolved ? utilityModelName(commit.resolved) : "None available"}
+                </p>
+              </div>
+              <Action
+                tone="outline"
+                onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))}
+              >
+                Change in Models
+              </Action>
             </div>
             {commit && !commit.resolved ? (
               <p role="alert" className="text-label leading-relaxed text-caution">

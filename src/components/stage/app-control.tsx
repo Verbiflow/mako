@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AppProbeMenu } from "@/components/stage/app-probe"
-import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { openAppSetup } from "@/state/app-setup"
@@ -328,8 +327,7 @@ function NoneMenu({ cwd, view, focused }: { cwd: string; view: Extract<ThreadApp
     <>
       <Head title={`${view.project} isn't set up to run yet`}>
         An agent works out how it installs, starts and gets checked. That's done once; then every Thread can run its own copy.
-        {fresh?.standingInFor ? ` ${harnessLabel(fresh.standingInFor)} isn't signed in, so ${harnessLabel(fresh.harness)} stands in for it.` : null}
-        {fresh ? null : " Sign in to an agent in Settings first."}
+        {fresh ? null : " Sign in to a harness in Settings › Agents first."}
       </Head>
       {stopped ? (
         <Action data-app-action="open-stopped-setup" onSelect={() => void openConversation(stopped.conversation)}>

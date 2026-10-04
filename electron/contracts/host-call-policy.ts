@@ -85,6 +85,7 @@ const reads = [
   "mako:daemon-status",
   "mako:daemon-login",
   "mako:utility-model-settings",
+  "mako:harness-order-saved",
   "mako:integrations",
   "mako:skills-discover",
   "mako:skills-resolve",
@@ -139,6 +140,8 @@ const replays = [
   "mako:thread-titles-import",
   /** Choosing a task's model a second time is the same choice. */
   "mako:utility-choice",
+  /** Saving the same harness order again leaves the same order. */
+  "mako:harness-order",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
   /** `WorkspaceMoves.answer`: the request id; an answered request ignores a repeat. */

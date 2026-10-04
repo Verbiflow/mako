@@ -2,7 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { UtilityModelError } from "../../utility-model-error.js"
-import { lightModel, type ProviderUtilityRunner } from "../utility-runner.js"
+import type { ProviderUtilityRunner } from "../utility-runner.js"
+import { ClaudeTuningSchema } from "./input.js"
 import { claudeRuntime } from "./runtime.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 
@@ -14,13 +15,13 @@ import { spawnClaudeProcess } from "./sdk-process.js"
  */
 export const claudeUtilityRunner: ProviderUtilityRunner = {
   provider: "claude",
-  light: lightModel,
   async complete(request) {
     const { resolveAccountLaunch } = await import("../../accounts.js")
     const { env } = await resolveAccountLaunch("claude", process.env)
     const runtime = claudeRuntime(env)
     if (!runtime) throw new UtilityModelError("request", "Claude Code is unavailable. Reinstall Mako or set CLAUDE_CODE_EXECUTABLE.")
     const { query } = await import("@anthropic-ai/claude-agent-sdk")
+    const tuning = ClaudeTuningSchema.parse(request.options)
     const cwd = await mkdtemp(join(tmpdir(), "mako-utility-"))
     const controller = new AbortController()
     const abort = () => controller.abort()
@@ -32,6 +33,9 @@ export const claudeUtilityRunner: ProviderUtilityRunner = {
           cwd,
           env,
           model: request.model,
+          effort: tuning.effort,
+          // No setting sources are loaded, so the fast lane is off unless asked for.
+          settings: tuning.fast ? { fastMode: true } : undefined,
           pathToClaudeCodeExecutable: runtime.kind === "configured" ? runtime.executable : undefined,
           spawnClaudeCodeProcess: (options) => spawnClaudeProcess(options).child,
           systemPrompt: request.instructions,

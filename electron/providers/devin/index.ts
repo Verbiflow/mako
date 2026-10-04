@@ -15,7 +15,7 @@ import { scriptInstall } from "../update-source.js"
 
 export const installDevin: ProviderModule = (host) => installHarness(host, {
   provider: "devin",
-  presentation: { firstRunPriority: 5, icon: { id: "devin-mark", tint: "#4E8DF6" } },
+  presentation: { icon: { id: "devin-mark", tint: "#4E8DF6" } },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

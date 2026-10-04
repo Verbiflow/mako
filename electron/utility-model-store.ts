@@ -19,7 +19,7 @@ import {
   utilityProviderSchema,
   UtilityModelError,
 } from "./utility-models.js"
-import { AUTOMATIC, OFF, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "./contracts/utility-work.js"
+import { AUTOMATIC, HARNESS_ORDER_LIMIT, OFF, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "./contracts/utility-work.js"
 
 export interface UtilityKeyEncryption {
   available(): boolean | Promise<boolean>
@@ -34,7 +34,10 @@ const apiKeySchema = z
   .regex(/^[\x20-\x7e]*$/)
 const storedSchema = connectionSchema.extend({ apiKey: apiKeySchema })
 const choiceSchema = z.string().min(1).max(400)
-const choicesSchema = z.object({ title: choiceSchema.optional(), commit: choiceSchema.optional() })
+const harnessIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
+const harnessOrderSchema = z.array(harnessIdSchema).max(HARNESS_ORDER_LIMIT)
+const choicesSchema = z.object({ title: choiceSchema.optional(), commit: choiceSchema.optional(), order: harnessOrderSchema.optional() })
+type StoredChoices = z.infer<typeof choicesSchema>
 const legacyTitleSchema = z.object({ model: choiceSchema })
 
 /** A small JSON file read with `schema`, or undefined when it's missing, too big or not that shape. */
@@ -63,6 +66,7 @@ export interface UtilityModelStoreOptions {
 
 export class UtilityModelStore {
   private readonly writing = new Set<UtilityProvider>()
+  private writes: Promise<unknown> = Promise.resolve()
 
   private readonly directory: string
   private readonly encryption: UtilityKeyEncryption
@@ -119,18 +123,39 @@ export class UtilityModelStore {
   }
 
   async choose(task: UtilityTask, choice: string): Promise<void> {
-    await this.ready
     if (choice === OFF && task !== "title") throw new Error("Commit messages can't be turned off; choose Automatic or a model.")
-    const next = { ...(await this.choices()), [task]: choice }
-    await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    const temporary = `${this.choicesPath()}.${randomUUID()}.tmp`
-    try {
-      await writeFile(temporary, JSON.stringify(next), { mode: 0o600, flag: "wx" })
-      await rename(temporary, this.choicesPath())
-      await rm(this.legacyTitlePath(), { force: true })
-    } finally {
-      await rm(temporary, { force: true })
-    }
+    await this.update(async (stored) => ({ ...stored, ...(await this.choices()), [task]: choice }))
+  }
+
+  /** The harness order the person saved, most preferred first; empty until they reorder. */
+  async harnessOrder(): Promise<string[]> {
+    await this.ready
+    return (await readSmallJson(this.choicesPath(), choicesSchema))?.order ?? []
+  }
+
+  /** Save the harness order; an empty one goes back to Mako's. */
+  async saveHarnessOrder(order: readonly string[]): Promise<void> {
+    const parsed = harnessOrderSchema.parse([...new Set(order)])
+    await this.update(async (stored) => ({ ...stored, ...(await this.choices()), order: parsed.length ? parsed : undefined }))
+  }
+
+  /** Read, change and replace the choices file, one change at a time. */
+  private update(change: (stored: StoredChoices) => Promise<StoredChoices>): Promise<void> {
+    const write = this.writes.then(async () => {
+      await this.ready
+      const next = await change((await readSmallJson(this.choicesPath(), choicesSchema)) ?? {})
+      await mkdir(this.directory, { recursive: true, mode: 0o700 })
+      const temporary = `${this.choicesPath()}.${randomUUID()}.tmp`
+      try {
+        await writeFile(temporary, JSON.stringify(next), { mode: 0o600, flag: "wx" })
+        await rename(temporary, this.choicesPath())
+        await rm(this.legacyTitlePath(), { force: true })
+      } finally {
+        await rm(temporary, { force: true })
+      }
+    })
+    this.writes = write.catch(() => {})
+    return write
   }
 
   async load(provider: UtilityProvider) {

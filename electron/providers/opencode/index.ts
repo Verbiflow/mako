@@ -22,7 +22,7 @@ import { openCodeUpdateSource } from "./updates.js"
  */
 export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   provider: "opencode",
-  presentation: { firstRunPriority: 3, icon: { id: "opencode-mark", tint: "currentColor" } },
+  presentation: { icon: { id: "opencode-mark", tint: "currentColor" } },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: openCodeCommands,
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

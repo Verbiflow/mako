@@ -6,7 +6,7 @@ import { hostClient } from "../host-client.js"
 import { CommitGeneration } from "../commit-generation.js"
 import { UtilityModelStore } from "../utility-model-store.js"
 import type { UtilityWork } from "../utility-work.js"
-import { UTILITY_TASKS, type UtilityTask } from "../contracts/utility-work.js"
+import { HARNESS_ORDER_LIMIT, UTILITY_TASKS, type UtilityTask } from "../contracts/utility-work.js"
 import {
   legacyUtilityModelDirectory,
   migrateUtilityModels,
@@ -37,6 +37,7 @@ export interface GitIpcContext {
 }
 
 const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).max(400)])
+const HarnessOrderSchema = z.array(z.string().min(1).max(40)).max(HARNESS_ORDER_LIMIT)
 
 export function installGitIpc(context: GitIpcContext): void {
   const { withHost, models, work, chosen } = context
@@ -103,6 +104,10 @@ export function installGitIpc(context: GitIpcContext): void {
     await work.choose(parsedTask, parsedChoice)
     chosen?.(parsedTask, parsedChoice)
   })
+  registerIpc("mako:harness-order-saved", () => models.harnessOrder())
+  registerIpc("mako:harness-order", (_event, order: string[]) =>
+    work.saveHarnessOrder(HarnessOrderSchema.parse(order))
+  )
   registerIpc(
     "mako:utility-model-catalog",
     (_event, input: UtilityCatalogInput) => catalog.list(input)

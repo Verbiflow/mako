@@ -3,8 +3,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { UtilityModelError } from "../../utility-model-error.js"
 import { spawnProviderProcess } from "../provider-process.js"
-import { jsonReply, lightModel, type ProviderUtilityRunner } from "../utility-runner.js"
+import { jsonReply, type ProviderUtilityRunner } from "../utility-runner.js"
 import { resolveCodexExecutable } from "./executable.js"
+import { codexWireSettings } from "./settings.js"
 
 /**
  * One prompt through `codex exec` on the account Codex is signed in with.
@@ -15,7 +16,6 @@ import { resolveCodexExecutable } from "./executable.js"
  */
 export const codexUtilityRunner: ProviderUtilityRunner = {
   provider: "codex",
-  light: lightModel,
   async complete(request) {
     const { resolveAccountLaunch } = await import("../../accounts.js")
     const { env } = await resolveAccountLaunch("codex", process.env)
@@ -24,10 +24,13 @@ export const codexUtilityRunner: ProviderUtilityRunner = {
     const folder = await mkdtemp(join(tmpdir(), "mako-utility-"))
     try {
       const reply = join(folder, "reply.txt")
+      const { effort, serviceTier } = codexWireSettings({ options: { ...request.options } })
       const args = [
         "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
         "--model", request.model,
-        "-c", `model_reasoning_effort="${request.reasoning === "high" ? "high" : "low"}"`,
+        ...configValue("model_reasoning_effort", effort),
+        // The person's own config may put every run in the priority lane.
+        ...configValue("service_tier", serviceTier),
         "-c", "mcp_servers={}",
         "--output-last-message", reply,
       ]
@@ -46,6 +49,11 @@ export const codexUtilityRunner: ProviderUtilityRunner = {
       await rm(folder, { recursive: true, force: true })
     }
   },
+}
+
+/** A `-c key="value"` override; values are catalog words, never quoted text. */
+function configValue(key: string, value: string | undefined): string[] {
+  return value && /^[a-z][a-z0-9_-]*$/.test(value) ? ["-c", `${key}="${value}"`] : []
 }
 
 function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, input: string, signal: AbortSignal): Promise<{ code: number | null; stderr: string }> {

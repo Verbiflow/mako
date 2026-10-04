@@ -8,7 +8,8 @@ import type { HarnessProfile, ThreadRef } from "@/lib/types"
 import { acp } from "@/state/acp"
 import { acpStore, activeAcp, useAcp, type AcpConversation } from "@/state/acp-state"
 import { composerModelName, harnessDefaults, liveSettingsTarget, threadSettingsTarget } from "@/state/composer-settings"
-import { firstRunAgent, isSignedIn } from "@/state/default-agent"
+import { signedInByOrder } from "@/state/default-agent"
+import { currentHarnessOrder, useHarnessOrder } from "@/state/harness-order"
 import { prefsStore, usePrefs, type Prefs } from "@/state/prefs"
 import { providerStore, useProviders } from "@/state/providers"
 import { actions, store } from "@/state/session"
@@ -16,42 +17,36 @@ import { threadAppStore, useThreadApp } from "@/state/thread-app"
 import { threads } from "@/state/threads"
 import { threadsStore, useThreads } from "@/state/thread-store"
 
-/** Who sets a project up: the agent, the model it's on, and the agent it stands in for. */
+/** Who sets a project up: the harness and the model it's on. */
 export interface SetupAgent {
   harness: string
   model?: string
-  /** The composer's agent, when it isn't signed in and this one sets it up instead. */
-  standingInFor?: string
 }
 
 /**
- * Who sets a project up in a new Thread: what a new Thread starts on, the
- * agent the person last picked on its defaults for new conversations; before
- * any pick, or when the picked agent isn't signed in, the one a first run
- * would choose.
+ * Who sets a project up in a new Thread: the first signed-in harness in the
+ * person's harness order, on its model for new conversations, which is the
+ * one saved in Settings › Models or else Mako's default for it. The
+ * composer's pick plays no part.
  */
 export function setupAgent(
   profiles: Record<string, HarnessProfile>,
   providerSettings: Prefs["providerSettings"],
-  picked: string | undefined,
-  history: readonly ThreadRef[]
+  order: readonly string[]
 ): SetupAgent | undefined {
-  const harness = picked && isSignedIn(profiles[picked]) ? picked : firstRunAgent(profiles, history)
+  const harness = signedInByOrder(profiles, order)[0]
   if (!harness) return undefined
   const agent: SetupAgent = { harness }
   const model = harnessDefaults(harness, profiles[harness], providerSettings[harness]).model?.label
   if (model) agent.model = model
-  if (picked && harness !== picked && profiles[picked]) agent.standingInFor = picked
   return agent
 }
 
 export function useSetupAgent(): SetupAgent | undefined {
   const profiles = useProviders((state) => state.profiles)
   const providerSettings = usePrefs((state) => state.providerSettings)
-  const picked = usePrefs((state) => state.composerHarness)
-  const history = useThreads((state) => state.threads)
-  useThreads((state) => state.descriptors)
-  return setupAgent(profiles, providerSettings, picked, history)
+  const order = useHarnessOrder()
+  return setupAgent(profiles, providerSettings, order)
 }
 
 export function setupAgentLabel(agent: SetupAgent): string {
@@ -137,8 +132,8 @@ export function appSetupAttachment(): AttachmentInput | null {
 }
 
 function currentSetupAgent(): SetupAgent | undefined {
-  const { providerSettings, composerHarness } = prefsStore.get()
-  const agent = setupAgent(providerStore.get().profiles, providerSettings, composerHarness, threadsStore.get().threads)
-  if (!agent) toast("Sign in to an agent in Settings to set this project up")
+  const profiles = providerStore.get().profiles
+  const agent = setupAgent(profiles, prefsStore.get().providerSettings, currentHarnessOrder(Object.keys(profiles)))
+  if (!agent) toast("Sign in to a harness in Settings › Agents to set this project up")
   return agent
 }

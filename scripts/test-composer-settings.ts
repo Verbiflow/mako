@@ -353,11 +353,9 @@ console.log("composer settings: role cycling walks only reported options")
   moveLoadoutEntry(1, -1)
   assert.equal(prefsStore.get().modelLoadout[0]?.model, "sonnet")
   applyLoadoutEntry(1)
-  assert.equal(
-    prefsStore.get().providerSettings.claude?.settings.model,
-    "opus",
-    "a same-provider pick is the provider's saved default"
-  )
+  const { resolveComposerSettings, currentSettingsTarget } = await import("../src/state/composer-settings.ts")
+  assert.equal(resolveComposerSettings(currentSettingsTarget()).settings.model, "opus", "a same-provider pick is the composer's model")
+  assert.deepEqual(prefsStore.get().providerSettings, {}, "and only that conversation's: the harness's default is Settings' to change")
   removeFromLoadout(0)
   assert.equal(prefsStore.get().modelLoadout.length, 1)
   providerStore.set({ contexts: {} })

@@ -19,6 +19,7 @@ storage.set(
   JSON.stringify({
     composerTuning: { codex: { model: "a", effort: "high", fast: true } },
     providerTuningImported: ["codex"],
+    harnessDefaultsReset: true,
   })
 )
 const { prefsStore, setPref } = await import("../src/state/prefs.ts")

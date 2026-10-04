@@ -1,6 +1,7 @@
 import { agentOrder, harnessesByRecency } from "../../electron/contracts/agent-order"
-import type { HarnessDescriptor, HarnessProfile, ThreadRef } from "@/lib/types"
+import type { HarnessProfile, ThreadRef } from "@/lib/types"
 import { acpStore, activeAcp } from "@/state/acp-state"
+import { currentHarnessOrder, loadHarnessOrder, subscribeHarnessOrder } from "@/state/harness-order"
 import { prefsStore } from "@/state/prefs"
 import { providerStore } from "@/state/providers"
 import { threadsStore } from "@/state/thread-store"
@@ -10,19 +11,18 @@ export function isSignedIn(profile: HarnessProfile | undefined): boolean {
   return Boolean(profile && (profile.pending || profile.available))
 }
 
+/** The signed-in harnesses, in the person's harness order. */
+export function signedInByOrder(profiles: Record<string, HarnessProfile>, order: readonly string[] = currentHarnessOrder(Object.keys(profiles))): string[] {
+  return agentOrder({ signedIn: Object.keys(profiles).filter((harness) => isSignedIn(profiles[harness])), order })
+}
+
 /**
  * The agent new conversations start on before the person has picked one: the
  * signed-in agent this Mac used most recently, read from every agent's own
- * history; with no history, the first signed-in one.
+ * history; with no history, the first signed-in one in the harness order.
  */
-export function firstRunAgent(profiles: Record<string, HarnessProfile>, threads: readonly ThreadRef[], descriptors: readonly HarnessDescriptor[] = threadsStore.get().descriptors): string | undefined {
-  const signedIn = Object.keys(profiles).filter((harness) => isSignedIn(profiles[harness]))
-  const recent = harnessesByRecency(threads)
-  // Profiles may arrive before identity metadata. Do not pick an arbitrary
-  // first-run default while the declared preference order is still loading.
-  if (!recent.some((harness) => signedIn.includes(harness)) && descriptors.some((entry) => !entry.presentation)) return undefined
-  const priority = Object.fromEntries(descriptors.map((entry) => [entry.provider, entry.presentation?.firstRunPriority ?? Number.POSITIVE_INFINITY]))
-  return agentOrder({ signedIn, recent, priority })[0]
+export function firstRunAgent(profiles: Record<string, HarnessProfile>, threads: readonly ThreadRef[], order: readonly string[] = currentHarnessOrder(Object.keys(profiles))): string | undefined {
+  return agentOrder({ signedIn: signedInByOrder(profiles, order), order, recent: harnessesByRecency(threads) })[0]
 }
 
 /**
@@ -38,8 +38,9 @@ export function followFirstRunAgent(): () => void {
     const harness = firstRunAgent(providerStore.get().profiles, state.threads)
     if (harness && harness !== state.composerHarness) threadsStore.set({ composerHarness: harness })
   }
+  void loadHarnessOrder()
   follow()
-  const stops = [providerStore.subscribe(follow), threadsStore.subscribe(follow), prefsStore.subscribe(follow), acpStore.subscribe(follow)]
+  const stops = [providerStore.subscribe(follow), threadsStore.subscribe(follow), prefsStore.subscribe(follow), acpStore.subscribe(follow), subscribeHarnessOrder(follow)]
   return () => {
     for (const stop of stops) stop()
   }

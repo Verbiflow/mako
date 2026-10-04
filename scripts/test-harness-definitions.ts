@@ -86,7 +86,7 @@ for (const harness of harnesses) {
 const host = createProviderHost()
 const definition: HarnessDefinition = {
   provider: "example",
-  presentation: { firstRunPriority: 99, icon: { id: "codex-cloud", tint: "currentColor" } },
+  presentation: { icon: { id: "codex-cloud", tint: "currentColor" } },
   hooks: lacks("test"),
   commands: lacks("test"),
   toolEditing: lacks("test"),

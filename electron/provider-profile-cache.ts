@@ -8,6 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { HarnessProfile } from "./shared.js"
+import { withWorkDefault } from "./providers/profile-loader.js"
 
 const profileSchema = z.object({
   id: z.string(),
@@ -55,7 +56,8 @@ export class ProviderProfileCache {
   async get(key: string): Promise<HarnessProfile | null> {
     await this.load()
     const entry = this.file.entries[key]
-    return entry ? (this.file.snapshots[entry.hash] ?? null) : null
+    const profile = entry ? this.file.snapshots[entry.hash] : undefined
+    return profile ? withWorkDefault(profile) : null
   }
 
   /**
@@ -73,7 +75,7 @@ export class ProviderProfileCache {
       if (!best || entry.savedAt > best.savedAt)
         best = { savedAt: entry.savedAt, profile }
     }
-    return best?.profile ?? null
+    return best ? withWorkDefault(best.profile) : null
   }
 
   async put(key: string, profile: HarnessProfile): Promise<void> {

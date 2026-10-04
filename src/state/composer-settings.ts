@@ -360,16 +360,12 @@ function saveOverrides(
   settings: SessionSettings
 ): void {
   rememberModelSettings(target, settings)
+  // A pick for one conversation stays with it; only Settings › Models
+  // changes what every new conversation starts on.
   setPref("settingsOverrides", {
     ...prefsStore.get().settingsOverrides,
     [settingsTargetKey(target)]: settings,
   })
-  if (target.kind === "new") {
-    setPref("providerSettings", {
-      ...prefsStore.get().providerSettings,
-      [target.harness]: { source: "saved", settings },
-    })
-  }
 }
 
 export function chooseComposerModel(
@@ -474,6 +470,16 @@ export function saveHarnessDefaults(
     )
   )
   setPref("settingsOverrides", overrides)
+}
+
+/** Go back to Mako's defaults for new conversations in `harness`. */
+export function resetHarnessDefaults(harness: string): void {
+  const preferences = { ...prefsStore.get().providerSettings }
+  delete preferences[harness]
+  setPref("providerSettings", preferences)
+  setPref("settingsOverrides", Object.fromEntries(
+    Object.entries(prefsStore.get().settingsOverrides).filter(([key]) => !isNewTargetKey(key, harness))
+  ))
 }
 
 function isNewTargetKey(key: string, harness: string): boolean {

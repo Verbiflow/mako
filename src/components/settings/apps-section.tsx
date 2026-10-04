@@ -232,7 +232,7 @@ function NotSetUp({ setup }: { setup: ProjectAppSetup }) {
               >
                 Set up in a new Thread
               </Action>
-              <span className="text-label text-faint">{agent ? setupAgentLabel(agent) : "Sign in to an agent in Settings first"}</span>
+              <span className="text-label text-faint">{agent ? setupAgentLabel(agent) : "Sign in to a harness in Settings › Agents first"}</span>
               {hidden ? (
                 <Action size="xs" className="mt-1 text-faint" onClick={() => showSetupFor(setup.root)}>
                   Show Run app in its Threads again
