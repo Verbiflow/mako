@@ -8,7 +8,7 @@ import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
-import { acp, useAcp } from "@/state/acp"
+import { acp, useAcp, type ForkAnswer } from "@/state/acp"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { acpStore } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
@@ -909,7 +909,11 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
   const fromNative = useAcp((state) =>
     Boolean(anchor && !exchange.prompt?.requestId && scopedLiveAcp(state, scope)?.base)
   )
-  const liveAnswer = liveRequestId ?? (!viewing && fromNative ? anchor : undefined)
+  const liveAnswer: ForkAnswer | undefined = liveRequestId
+    ? { kind: "run", requestId: liveRequestId }
+    : !viewing && fromNative && anchor
+      ? { kind: "native", anchor }
+      : undefined
   if (liveAnswer)
     return (
       <>

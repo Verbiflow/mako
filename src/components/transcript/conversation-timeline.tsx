@@ -282,26 +282,27 @@ export function ConversationTimeline({
   const [showJump, setShowJump] = useState(false)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
-   * The first mounted turn, by id, so turns arriving below never unmount one
-   * above the reader. Null until the transcript first shows its newest turns.
+   * How many of the newest turns are mounted, and the newest turn it was
+   * counted against. Turns arriving below raise the count, so they never
+   * unmount one above the reader; history arriving above waits for a reveal.
    */
-  const [start, setStart] = useState<string | null>(null)
+  const [tail, setTail] = useState({
+    limit: INITIAL_TURNS,
+    last: exchanges.at(-1)?.id,
+  })
+  const newest = exchanges.at(-1)?.id
+  if (tail.last !== newest) {
+    const previous =
+      tail.last === undefined
+        ? -1
+        : exchanges.findIndex((exchange) => exchange.id === tail.last)
+    const arrived = previous < 0 ? 0 : exchanges.length - 1 - previous
+    setTail({ limit: tail.limit + arrived, last: newest })
+  }
   const [everMore, setEverMore] = useState(false)
   const windowed = exchanges.length > 200
-  const startIndex =
-    start === null
-      ? -1
-      : exchanges.findIndex((exchange) => exchange.id === start)
-  const hidden = windowed
-    ? 0
-    : startIndex >= 0
-      ? startIndex
-      : Math.max(0, exchanges.length - INITIAL_TURNS)
+  const hidden = windowed ? 0 : Math.max(0, exchanges.length - tail.limit)
   const shown = hidden > 0 ? exchanges.slice(hidden) : exchanges
-  const firstShown = windowed ? undefined : exchanges[hidden]?.id
-  useEffect(() => {
-    if (firstShown !== undefined && firstShown !== start) setStart(firstShown)
-  }, [firstShown, start])
   const isEmpty = exchanges.length === 0
   const more = hidden > 0 || hasEarlier
   const edge = more || everMore || exchanges.length > INITIAL_TURNS
@@ -343,7 +344,8 @@ export function ConversationTimeline({
     if (index < 0) return
     if (windowed)
       rows.scrollToIndex(index, { align: "start", behavior: "auto" })
-    else if (index < hidden) setStart(snapshot.exchangeId)
+    else if (index < hidden)
+      setTail((current) => ({ ...current, limit: exchanges.length - index }))
     restoringReader.current = snapshot
   }, [windowed, rows, exchanges, hidden])
   const virtualRows = rows.getVirtualItems()
@@ -517,7 +519,7 @@ export function ConversationTimeline({
     awaitingEarlier.current = false
     sawLoading.current = false
     stalled.current = false
-    setStart(null)
+    setTail({ limit: INITIAL_TURNS, last: undefined })
     setEverMore(false)
     setShowJump(false)
     viewport.current?.removeAttribute("data-preserve-scroll")
@@ -636,7 +638,7 @@ export function ConversationTimeline({
     }
     if (hidden > 0) {
       begin()
-      setStart(exchanges[Math.max(0, hidden - MORE_TURNS)]!.id)
+      setTail((current) => ({ ...current, limit: current.limit + MORE_TURNS }))
       return
     }
     if (!onLoadEarlier) return
@@ -660,7 +662,6 @@ export function ConversationTimeline({
     loadingEarlier,
     onLoadEarlier,
     shown,
-    exchanges,
     endEarlier,
   ])
 
@@ -749,7 +750,7 @@ export function ConversationTimeline({
       }
       if (index < hidden) {
         pendingJump.current = id
-        setStart(id)
+        setTail((current) => ({ ...current, limit: exchanges.length - index }))
         return
       }
       const element = viewport.current?.querySelector(
