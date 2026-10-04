@@ -6,17 +6,22 @@ import { CODEX_PLAN_OPTION } from "@mako/sessions/model-catalog"
 import type { ProviderLiveDriver } from "../live-driver.js"
 import { fileResumeEvidence } from "../../native-continuation.js"
 import { codexProcessProbe } from "./process-probe.js"
+import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
+
+export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server account/read" } as const
 
 export const codexLiveDriver: ProviderLiveDriver = {
   ...fileResumeEvidence(codexProcessProbe),
   provider: "codex",
+  nativeIdentity: CODEX_NATIVE_IDENTITY,
+  nativeExclusion: NO_NATIVE_EXCLUSION,
   sessionQuestions: { encodeAnswer: codexQuestionAnswer, history: readCodexQuestionHistory },
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission"], coverage: "Native codex.tool_decision user events confirm once/session/decline/abort for a unique command or file approval. Repeated tool IDs, amendments and other request families remain unconfirmed. Normalized decisions survive reconnect; request-resolved alone is not confirmation." },
   planning: { via: "setting", option: CODEX_PLAN_OPTION.id, proposal: "The Plan collaboration mode's plan item, built by a message that asks for the implementation" },
   observesNativeAgents: true,
   canResume: true,
   forkPoint: "run",
-  backgroundStop: { kind: "ends-on-stop", how: "Stop cleans the thread's background terminals once the interrupted turn settles, and at once with no turn running; it interrupts each subagent thread's turn and cleans its terminals too. Closing does both before the app-server exits. Codex 0.154 keeps terminals and subagents through an interrupt, which adds the running command, and past the app-server's exit." },
+  backgroundStop: { kind: "ends-on-stop", how: "Stop terminates exact native terminal IDs before interruption and checks again after settlement, including child threads. Stopped turn IDs retain a bounded guard for commands reported after interruption; failed native termination disconnects instead of claiming cleanup. Checked on Codex 0.159.3: foreground child exit and same-session follow-up. Closing ends terminals and subagents before the app-server exits." },
   turnRecovery: {
     kind: "continues",
     accepted: "The turn/start response, which names the turn Codex began, before any of the turn runs.",

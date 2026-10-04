@@ -52,6 +52,7 @@ export type CodexEffect =
   | { type: "question-answer"; answer: NativeQuestionAnswer }
   /** A command's item completed, so its terminal no longer runs. */
   | { type: "command-ended"; itemId: string }
+  | { type: "command-started"; threadId: string; turnId: string; itemId: string; processId?: string }
 
 export type CodexDecoded = Decoded<CodexEffect>
 
@@ -248,6 +249,8 @@ export class CodexDecoder {
     if (notification.threadId && thread && notification.threadId !== thread) {
       if (notification.method === "turn/started" || notification.method === "turn/completed")
         out.push(decoded.effect({ type: "subagent-turn", threadId: notification.threadId, completed: notification.method === "turn/completed" }))
+      if (notification.method === "item/started" && notification.item.type === "commandExecution")
+        out.push(decoded.effect({ type: "command-started", threadId: notification.threadId, turnId: notification.turnId, itemId: notification.item.id, processId: notification.item.processId }))
       return
     }
     switch (notification.method) {
@@ -491,6 +494,7 @@ export class CodexDecoder {
         if (completed) finalText(out, "thinking", [...item.summary, ...item.content].filter(Boolean).join("\n\n"), tracker.acpId)
         return
       case "commandExecution":
+        if (!completed && !replay && thread) out.push(decoded.effect({ type: "command-started", threadId: thread, turnId, itemId: item.id, processId: item.processId }))
         startTool(out, tracker, item.command || "Command", "exec_command", item.status, { command: item.command })
         if (completed) {
           finishTool(out, tracker, item.status, (item.aggregatedOutput ?? tracker.output) || undefined)
