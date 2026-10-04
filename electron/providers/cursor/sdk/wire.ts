@@ -359,6 +359,8 @@ export const SdkResultSchemas = {
     imported: z.boolean().optional(),
     /** Verified origin for both a fresh copy and a previously indexed import. */
     importSource: z.string().optional(),
+    /** Checkpoint of the snapshot actually copied, including existing imports. */
+    importRevision: z.string().min(1).optional(),
   }),
   send: z.object({ runId: z.string() }),
   steer: z.object({ outcome: z.enum(["complete_delivered", "revert_to_followup"]) }),

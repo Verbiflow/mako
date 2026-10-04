@@ -436,7 +436,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false)
         throw new Error("This Cursor binding is already connected")
-      const accountEnvironment = await trace.step("account", () => dependencies.auth.childEnv())
+      const launch = await trace.step("account", () => dependencies.auth.childLaunch())
+      const accountEnvironment = launch.env
       const env = { ...accountEnvironment }
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
@@ -452,6 +453,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       }
       const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn))
       const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY)
+      context.credential = launch.credential
       const live: Live = {
         client,
         emit: options.emit,
@@ -550,6 +552,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
               destination: cursorSdkStorePath(stateRoot, opened.agentId),
               nativeId: opened.agentId,
               via: "SDK child open.importSource",
+              revision: opened.importRevision,
             } : undefined,
           },
           currentMode: CURSOR_SDK_DEFAULT_MODE,

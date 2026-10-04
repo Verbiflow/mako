@@ -34,10 +34,11 @@ import {
   copyLegacyStore,
   CursorImportError,
   importedAgentDocument,
-  readLegacyStoreMeta,
+  verifyImportRevision,
   resolveImportAgentId,
   type KnownAgent,
 } from "./import.js"
+import { readLegacyStoreSnapshot } from "../legacy-store.js"
 import {
   CURSOR_SDK_EXIT,
   CURSOR_SDK_HEADLESS,
@@ -66,6 +67,8 @@ interface OpenAgent {
   model: SdkModelSelection | undefined
   mcpServers: Record<string, McpServerConfig> | undefined
   name: string | undefined
+  /** Exact origin revision admitted by this child, checked again before send. */
+  sourceImport?: { path: string; nativeId: string; revision: string }
 }
 
 interface ActiveTurn {
@@ -217,7 +220,7 @@ type OpenParams = Extract<SdkRequest, { method: "open" }>["params"]
 type SendParams = Extract<SdkRequest, { method: "send" }>["params"]
 
 const ImportRecordSchema = z.object({
-  [CURSOR_SDK_IMPORT_METADATA_KEY]: z.object({ path: z.string() }).optional(),
+  [CURSOR_SDK_IMPORT_METADATA_KEY]: z.object({ path: z.string(), revision: z.string().min(1).optional() }).optional(),
 })
 
 /** Every agent the index knows, with the legacy store each was imported from. */
@@ -229,8 +232,11 @@ async function knownAgents(store: SqliteLocalAgentStore): Promise<KnownAgent[]> 
     for (const document of page.items) {
       const entry: KnownAgent = { agentId: document.agentId }
       const metadata = ImportRecordSchema.safeParse(document.sdkMetadata ?? {})
-      const path = metadata.success ? metadata.data[CURSOR_SDK_IMPORT_METADATA_KEY]?.path : undefined
-      if (path) entry.importedFrom = path
+      const record = metadata.success ? metadata.data[CURSOR_SDK_IMPORT_METADATA_KEY] : undefined
+      if (record) {
+        entry.importedFrom = record.path
+        entry.importRevision = record.revision
+      }
       known.push(entry)
     }
     cursor = page.nextCursor
@@ -241,19 +247,25 @@ async function knownAgents(store: SqliteLocalAgentStore): Promise<KnownAgent[]> 
 /**
  * Make a `cursor-agent` store an SDK agent, once. Returns the id to resume
  * and whether this call made the copy. The copy lands before the index row,
- * so a crash between the two leaves a store the next attempt replaces, never
- * a row that points at nothing.
+ * so a crash between the two leaves an unindexed store, never a row pointing
+ * at missing bytes. Existing destinations are preserved, not overwritten.
  */
 async function importLegacyStore(
   store: SqliteLocalAgentStore,
   params: OpenParams,
   source: SdkImportSource
-): Promise<{ agentId: string; imported: boolean }> {
+): Promise<{ agentId: string; imported: boolean; revision: string }> {
   const resolved = resolveImportAgentId(params.agentId, source.path, await knownAgents(store))
-  if (resolved.existing) return { agentId: resolved.agentId, imported: false }
-  const meta = readLegacyStoreMeta(source.path)
-  copyLegacyStore(source.path, params.stateRoot, resolved.agentId)
-  const document = importedAgentDocument({ agentId: resolved.agentId, source, meta, now: Date.now() })
+  if (resolved.existing) {
+    const current = readLegacyStoreSnapshot(source.path, params.agentId)
+    const revision = verifyImportRevision(resolved.revision, current.revision)
+    return { agentId: resolved.agentId, imported: false, revision }
+  }
+  const copied = copyLegacyStore(source.path, params.stateRoot, resolved.agentId)
+  // Read the copied snapshot, never an earlier/later head from the live source.
+  const snapshot = readLegacyStoreSnapshot(copied, params.agentId)
+  verifyImportRevision(snapshot.revision, readLegacyStoreSnapshot(source.path, params.agentId).revision)
+  const document = importedAgentDocument({ agentId: resolved.agentId, source, snapshot, now: Date.now() })
   await store.agents.create({
     agent: {
       agentId: document.agentId,
@@ -267,7 +279,7 @@ async function importLegacyStore(
     },
   })
   log("info", `imported a cursor-agent store as agent ${document.agentId}`)
-  return { agentId: document.agentId, imported: true }
+  return { agentId: document.agentId, imported: true, revision: snapshot.revision }
 }
 
 async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
@@ -280,11 +292,13 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   Cursor.configure({ local: { store, useHttp1ForAgent: params.http1 ?? true } })
   let agentId = params.agentId
   let imported = false
+  let importRevision: string | undefined
   try {
     if (!params.create && params.importFrom) {
       const result = await importLegacyStore(store, params, params.importFrom)
       agentId = result.agentId
       imported = result.imported
+      importRevision = result.revision
     }
   } catch (cause) {
     await store.dispose().catch(() => undefined)
@@ -299,6 +313,8 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     mcpServers: mcpConfig(params.mcpServers),
     name: params.name,
   }
+  if (params.importFrom && importRevision)
+    base.sourceImport = { path: params.importFrom.path, nativeId: params.agentId, revision: importRevision }
   const options = handleOptions(base)
   let handle: SDKAgent
   try {
@@ -310,7 +326,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     throw cause
   }
   agent = { ...base, handle }
-  return { agentId: handle.agentId, model: handle.model, imported: imported || undefined, importSource: !params.create ? params.importFrom?.path : undefined }
+  return { agentId: handle.agentId, model: handle.model, importRevision, imported: imported || undefined, importSource: !params.create ? params.importFrom?.path : undefined }
 }
 
 function remember(line: SdkChildLine & { turn: string }): void {
@@ -408,20 +424,14 @@ function flushShellOutput(): void {
 
 type SendOptions = NonNullable<Parameters<SDKAgent["send"]>[1]>
 
+/** A native busy refusal is final for this attempt. A Mako reservation cannot
+ * authorize force-taking a run an independent executor may have just started.
+ */
 async function startRun(open: OpenAgent, message: Parameters<SDKAgent["send"]>[0], options: SendOptions): Promise<Run> {
-  try {
-    return await open.handle.send(message, options)
-  } catch (cause) {
-    // SDK 1.0.31 wraps this SQLite preflight refusal as UnknownAgentError,
-    // not AgentBusyError. Match only this agent's persisted-run refusal:
-    // other failures may follow delivery and must never resend a prompt.
-    // Mako acquires the native-session hold before opening this child;
-    // active/sending exclude a run belonging to this process.
-    if (!(cause instanceof Error) || cause.message !== `Agent ${open.agentId} already has active run`) throw cause
-    const run = await open.handle.send(message, { ...options, local: { force: true } })
-    log("warn", "recovered a run left active by an earlier process")
-    return run
-  }
+  const receipt = open.sourceImport
+  if (receipt)
+    verifyImportRevision(receipt.revision, readLegacyStoreSnapshot(receipt.path, receipt.nativeId).revision)
+  return open.handle.send(message, options)
 }
 
 async function send(params: SendParams): Promise<SdkResult<"send">> {
@@ -641,25 +651,43 @@ async function handle(line: string): Promise<void> {
 }
 
 /** `--headless`: one prompt, its reply's text on stdout, and an exit code that says how the run ended. */
-async function runHeadless(spec: SdkHeadlessSpec): Promise<number> {
-  await openAgent({ ...spec, cwd: process.cwd() })
-  const open = agent!
-  const run = await startRun(open, { text: spec.prompt }, {
-    model: spec.model,
-    mode: "agent",
-    onDelta: ({ update }) => {
-      if (update.type === "text-delta" && update.text) process.stdout.write(update.text)
-    },
-  })
-  // Stop reaches the run before the signal ends this process, so the store records no run left active.
-  process.once("SIGTERM", () => {
-    void run.cancel().catch(() => undefined).finally(() => process.kill(process.pid, "SIGTERM"))
-  })
-  const result = await run.wait()
-  await close()
-  if (result.status === "finished") return 0
-  process.stderr.write(`\n${result.error?.message ?? `Cursor's run ended ${result.status}`}\n`)
-  return 1
+async function runHeadless(spec: SdkHeadlessSpec): Promise<number | "stopped"> {
+  let stopped = false
+  let run: Run | undefined
+  let cancellation: Promise<void> | undefined
+  const stop = () => {
+    if (!stopped) process.stderr.write("Cursor headless Stop requested; awaiting owned native cleanup.\n")
+    stopped = true
+    if (run && !cancellation) {
+      cancellation = run.cancel()
+      // Keep the rejection for the awaited verdict without an unhandled
+      // rejection while the native terminal result is still pending.
+      void cancellation.catch(() => undefined)
+    }
+  }
+  // Install before open/send: either await can still create native work.
+  process.on("SIGTERM", stop)
+  try {
+    await openAgent({ ...spec, cwd: process.cwd() })
+    if (stopped) return "stopped"
+    run = await startRun(agent!, { text: spec.prompt }, {
+      model: spec.model,
+      mode: "agent",
+      onDelta: ({ update }) => {
+        if (update.type === "text-delta" && update.text) process.stdout.write(update.text)
+      },
+    })
+    if (stopped) stop()
+    const result = await run.wait()
+    await cancellation
+    if (stopped) return "stopped"
+    if (result.status === "finished") return 0
+    process.stderr.write(`\n${result.error?.message ?? `Cursor's run ended ${result.status}`}\n`)
+    return 1
+  } finally {
+    await close()
+    process.off("SIGTERM", stop)
+  }
 }
 
 function headlessMain(raw: string | undefined): void {
@@ -673,7 +701,12 @@ function headlessMain(raw: string | undefined): void {
   process.on("unhandledRejection", (cause) => fatal("rejection", cause))
   configureRipgrep()
   guardShellFolder(() => agent?.cwd, () => undefined)
-  void runHeadless(spec.data).then((code) => process.exit(code), (cause) => {
+  void runHeadless(spec.data).then((code) => {
+    // Signal after cleanup, without racing a synchronous process.exit(0).
+    // Failed cancellation remains failed rather than claiming a clean Stop.
+    if (code === "stopped") process.kill(process.pid, "SIGTERM")
+    else process.exit(code)
+  }, (cause) => {
     process.stderr.write(`\n${cursorSdkWireError(cause).message}\n`)
     process.exit(1)
   })

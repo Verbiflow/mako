@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync, rmSync } from "node:fs"
+import { closeSync, mkdirSync, openSync, rmSync } from "node:fs"
 import { dirname } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore, refuseNativeWrite } from "@mako/sessions/read-only-sqlite"
@@ -9,6 +9,8 @@ import {
   type CursorSdkImport,
 } from "@mako/sessions"
 import { z } from "zod"
+import { CursorImportError, type LegacyStoreSnapshot } from "../legacy-store.js"
+export { CursorImportError } from "../legacy-store.js"
 import type { SdkImportSource } from "./wire.js"
 
 /**
@@ -31,56 +33,19 @@ import type { SdkImportSource } from "./wire.js"
  * read-only so a `cursor-agent` that still has it open is undisturbed.
  */
 
-const LegacyMetaSchema = z.object({
-  agentId: z.string().optional(),
-  latestRootBlobId: z.string().min(1),
-  name: z.string().optional(),
-  createdAt: z.union([z.string(), z.number()]).optional(),
-  blobEncryptionKey: z.string().optional(),
-})
-export type LegacyStoreMeta = z.infer<typeof LegacyMetaSchema>
-
-const MetaRowSchema = z.object({
-  value: z.union([
-    z.string().transform((raw) => (/^[0-9a-f]+$/i.test(raw) ? Buffer.from(raw, "hex").toString("utf8") : raw)),
-    z.instanceof(Uint8Array).transform((raw) => Buffer.from(raw).toString("utf8")),
-  ]),
-})
-
-export class CursorImportError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = "CursorImportError"
-  }
-}
-
-/** The legacy store's own record of itself, or a typed refusal naming what is missing. */
-export function readLegacyStoreMeta(path: string): LegacyStoreMeta {
-  let database: DatabaseSync | undefined
-  try {
-    database = openNativeStore(path)
-    const row = MetaRowSchema.safeParse(database.prepare("SELECT value FROM meta WHERE key = '0'").get())
-    if (!row.success) throw new CursorImportError("The Cursor session store has no meta row to import from.")
-    const meta = LegacyMetaSchema.safeParse(JSON.parse(row.data.value))
-    if (!meta.success) throw new CursorImportError("The Cursor session store's meta row names no root blob.")
-    return meta.data
-  } catch (error) {
-    if (error instanceof CursorImportError) throw error
-    throw new CursorImportError(
-      `The Cursor session store could not be read: ${error instanceof Error ? error.message : String(error)}`
-    )
-  } finally {
-    database?.close()
-  }
-}
-
 /** Copy the legacy store, WAL folded in, to where the SDK will look for `agentId`. */
 export function copyLegacyStore(sourcePath: string, stateRoot: string, agentId: string): string {
   refuseNativeWrite("Cursor's agent stores")
   const target = cursorSdkStorePath(stateRoot, agentId)
   mkdirSync(dirname(target), { recursive: true })
-  // A half-finished earlier import leaves a store with no index row; replace it.
-  for (const suffix of ["", "-wal", "-shm"]) rmSync(`${target}${suffix}`, { force: true })
+  // Reserve only this destination. Never delete another import/SDK history,
+  // even if it appeared after the index was read. SQLite accepts an empty
+  // output file; failed VACUUM cleanup applies only to our reservation.
+  try {
+    closeSync(openSync(target, "wx", 0o600))
+  } catch {
+    throw new CursorImportError("The Cursor import destination already exists or cannot be reserved. No history was overwritten. Open its SDK continuation or choose a separate import.")
+  }
   let source: DatabaseSync | undefined
   try {
     source = openNativeStore(sourcePath)
@@ -123,23 +88,24 @@ function epochOf(value: string | number | undefined, fallback: number): number {
 export function importedAgentDocument(input: {
   agentId: string
   source: SdkImportSource
-  meta: LegacyStoreMeta
+  snapshot: LegacyStoreSnapshot
   now: number
 }): ImportedAgentDocument {
   const record: CursorSdkImport = {
     path: input.source.path,
     identity: input.source.identity,
-    agentId: input.meta.agentId ?? input.agentId,
+    revision: input.snapshot.revision,
+    agentId: input.snapshot.meta.agentId ?? input.agentId,
   }
   const sdkMetadata: ImportedSdkMetadata = { [CURSOR_SDK_IMPORT_METADATA_KEY]: record }
-  if (input.meta.blobEncryptionKey) sdkMetadata.blobEncryptionKey = input.meta.blobEncryptionKey
-  const name = input.source.name ?? (input.meta.name && input.meta.name !== "New Agent" ? input.meta.name : undefined)
+  if (input.snapshot.meta.blobEncryptionKey) sdkMetadata.blobEncryptionKey = input.snapshot.meta.blobEncryptionKey
+  const name = input.source.name ?? (input.snapshot.meta.name && input.snapshot.meta.name !== "New Agent" ? input.snapshot.meta.name : undefined)
   return {
     agentId: input.agentId,
     cwd: input.source.cwd ?? "",
     name: name ?? null,
-    createdAt: epochOf(input.meta.createdAt, input.now),
-    latestRootBlobId: input.meta.latestRootBlobId,
+    createdAt: epochOf(input.snapshot.meta.createdAt, input.now),
+    latestRootBlobId: input.snapshot.meta.latestRootBlobId,
     sdkMetadata,
   }
 }
@@ -148,6 +114,7 @@ export function importedAgentDocument(input: {
 export interface KnownAgent {
   agentId: string
   importedFrom?: string
+  importRevision?: string
 }
 
 /**
@@ -162,6 +129,7 @@ export interface ImportAgentTarget {
   agentId: string
   /** The index already holds this import; open it instead of copying again. */
   existing: boolean
+  revision?: string
 }
 
 export function resolveImportAgentId(
@@ -170,8 +138,17 @@ export function resolveImportAgentId(
   known: readonly KnownAgent[]
 ): ImportAgentTarget {
   const byPath = known.find((agent) => agent.importedFrom === sourcePath)
-  if (byPath) return { agentId: byPath.agentId, existing: true }
+  if (byPath) return { agentId: byPath.agentId, existing: true, revision: byPath.importRevision }
   const held = known.find((agent) => agent.agentId === requested)
   if (!held) return { agentId: requested, existing: false }
   return { agentId: randomUUID(), existing: false }
+}
+
+/** Never overwrite an indexed SDK continuation when its legacy origin moved. */
+export function verifyImportRevision(retained: string | undefined, current: string): string {
+  if (!retained)
+    throw new CursorImportError("This Cursor import predates revision receipts. Open its SDK continuation directly; the legacy source was preserved.")
+  if (retained !== current)
+    throw new CursorImportError("The original Cursor session changed after import. No prompt was sent and neither history was overwritten. Open the histories separately.")
+  return retained
 }

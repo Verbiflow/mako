@@ -10,6 +10,7 @@ import {
   type StoredCursorCredential,
 } from "./credentials.js"
 import type { SdkEvent } from "./wire.js"
+import type { ExecutionCredential } from "../../../contracts/execution-context.js"
 
 /** What a sign-in or probe needs from a child: a handshake, requests, and a close. */
 export type CursorSdkProbeClient = Pick<CursorSdkClient, "hello" | "request" | "close">
@@ -118,10 +119,22 @@ export class CursorSdkAuth {
    * thread's first prompt must not wait on a verification round trip.
    */
   async childEnv(): Promise<NodeJS.ProcessEnv> {
+    return (await this.childLaunch()).env
+  }
+
+  /** Environment and public source facts from the same resolution, not cached Settings state. */
+  async childLaunch(): Promise<{ env: NodeJS.ProcessEnv; credential: ExecutionCredential }> {
     const env = await this.options.env()
     const resolved = await this.resolve(env)
-    if (resolved.apiKey) return { ...env, CURSOR_API_KEY: resolved.apiKey }
-    return env
+    return {
+      env: resolved.apiKey ? { ...env, CURSOR_API_KEY: resolved.apiKey } : env,
+      credential: {
+        kind: "configured", source: resolved.source,
+        revision: resolved.credential?.revision
+          ? { kind: "reported", value: resolved.credential.revision, via: "encrypted credential record" }
+          : { kind: "unavailable", reason: "This credential source has no verified revision record." },
+      },
+    }
   }
 
   /** The remembered answer while it is fresh; otherwise a new verification. */
@@ -237,9 +250,10 @@ export class CursorSdkAuth {
       const credential = await this.options.credentials.load()
       if (credential) return { source: "mako", apiKey: credential.apiKey, credential }
     } catch (error) {
-      // A saved key this host cannot open is reported by the probe; a child
-      // spawned now runs on whatever else is available.
+      // A saved selection that cannot be opened must not silently become
+      // the CLI/SDK account. An explicit environment override was handled above.
       hostWarn("cursor-sdk", "saved credential unavailable", { error: errorMessage({ error }) })
+      throw error
     }
     const cli = await (this.options.cliKey ?? readCursorCliApiKey)()
     if (cli) return { source: "cli", apiKey: cli }
@@ -275,18 +289,12 @@ export class CursorSdkAuth {
 
   private async probe(): Promise<CursorSdkAuthSnapshot> {
     const env = await this.options.env()
-    let storeProblem: { source: CursorKeySource; message: string } | undefined
     let resolved: ResolvedKey
     try {
-      const credential = await this.options.credentials.load()
-      resolved = env.CURSOR_API_KEY
-        ? { source: "env", apiKey: env.CURSOR_API_KEY }
-        : credential
-          ? { source: "mako", apiKey: credential.apiKey, credential }
-          : await this.resolve(env)
-    } catch (error) {
-      if (error instanceof CursorCredentialStoreError) storeProblem = { source: "mako", message: error.message }
       resolved = await this.resolve(env)
+    } catch (error) {
+      if (!(error instanceof CursorCredentialStoreError)) throw error
+      return this.record({ status: "signed-out", problem: { source: "mako", message: error.message } })
     }
     try {
       if (resolved.apiKey) {
@@ -307,7 +315,7 @@ export class CursorSdkAuth {
       } finally {
         await client.close(2_000)
       }
-      return this.record(storeProblem ? { status: "signed-out", problem: storeProblem } : { status: "signed-out" })
+      return this.record({ status: "signed-out" })
     } catch (error) {
       if (error instanceof CursorSdkError && error.kind === "authentication") {
         hostWarn("cursor-sdk", "Cursor rejected the key", { source: resolved.source, error: error.message })

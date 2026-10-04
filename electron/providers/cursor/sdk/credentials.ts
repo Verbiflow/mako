@@ -39,6 +39,8 @@ export const StoredCursorCredentialSchema = z.object({
   /** ISO time the key lapses, when the provider said. */
   expiresAt: z.string().optional(),
   savedAt: z.string(),
+  /** Opaque identity of this saved credential, never a digest of its secret. */
+  revision: z.string().uuid().optional(),
 })
 export type StoredCursorCredential = z.infer<typeof StoredCursorCredentialSchema>
 
@@ -108,7 +110,7 @@ export class CursorCredentialStore {
       throw new CursorCredentialStoreError(
         "Mako cannot store the key securely on this machine: the system keychain is unavailable."
       )
-    const payload = await this.encryption.encrypt(JSON.stringify(StoredCursorCredentialSchema.parse(credential)))
+    const payload = await this.encryption.encrypt(JSON.stringify({ ...StoredCursorCredentialSchema.parse(credential), revision: randomUUID() }))
     const task = this.writing.then(async () => {
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
       const temporary = `${this.path}.${randomUUID()}.tmp`
