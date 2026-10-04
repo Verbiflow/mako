@@ -10,6 +10,11 @@ import { formatBytes, threadAppDriver, useThreadApp, type RoomApp, type RoomView
 /** Subjects a confirmation names before it counts the rest. */
 const SHOWN_SUBJECTS = 5
 
+/** A picked row's actions fade into its selected fill rather than the hover fill. */
+const PICKED_ACTIONS: CSSProperties & { "--row-over": string } = {
+  "--row-over": "var(--fill-selected)",
+}
+
 function StateIcon({ state }: { state: RoomApp["state"] }) {
   const icon = "size-3 shrink-0"
   if (state === "running") return <PlayIcon aria-hidden className={cn(icon, "fill-current text-positive")} strokeWidth={2.5} />
@@ -18,12 +23,12 @@ function StateIcon({ state }: { state: RoomApp["state"] }) {
   return <TriangleAlertIcon aria-hidden className={cn(icon, "text-muted-foreground")} strokeWidth={2.25} />
 }
 
-const STATE_WORDS: Record<RoomApp["state"], string> = {
+const STATE_WORDS = {
   running: "running",
   starting: "starting",
   waiting: "waiting for memory",
   crashed: "crashed",
-}
+} satisfies Record<RoomApp["state"], string>
 
 /**
  * Every app on this Mac, in the Status view: what it is, what it holds, how
@@ -173,7 +178,7 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
                   {isStopping ? null : (
                     <span
                       data-tip-quiet
-                      style={isPicked ? { "--row-over": "var(--fill-selected)" } as CSSProperties : undefined}
+                      style={isPicked ? PICKED_ACTIONS : undefined}
                       className="rail-row-actions pointer-events-none absolute top-0.5 right-0 z-[1] flex items-center rounded-r-md pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
                     >
                       <button
