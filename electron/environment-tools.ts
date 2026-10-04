@@ -16,7 +16,7 @@ import { bringFiles, carryReport, holdsCredentials, isSpareCheckout, linkedCarry
 import { ago, toolText, when } from "./tool-text.js"
 import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
 import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type StepRecord, type StepState } from "./check-steps.js"
-import { freeMemory, memoryPressure, runKey, type AppOverview, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
+import { freeMemory, memoryPressure, runKey, type AppOverview, type Leftover, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import type { FileHistory } from "./watch-backend.js"
 import type { HistoryMark } from "./contracts/watcher-child.js"
 import { installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
@@ -91,6 +91,13 @@ const CLEANUP_MS = 2 * 60_000
 const TRACE_EVERY_MS = 2 * 60_000
 /** app_status says nothing of writes through links rather than wait longer than this for the file system's history. */
 const LINK_WRITES_WAIT_MS = 1_500
+/**
+ * How long app_stop gives what the app left running to exit by itself before
+ * calling it left behind: a detached host that idles out once its launcher is
+ * gone, such as a profile host's 15 s, leaves within it.
+ */
+const LEAVE_MS = 20_000
+const LEAVE_POLL_MS = 500
 
 /** The recipe's carry entries named like credentials, and the one rule for them. */
 function credentialsSummary(recipe: Recipe): string | undefined {
@@ -122,6 +129,7 @@ interface Deps {
   freeMemory?: () => Promise<{ freeBytes: number; totalBytes: number } | undefined>
   settleMs?: number
   lineMs?: number
+  leaveMs?: number
   now?: () => number
 }
 
@@ -659,11 +667,34 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the prepare step" : status.name)
     const { leftovers, pids, folder } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
     if (!pids.length) await refreshTraces([{ folder, pids: [], ended: true }], deps.history ? { history: deps.history } : {}).catch(() => {})
-    const left = leftovers.length
-      ? ` Still running, though, and likely left behind by the app: ${leftovers.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up and outlived the process that started it, so no stop reaches it; ${leftovers.every((entry) => entry.sure) ? "each carries the app's mark" : "each carries the app's mark or works in this checkout or data folder"}. Stop one yourself if it's the app's and shouldn't outlive it.`
+    return { were, inLine, leftovers }
+  }
+  /** What the app left running, once each has had `leaveMs` to exit by itself: those that did, with when, and those still there. */
+  const leaving = async ({ environment, checkout }: Context, leftovers: Leftover[]) => {
+    const began = Date.now()
+    const gone = new Map<number, number>()
+    let stayed = leftovers
+    while (stayed.length && Date.now() - began < (deps.leaveMs ?? LEAVE_MS)) {
+      await new Promise((resolve) => setTimeout(resolve, LEAVE_POLL_MS))
+      const now = (await deps.processes.footprint(environment.app, [checkout, environment.dataDir])).leftovers
+      for (const entry of stayed) if (!now.some((left) => left.pid === entry.pid)) gone.set(entry.pid, Date.now() - began)
+      stayed = now
+    }
+    return { gone: leftovers.flatMap((entry) => gone.has(entry.pid) ? [{ ...entry, ms: gone.get(entry.pid)! }] : []), stayed, waited: Date.now() - began }
+  }
+  const stop = async (conversationId: string, names?: string[]) => {
+    const current = await context(conversationId)
+    const { were, inLine, leftovers } = await stopIn(current, names)
+    const { gone, stayed, waited } = await leaving(current, leftovers)
+    const seconds = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`
+    const went = gone.length
+      ? ` Still running at first, then gone by ${gone.length === 1 ? "itself" : "themselves"}: ${gone.map((entry) => `pid ${entry.pid} (${entry.command}) after ${seconds(entry.ms)}`).join("; ")}.`
       : ""
-    if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.${left}`
-    return (inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running.") + left
+    const left = stayed.length
+      ? ` Still running ${seconds(waited)} later, though, and likely left behind by the app: ${stayed.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up and outlived the process that started it, so no stop reaches it; ${stayed.every((entry) => entry.sure) ? "each carries the app's mark" : "each carries the app's mark or works in this checkout or data folder"}. Stop one yourself if it's the app's and shouldn't outlive it.`
+      : ""
+    if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.${went}${left}`
+    return (inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running.") + went + left
   }
   const probe = async ({ environment, checkout }: Context): Promise<AppProbeView> => {
     const { pids, commands, leftovers, since, records, folder } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
@@ -707,7 +738,6 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       })
       .catch(() => {})
   }, SAMPLE_EVERY_MS).unref()
-  const stop = async (conversationId: string, names?: string[]) => stopIn(await context(conversationId), names)
   /**
    * Check runs a conversation hasn't had the result of yet, by app, tier and
    * conversation: the run its last app_check started or joined, and that
@@ -2088,7 +2118,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
   server.registerTool(
     "app_stop",
     {
-      description: "Stop this Thread's app when you're done with it or before changing something its processes hold open. Stops only what Mako started for this Thread, each with every process it started; never another Thread's processes or anything Mako didn't start.",
+      description: "Stop this Thread's app when you're done with it or before changing something its processes hold open. Stops only what Mako started for this Thread, each with every process it started; never another Thread's processes or anything Mako didn't start. When the app leaves a process running, such as a host that exits once idle, it waits up to 20 seconds for it to exit by itself and names only those still running.",
       inputSchema: names,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

@@ -424,6 +424,34 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.match(await tools.stop(conversation), /Stopped (web, api|api, web)/)
   assert.equal(await portListening(toolBase + 1), false)
 
+  // A process the app leaves running: app_stop waits for it to exit by itself, and names it left behind only if it stays.
+  writeFileSync(join(project, "daemon.mjs"), `
+import { spawn } from "node:child_process"
+const away = "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, ' + process.argv[1] + ')'], { detached: true, stdio: 'ignore' }); require('node:fs').writeFileSync(process.argv[2], String(c.pid)); c.unref()"
+spawn(process.execPath, ["-e", away, process.env.LINGER_MS, process.env.LINGER_PID], { detached: true, stdio: "ignore" }).unref()
+setInterval(() => {}, 1000)
+`)
+  const lingerPid = join(root, "linger.pid")
+  const lingering = async (ms: number, leaveMs: number) => {
+    rmSync(lingerPid, { force: true })
+    writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ processes: { daemon: { command: "node daemon.mjs", values: { LINGER_MS: String(ms), LINGER_PID: lingerPid } } } }))
+    const linger = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, leaveMs })
+    assert.match(await linger.start(conversation), /daemon: running/)
+    const deadline = Date.now() + settle
+    while (!existsSync(lingerPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
+    const pid = Number(readFileSync(lingerPid, "utf8"))
+    const began = Date.now()
+    return { pid, text: await linger.stop(conversation), took: Date.now() - began }
+  }
+  const idles = await lingering(5_000, 20_000)
+  assert.match(idles.text, new RegExp(`^Stopped daemon, with every process each had started\\. Still running at first, then gone by itself: pid ${idles.pid} \\(\\S+ -e setTimeout.+\\) after \\d s\\.$`), idles.text)
+  assert.ok(idles.took < 15_000, `the stop returns once it's gone, not after the whole wait: ${idles.took} ms`)
+  const stays = await lingering(60_000, 1_000)
+  cleanups.push(async () => { try { process.kill(stays.pid) } catch {} })
+  assert.match(stays.text, new RegExp(`^Stopped daemon, with every process each had started\\. Still running 1 s later, though, and likely left behind by the app: pid ${stays.pid} \\(.+\\)\\. .+ carries the app's mark\\. Stop one yourself`), stays.text)
+  process.kill(stays.pid)
+  writeFileSync(join(project, RECIPE_PATH), JSON.stringify(recipe, null, 2))
+
   // Install and catch up: each step runs in a fresh copy and again only when its inputs change.
   const installs = join(root, "installs.txt")
   writeFileSync(join(project, "package-lock.json"), "{\"v\": 1}\n")
@@ -829,7 +857,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(existsSync(join(records, placed.thread)), false, "and its records")
   store.close()
 
-  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, a long install starting the app by itself once done unless stopped, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, credentials carried as copies and named in the save, app_status and Settings, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; one copy at a time (a fixed port, a start refused naming whose copy runs, the desk taking a turn); process trees started detached, adopted by another host, surviving the host that started them, stopped whole; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
+  console.log("thread processes: one app per folder, shared by the Threads in it, and the same app from the desk (its view, start, restart, checks, stop, output followed across runs, a look that claims nothing, broken and being set up, an install stopped mid-way run again, a long install starting the app by itself once done unless stopped, waiting in line for memory and making room); recipe checked and resolved, the project's recipe saved in Mako first and shared by its worktrees, the committed one otherwise, credentials carried as copies and named in the save, app_status and Settings, install and catch-up only when inputs change, room made from quiet apps or the start waits in line and goes ahead by itself, idle apps stopped; one copy at a time (a fixed port, a start refused naming whose copy runs, the desk taking a turn); process trees started detached, adopted by another host, surviving the host that started them, stopped whole; what an app leaves running given time to exit by itself, and named left behind only when it stays; busy ports named; the agent's tools ran the app and both checks; removing the worktree stopped the app and deleted its data")
 } finally {
   for (const cleanup of cleanups) await cleanup().catch(() => {})
   rmSync(root, { recursive: true, force: true })
