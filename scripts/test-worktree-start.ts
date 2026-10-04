@@ -12,6 +12,7 @@ import { WorktreeStarts } from "../electron/worktree-start.js"
 import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
 import type { WorktreeBranchPull, WorktreeSummary } from "../electron/contracts/thread-worktrees.js"
 import { worktreeMark, worktreeMarkLabel, worktreeTip } from "../src/lib/worktree-marks.ts"
+import { landState, readLandWith } from "../src/lib/worktree-landing.ts"
 
 /**
  * Where a new Thread's branch starts: the project folder's branch, or its
@@ -259,6 +260,19 @@ assert.deepEqual(worktreeTip(worktree, opened), ["On mako/x from main", "3 commi
 assert.deepEqual(worktreeTip(worktree, { ...opened, ahead: 0, landing: { kind: "empty" } }), ["On mako/x from main", "2 files not committed yet"])
 assert.deepEqual(worktreeTip(worktree, { ...opened, changes: 0, pull: { number: 4, title: "", url: "", branch: "mako/x", state: "open", head: "", checks: "failed" } }), ["On mako/x from main", "3 commits not in main", "#4 open · checks failed"])
 assert.equal(worktreeMarkLabel({ kind: "ahead", ahead: 1 }, worktree, "main"), "mako/x: 1 commit not in main")
+
+// Since main offers one landing action, and it follows the branch.
+const facts = { commits: 3, changed: false, operation: false, landed: false, pullOpen: false, last: undefined }
+assert.deepEqual(landState(facts), { kind: "commits", main: "merge" }, "merging is the first way to land")
+assert.deepEqual(landState({ ...facts, last: "pull" }), { kind: "commits", main: "pull" }, "the way this project used last leads")
+assert.deepEqual(landState({ ...facts, changed: true }), { kind: "busy" }, "changes not committed come first")
+assert.deepEqual(landState({ ...facts, operation: true, pullOpen: true }), { kind: "busy" }, "a merge under way comes before anything else")
+assert.deepEqual(landState({ ...facts, changed: true, pullOpen: true }), { kind: "pull" }, "an open pull request stays viewable while work goes on")
+assert.deepEqual(landState({ ...facts, pullOpen: true, landed: true }), { kind: "landed" }, "landed wins over a pull request left open")
+assert.deepEqual(landState({ ...facts, landed: true, changed: true }), { kind: "busy" }, "a landed branch with new edits isn't done")
+assert.deepEqual(landState({ ...facts, commits: 0 }), { kind: "nothing" })
+assert.equal(readLandWith("pull"), "pull")
+assert.equal(readLandWith("rebase"), undefined)
 
 threads.close()
 rmSync(root, { recursive: true, force: true })

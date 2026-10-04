@@ -8,11 +8,13 @@ import {
 } from "@/components/ui/popover"
 import { desktop } from "@/state/desktop"
 import { git } from "@/state/git"
-import { github, useGitHub } from "@/state/github"
+import { github, useBranchPull, useGitHub } from "@/state/github"
 import { currentCommitModel } from "@/state/commit-model"
 import { useSession } from "@/state/session"
+import { useWorktrees, worktreeAt } from "@/state/worktrees"
+import { pullMergeReason, summarizeChecks } from "@/lib/pull-requests"
 import { cn } from "@/lib/utils"
-import type { CheckSummary, GitHubStatus, PullRequest as Pull } from "@/lib/types"
+import type { GitHubStatus, PullRequest as Pull } from "@/lib/types"
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -48,31 +50,17 @@ Be specific. Do not invent tests or behavior not shown by the diff.`
  * branch with commits that could become one.
  */
 export function PullRequestCard() {
-  const status = useGitHub((state) => state.status)
-  const pull = useGitHub((state) => state.pull)
-  const loading = useGitHub((state) => state.loading)
-  const cached = useGitHub((state) => state.branch)
-  const cachedRoot = useGitHub((state) => state.root)
-  const statusRoot = useGitHub((state) => state.statusRoot)
-
-  const branch = useSession((state) => state.git?.branch)
+  const branchPull = useBranchPull()
   const ahead = useSession((state) => state.git?.ahead ?? 0)
   const upstream = useSession((state) => state.git?.upstream)
   const behind = useSession((state) => state.git?.behind ?? 0)
-  const root = useSession((state) => state.git?.root)
+  const cwd = useSession((state) => state.git?.cwd)
+  // A Thread's own worktree lands its branch from Since main, above the changes.
+  const inWorktree = useWorktrees((state) => Boolean(worktreeAt(state.worktrees, cwd)))
   const [composing, setComposing] = useState(false)
-  useEffect(() => {
-    if (!root) return
-    if (
-      cachedRoot !== root ||
-      statusRoot !== root ||
-      cached !== branch
-    )
-      void github.refresh(root, branch)
-  }, [branch, cached, cachedRoot, root, statusRoot])
 
-  if (!root || cachedRoot !== root || statusRoot !== root || cached !== branch || !status)
-    return null
+  if (!branchPull || inWorktree) return null
+  const { status, pull, loading, branch } = branchPull
 
   const onDefault = Boolean(status.defaultBranch && branch === status.defaultBranch)
   const unpublished = Boolean(branch) && !upstream
@@ -207,14 +195,18 @@ function BehindBranch({ behind, upstream }: { behind: number; upstream?: string 
  * the same model, the same idea as the commit draft — but what it writes is a
  * starting point in an editable field, not a thing that happens to you.
  */
-function ComposePull({
+export function ComposePull({
   base,
   branch,
   onDone,
+  onOpened,
+  className,
 }: {
   base?: string
   branch?: string
   onDone: () => void
+  onOpened?: () => void
+  className?: string
 }) {
   const cwd = useSession((state) => state.git?.cwd ?? state.meta?.cwd ?? "")
   const [title, setTitle] = useState("")
@@ -276,6 +268,7 @@ function ComposePull({
         draft,
       })
       toast.success(pull ? `Opened #${pull.number}` : "Pull request opened")
+      onOpened?.()
       onDone()
     } catch (error) {
       toast.error("Pull request was not created", {
@@ -286,10 +279,10 @@ function ComposePull({
     } finally {
       setBusy(false)
     }
-  }, [body, busy, draft, onDone, selectedBase, title])
+  }, [body, busy, draft, onDone, onOpened, selectedBase, title])
 
   return (
-    <div className="shrink-0 border-t border-hairline px-2.5 py-2">
+    <div className={cn("shrink-0 border-t border-hairline px-2.5 py-2", className)}>
       <div className="mb-1.5 flex items-center gap-2">
         <GitPullRequestIcon className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 truncate text-ui text-faint">
@@ -352,26 +345,10 @@ function ComposePull({
 /** An open pull request, in one line plus whatever CI has to say. */
 function PullSummary({ pull, loading }: { pull: Pull; loading: boolean }) {
   const root = useGitHub((state) => state.root)
-  const checks = useMemo(() => summarize(pull.checks), [pull.checks])
+  const checks = useMemo(() => summarizeChecks(pull.checks), [pull.checks])
   const [merging, setMerging] = useState(false)
-  const mergeBlocked =
-    pull.state !== "open" ||
-    pull.mergeable === "conflicting" ||
-    checks.failed > 0 ||
-    checks.running > 0 ||
-    pull.reviewDecision === "changes"
-  const mergeReason =
-    pull.state !== "open"
-      ? `This pull request is already ${pull.state}`
-      : pull.mergeable === "conflicting"
-        ? "Resolve merge conflicts first"
-        : checks.failed > 0
-          ? "Fix failing checks first"
-          : checks.running > 0
-            ? "Wait for checks to finish"
-            : pull.reviewDecision === "changes"
-              ? "Address requested changes first"
-              : undefined
+  const mergeReason = pullMergeReason(pull)
+  const mergeBlocked = mergeReason !== undefined
 
   const merge = useCallback(async function mergePullRequest(
     strategy: "merge" | "squash" | "rebase"
@@ -536,16 +513,4 @@ function MergeMenu({
       </PopoverContent>
     </Popover>
   )
-}
-
-function summarize(checks: CheckSummary[]) {
-  let passed = 0
-  let failed = 0
-  let running = 0
-  for (const check of checks) {
-    if (check.state === "passed") passed += 1
-    else if (check.state === "failed") failed += 1
-    else if (check.state === "running") running += 1
-  }
-  return { total: checks.length, passed, failed, running }
 }

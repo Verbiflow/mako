@@ -1,4 +1,6 @@
+import { useEffect } from "react"
 import { createHook, createStore } from "@/state/store"
+import { useSession } from "@/state/session"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { GitHubStatus, PullRequest } from "@/lib/types"
 
@@ -128,4 +130,26 @@ export const github = {
     await getMako().rerunChecks()
     await github.refresh(root, branch)
   },
+}
+
+export interface BranchPull {
+  status: GitHubStatus
+  pull: PullRequest | null
+  loading: boolean
+  branch: string | undefined
+  root: string
+}
+
+/** GitHub's word on the checked-out branch, read when the branch or repository changes; null until it's for them. */
+export function useBranchPull(): BranchPull | null {
+  const state = useGitHub((current) => current)
+  const branch = useSession((current) => current.git?.branch)
+  const root = useSession((current) => current.git?.root)
+  const { status, pull, loading, branch: cached, root: cachedRoot, statusRoot } = state
+  useEffect(() => {
+    if (!root) return
+    if (cachedRoot !== root || statusRoot !== root || cached !== branch) void github.refresh(root, branch)
+  }, [branch, cached, cachedRoot, root, statusRoot])
+  if (!root || cachedRoot !== root || statusRoot !== root || cached !== branch || !status) return null
+  return { status, pull: pull ?? null, loading, branch, root }
 }

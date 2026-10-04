@@ -70,6 +70,8 @@ export interface Prefs {
   autoOpenDiff: boolean
   /** New Threads start in their own Git worktree instead of the project folder. */
   newThreadsInWorktree: boolean
+  /** How a worktree's branch last landed in each project, by its main checkout: `merge` or `pull`. */
+  landWith: PreferenceStringMap
   selectedDiffs: PreferenceStringMap
   /** Threads kept at the top of both rails, by session path. */
   pinnedThreads: string[]
@@ -142,6 +144,7 @@ const defaults: Prefs = {
   railSortBy: "recent",
   railGrouping: "project",
   folderUse: {},
+  landWith: {},
   providerModes: {},
   steerOnEnter: true,
   collapsedGroups: [],
@@ -395,6 +398,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     composerHarness: readComposerHarness(value.composerHarness),
     railGrouping: readChoice(value.railGrouping, ["project", "recent", "status", "archived"], defaults.railGrouping),
     folderUse: readStringRecord(value.folderUse),
+    landWith: readStringRecord(value.landWith),
     providerModes: readStringRecord(value.providerModes),
     steerOnEnter: readBoolean(value.steerOnEnter, defaults.steerOnEnter),
     providerSettings: readProviderSettings(value.providerSettings, value.composerTuning),

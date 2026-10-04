@@ -12,7 +12,7 @@ import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
-import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
+import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
@@ -145,8 +145,23 @@ export function installMockBridge() {
     listeners.forEach((listener) => listener(event))
   const emitTerminal = (event: TerminalEvent) =>
     terminalListeners.forEach((listener) => listener(event))
-  /** `?app=rail&since=behind`: the tab works in the billing-webhooks worktree, 4 commits behind origin/main; Update stops on a conflict. */
-  const sinceWorktree = "location" in window && new URLSearchParams(window.location.search).get("since") === "behind" ? RAIL_WORKTREES[0] : undefined
+  /**
+   * `?app=rail&since=commits|behind|pull|landed`: the tab works in the
+   * billing-webhooks worktree, with commits main lacks; `behind` adds 4 from
+   * origin/main whose Update stops on a conflict, `pull` has its pull request
+   * open, `landed` has its work in main. Merging lands it; opening a pull
+   * request opens one.
+   */
+  const since = "location" in window ? new URLSearchParams(window.location.search).get("since") : null
+  const sinceWorktree = since === "commits" || since === "behind" || since === "pull" || since === "landed" ? RAIL_WORKTREES[0] : undefined
+  let sinceLanded = since === "landed"
+  const sincePull = (number: number): PullRequest => ({
+    number, title: "Retry billing webhooks with backoff", body: "", state: "open", draft: false,
+    url: `https://github.com/you/api/pull/${number}`, head: RAIL_WORKTREES[0].branch, base: "main",
+    additions: 60, deletions: 9, files: 2, mergeable: "clean", reviewDecision: "required",
+    checks: [{ name: "test", state: "passed" }, { name: "lint", state: "running" }], reviews: [],
+  })
+  let sinceOpen: PullRequest | null = since === "pull" ? sincePull(812) : null
   let meta = { ...META }
   if (sinceWorktree) meta.cwd = sinceWorktree.path
   let terminalSessions = initialTerminalSessions()
@@ -367,7 +382,12 @@ export function installMockBridge() {
     },
     worktreeSummaries: async (): Promise<WorktreeSummary[]> => [
       ...madeWorktrees.map((worktree) => ({ path: worktree.path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" as const }, pull: null })),
-      ...(scene === "rail" ? RAIL_SUMMARIES : []),
+      ...(scene === "rail" ? RAIL_SUMMARIES.map((summary) => summary.path !== sinceWorktree?.path ? summary : {
+        ...summary,
+        ahead: sinceLanded ? 0 : 3,
+        landing: sinceLanded ? { kind: "merged" as const, into: "main" } : { kind: "open" as const, into: "main", commits: 3 },
+        pull: sinceOpen && summary.pull ? { ...summary.pull, number: sinceOpen.number, state: sinceOpen.state === "merged" ? "merged" as const : "open" as const } : null,
+      }) : []),
     ],
     worktreePulls: async () => {
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -387,10 +407,10 @@ export function installMockBridge() {
         branch: sinceWorktree.branch,
         into: "main",
         base: sinceWorktree.base,
-        commits: 3,
-        files: [{ path: "src/billing/webhooks.ts", insertions: 42, deletions: 7 }, { path: "src/billing/retry.ts", insertions: 18, deletions: 2 }],
+        commits: sinceLanded ? 0 : 3,
+        files: sinceLanded ? [] : [{ path: "src/billing/webhooks.ts", insertions: 42, deletions: 7 }, { path: "src/billing/retry.ts", insertions: 18, deletions: 2 }],
         merge: sinceConflict ? { ok: false, reason: "Commit or discard this worktree's changes first." } : { ok: true, into: "main" },
-        behind: { from: "origin/main", commits: sinceConflict ? 0 : 4 },
+        behind: since === "behind" && !sinceConflict && !sinceLanded ? { from: "origin/main", commits: 4 } : null,
       }
     },
     worktreeUpdate: async (): Promise<WorktreeUpdate> => {
@@ -399,7 +419,12 @@ export function installMockBridge() {
       return { kind: "conflicts", from: "origin/main", files: ["src/billing/retry.ts"] }
     },
     worktreeReviewDiffs: async () => ({ diffs: [], truncated: 0 }),
-    mergeWorktree: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
+    mergeWorktree: async (path: string) => {
+      if (!sinceWorktree || path !== sinceWorktree.path) throw new Error("Worktrees are unavailable in the mock bridge")
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      sinceLanded = true
+      return { branch: sinceWorktree.branch, into: "main" }
+    },
     workspaceMoves: async () => workspaceMoves,
     answerWorkspaceMove: async (id, answer) => {
       const request = workspaceMoves.requests.find((candidate) => candidate.id === id)
@@ -885,11 +910,22 @@ export function installMockBridge() {
       repo: "you/mako",
       defaultBranch: "main",
     }),
-    pullRequest: async () => null,
+    pullRequest: async () => sinceOpen,
     pullRequests: async () => [],
     pullBranches: async () => ["main", "release"],
-    createPull: async () => null,
-    mergePull: async () => null,
+    createPull: async (options) => {
+      if (!sinceWorktree) return null
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      sinceOpen = { ...sincePull(815), title: options.title, draft: Boolean(options.draft), reviewDecision: "none", checks: [{ name: "test", state: "passed" }] }
+      return sinceOpen
+    },
+    mergePull: async () => {
+      if (!sinceOpen) return null
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      sinceOpen = { ...sinceOpen, state: "merged" }
+      sinceLanded = true
+      return sinceOpen
+    },
     rerunChecks: async () => {},
     repoAvatar: async () => undefined,
     // A 1x1 warm-grey png; enough for the identity badge to show an image path.
