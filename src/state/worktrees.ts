@@ -3,7 +3,7 @@ import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
 import type { GitStatus, ThreadRef } from "@/lib/types"
-import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
@@ -264,6 +264,21 @@ export async function mergeWorktree(worktree: ThreadWorktree, review: Pick<Workt
   } catch (error) {
     toast.error("The branch wasn't merged", { description: error instanceof Error ? error.message : String(error) })
     return false
+  }
+}
+
+/** Merge what new Threads start from into the worktree's branch; a conflict is left for the Changes panel. Undefined when it failed. */
+export async function updateFromMain(worktree: ThreadWorktree): Promise<WorktreeUpdate | undefined> {
+  try {
+    const update = await getMako().worktreeUpdate(worktree.path)
+    if (update.kind === "updated")
+      toast(`Updated from ${update.from}`, { description: `${update.commits === 1 ? "Its 1 commit is" : `Its ${update.commits} commits are`} on ${worktree.branch} now.`, duration: ACTION_TOAST_MS })
+    if (update.kind === "current") toast(`${worktree.branch} already has everything in ${update.from}`)
+    void refreshWorktreeSummaries().catch(() => {})
+    return update
+  } catch (error) {
+    toast.error(`${worktree.branch} wasn't updated`, { description: error instanceof Error ? error.message : String(error) })
+    return undefined
   }
 }
 

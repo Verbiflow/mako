@@ -1,7 +1,7 @@
 import { registerIpc } from "./register.js"
 import type { ThreadWorktreeService } from "../thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 
 interface PullLists {
   /** Open pull requests a new Thread can work on. */
@@ -37,6 +37,10 @@ export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | nul
   registerIpc("mako:worktree-merge", (_event, path: string): Promise<{ branch: string; into: string }> => {
     if (!worktrees) throw new Error(UNAVAILABLE)
     return worktrees.merge(path)
+  })
+  registerIpc("mako:worktree-update", (_event, path: string): Promise<WorktreeUpdate> => {
+    if (!worktrees) throw new Error(UNAVAILABLE)
+    return worktrees.update(path)
   })
   registerIpc("mako:worktree-ahead", async (_event, path: string): Promise<number | null> =>
     (await worktrees?.ahead(path)) ?? null)

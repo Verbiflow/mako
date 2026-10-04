@@ -9,7 +9,7 @@ import type { ThreadStore } from "./thread-store.js"
 import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary } from "./contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeUpdate } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
@@ -480,11 +480,12 @@ export class ThreadWorktreeService {
     const worktree = this.known(path)
     const into = await git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "") || null
     const base = into ? await git(path, ["merge-base", into, "HEAD"]).catch(() => worktree.base) : worktree.base
-    const [commits, numstat, untracked, status] = await Promise.all([
+    const [commits, numstat, untracked, status, behind] = await Promise.all([
       git(path, ["rev-list", "--count", `${base}..HEAD`]).then(Number),
       git(path, ["diff", "--numstat", "-z", "-M", base]),
       git(path, ["ls-files", "--others", "--exclude-standard", "-z"]),
       git(path, ["status", "--porcelain", "--untracked-files=normal"]),
+      this.behind(worktree.repoRoot, path, false),
     ])
     const files = parseNumstat(numstat)
     const added = untracked.split("\0").filter(Boolean)
@@ -493,7 +494,49 @@ export class ThreadWorktreeService {
       const lines = counted[index] ?? null
       files.push({ path: file, insertions: lines, deletions: lines === null ? null : 0 })
     })
-    return { path, branch: worktree.branch, into, base, commits, files, merge: await this.mergeCheck(worktree, into, commits, status !== "") }
+    return {
+      path, branch: worktree.branch, into, base, commits, files,
+      merge: await this.mergeCheck(worktree, into, commits, status !== ""),
+      behind: behind && { from: behind.from, commits: behind.commits },
+    }
+  }
+
+  /** What the start point has that the worktree's `HEAD` doesn't, by the same rule a new Thread starts by. */
+  private async behind(repoRoot: string, path: string, fetch: boolean): Promise<{ from: string; commit: string; commits: number } | null> {
+    try {
+      const point = await this.starts.point(repoRoot, fetch)
+      return { from: point.from, commit: point.commit, commits: Number(await git(path, ["rev-list", "--count", `HEAD..${point.commit}`])) }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Merge what the start point has into the worktree's branch. A worktree
+   * with uncommitted changes, or mid-operation, is refused. A conflict
+   * leaves the merge in progress, so the person or the Thread's agent can
+   * resolve it, continue or abort it in the Changes panel.
+   */
+  async update(path: string): Promise<WorktreeUpdate> {
+    const worktree = this.known(path)
+    if (await git(path, ["status", "--porcelain", "--untracked-files=no"]).catch(() => "unreadable"))
+      throw new Error("Commit or stash your changes first.")
+    const gitDir = await git(path, ["rev-parse", "--absolute-git-dir"])
+    const underWay = UNDER_WAY.find(([marker]) => existsSync(join(gitDir, marker)))
+    if (underWay) throw new Error(`Finish or abort the ${underWay[1]} first.`)
+    if (!(await succeeds(path, ["symbolic-ref", "-q", "HEAD"]))) throw new Error("The worktree isn't on its branch.")
+    const behind = await this.behind(worktree.repoRoot, path, true)
+    if (!behind) throw new Error("Git couldn't tell which branch new Threads start from.")
+    if (behind.commits === 0) return { kind: "current", from: behind.from }
+    try {
+      await git(path, ["merge", "--no-edit", "-m", `Merge ${behind.from} into ${worktree.branch}`, behind.commit])
+      return { kind: "updated", from: behind.from, commits: behind.commits }
+    } catch (error) {
+      const conflicted = (await git(path, ["diff", "--name-only", "--diff-filter=U", "-z"]).catch(() => "")).split("\0").filter(Boolean)
+      if (conflicted.length) return { kind: "conflicts", from: behind.from, files: conflicted }
+      await git(path, ["merge", "--abort"]).catch(() => undefined)
+      throw new Error(`Git couldn't merge ${behind.from}: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+    }
   }
 
   private async mergeCheck(worktree: ThreadWorktree, into: string | null, commits: number, dirty: boolean): Promise<WorktreeMergeCheck> {
@@ -507,7 +550,7 @@ export class ThreadWorktreeService {
     // Merged in memory first: a conflict is found without touching either checkout. Older Git
     // can't, and then the merge itself finds it and is aborted.
     if (await mergesWithoutCheckout() && !await succeeds(worktree.repoRoot, ["merge-tree", "--write-tree", into, worktree.branch]))
-      return { ok: false, reason: `It conflicts with ${into}. Merge ${into} into this branch and resolve it here, or open a pull request.` }
+      return { ok: false, reason: `It conflicts with ${into}. Update it from ${into} and resolve the conflict here, or open a pull request.` }
     return { ok: true, into }
   }
 

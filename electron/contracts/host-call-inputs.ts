@@ -984,6 +984,7 @@ export const hostCallInputs = {
   "mako:worktree-skip": z.tuple([z.string()]),
   "mako:worktree-start-point": z.tuple([z.string(), z.boolean()]),
   "mako:worktree-summaries": z.tuple([]),
+  "mako:worktree-update": z.tuple([z.string()]),
   "mako:worktree-want": z.tuple([z.string()]),
   "mako:worktrees": z.tuple([]),
   "mako:write-plugin": z.tuple([z.string(), z.string()]),

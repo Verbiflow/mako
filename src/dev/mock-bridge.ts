@@ -5,14 +5,14 @@ import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema, type ThreadId } from "../../electron/contracts/thread-identity"
-import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeStartPoint, type WorktreeSummary } from "../../electron/contracts/thread-worktrees"
+import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "../../electron/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
-import type { ContextBreakdown, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
+import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
@@ -145,9 +145,27 @@ export function installMockBridge() {
     listeners.forEach((listener) => listener(event))
   const emitTerminal = (event: TerminalEvent) =>
     terminalListeners.forEach((listener) => listener(event))
+  /** `?app=rail&since=behind`: the tab works in the billing-webhooks worktree, 4 commits behind origin/main; Update stops on a conflict. */
+  const sinceWorktree = "location" in window && new URLSearchParams(window.location.search).get("since") === "behind" ? RAIL_WORKTREES[0] : undefined
   let meta = { ...META }
+  if (sinceWorktree) meta.cwd = sinceWorktree.path
   let terminalSessions = initialTerminalSessions()
   const capabilities = createCapabilities()
+  let sinceConflict = false
+  const gitStatus = (): GitStatus => sinceWorktree
+    ? {
+        ...GIT,
+        cwd: sinceWorktree.path,
+        root: sinceWorktree.path,
+        branch: sinceWorktree.branch,
+        ahead: 0,
+        behind: 0,
+        operation: sinceConflict ? "merge" : undefined,
+        files: sinceConflict
+          ? [{ path: "src/billing/retry.ts", status: "conflicted", staged: false, insertions: null, deletions: null, binary: false }]
+          : [],
+      }
+    : GIT
 
   const nativeRequests: NativeRequest[] = []
   const liveSnapshots = new Map<string, LiveSnapshot>()
@@ -157,7 +175,7 @@ export function installMockBridge() {
       {
         id: "tab-1",
         session: { meta, messages: MESSAGES, tree: TREE },
-        git: GIT,
+        git: gitStatus(),
         capabilities,
       },
     ],
@@ -180,7 +198,7 @@ export function installMockBridge() {
   const mockTab = (id: string) => ({
     id,
     session: { meta, messages: MESSAGES, tree: TREE },
-    git: GIT,
+    git: gitStatus(),
     capabilities,
   })
 
@@ -362,7 +380,24 @@ export function installMockBridge() {
     },
     worktreeAhead: async () => null,
     worktreeInventory: async () => ({ worktrees: [], spares: { count: 0, bytes: null } }),
-    worktreeReview: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
+    worktreeReview: async (path: string): Promise<WorktreeReview> => {
+      if (!sinceWorktree || path !== sinceWorktree.path) throw new Error("Worktrees are unavailable in the mock bridge")
+      return {
+        path,
+        branch: sinceWorktree.branch,
+        into: "main",
+        base: sinceWorktree.base,
+        commits: 3,
+        files: [{ path: "src/billing/webhooks.ts", insertions: 42, deletions: 7 }, { path: "src/billing/retry.ts", insertions: 18, deletions: 2 }],
+        merge: sinceConflict ? { ok: false, reason: "Commit or discard this worktree's changes first." } : { ok: true, into: "main" },
+        behind: { from: "origin/main", commits: sinceConflict ? 0 : 4 },
+      }
+    },
+    worktreeUpdate: async (): Promise<WorktreeUpdate> => {
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      sinceConflict = true
+      return { kind: "conflicts", from: "origin/main", files: ["src/billing/retry.ts"] }
+    },
     worktreeReviewDiffs: async () => ({ diffs: [], truncated: 0 }),
     mergeWorktree: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     workspaceMoves: async () => workspaceMoves,
@@ -795,7 +830,7 @@ export function installMockBridge() {
 
     selectGitRepository: async () => GIT,
     gitRemote: async () => ({ status: { cwd: META.cwd, ahead: 0, behind: 0, files: [] } }),
-    gitStatus: async () => GIT,
+    gitStatus: async () => gitStatus(),
     gitDiff: async (path: string) => ({
       path,
       binary: false,

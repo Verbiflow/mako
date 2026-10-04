@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ThreadStore } from "../electron/thread-store.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
+import { succeeds } from "../electron/worktree-git.js"
 import { WorktreeStarts } from "../electron/worktree-start.js"
 import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
 import type { WorktreeBranchPull, WorktreeSummary } from "../electron/contracts/thread-worktrees.js"
@@ -222,6 +223,29 @@ commit(moved.path, "after the merge")
 assert.equal((await summaryOf(moved.path))?.landing.kind, "open", "a commit after the merge isn't in it")
 assert.equal(asked, 1, "GitHub is asked once a minute per repository")
 assert.equal((await service.summaries()).find((summary) => summary.path === moved.path)?.pull?.number, 9, "within the minute the last answer stands")
+
+// Update from main: what the start point has comes in as a merge; a conflict is left for resolving.
+const upId = placed()
+const up = await service.prepare(upId, project, "Update me", { kind: "newest" })
+await service.attach(upId)
+commit(project, "main moves")
+assert.deepEqual((await service.review(up.path)).behind, { from: "main", commits: 1 }, "the review counts what the start point has that the branch lacks")
+assert.deepEqual(await service.update(up.path), { kind: "updated", from: "main", commits: 1 })
+assert.ok(await succeeds(up.path, ["merge-base", "--is-ancestor", "main", "HEAD"]))
+assert.deepEqual(await service.update(up.path), { kind: "current", from: "main" })
+writeFileSync(join(up.path, "up.txt"), "mine\n")
+git(up.path, "add", ".")
+git(up.path, "commit", "-q", "-m", "mine")
+writeFileSync(join(up.path, "up.txt"), "dirty\n")
+await assert.rejects(service.update(up.path), /Commit or stash your changes first/)
+git(up.path, "checkout", "-q", "--", "up.txt")
+writeFileSync(join(project, "up.txt"), "theirs\n")
+git(project, "add", ".")
+git(project, "commit", "-q", "-m", "theirs")
+assert.deepEqual(await service.update(up.path), { kind: "conflicts", from: "main", files: ["up.txt"] })
+assert.ok(existsSync(join(git(up.path, "rev-parse", "--absolute-git-dir"), "MERGE_HEAD")), "the merge is left in progress")
+await assert.rejects(service.update(up.path), /Commit or stash|Finish or abort the merge/)
+git(up.path, "merge", "--abort")
 
 // The mark and the tip say the same thing in a glyph and in words.
 const opened = { path: "/w", into: "main", ahead: 3, changes: 2, landing: { kind: "open", into: "main", commits: 3 }, pull: null } satisfies WorktreeSummary

@@ -138,7 +138,15 @@ export interface WorktreeReview {
   commits: number
   files: WorktreeReviewFile[]
   merge: WorktreeMergeCheck
+  /** Commits on the branch new Threads start from (`main`, or `origin/main` when only it moved) that this branch lacks. */
+  behind: { from: string; commits: number } | null
 }
+
+/** What Update from main did: merged the commits, found nothing to bring, or stopped on conflicts and left the merge for them to be resolved. */
+export type WorktreeUpdate =
+  | { kind: "updated"; from: string; commits: number }
+  | { kind: "current"; from: string }
+  | { kind: "conflicts"; from: string; files: string[] }
 
 /**
  * What a new Thread's worktree is made on, when the person chose: a new
