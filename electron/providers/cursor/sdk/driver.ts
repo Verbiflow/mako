@@ -1,4 +1,6 @@
 import { applyControlEnvironment } from "../../../control-launch.js"
+import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../../../execution-context.js"
+import { NO_NATIVE_EXCLUSION } from "../../../contracts/execution-context.js"
 import { applyThreadEnvironment } from "../../../thread-environment.js"
 import { preparePrompt, preparePromptAsync } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
@@ -17,6 +19,8 @@ import { mcpServerFailedEvent, messageEvent, TURN_FAILED } from "@mako/sessions/
 import { CURSOR_PLAN_OPTION } from "@mako/sessions"
 import type { ProviderBinding } from "../../../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "../../../native-continuation.js"
+import { inspectNativeSession as inspectNativeSource } from "../../../native-continuation.js"
+import { cursorProcessProbe } from "../process-probe.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
 import {
@@ -56,6 +60,8 @@ import { cursorSdkExitReason } from "./wire.js"
 
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
+
+const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
 
 export interface CursorSdkDriverDependencies {
   auth: CursorSdkAuth
@@ -374,9 +380,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   }
 
   /**
-   * A binding is reopened when its store still reads. An SDK agent is
-   * Mako's own and another host's hold is refused upstream by the session
-   * ledger; a `cursor-agent` store is only ever read here, so a CLI that
+   * SDK-store resume requires source-scoped process evidence in addition to
+   * the cooperating-host ledger. A `cursor-agent` store is only read here, so a CLI that
    * still has it open loses nothing when the SDK continues from a copy.
    */
   const inspectNativeSession = async (binding: ProviderBinding): Promise<NativeResumeEvidence> => {
@@ -385,10 +390,17 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     const origin = cursorStoreOrigin(binding.path, { home: dependencies.home })
     if (!origin)
       return { kind: "unavailable", reason: "The saved binding does not point at a Cursor session store." }
+    const sourcePath = binding.path
+    if (origin.origin === "sdk") return inspectNativeSource(binding, cursorProcessProbe, async () => {
+      const current = await checkpoint(sourcePath)
+      return current === undefined
+        ? { kind: "unavailable", reason: "The Cursor session store is missing or unreadable." }
+        : { kind: "available", checkpoint: current }
+    })
     const current = await checkpoint(binding.path)
     if (current === undefined)
       return { kind: "unavailable", reason: "The Cursor session store is missing or unreadable." }
-    return { kind: "available", checkpoint: current, strategy: origin.origin === "sdk" ? "same-session" : "copy" }
+    return { kind: "available", checkpoint: current, strategy: "copy" }
   }
 
   return {
@@ -408,6 +420,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       tests: ["scripts/test-turn-recovery-live.mjs"],
     },
     canResume: true,
+    nativeIdentity: CURSOR_NATIVE_IDENTITY,
+    nativeExclusion: NO_NATIVE_EXCLUSION,
     checkpoint,
     inspectNativeSession,
     // Verified 2026-09-13 (SDK 1.0.31): a steer delivered while `sleep 6 &&
@@ -437,6 +451,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         },
       }
       const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn))
+      const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY)
       const live: Live = {
         client,
         emit: options.emit,
@@ -449,6 +464,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         pendingPermissions: new Map(),
         closed: false,
         state: {
+          executionContext: context,
           id: options.conversationId,
           harness: "cursor",
           cwd,
@@ -482,9 +498,19 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       })
       try {
         const hello = await trace.step("handshake", () => live.client.hello())
+        engine.patch(live, { executionContext: {
+          ...context,
+          runtime: reportedRuntime(hello.sdkVersion, "SDK child hello.sdkVersion"),
+        } })
         if (hello.ripgrep === false)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
         await trace.step("authentication", () => ensureSignedIn(live, trace))
+        const identityObservation = observeNativeIdentity(async () => {
+          const identity = await live.client.request("me", undefined)
+          return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)
+        }, () => !live.closed && sessions.get(live.state.id) === live, identity => {
+          if (live.state.executionContext) engine.patch(live, { executionContext: { ...live.state.executionContext, identity } })
+        })
         const catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment))
         live.models = catalog.models
         const selection = selectionFor(live, options.tuning, catalog.defaultModel)
@@ -509,12 +535,23 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           importFrom,
         }))
         if (live.closed) throw new Error("Cursor disconnected during startup")
+        await identityObservation
+        if (live.closed) throw new Error("Cursor disconnected during identity verification")
         const reported = opened.model ?? selection
         engine.patch(live, {
           status: "ready",
           connection: "connected",
           nativeId: opened.agentId,
           nativePath: cursorSdkStorePath(stateRoot, opened.agentId),
+          executionContext: live.state.executionContext && {
+            ...live.state.executionContext,
+            sourceImport: opened.importSource ? {
+              source: opened.importSource,
+              destination: cursorSdkStorePath(stateRoot, opened.agentId),
+              nativeId: opened.agentId,
+              via: "SDK child open.importSource",
+            } : undefined,
+          },
           currentMode: CURSOR_SDK_DEFAULT_MODE,
           settings: cursorSdkReportedSettings(reported, live.models, options.tuning?.options?.plan),
           configOptions: cursorConfigOptions(live.models, reported, options.tuning?.options?.plan),

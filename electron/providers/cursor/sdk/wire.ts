@@ -357,6 +357,8 @@ export const SdkResultSchemas = {
     model: SdkModelSelectionSchema.optional(),
     /** Set when this open copied a `cursor-agent` store into a new agent. */
     imported: z.boolean().optional(),
+    /** Verified origin for both a fresh copy and a previously indexed import. */
+    importSource: z.string().optional(),
   }),
   send: z.object({ runId: z.string() }),
   steer: z.object({ outcome: z.enum(["complete_delivered", "revert_to_followup"]) }),

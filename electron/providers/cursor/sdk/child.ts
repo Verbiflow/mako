@@ -71,6 +71,8 @@ interface OpenAgent {
 interface ActiveTurn {
   turn: string
   run: Run
+  /** Native stream and terminal result must drain before cancel acknowledges. */
+  finished: Promise<void>
   /** What the host was sent of this turn, so a host that lost track of it can be shown it again (`active`). */
   replay: SdkChildLine[]
   replayCharacters: number
@@ -308,7 +310,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     throw cause
   }
   agent = { ...base, handle }
-  return { agentId: handle.agentId, model: handle.model, imported: imported || undefined }
+  return { agentId: handle.agentId, model: handle.model, imported: imported || undefined, importSource: !params.create ? params.importFrom?.path : undefined }
 }
 
 function remember(line: SdkChildLine & { turn: string }): void {
@@ -475,8 +477,13 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
   cancelWhileSending = false
   try {
     const run = await startRun(open, message, options)
-    active = { turn: params.turn, run, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0 }
-    void pump(params.turn, run)
+    let finish = () => {}
+    const finished = new Promise<void>(resolve => { finish = resolve })
+    active = { turn: params.turn, run, finished, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0 }
+    void pump(params.turn, run).then(finish, cause => {
+      log("warn", `run projection ended early: ${cursorSdkWireError(cause).message}`)
+      finish()
+    })
     if (cancelWhileSending) await run.cancel().catch((cause) => log("warn", `could not stop a run Stop asked for while it started: ${cursorSdkWireError(cause).message}`))
     return { runId: run.id }
   } finally {
@@ -506,7 +513,11 @@ async function steer(text: string): Promise<SdkResult<"steer">> {
 }
 
 async function cancel(): Promise<SdkResult<"cancel">> {
-  if (active) await active.run.cancel()
+  const current = active
+  if (current) {
+    await current.run.cancel()
+    await current.finished
+  }
   else if (sending) cancelWhileSending = true
   return {}
 }

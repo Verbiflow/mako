@@ -180,7 +180,7 @@ export class CursorSdkClient {
       const requestedTimeout = this.options.requestTimeoutMs ?? 60_000
       // Stop must reach its process-close fallback promptly when the SDK is
       // wedged; ordinary sends retain their longer request deadline.
-      const timeout = method === "cancel" ? Math.min(requestedTimeout, 5_000) : requestedTimeout
+      const timeout = method === "cancel" || method === "me" ? Math.min(requestedTimeout, 5_000) : requestedTimeout
       const timer = !bounded || UNBOUNDED.has(method)
         ? undefined
         : setTimeout(() => {
