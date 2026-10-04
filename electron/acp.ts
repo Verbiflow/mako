@@ -63,7 +63,11 @@ import {
   type SessionModeState,
   type SessionNotification,
 } from "@agentclientprotocol/sdk"
-import { accountEnv } from "./accounts.js"
+import { resolveAccountLaunch } from "./accounts.js"
+import { launchContext, reportedRuntime } from "./execution-context.js"
+import { ACP_NATIVE_IDENTITY } from "./providers/acp-live-driver.js"
+import { readRuntimeVersion } from "./runtime-updates.js"
+import { parseVersion } from "./contracts/runtime-version.js"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { errorMessage } from "./live-runtime.js"
@@ -248,7 +252,7 @@ async function startAcp(
   const launchTier = requestedAccess ?? policy?.default
   const launchAccess =
     launchTier && policy?.launch?.includes(launchTier) ? launchTier : null
-  const env = await trace.step("account", () => accountEnv(harness, process.env))
+  const { env, account } = await trace.step("account", () => resolveAccountLaunch(harness, process.env))
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const launchOptions: AcpLaunchOptions = {
     cwd: workingDir,
@@ -304,6 +308,7 @@ async function startAcp(
     void disposeMcp?.().catch(() => console.error("Provider MCP configuration cleanup failed"))
   })
 
+  const context = launchContext("acp", ACP_NATIVE_IDENTITY, account, executable)
   const live: Live = {
     id,
     harness,
@@ -312,6 +317,7 @@ async function startAcp(
     connection: null,
     sessionId: null,
     state: {
+      executionContext: context,
       id,
       harness,
       cwd: workingDir,
@@ -571,6 +577,13 @@ async function startAcp(
           ...providerHost.acpSources.get(harness)?.clientCapabilities,
         },
       })))
+    let runtime = reportedRuntime(initialized.agentInfo?.version, "ACP initialize.agentInfo")
+    const versionArgs = spec.versionArgs
+    if (runtime.kind === "unavailable" && versionArgs) {
+      const output = await trace.step("runtime-discovery", () => readRuntimeVersion(executable, versionArgs, env, "launch")).catch(() => undefined)
+      runtime = reportedRuntime(output === undefined ? undefined : parseVersion(output), "launch executable version query")
+    }
+    update(live, { executionContext: { ...context, runtime } })
     live.promptCapabilities =
       initialized.agentCapabilities?.promptCapabilities ?? {}
     live.closesSession = Boolean(initialized.agentCapabilities?.sessionCapabilities?.close)

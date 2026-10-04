@@ -42,7 +42,8 @@ export class ProviderChildren {
   private records: ProviderChildRecord[] = []
   private readonly hostPid: number
   private readonly observeIdentity: typeof observeProcessIdentity
-  private reaped = false
+  /** Retire only records proved gone or successfully signalled, never unreadable identities. */
+  private readonly retired = new Set<string>()
   private readonly observations = new Map<number, AbortController>()
 
   constructor(
@@ -69,9 +70,9 @@ export class ProviderChildren {
   private write(): void {
     try {
       mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-      const foreign = this.reaped
-        ? []
-        : this.read().filter((entry) => entry.host !== this.hostPid)
+      const foreign = this.read().filter(
+        (entry) => entry.host !== this.hostPid && !this.retired.has(childRecordId(entry))
+      )
       const draft = `${this.path}.${this.hostPid}.tmp`
       writeFileSync(
         draft,
@@ -180,7 +181,8 @@ export class ProviderChildren {
   /**
    * Terminate what an earlier host left. Only a pid that still runs the
    * recorded executable and started within the record's tolerance is
-   * signalled; anything else is dropped from the registry as already gone.
+   * signalled. Unreadable or changed executable observations remain recorded;
+   * only a missing process or a different birth proves the old record gone.
    */
   async reap(
     signal: AbortSignal = AbortSignal.timeout(10_000)
@@ -188,10 +190,16 @@ export class ProviderChildren {
     const leftovers = this.read().filter((entry) => entry.host !== this.hostPid)
     const killed: ProviderChildRecord[] = []
     for (const entry of leftovers) {
-      const alive = await this.identityHolds(entry, signal)
-      if (!alive) continue
+      // A foreign record is not an orphan while its host might still live.
+      // Old records have no host birth identity, so a reused host PID also
+      // conservatively blocks cleanup instead of authorizing a signal.
+      if (!hostIsGone(entry.host)) continue
+      const identity = await this.identityHolds(entry, signal)
+      if (identity === "gone") this.retired.add(childRecordId(entry))
+      if (identity !== "owned") continue
       try {
         process.kill(entry.pid, "SIGTERM")
+        this.retired.add(childRecordId(entry))
         killed.push(entry)
         hostLog("children", "terminated orphan", {
           pid: entry.pid,
@@ -208,7 +216,6 @@ export class ProviderChildren {
         })
       }
     }
-    this.reaped = true
     this.write()
     return killed
   }
@@ -216,8 +223,15 @@ export class ProviderChildren {
   private async identityHolds(
     entry: ProviderChildRecord,
     signal: AbortSignal
-  ): Promise<boolean> {
+  ): Promise<"owned" | "gone" | "unavailable"> {
     try {
+      try {
+        process.kill(entry.pid, 0)
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ESRCH")
+          return "gone"
+        throw error
+      }
       if (
         !(await processIdentityMatches({
           pid: entry.pid,
@@ -227,8 +241,8 @@ export class ProviderChildren {
           toleranceMs: entry.processStartedAt === undefined ? 1_500 : undefined,
         }))
       )
-        return false
-      return processExecutableMatches({
+        return "gone"
+      const matches = await processExecutableMatches({
         pid: entry.pid,
         executable:
           entry.executableIdentity ??
@@ -236,9 +250,26 @@ export class ProviderChildren {
           entry.executable,
         signal,
       })
+      return matches ? "owned" : "unavailable"
     } catch {
-      return false
+      // Permission failures, wrapper exec transitions and unavailable OS
+      // reads are not evidence of death. Preserve the exact record for a
+      // later verified observation instead of silently dropping its owner.
+      return "unavailable"
     }
+  }
+}
+
+function childRecordId(entry: ProviderChildRecord): string {
+  return `${entry.host}:${entry.pid}:${entry.startedAt}`
+}
+
+function hostIsGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ESRCH"
   }
 }
 

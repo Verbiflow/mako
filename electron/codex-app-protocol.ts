@@ -2,6 +2,7 @@ import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
 import type { CodexDecoded, CodexEffect } from "./providers/codex/decoder.js"
 import { z } from "zod"
+import { CodexIdentityResponseSchema, CodexInitializeSchema } from "./providers/codex/native-context.js"
 import {
   isNumber,
   stringValue,
@@ -52,7 +53,7 @@ export type {
 const RPC_TIMEOUT_MS = 30_000
 export const MAX_STDOUT_BUFFER = 8 * 1024 * 1024
 const BackgroundTerminalsSchema = z.object({
-  data: z.array(z.object({ itemId: z.string() })),
+  data: z.array(z.object({ itemId: z.string(), processId: z.string().min(1) })).max(4096),
   nextCursor: z.string().nullish(),
 })
 const LoadedThreadsSchema = z.object({
@@ -61,6 +62,18 @@ const LoadedThreadsSchema = z.object({
 })
 
 export { CodexDecoder } from "./providers/codex/decoder.js"
+
+/** Never evict an interrupted turn while this transport can still emit its work. */
+export function retainStoppedTurn(context: ProtocolContext, turnId: string): void {
+  const stopped = context.stoppedTurns ??= new Set<string>()
+  if (stopped.has(turnId)) return
+  if (stopped.size >= 512) throw new Error("Codex Stop evidence reached its bound; reconnect before continuing")
+  stopped.add(turnId)
+}
+
+export async function drainStoppedCommands(context: ProtocolContext): Promise<void> {
+  while (context.stoppingCommands?.size) await Promise.all(context.stoppingCommands)
+}
 
 export function consumeStdout(context: ProtocolContext, chunk: Buffer): void {
   if (context.exited) return
@@ -168,6 +181,38 @@ function applyEffect(context: ProtocolContext, effect: CodexEffect): void {
     case "question-answer":
       context.protocol.observeQuestionAnswer?.(effect.answer)
       return
+    case "command-started":
+      if (context.stoppedTurns?.has(effect.turnId)) {
+        if (!effect.processId || !context.threadId) {
+          context.protocol.handleFatal("Codex started a command after Stop without a native terminal identity")
+          return
+        }
+        const key = `${effect.threadId}\u0000${effect.turnId}\u0000${effect.processId}`
+        const commands = context.stoppedCommands ??= new Set<string>()
+        if (commands.has(key)) return
+        if (commands.size >= 4096) {
+          context.protocol.handleFatal("Codex late Stop evidence reached its bound; reconnect before continuing")
+          return
+        }
+        commands.add(key)
+        const rootCommand = effect.threadId === context.threadId
+        if (rootCommand) {
+          context.background.running.add(effect.itemId)
+          reportBackground(context)
+        }
+        const stopping = context.stoppingCommands ??= new Set<Promise<void>>()
+        const operation = terminateTerminal(context, effect.threadId, effect.processId, true).then(() => {
+          if (rootCommand) backgroundEnded(context, effect.itemId)
+        }, error => {
+          context.protocol.handleFatal(`A command arriving after Stop was not ended: ${String(error)}`)
+          throw error
+        })
+        stopping.add(operation)
+        // The event callback cannot await. Retain the operation for lifecycle
+        // callers and handle its rejection even if nobody is closing yet.
+        void operation.then(() => stopping.delete(operation), () => stopping.delete(operation))
+      }
+      return
     case "command-ended":
       backgroundEnded(context, effect.itemId)
       return
@@ -194,15 +239,36 @@ function settleRpc(
   pending.settleResult(message.result)
 }
 
-/**
- * End every terminal the thread left running, then read what remains.
- * Checked on codex 0.154: terminals outlive both an interrupt, which turns
- * the running foreground command into one more, and the app-server's exit.
- */
-export async function cleanBackground(context: ProtocolContext): Promise<void> {
-  if (!context.threadId) return
-  await rpcRequest(context, "thread/backgroundTerminals/clean", { threadId: context.threadId })
-  await listBackground(context)
+/** Terminate exact native terminal IDs. `clean` acknowledges submission only. */
+export async function cleanBackground(context: ProtocolContext, threadId = context.threadId): Promise<void> {
+  if (!threadId) return
+  const terminals = []
+  let cursor: string | undefined
+  const seen = new Set<string>()
+  do {
+    const page = await rpcRequest(context, "thread/backgroundTerminals/list", { threadId, cursor })
+    if (terminals.length + page.data.length > 4096) throw new Error("Codex terminal inventory exceeds its bound")
+    terminals.push(...page.data)
+    cursor = page.nextCursor ?? undefined
+    if (cursor && (seen.size >= 128 || seen.has(cursor))) throw new Error("Codex terminal inventory repeated a cursor")
+    if (cursor) seen.add(cursor)
+  } while (cursor)
+  for (const terminal of terminals) {
+    await terminateTerminal(context, threadId, terminal.processId)
+  }
+  if (threadId === context.threadId) await listBackground(context)
+}
+
+async function terminateTerminal(context: ProtocolContext, threadId: string, processId: string, requireConfirmation = false): Promise<void> {
+  const result = await rpcRequest(context, "thread/backgroundTerminals/terminate", { threadId, processId })
+  if (!result.terminated) {
+    if (requireConfirmation) throw new Error("Codex refused termination of a late native command")
+    // An ordinary listed command can exit between list and terminate. An
+    // absent terminal is native evidence; failed/malformed replies are not.
+    const remaining = await rpcRequest(context, "thread/backgroundTerminals/list", { threadId })
+    if (remaining.nextCursor || remaining.data.some(item => item.processId === processId))
+      throw new Error("Codex did not confirm terminal termination")
+  }
 }
 
 /**
@@ -233,6 +299,8 @@ async function endSubagent(context: ProtocolContext, threadId: string): Promise<
   try {
     const [turn] = (await rpcRequest(context, "thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" })).data
     if (turn?.status === "inProgress") {
+      retainStoppedTurn(context, turn.id)
+      await cleanBackground(context, threadId)
       await rpcRequest(context, "turn/interrupt", { threadId, turnId: turn.id })
       await settled
     }
@@ -240,7 +308,7 @@ async function endSubagent(context: ProtocolContext, threadId: string): Promise<
     const rest = waiters.get(threadId)?.filter((waiter) => waiter !== settle) ?? []
     if (rest.length) waiters.set(threadId, rest)
     else waiters.delete(threadId)
-    await rpcRequest(context, "thread/backgroundTerminals/clean", { threadId })
+    await cleanBackground(context, threadId)
   }
 }
 
@@ -299,6 +367,12 @@ export function rpcRequest(
   params: RpcParams[RpcMethod]
 ): Promise<RpcResults[RpcMethod]> {
   switch (method) {
+    case "account/read":
+      return beginRpcRequest(context, method, params, value => {
+        const parsed = CodexIdentityResponseSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid native identity response" }
+      })
     case "thread/turns/list":
       return beginRpcRequest(context, method, params, (value) => {
         const parsed = CodexAgentRunsSchema.safeParse(value)
@@ -306,7 +380,11 @@ export function rpcRequest(
           : { valid: false, message: "Invalid child turn status response" }
       })
     case "initialize":
-      return beginRpcRequest(context, method, params, parseObjectResult)
+      return beginRpcRequest(context, method, params, value => {
+        const parsed = CodexInitializeSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid native initialization response" }
+      })
     case "thread/start":
       return beginRpcRequest(context, method, params, parseThreadResponse)
     case "thread/fork":
@@ -323,6 +401,12 @@ export function rpcRequest(
     case "turn/interrupt":
     case "thread/backgroundTerminals/clean":
       return beginRpcRequest(context, method, params, parseObjectResult)
+    case "thread/backgroundTerminals/terminate":
+      return beginRpcRequest(context, method, params, value => {
+        const parsed = z.object({ terminated: z.boolean() }).safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid terminal termination response" }
+      })
     case "thread/backgroundTerminals/list":
       return beginRpcRequest(context, method, params, (value) => {
         const parsed = BackgroundTerminalsSchema.safeParse(value)
@@ -354,7 +438,7 @@ function beginRpcRequest<M extends RpcMethod>(
     const timer = method === "turn/start" ? undefined : setTimeout(() => {
       context.pending.delete(rpcKey(id))
       reject(new Error(`Codex app-server did not answer ${method}`))
-    }, ["initialize", "thread/start", "thread/resume", "thread/fork"].includes(method)
+    }, method === "account/read" ? 5_000 : ["initialize", "thread/start", "thread/resume", "thread/fork"].includes(method)
       ? STARTUP_TOTAL_MS
       : RPC_TIMEOUT_MS)
     const pending: PendingRpc<M> = {

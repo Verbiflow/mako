@@ -116,7 +116,9 @@ export async function inspectNativeSession(
     .probe(AbortSignal.timeout(probe.timeoutMs ?? 6_000), { nativeId: binding.nativeId, path: binding.path })
     .catch(() => ({ kind: "unavailable" as const }))
   if (activity.kind !== "available")
-    return { kind: "unavailable", reason: "Whether another process has this session open could not be checked." }
+    return { kind: "unavailable", reason: "reason" in activity && activity.reason === "incomplete"
+      ? "Native activity inventory is incomplete; an external executor may still own this session."
+      : "Whether another process has this session open could not be checked." }
   const holder = activity.sessions.find(
       (session) =>
         session.nativeId === binding.nativeId || session.path === binding.path

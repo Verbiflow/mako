@@ -564,6 +564,7 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
       return summary && content ? { type, id, summary, content } : null
     }
     case "commandExecution": {
+      const processId = stringValue(root.processId)
       const command = stringValue(root.command)
       const cwd = stringValue(root.cwd)
       const status = stringValue(root.status)
@@ -580,6 +581,7 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
             command,
             cwd,
             status,
+            processId,
             aggregatedOutput: aggregatedOutput.value,
             exitCode: exitCode.value,
           }

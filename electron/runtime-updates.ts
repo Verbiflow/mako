@@ -498,7 +498,7 @@ export class RuntimeUpdates {
     )
       return { version: held.installed }
     try {
-      const output = await (this.options.version ?? spawnVersion)(
+      const output = await (this.options.version ?? readRuntimeVersion)(
         binary,
         source.versionArgs ?? ["--version"],
         env
@@ -892,10 +892,12 @@ function packageUpdate(
   }
 }
 
-async function spawnVersion(
+/** The shared bounded native version read, also used when a launch handshake omits it. */
+export async function readRuntimeVersion(
   binary: string,
   args: string[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  priority: "background" | "launch" = "background"
 ): Promise<string> {
   return withDiscoveryProcess(
     {
@@ -903,7 +905,7 @@ async function spawnVersion(
       args,
       env,
       timeoutMs: DEFAULTS.versionTimeoutMs,
-      priority: "background",
+      priority,
     },
     async ({ child, exited }) => {
       const chunks: Buffer[] = []

@@ -198,7 +198,7 @@ export class ThreadTitler {
       if (!on || this.closed || this.enabled) return
       this.configure(true)
       this.keep(exchange)
-    }, (error: unknown) => {
+    }, (error) => {
       hostWarn("thread-titles", "the model chosen for titles could not be read", { error: error instanceof Error ? error.message : String(error) })
     })
   }

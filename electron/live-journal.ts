@@ -15,6 +15,7 @@ import { mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
+import { ExecutionContextSchema } from "./contracts/execution-context.js"
 import { ThreadEntrySchema, ThreadRefSchema } from "@mako/sessions"
 import {
   LiveBlockSchema,
@@ -124,6 +125,7 @@ const MetadataSchema = z.object({
   nativeAgents: NativeAgentRosterSchema.optional(),
   control: ConversationControlSchema.optional(),
   session: z.object({
+    executionContext: ExecutionContextSchema.optional(),
     connection: z.enum([
       "starting",
       "connected",

@@ -1,4 +1,6 @@
 import { applyControlEnvironment } from "./control-launch.js"
+import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "./execution-context.js"
+import { CODEX_NATIVE_IDENTITY } from "./providers/codex/live-driver.js"
 import { applyThreadEnvironment } from "./thread-environment.js"
 import { app } from "electron"
 import { join } from "node:path"
@@ -23,8 +25,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
-import { setTimeout as delay } from "node:timers/promises"
-import { accountEnv, observeAccountUsage, selectedAccount } from "./accounts.js"
+import { resolveAccountLaunch, observeAccountUsage } from "./accounts.js"
 import { mergeWindows } from "./contracts/account-usage.js"
 import { CodexDecoder } from "./providers/codex/decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
@@ -45,6 +46,8 @@ import { boundedText, type JsonObject } from "./codex-app-json.js"
 import { LineAssembler } from "@mako/sessions"
 import {
   cleanBackground,
+  drainStoppedCommands,
+  retainStoppedTurn,
   endSubagents,
   consumeStdout,
   MAX_STDOUT_BUFFER,
@@ -87,6 +90,12 @@ type Live = {
   interruptWhenStarted: boolean
   /** Waiting for the running turn to settle, or for the app-server to exit. */
   settling: Array<() => void>
+  stoppedTurns: Set<string>
+  stoppingCommands: Set<Promise<void>>
+  startingTurn?: Promise<void>
+  resolveTurnStart?: () => void
+  canceling?: Promise<void>
+  deferredStop?: Partial<LiveSessionState>
   /** The chosen tier; sent with every turn/start and kept by Codex afterwards. */
   access: AccessTier | null
   state: LiveSessionState
@@ -148,8 +157,8 @@ async function startCodex(
   const id = options.conversationId
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
-  const env = await trace.step("account", () => accountEnv("codex", process.env))
-  const account = selectedAccount("codex").then((selected) => selected.name, () => "default")
+  const { env, account: configuredAccount } = await trace.step("account", () => resolveAccountLaunch("codex", process.env))
+  const account = Promise.resolve(configuredAccount.name)
   if (options.conversationTools)
     env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
   applyControlEnvironment(env, options.conversationTools?.control)
@@ -176,6 +185,7 @@ async function startCodex(
     // ledger's "must apply or fail" rule.
     access: options.modeId ? codexAccessTier(options.modeId) : null,
     state: {
+      executionContext: launchContext("codex-app-server", CODEX_NATIVE_IDENTITY, configuredAccount, executable),
       id,
       harness: "codex",
       cwd: workingDir,
@@ -201,6 +211,8 @@ async function startCodex(
     background: { running: new Set() },
     subagentTurns: new Map(),
     settling: [],
+    stoppedTurns: new Set(),
+    stoppingCommands: new Set(),
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
     approvals: new CodexPermissionObserver(join(app.getPath("userData"), "approval-evidence", "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
@@ -317,7 +329,7 @@ export async function codexAppPrompt(
 ): Promise<void> {
   const { live, threadId, collaboration } = preparePrompt(dispatch, () => {
     const live = sessions.get(id)
-    if (!live?.threadId || live.exited)
+    if (!live?.threadId || live.exited || closingSessions.has(id))
       throw new Error("This Codex session is not running")
     if (live.state.status === "running")
       throw new Error("Codex is already working")
@@ -329,6 +341,10 @@ export async function codexAppPrompt(
     return { live, threadId: live.threadId, collaboration: codexCollaborationMode(tuning, live.state.settings?.model) }
   })
   const sequence = ++live.promptSequence
+  let resolveStarted = () => {}
+  const startingTurn = new Promise<void>(resolve => { resolveStarted = resolve })
+  live.startingTurn = startingTurn
+  live.resolveTurnStart = resolveStarted
   live.interruptWhenStarted = false
   updateState(live, {
     status: "running",
@@ -366,7 +382,7 @@ export async function codexAppPrompt(
       }
     }
   } catch (error) {
-    if (live.promptSequence !== sequence) return
+    if (live.promptSequence !== sequence || live.exited) return
     live.interruptWhenStarted = false
     const message =
       error instanceof Error && error.message
@@ -374,6 +390,12 @@ export async function codexAppPrompt(
         : "Codex rejected the turn"
     updateState(live, { status: "failed", error: message, lastStop: "failed" })
     throw new Error(message, { cause: error })
+  } finally {
+    resolveStarted()
+    if (live.startingTurn === startingTurn) {
+      live.startingTurn = undefined
+      live.resolveTurnStart = undefined
+    }
   }
 }
 
@@ -399,31 +421,45 @@ export function codexAppPermission(
 export async function codexAppCancel(id: string): Promise<void> {
   const live = sessions.get(id)
   if (!live?.threadId || live.exited) return
-  const clean = () => {
-    if (live.exited) return
-    cleanBackground(live).catch((error) =>
-      hostWarn("codex", "Background terminals were not ended", { conversation: id, error: String(error) }))
-    endSubagents(live).catch((error) =>
-      hostWarn("codex", "Subagents were not ended", { conversation: id, error: String(error) }))
-  }
-  if (!live.currentTurnId) {
-    // turn/start has not answered, so its turn may exist without an id yet.
-    if (isRunning(live) && !live.compaction) live.interruptWhenStarted = true
-    clean()
+  if (live.canceling) return live.canceling
+  const threadId = live.threadId
+  if (!live.currentTurnId && isRunning(live) && !live.compaction) {
+    // The accepted turn ID will issue this Stop once, without replaying input.
+    live.interruptWhenStarted = true
     return
   }
-  // The interrupt turns the running command into one more terminal, so the
-  // clean waits for the turn to settle.
-  live.settling.push(clean)
-  try {
-    await rpcRequest(live, "turn/interrupt", {
-      threadId: live.threadId,
-      turnId: live.currentTurnId,
-    })
-  } catch (error) {
-    live.settling = live.settling.filter((settle) => settle !== clean)
-    throw error
-  }
+  const operation = Promise.resolve().then(async () => {
+    const turnId = live.currentTurnId
+    let settled = Promise.resolve()
+    let settle = () => {}
+    if (turnId) {
+      settled = new Promise<void>(resolve => { settle = resolve })
+      live.settling.push(settle)
+    }
+    try {
+      if (turnId) retainStoppedTurn(live, turnId)
+      // Capture and terminate foreground terminals while the native turn still
+      // owns their IDs. Interrupt can discard that ownership before cleanup.
+      await cleanBackground(live)
+      if (turnId && live.currentTurnId === turnId)
+        await rpcRequest(live, "turn/interrupt", { threadId, turnId })
+      await settled
+      await Promise.all([cleanBackground(live), endSubagents(live)])
+      await drainStoppedCommands(live)
+      if (live.exited) throw new Error("The native transport ended before Stop cleanup was confirmed")
+    } catch (error) {
+      live.deferredStop = { status: "failed", lastStop: "failed", error: `Stop cleanup was not confirmed: ${String(error)}` }
+      throw error
+    } finally {
+      live.settling = live.settling.filter(waiter => waiter !== settle)
+      live.canceling = undefined
+      const patch = live.deferredStop
+      live.deferredStop = undefined
+      if (patch && !live.exited) updateState(live, patch)
+    }
+  })
+  live.canceling = operation
+  return operation
 }
 
 export async function codexAppSteer(
@@ -477,19 +513,32 @@ export async function codexAppClose(id: string): Promise<void> {
   if (closing) return closing
   const live = sessions.get(id)
   if (!live) return
-  const operation = (async () => {
-    updateState(live, { status: "closed" })
-    if (!live.exited)
-      await Promise.race([
-        Promise.allSettled([cleanBackground(live), endSubagents(live)]),
-        delay(SHUTDOWN_GRACE_MS, undefined, { ref: false }),
+  // Install the closing fence before the first native call. Keep decoding until
+  // Stop has settled and every observed late terminal's termination has replied.
+  const operation = Promise.resolve().then(async () => {
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      if (!live.exited) await Promise.race([
+        (async () => {
+          await live.startingTurn
+          await codexAppCancel(id)
+          await drainStoppedCommands(live)
+          if (live.exited) throw new Error("The native transport ended before Close cleanup was confirmed")
+        })(),
+        new Promise<never>((_resolve, reject) => {
+          deadline = setTimeout(() => reject(new Error("Codex Close cleanup was not confirmed before the shutdown deadline")), SHUTDOWN_GRACE_MS)
+        }),
       ])
-    disposeLive(live, new Error("Codex session closed"))
-    if (!live.child.killed) live.child.kill()
-    await live.processClosed
-    await live.approvals.close()
-    if (sessions.get(id) === live) sessions.delete(id)
-  })()
+    } finally {
+      clearTimeout(deadline)
+      updateState(live, { status: "closed" })
+      disposeLive(live, new Error("Codex session closed"))
+      if (!live.child.killed) live.child.kill()
+      await live.processClosed
+      await live.approvals.close()
+      if (sessions.get(id) === live) sessions.delete(id)
+    }
+  })
   closingSessions.set(id, operation)
   try {
     await operation
@@ -510,28 +559,40 @@ async function openThread(
   resume?: string,
   fork?: { nativeId: string; runId: string }
 ): Promise<ThreadResponse> {
-  await trace.step("handshake", () => watch.step("initialize", rpcRequest(live, "initialize", {
+  const initialized = await trace.step("handshake", () => watch.step("initialize", rpcRequest(live, "initialize", {
     clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
     capabilities: { experimentalApi: true, requestAttestation: false },
   })))
   sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
+  if (live.state.executionContext) updateState(live, { executionContext: {
+    ...live.state.executionContext,
+    runtime: reportedRuntime(initialized.userAgent, "app-server initialize.userAgent"),
+  } })
+  const identityObservation = observeNativeIdentity(async () => {
+    const { account } = await rpcRequest(live, "account/read", { refreshToken: false })
+    return reportedIdentity(account?.type === "chatgpt" ? account.email : undefined, account?.type ?? "signed-out", CODEX_NATIVE_IDENTITY.via)
+  }, () => !live.exited && live.state.status !== "closed" && sessions.get(live.id) === live, identity => {
+    if (live.state.executionContext) updateState(live, { executionContext: { ...live.state.executionContext, identity } })
+  })
   const tuning = threadTuning(
     live.tuning,
     codexMcpConfig(live.mcpSnapshot, live.makoServers)
   )
-  if (fork)
-    return trace.step("session-fork", () => watch.step("thread/fork", rpcRequest(live, "thread/fork", {
-      threadId: fork.nativeId,
-      lastTurnId: fork.runId,
-      cwd: live.cwd,
-      ...tuning,
-    })))
-  if (!resume)
-    return trace.step("session-open", () => watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning })))
-  // Codex refuses to resume a thread its archive holds, and Mako leaves the
-  // archive to Codex: the catalog marks such a thread closed, so a reply
-  // continues it in a new thread rather than reaching this resume.
-  return trace.step("session-resume", () => watch.step("thread/resume", rpcRequest(live, "thread/resume", { threadId: resume, cwd: live.cwd, ...tuning })))
+  const open = () => {
+    if (fork)
+      return trace.step("session-fork", () => watch.step("thread/fork", rpcRequest(live, "thread/fork", {
+        threadId: fork.nativeId,
+        lastTurnId: fork.runId,
+        cwd: live.cwd,
+        ...tuning,
+      })))
+    if (!resume)
+      return trace.step("session-open", () => watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning })))
+    // An archived native thread is never unarchived to make recovery pass.
+    return trace.step("session-resume", () => watch.step("thread/resume", rpcRequest(live, "thread/resume", { threadId: resume, cwd: live.cwd, ...tuning })))
+  }
+  const [response] = await Promise.all([open(), identityObservation])
+  return response
 }
 
 function threadTuning(
@@ -620,8 +681,17 @@ function clearStartupWatch(live: Live): void {
 }
 
 function updateState(live: Live, patch: Partial<LiveSessionState>): void {
+  // Native turn/started can identify the accepted run before turn/start replies.
+  // Close can interrupt that exact run without waiting for the delayed receipt.
+  if (patch.nativeRunId) live.resolveTurnStart?.()
+  if (patch.status && patch.status !== "running") {
+    for (const settle of live.settling.splice(0)) settle()
+    if (live.canceling && patch.status !== "closed") {
+      live.deferredStop = { ...live.deferredStop, ...patch }
+      return
+    }
+  }
   engine.patch(live, patch)
-  if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
 }
 
 /** A marker held with the history replayed at startup, which is published as one batch. */

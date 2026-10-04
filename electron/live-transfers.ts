@@ -16,6 +16,7 @@ import type { TurnContinuation } from "./contracts/live-conversations.js"
 import { classifyStartFailure } from "./contracts/provider-failure.js"
 import type { LiveSnapshot } from "./shared.js"
 import { hostLog } from "./host-log.js"
+import { verifyRecoveredSession } from "./provider-recovery.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { capturedThread, prepareLiveContext } from "./live-context.js"
 import { bindingPath, errorMessage } from "./live-runtime.js"
@@ -407,6 +408,7 @@ export class LiveTransfers {
         prepared = { driver, session }
         if (prior?.nativeId && session.nativeId !== prior.nativeId)
           throw new Error("The provider returned a different session while resuming. The saved conversation was not replaced.")
+        if (prior?.nativeId) await verifyRecoveredSession(prior, session, driver)
         if (session.nativeId && held !== session.nativeId) {
           this.host.dependencies.memory?.hold(
             transfer.input.provider,

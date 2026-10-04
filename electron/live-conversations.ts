@@ -1,4 +1,6 @@
 import { LiveQuestions } from "./live-questions.js"
+import { disconnectedContext } from "./execution-context.js"
+import { verifyRecoveredSession } from "./provider-recovery.js"
 import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
@@ -863,8 +865,14 @@ export class LiveConversations {
     if (purpose) this.markPurpose(id, purpose, options)
     const generation = resident.generation
     const openingOperation = Promise.resolve()
-      .then(async () =>
-        driver.start(cwd, {
+      .then(async () => {
+        const conversationTools = await this.dependencies.tools?.(id, id)
+        const threadEnvironment = await this.dependencies.threadEnvironment?.(id, options.title, cwd)
+        // Preparation may finish after Close or an execution-ownership move.
+        // Check and start without yielding so a stale owner never spawns.
+        if (resident.generation !== generation || resident.closing || !this.moves.executes(resident))
+          throw new Error("Execution ownership changed while preparing the native session.")
+        return driver.start(cwd, {
         ...options,
         modeId,
         tuning,
@@ -872,10 +880,10 @@ export class LiveConversations {
         mcpSnapshot: this.dependencies.mcpSnapshot
           ? () => this.dependencies.mcpSnapshot!(cwd)
           : undefined,
-          conversationTools: await this.dependencies.tools?.(id, id),
-          threadEnvironment: await this.dependencies.threadEnvironment?.(id, options.title, cwd),
+          conversationTools,
+          threadEnvironment,
         })
-      )
+      })
       .then(async (session) => {
         if (resident.generation !== generation) {
           try {
@@ -1368,6 +1376,7 @@ export class LiveConversations {
         throw new Error(
           "The provider returned a different session while waking. The saved conversation was not replaced."
         )
+      await verifyRecoveredSession(binding, session, driver)
       if (
         modeId &&
         modeId !== session.currentMode &&
@@ -1459,6 +1468,9 @@ export class LiveConversations {
         session: {
           ...resident.snapshot.session,
           connection: closed ? "disconnected" : "connected",
+          nativeId: closed ? binding.nativeId : resident.snapshot.session.nativeId,
+          nativePath: closed ? binding.path : resident.snapshot.session.nativePath,
+          executionContext: closed ? binding.executionContext : resident.snapshot.session.executionContext,
           status: "failed",
           error: message,
         },
@@ -1565,7 +1577,9 @@ export class LiveConversations {
           ),
         }
       }
-      this.updateBinding(resident, event.session)
+      // Startup reports are observations, not permission to replace an admitted
+      // source. Wake validates the returned session before committing its binding.
+      if (!resident.opening) this.updateBinding(resident, event.session)
       const connection = resident.connections.get(bindingId)
       if (connection) connection.session = { ...event.session, id: bindingId }
       if (event.session.connection === "disconnected") {
@@ -2325,8 +2339,13 @@ export class LiveConversations {
   private updateBinding(resident: Resident, session: LiveSessionState): void {
     const control = this.control(resident)
     const path = bindingPath(this.dependencies, session, session.nativePath ?? resident.snapshot.threadPath)
+    const context = session.executionContext && {
+      ...session.executionContext,
+      store: path ? { kind: "located" as const, path } : session.executionContext.store,
+    }
     resident.snapshot = {
       ...resident.snapshot,
+      session: { ...resident.snapshot.session, executionContext: context },
       threadPath: path,
       control: {
         ...control,
@@ -2335,6 +2354,7 @@ export class LiveConversations {
             ? {
                 ...binding,
                 nativeId: session.nativeId ?? binding.nativeId,
+                executionContext: context ?? binding.executionContext,
                 path: path ?? binding.path,
                 tuning: session.settings ?? binding.tuning,
                 modeId:
@@ -3277,6 +3297,12 @@ export class LiveConversations {
   }
 
   private flush(resident: Resident): void {
+    const session = resident.snapshot.session
+    if (session.executionContext?.identity.kind === "pending" &&
+      (session.status === "closed" || session.connection === "hibernated" || session.connection === "disconnected")) {
+      resident.snapshot = { ...resident.snapshot, session: { ...session, executionContext: disconnectedContext(session.executionContext) } }
+      if (!resident.opening) this.updateBinding(resident, resident.snapshot.session)
+    }
     if (resident.timer) clearTimeout(resident.timer)
     resident.timer = null
     const previous = resident.journalSnapshot ?? resident.snapshot
@@ -3444,6 +3470,7 @@ export class LiveConversations {
         : undefined,
       session: {
         ...previous.session,
+        executionContext: disconnectedContext(previous.session.executionContext),
         status:
           previous.session.status === "closed"
             ? "closed"

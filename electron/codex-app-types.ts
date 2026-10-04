@@ -1,4 +1,5 @@
 import type { CodexAgentRun } from "./providers/codex/agent-status.js"
+import type { CodexIdentityResponse, CodexInitialize } from "./providers/codex/native-context.js"
 import type { CodexAgentItem } from "./providers/codex/agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { AttachmentContent, LineAssembler } from "@mako/sessions"
@@ -36,6 +37,7 @@ export type ThreadItem =
   | { type: "reasoning"; id: string; summary: string[]; content: string[] }
   | {
       type: "commandExecution"
+      processId?: string
       id: string
       command: string
       cwd: string
@@ -103,6 +105,7 @@ export type ThreadResponse = {
 }
 
 export type RpcParams = {
+  "account/read": { refreshToken: false }
   initialize: {
     clientInfo: { name: string; title: string; version: string }
     capabilities: { experimentalApi: true; requestAttestation: false }
@@ -137,11 +140,13 @@ export type RpcParams = {
   "turn/interrupt": TurnInterruptParams
   "thread/backgroundTerminals/list": { threadId: string; cursor?: string }
   "thread/backgroundTerminals/clean": { threadId: string }
+  "thread/backgroundTerminals/terminate": { threadId: string; processId: string }
   "thread/loaded/list": { cursor?: string }
 }
 
 export type RpcResults = {
-  initialize: JsonObject
+  "account/read": CodexIdentityResponse
+  initialize: CodexInitialize
   "thread/start": ThreadResponse
   "thread/fork": ThreadResponse
   "thread/resume": ThreadResponse
@@ -150,8 +155,9 @@ export type RpcResults = {
   "turn/steer": { turnId: string }
   "thread/compact/start": JsonObject
   "turn/interrupt": JsonObject
-  "thread/backgroundTerminals/list": { data: { itemId: string }[]; nextCursor?: string | null }
+  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[]; nextCursor?: string | null }
   "thread/backgroundTerminals/clean": JsonObject
+  "thread/backgroundTerminals/terminate": { terminated: boolean }
   "thread/loaded/list": { data: string[]; nextCursor?: string | null }
 }
 
@@ -207,6 +213,11 @@ export interface ProtocolCallbacks {
 }
 
 export interface ProtocolContext {
+  /** Stopped native turns retained until transport disposal: late commands still belong to Stop. */
+  stoppedTurns?: Set<string>
+  stoppedCommands?: Set<string>
+  /** Native termination replies in flight; Close must drain them before retiring the decoder. */
+  stoppingCommands?: Set<Promise<void>>
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }
   child: ChildProcessWithoutNullStreams
   threadId: string | null
