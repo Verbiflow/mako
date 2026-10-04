@@ -7,7 +7,7 @@ import { formatBytes, formatRelative } from "@/lib/format"
 import { desktop } from "@/state/desktop"
 import { togglePref, usePrefs } from "@/state/prefs"
 import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
-import { readWorktreeInventory, removable, removeLandedWorktrees, removeWorktree } from "@/state/worktrees"
+import { leavingWorktrees, readWorktreeInventory, removable, removeLandedWorktrees, removeWorktree, useLeavingWorktrees } from "@/state/worktrees"
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
 const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
@@ -75,8 +75,11 @@ export function WorktreesSection() {
     (reason) => setError(reason instanceof Error ? reason.message : String(reason)),
   ), [])
   useEffect(() => { void read() }, [read])
+  // A removal waits out its Undo: read again as one starts, is undone, or runs.
+  useEffect(() => leavingWorktrees.subscribe(() => void read()), [read])
+  const leaving = useLeavingWorktrees((state) => state.byPath)
 
-  const act = async (work: () => Promise<void>) => {
+  const act = async (work: () => Promise<void> | void) => {
     setBusy(true)
     try { await work() } finally {
       await read()
@@ -84,7 +87,7 @@ export function WorktreesSection() {
     }
   }
 
-  const worktrees = [...(inventory?.worktrees ?? [])].sort((a, b) => b.createdAt - a.createdAt)
+  const worktrees = (inventory?.worktrees ?? []).filter((worktree) => !leaving[worktree.path]).sort((a, b) => b.createdAt - a.createdAt)
   const landed = worktrees.filter(removable)
   const measured = worktrees.reduce((sum, worktree) => sum + (worktree.bytes ?? 0), 0)
   const spares = inventory?.spares
@@ -155,6 +158,7 @@ export function WorktreesSection() {
 /** The default for new Threads, the composer's Own branch chip in Settings, and the projects where agents may move without asking. */
 function BranchSettings() {
   const ownBranch = usePrefs((prefs) => prefs.newThreadsInWorktree)
+  const tidy = usePrefs((prefs) => prefs.removeLandedOnArchive)
   const alwaysAllowed = useWorkspaceMoves((moves) => moves.alwaysAllowed)
   return (
     <ListCard>
@@ -163,6 +167,12 @@ function BranchSettings() {
         description="Each new Thread in a Git project gets its own branch, in a worktree with your .env files and installed packages. Off starts it in the project folder. The composer's chip is the same switch"
       >
         <Toggle label="Start new threads on their own branch" on={ownBranch} onChange={() => togglePref("newThreadsInWorktree")} />
+      </SettingRow>
+      <SettingRow
+        title="Remove a worktree when its Thread is archived, once its work has landed"
+        description="Only when everything it committed is in its project's branch, nothing is left uncommitted and nothing runs there. The archive toast's Undo brings back both. Off, the toast offers the removal instead"
+      >
+        <Toggle label="Remove a worktree when its Thread is archived, once its work has landed" on={tidy} onChange={() => togglePref("removeLandedOnArchive")} />
       </SettingRow>
       {alwaysAllowed.map((project) => (
         <SettingRow

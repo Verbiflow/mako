@@ -17,7 +17,7 @@ import { github, useBranchPull } from "@/state/github"
 import { setPref, prefsStore, usePrefs } from "@/state/prefs"
 import { actions, useSession } from "@/state/session"
 import { viewer } from "@/state/viewer"
-import { mergeWorktree, readWorktreeReviewDiffs, refreshWorktreeSummaries, removeWorktree, updateFromMain, useWorktreeReview, useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
+import { mergeWorktree, readWorktreeReviewDiffs, refreshWorktreeSummaries, removeWorktree, updateFromMain, useLeavingWorktrees, useWorktreeReview, useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`
 
@@ -92,7 +92,8 @@ export function WorktreeReview() {
   const [asked, setAsked] = useState(false)
   const [composing, setComposing] = useState(false)
   const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
-  if (!worktree || !review) return null
+  const leaving = useLeavingWorktrees((state) => Boolean(worktree && state.byPath[worktree.path]))
+  if (!worktree || !review || leaving) return null
 
   const pull = branchPull?.pull && branchPull.pull.head === worktree.branch && branchPull.pull.state === "open" ? branchPull.pull : null
   const changed = status?.files.some((file) => file.status !== "untracked") ?? false

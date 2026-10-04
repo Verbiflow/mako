@@ -9,7 +9,7 @@ import type { ThreadStore } from "./thread-store.js"
 import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeUpdate } from "./contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
@@ -652,6 +652,31 @@ export class ThreadWorktreeService {
     return { root: this.root, worktrees }
   }
 
+  private async made(path: string) {
+    const attached = this.threads.worktrees().find((candidate) => candidate.path === path)
+    const receipts = (await this.receiptsList()).filter(({ receipt }) => receipt.path === path)
+    const repoRoot = attached?.repoRoot ?? receipts[0]?.receipt.repoRoot
+    if (!repoRoot) throw new Error("Mako didn't make this worktree, so it won't remove it.")
+    return { attached, receipts, repoRoot }
+  }
+
+  private async held(path: string): Promise<string | null> {
+    const users = await this.inUse(path)
+    if (users.length) return `${basename(path)} is in use by ${users.join(", ")}. Stop ${users.length === 1 ? "it" : "them"}, then remove the worktree.`
+    return existsSync(path) ? (await removalBlocker(path)) ?? null : null
+  }
+
+  /** What removing the worktree at `path` would meet, without removing it: a removal can wait for an Undo and still say what it will do. */
+  async removal(path: string): Promise<WorktreeRemoval> {
+    const { attached, receipts, repoRoot } = await this.made(path)
+    const made = attached ?? receipts[0]?.receipt
+    const [held, landing] = await Promise.all([
+      this.held(path),
+      made ? this.landing({ repoRoot, branch: made.branch, base: made.base }) : Promise.resolve({ kind: "unknown" as const }),
+    ])
+    return { held, landing }
+  }
+
   /**
    * Remove a worktree that nothing runs in and nothing is uncommitted in.
    * Its branch stays, so committed work is never lost. The folder is moved
@@ -659,16 +684,10 @@ export class ThreadWorktreeService {
    * installed files don't hold the answer up.
    */
   async remove(path: string): Promise<ThreadWorktreeList> {
-    const attached = this.threads.worktrees().find((candidate) => candidate.path === path)
-    const receipts = (await this.receiptsList()).filter(({ receipt }) => receipt.path === path)
-    const repoRoot = attached?.repoRoot ?? receipts[0]?.receipt.repoRoot
-    if (!repoRoot) throw new Error("Mako didn't make this worktree, so it won't remove it.")
-    const users = await this.inUse(path)
-    if (users.length)
-      throw new Error(`${basename(path)} is in use by ${users.join(", ")}. Stop ${users.length === 1 ? "it" : "them"}, then remove the worktree.`)
+    const { attached, receipts, repoRoot } = await this.made(path)
+    const held = await this.held(path)
+    if (held) throw new Error(held)
     if (existsSync(path)) {
-      const blocker = await removalBlocker(path)
-      if (blocker) throw new Error(blocker)
       if (attached) {
         await this.environment?.stop(attached.thread)
         await this.environment?.cleanup?.(attached.thread, path)

@@ -72,6 +72,8 @@ export interface Prefs {
   newThreadsInWorktree: boolean
   /** How a worktree's branch last landed in each project, by its main checkout: `merge` or `pull`. */
   landWith: PreferenceStringMap
+  /** Archiving a Thread removes its worktree too, once its work is in its project's branch and nothing is left uncommitted. */
+  removeLandedOnArchive: boolean
   selectedDiffs: PreferenceStringMap
   /** Threads kept at the top of both rails, by session path. */
   pinnedThreads: string[]
@@ -145,6 +147,7 @@ const defaults: Prefs = {
   railGrouping: "project",
   folderUse: {},
   landWith: {},
+  removeLandedOnArchive: false,
   providerModes: {},
   steerOnEnter: true,
   collapsedGroups: [],
@@ -399,6 +402,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     railGrouping: readChoice(value.railGrouping, ["project", "recent", "status", "archived"], defaults.railGrouping),
     folderUse: readStringRecord(value.folderUse),
     landWith: readStringRecord(value.landWith),
+    removeLandedOnArchive: readBoolean(value.removeLandedOnArchive, defaults.removeLandedOnArchive),
     providerModes: readStringRecord(value.providerModes),
     steerOnEnter: readBoolean(value.steerOnEnter, defaults.steerOnEnter),
     providerSettings: readProviderSettings(value.providerSettings, value.composerTuning),

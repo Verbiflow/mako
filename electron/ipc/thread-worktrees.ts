@@ -1,7 +1,7 @@
 import { registerIpc } from "./register.js"
 import type { ThreadWorktreeService } from "../thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 
 interface PullLists {
   /** Open pull requests a new Thread can work on. */
@@ -48,6 +48,10 @@ export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | nul
     (await worktrees?.startPoint(cwd, fetch)) ?? null)
   registerIpc("mako:worktree-want", async (_event, cwd: string): Promise<void> => {
     await worktrees?.want(cwd)
+  })
+  registerIpc("mako:worktree-removal", (_event, path: string): Promise<WorktreeRemoval> => {
+    if (!worktrees) throw new Error(UNAVAILABLE)
+    return worktrees.removal(path)
   })
   registerIpc("mako:worktree-remove", (_event, path: string): Promise<ThreadWorktrees> => {
     if (!worktrees) throw new Error(UNAVAILABLE)

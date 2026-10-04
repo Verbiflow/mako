@@ -13,6 +13,7 @@ import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
 import type { WorktreeBranchPull, WorktreeSummary } from "../electron/contracts/thread-worktrees.js"
 import { worktreeMark, worktreeMarkLabel, worktreeTip } from "../src/lib/worktree-marks.ts"
 import { landState, readLandWith } from "../src/lib/worktree-landing.ts"
+import { landedFor, removedNote } from "../src/lib/worktree-removal.ts"
 
 /**
  * Where a new Thread's branch starts: the project folder's branch, or its
@@ -273,6 +274,17 @@ assert.deepEqual(landState({ ...facts, landed: true, changed: true }), { kind: "
 assert.deepEqual(landState({ ...facts, commits: 0 }), { kind: "nothing" })
 assert.equal(readLandWith("pull"), "pull")
 assert.equal(readLandWith("rebase"), undefined)
+
+// A removal's toast says what stays.
+assert.equal(removedNote("mako/fix-login", { kind: "merged", into: "main" }), "mako/fix-login is in main, and its branch is kept")
+assert.equal(removedNote("mako/fix-login", { kind: "open", into: "main", commits: 3 }), "Its 3 commits stay on mako/fix-login")
+assert.equal(removedNote("mako/fix-login", { kind: "open", into: "main", commits: 1 }), "Its commit stays on mako/fix-login")
+assert.equal(removedNote("mako/fix-login", { kind: "open", into: "main", commits: 2 }, { into: "main", landing: { kind: "merged", into: "main" } }), "mako/fix-login is in main, and its branch is kept", "a pull request merged at its tip counts")
+assert.equal(removedNote("mako/x", { kind: "empty" }), "Nothing was committed there; mako/x is kept")
+assert.equal(landedFor({ kind: "empty" }, undefined), true, "nothing committed is nothing to lose")
+assert.equal(landedFor({ kind: "open", into: "main", commits: 2 }, undefined), false)
+assert.equal(landedFor({ kind: "open", into: "main", commits: 2 }, { landing: { kind: "merged", into: "main" } }), true)
+assert.equal(landedFor({ kind: "unknown" }, { landing: { kind: "open", into: "main", commits: 1 } }), false)
 
 threads.close()
 rmSync(root, { recursive: true, force: true })

@@ -3,14 +3,16 @@ import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
 import type { GitStatus, ThreadRef } from "@/lib/types"
-import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeRemoval, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import { landedFor, REMOVAL_UNDO_MS, removedNote } from "@/lib/worktree-removal"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
 import { pathInside, plainPath, worktreeAt } from "@/lib/worktree-paths"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
 import { checkoutHeadsStore } from "@/state/checkout-heads"
 import { confirmAction } from "@/state/confirm"
+import { prefsStore } from "@/state/prefs"
 import { createHook, createStore } from "@/state/store"
 import { threadsStore } from "@/state/thread-store"
 
@@ -354,33 +356,69 @@ export function readWorktreePulls(cwd: string): Promise<WorktreePull[] | null> {
 }
 
 type RemovableWorktree = Pick<ThreadWorktree, "path" | "branch">
-/** A batch removal names this many worktrees and counts the rest. */
-const LISTED = 5
-const folderOf = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
 
-/** Remove a worktree once asked; its branch keeps whatever was committed there. */
-export async function removeWorktree(worktree: RemovableWorktree): Promise<void> {
-  const confirmed = await confirmAction({
-    title: "Remove this worktree?",
-    body: "Its folder is deleted from disk. The branch stays, with every commit made there.",
-    confirm: "Remove worktree",
-    tone: "negative",
-    icon: "remove",
-    subjects: [
-      { kind: "folder", name: folderOf(worktree.path), detail: "Deleted", lost: true },
-      { kind: "branch", name: worktree.branch, detail: "Kept" },
-    ],
-    note: "Files Git ignores go with the folder, such as .env copies and installed packages.",
+/** Worktrees whose removal waits out its toast's Undo: gone from view, still on disk. */
+export const leavingWorktrees = createStore<{ byPath: Readonly<Record<string, true>> }>({ byPath: {} })
+export const useLeavingWorktrees = createHook(leavingWorktrees)
+
+function setLeaving(paths: readonly string[], leaving: boolean): void {
+  const rest = Object.fromEntries(Object.entries(leavingWorktrees.get().byPath).filter(([path]) => !paths.includes(path)))
+  leavingWorktrees.set({ byPath: leaving ? { ...rest, ...Object.fromEntries(paths.map((path) => [path, true as const])) } : rest })
+}
+
+/**
+ * Take the worktrees out of view now and remove them once the toast's Undo
+ * has passed. Nothing is removed before then, so Undo puts them back exactly
+ * and quitting first keeps them. `undo` also runs on Undo.
+ */
+function removeAfterUndo(going: readonly RemovableWorktree[], title: string, description: string, undo?: () => void): void {
+  const paths = going.map((worktree) => worktree.path)
+  setLeaving(paths, true)
+  const timer = window.setTimeout(() => void removeNow(), REMOVAL_UNDO_MS)
+  toast(title, {
+    description,
+    duration: REMOVAL_UNDO_MS,
+    action: {
+      label: "Undo",
+      onClick: () => {
+        window.clearTimeout(timer)
+        setLeaving(paths, false)
+        undo?.()
+      },
+    },
   })
-  if (!confirmed) return
+  async function removeNow() {
+    const failed: string[] = []
+    for (const worktree of going) {
+      try {
+        const { worktrees } = await getMako().removeWorktree(worktree.path)
+        reads += 1
+        worktreesStore.set(stateOf(worktrees))
+      } catch (error) {
+        failed.push(going.length === 1 ? error instanceof Error ? error.message : String(error) : `${worktree.branch}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    setLeaving(paths, false)
+    void refreshWorktreeSummaries().catch(() => {})
+    if (failed.length) toast.error(failed.length === 1 ? "A worktree wasn't removed after all" : `${failed.length} worktrees weren't removed after all`, { description: failed.join("\n") })
+  }
+}
+
+/** Remove a worktree, with Undo instead of a question; one that would lose work stays and says why. Its branch keeps whatever was committed there. */
+export async function removeWorktree(worktree: RemovableWorktree): Promise<void> {
+  if (leavingWorktrees.get().byPath[worktree.path]) return
+  let removal: WorktreeRemoval
   try {
-    const { worktrees } = await getMako().removeWorktree(worktree.path)
-    reads += 1
-    worktreesStore.set(stateOf(worktrees))
-    toast("Worktree removed", { description: `The branch ${worktree.branch} keeps its commits.` })
+    removal = await getMako().worktreeRemoval(worktree.path)
   } catch (error) {
     toast.error("The worktree wasn't removed", { description: error instanceof Error ? error.message : String(error) })
+    return
   }
+  if (removal.held) {
+    toast("The worktree stays", { description: removal.held })
+    return
+  }
+  removeAfterUndo([worktree], "Worktree removed", removedNote(worktree.branch, removal.landing, worktreeSummariesStore.get().byPath[worktree.path]))
 }
 
 /** Every worktree with what decides whether it can go, and the spares kept for new Threads. */
@@ -394,45 +432,29 @@ export function removable(worktree: WorktreeDetail): boolean {
   return !worktree.held && worktree.users.length === 0 && (worktree.landing.kind === "merged" || worktree.landing.kind === "empty")
 }
 
-/** Remove every worktree whose work landed or never started, once asked; their branches stay. */
-export async function removeLandedWorktrees(worktrees: readonly WorktreeDetail[]): Promise<void> {
-  const going = worktrees.filter(removable)
-  if (!going.length) return
-  const one = going.length === 1
-  const confirmed = await confirmAction({
-    title: one ? "Remove this worktree?" : `Remove ${going.length} worktrees?`,
-    body: one
-      ? "Its work is on the project's branch, or it never made a commit. The folder is deleted; the branch stays."
-      : "Their work is on the project's branch, or they never made a commit. The folders are deleted; the branches stay.",
-    confirm: one ? "Remove worktree" : `Remove ${going.length} worktrees`,
-    tone: "negative",
-    icon: "remove",
-    subjects: going.slice(0, LISTED).map((worktree) => ({ kind: "folder" as const, name: folderOf(worktree.path), detail: worktree.branch })),
-    more: Math.max(0, going.length - LISTED),
-    note: "Files Git ignores go with each folder, such as .env copies and installed packages.",
-  })
-  if (!confirmed) return
-  const failed: string[] = []
-  let removed = 0
-  for (const worktree of going) {
-    try {
-      const { worktrees: left } = await getMako().removeWorktree(worktree.path)
-      reads += 1
-      worktreesStore.set(stateOf(left))
-      removed += 1
-    } catch (error) {
-      failed.push(`${worktree.branch}: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-  if (removed) toast(removed === 1 ? "1 worktree removed" : `${removed} worktrees removed`, { description: "Their branches keep their commits." })
-  if (failed.length) toast.error(failed.length === 1 ? "A worktree wasn't removed" : `${failed.length} worktrees weren't removed`, { description: failed.join("\n") })
+/** Remove every worktree whose work landed or never started, as one toast with one Undo; their branches stay. */
+export function removeLandedWorktrees(worktrees: readonly WorktreeDetail[]): void {
+  const going = worktrees.filter((worktree) => removable(worktree) && !leavingWorktrees.get().byPath[worktree.path])
+  const [only] = going
+  if (!only) return
+  if (going.length === 1) removeAfterUndo(going, "Worktree removed", removedNote(only.branch, only.landing, worktreeSummariesStore.get().byPath[only.path]))
+  else removeAfterUndo(going, `${going.length} worktrees removed`, "Their branches are kept, with every commit made there")
 }
 
-/** A Thread was put away with its worktree still on disk: say so, with the removal one click away. */
-export function offerWorktreeRemoval(worktree: ThreadWorktree): void {
-  toast("Thread archived", {
+/**
+ * A Thread was put away with nothing running in it. With the tidy-up on and
+ * its work landed and committed, its worktree goes too, under the archive
+ * toast's Undo, which brings back both; otherwise the toast offers the removal.
+ */
+export async function archivedWithWorktree(worktree: ThreadWorktree, restore: () => void): Promise<void> {
+  const offer = () => toast("Thread archived", {
     description: `Its worktree on ${worktree.branch} is still on disk. Removing it keeps the branch.`,
     duration: ACTION_TOAST_MS,
     action: { label: "Remove worktree", onClick: () => void removeWorktree(worktree) },
   })
+  if (!prefsStore.get().removeLandedOnArchive || !hasBridge()) return void offer()
+  const removal = await getMako().worktreeRemoval(worktree.path).catch(() => null)
+  const summary = worktreeSummariesStore.get().byPath[worktree.path]
+  if (!removal || removal.held || !landedFor(removal.landing, summary)) return void offer()
+  removeAfterUndo([worktree], "Thread archived", `Its worktree goes too. ${removedNote(worktree.branch, removal.landing, summary)}`, restore)
 }

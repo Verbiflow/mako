@@ -53,6 +53,7 @@ const reads = [
   "mako:worktree-branches",
   "mako:worktree-pulls",
   "mako:worktree-summaries",
+  "mako:worktree-removal",
   "mako:checkout-heads",
   "mako:chat-folders",
   "mako:workspace-moves",

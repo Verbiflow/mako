@@ -4,7 +4,7 @@ import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, 
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { desktop } from "@/state/desktop"
 import { threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
-import { offerWorktreeRemoval, removeWorktree, useWorktrees, worktreeAt } from "@/state/worktrees"
+import { archivedWithWorktree, removeWorktree, useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
 import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { wholeThreadTargets } from "@/state/session-archive"
 import { viewer } from "@/state/viewer"
@@ -66,6 +66,7 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
   const { target, title, archived, running, path, thread, cwd, archiveTargets, pinned, onPin, onRename } = props
   const { controls, error } = menu
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
+  const uncommitted = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path]?.changes ?? 0 : 0))
   // An archived row of a Thread whose other Sessions are still out is one Session of it.
   const oneOfMany = useThreadGroups((state) => !archiveTargets && thread !== undefined && state.groups[thread] !== undefined)
   const archive = async () => {
@@ -75,7 +76,7 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
     const leftBehind = !archived && !running ? worktree : undefined
     const changed = await threadLifecycle.archive(targets, !archived, !restoringOne && !leftBehind)
     if (changed && restoringOne) toast("Session restored")
-    if (changed && leftBehind) offerWorktreeRemoval(leftBehind)
+    if (changed && leftBehind) void archivedWithWorktree(leftBehind, () => void threadLifecycle.archive(targets, false, false))
     if (changed && !archived && thread) discardSessionDraft(thread)
   }
   return (
@@ -105,7 +106,13 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
         <MenuLabel>Worktree on {worktree.branch}</MenuLabel>
         <MenuItem onSelect={() => { void navigator.clipboard.writeText(worktree.path).then(() => toast("Worktree path copied")) }}><CopyIcon className="size-3.5" />Copy its path</MenuItem>
         <MenuItem onSelect={() => { void desktop.revealPath(worktree.path) }}><FolderOpenIcon className="size-3.5" />Show the folder</MenuItem>
-        <MenuItem data-thread-action="remove-worktree" onSelect={() => { void removeWorktree(worktree) }}><Trash2Icon className="size-3.5" />Remove worktree, keep branch</MenuItem>
+        <MenuItem data-thread-action="remove-worktree" disabled={uncommitted > 0} onSelect={() => { void removeWorktree(worktree) }}>
+          <Trash2Icon className="size-3.5" />
+          <span className="min-w-0 flex-1">
+            Remove worktree, keep branch
+            {uncommitted ? <span className="block text-label text-faint">{uncommitted === 1 ? "1 file isn't committed" : `${uncommitted} files aren't committed`}</span> : null}
+          </span>
+        </MenuItem>
       </> : null}
       <MenuSeparator />
       {running ? (

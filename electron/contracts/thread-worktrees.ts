@@ -87,6 +87,12 @@ export interface WorktreeSummary {
   pull: WorktreeBranchPull | null
 }
 
+/** What removing one worktree would meet: why it can't go now, if it can't, and where its branch stands. */
+export interface WorktreeRemoval {
+  held: string | null
+  landing: WorktreeLanding
+}
+
 export interface WorktreeInventory {
   worktrees: WorktreeDetail[]
   /** Checkouts kept ready for new Threads, and their own files' size. */

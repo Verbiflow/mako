@@ -162,6 +162,11 @@ export function installMockBridge() {
     checks: [{ name: "test", state: "passed" }, { name: "lint", state: "running" }], reviews: [],
   })
   let sinceOpen: PullRequest | null = since === "pull" ? sincePull(812) : null
+  const removedWorktrees = new Set<string>()
+  const listedWorktrees = () => ({
+    root: SETUP_WORKTREE_ROOT,
+    worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : [])].filter((worktree) => !removedWorktrees.has(worktree.path)),
+  })
   let meta = { ...META }
   if (sinceWorktree) meta.cwd = sinceWorktree.path
   let terminalSessions = initialTerminalSessions()
@@ -335,7 +340,7 @@ export function installMockBridge() {
       return entry
     },
     importThreadTitles: async () => [],
-    worktrees: async () => ({ root: SETUP_WORKTREE_ROOT, worktrees: [...(setupWorktree ? [setupWorktree] : []), ...madeWorktrees, ...(scene === "rail" ? RAIL_WORKTREES : [])] }),
+    worktrees: async () => listedWorktrees(),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
     checkoutHeads: async (folders: string[]) =>
       Object.fromEntries(
@@ -363,8 +368,19 @@ export function installMockBridge() {
     projectAppSetup: async () => {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
-    removeWorktree: async () => {
-      throw new Error("The mock desk has no worktrees to remove.")
+    worktreeRemoval: async (path: string) => {
+      const summary = RAIL_SUMMARIES.find((candidate) => candidate.path === path)
+      if (!summary && path !== sinceWorktree?.path) throw new Error("Mako didn't make this worktree, so it won't remove it.")
+      const folder = path.split("/").at(-1)
+      const landing = path === sinceWorktree?.path
+        ? sinceLanded ? { kind: "merged" as const, into: "main" } : { kind: "open" as const, into: "main", commits: 3 }
+        : summary?.landing ?? { kind: "unknown" as const }
+      return { held: summary?.changes && path !== sinceWorktree?.path ? `${folder} has changes that aren't committed. Commit or discard them, then remove the worktree.` : null, landing }
+    },
+    removeWorktree: async (path: string) => {
+      if (scene !== "rail") throw new Error("The mock desk has no worktrees to remove.")
+      removedWorktrees.add(path)
+      return listedWorktrees()
     },
     wantWorktree: async () => {},
     worktreeStartPoint: async () => mockStartPoint(),

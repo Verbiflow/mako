@@ -20,6 +20,9 @@ export const section = {
     "merged",
     "clean up",
     "remove",
+    "archive",
+    "tidy up",
+    "landed",
   ],
   Component: WorktreesSection,
 } as const satisfies SettingsSection

@@ -24,7 +24,7 @@ import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { followCheckouts } from "@/state/checkout-heads"
-import { useWorktrees, useWorktreeSummaries, workingFolder, worktreeAt } from "@/state/worktrees"
+import { useLeavingWorktrees, useWorktrees, useWorktreeSummaries, workingFolder, worktreeAt } from "@/state/worktrees"
 import { worktreeTip } from "@/lib/worktree-marks"
 import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -183,7 +183,8 @@ export const ThreadRow = memo(function ThreadRow({
   useEffect(() => {
     if (ownCheckouts) followCheckouts(ownCheckouts.split("\n"))
   }, [ownCheckouts])
-  const made = useWorktrees((state) => worktreeAt(state.worktrees, workingFolder(state, ref))?.worktree)
+  const found = useWorktrees((state) => worktreeAt(state.worktrees, workingFolder(state, ref))?.worktree)
+  const made = useLeavingWorktrees((state) => (found && state.byPath[found.path] ? undefined : found))
   const branch = useWorktrees((state) => made?.branch ?? worktreeAt(state.outside, workingFolder(state, ref))?.worktree.branch)
   const summary = useWorktreeSummaries((state) => (made ? state.byPath[made.path] : undefined))
   // A worktree's app is its Thread's own; the project folder's app is marked on the folder's header.
