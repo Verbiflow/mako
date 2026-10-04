@@ -13,6 +13,8 @@ export function launchContext(
       ? { kind: "configured", name: account.name, managed: Boolean(account.dir) }
       : { kind: "unavailable", reason: "This launch resolves credentials without a managed account selection." },
     identity: identity.kind === "reported" ? { kind: "pending" } : identity,
+    credential: { kind: "unavailable", reason: "This launch has not reported its credential source and revision." },
+    service: { kind: "unavailable", reason: "The native process has not reported its service authority." },
     store: { kind: "unavailable", reason: "The native session source has not been located." },
   }
 }
@@ -54,6 +56,8 @@ export function assessExecutionContext(saved: ExecutionContext | undefined, open
   const currentBackend = backend(opened.identity)
   if (previousBackend && currentBackend && previousBackend !== currentBackend)
     return { kind: "incompatible", reason: "The native authentication backend changed. Reconcile the selected account before resuming." }
+  if (saved.service?.kind === "reported" && opened.service?.kind === "reported" && saved.service.authority !== opened.service.authority)
+    return { kind: "incompatible", reason: "The native service authority changed. Reconcile the selected service before resuming." }
   if (saved.identity.kind === "reported" && opened.identity.kind !== "reported")
     return { kind: "incompatible", reason: "The runtime could not verify the reopened account's native identity. Retry after sign-in is available; the saved conversation was preserved." }
   if (saved.account.kind === "configured" && opened.account.kind === "configured" && saved.account.managed && opened.account.managed && saved.account.name === opened.account.name && saved.identity.kind === "reported" && opened.identity.kind === "reported" && saved.identity.principal !== opened.identity.principal)
@@ -63,6 +67,11 @@ export function assessExecutionContext(saved: ExecutionContext | undefined, open
   else if (saved.runtime.version !== opened.runtime.version) missing.push("runtime-version-compatibility")
   if (saved.identity.kind !== "reported" || opened.identity.kind !== "reported") missing.push("effective-identity")
   if (saved.account.kind !== "configured" || opened.account.kind !== "configured") missing.push("configured-account")
+  if (saved.credential?.kind !== "configured" || opened.credential?.kind !== "configured" || saved.credential.revision.kind !== "reported" || opened.credential.revision.kind !== "reported")
+    missing.push("credential-revision")
+  else if (saved.credential.source !== opened.credential.source || saved.credential.revision.value !== opened.credential.revision.value)
+    missing.push("credential-compatibility")
+  if (saved.service?.kind !== "reported" || opened.service?.kind !== "reported") missing.push("service-authority")
   return missing.length ? { kind: "unverified", missing } : { kind: "compatible" }
 }
 

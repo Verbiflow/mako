@@ -42,6 +42,13 @@ const cache = new Map<
 >()
 const loading = new Map<string, Promise<HarnessProfile>>()
 const launching = new Map<string, Promise<HarnessProfile>>()
+/** Runtime refresh invalidates in-flight discovery, not only cached results. */
+const revisions = new Map<string, number>()
+function profileRevision(harness: string): number { return revisions.get(harness) ?? 0 }
+function assertProfileRevision(harness: string, revision: number): void {
+  if (profileRevision(harness) !== revision)
+    throw new Error("Provider discovery was superseded by a runtime refresh. Retry with the current runtime.")
+}
 /** The workspace each cache key was asked for, so a provider can be re-discovered everywhere it was seen. */
 const scopes = new Map<string, string | undefined>()
 const listeners = new Set<(event: HarnessProfileEvent) => void>()
@@ -80,6 +87,9 @@ export function harnessProfile(
  */
 export async function refreshHarnessProfiles(harness: string): Promise<void> {
   const prefix = `${harness}:`
+  revisions.set(harness, profileRevision(harness) + 1)
+  for (const key of loading.keys()) if (key.startsWith(prefix)) loading.delete(key)
+  for (const key of launching.keys()) if (key.startsWith(prefix)) launching.delete(key)
   const workspaces = new Set<string | undefined>()
   for (const [key, cwd] of scopes) if (key.startsWith(prefix)) workspaces.add(cwd)
   for (const [key, held] of cache)
@@ -153,6 +163,7 @@ async function loadProfile(
 ): Promise<HarnessProfile> {
   const loader = providerHost.profiles.get(harness)
   if (!loader) return unknownProviderProfile(harness, "Unknown provider")
+  const revision = profileRevision(harness)
   const env = await accountEnv(harness, process.env)
   const accountKey = loader.cacheKey(env)
   let scope = cwd
@@ -172,6 +183,7 @@ async function loadProfile(
     }
   }
   const account = `${harness}:${accountKey}:`
+  assertProfileRevision(harness, revision)
   const key = `${account}${scope ?? ""}`
   scopes.set(key, cwd)
   const held = cache.get(key)
@@ -193,7 +205,8 @@ async function loadProfile(
     if (pending) return pending
     const request = loader
       .loadForSend(env, scope)
-      .finally(() => launching.delete(key))
+      .then(profile => { assertProfileRevision(harness, revision); return profile })
+      .finally(() => { if (launching.get(key) === request) launching.delete(key) })
     launching.set(key, request)
     return request
   }
@@ -270,6 +283,7 @@ function startLoad(
   reportedCwd: string | undefined
 ): Promise<HarnessProfile> {
   const { key } = scope
+  const revision = profileRevision(loader.provider)
   const request = (async () => {
     let profile: HarnessProfile
     let failed = false
@@ -290,6 +304,7 @@ function startLoad(
           }
         : unavailableProviderProfile(loader, message)
     }
+    assertProfileRevision(loader.provider, revision)
     const loadedAt = Date.now()
     cache.set(key, {
       profile,
@@ -300,11 +315,12 @@ function startLoad(
     // a transient failure must not greet the next launch as fact.
     if (profile.available && !failed)
       await providerProfileCache.put(key, profile).catch(() => {})
+    assertProfileRevision(loader.provider, revision)
     const event: HarnessProfileEvent = { profile }
     if (reportedCwd !== undefined) event.cwd = reportedCwd
     for (const listener of listeners) listener(event)
     return profile
-  })().finally(() => loading.delete(key))
+  })().finally(() => { if (loading.get(key) === request) loading.delete(key) })
   loading.set(key, request)
   // Callers that answer from a snapshot never observe this promise.
   request.catch(() => {})

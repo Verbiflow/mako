@@ -18,6 +18,16 @@ export const NO_NATIVE_EXCLUSION: NativeExclusionCapability = {
   reason: "No verified native atomic lease excludes a noncooperating external executor. Preflight activity observations do not prevent another executor from starting later.",
 }
 
+/** Public launch evidence only. Opaque revisions must never contain key material. */
+export const ExecutionCredentialSchema = z.union([
+  z.object({ kind: z.literal("configured"), source: z.string().min(1), revision: z.union([
+    z.object({ kind: z.literal("reported"), value: z.string().min(1), via: z.string().min(1) }),
+    unavailable,
+  ]) }),
+  unavailable,
+])
+export type ExecutionCredential = z.infer<typeof ExecutionCredentialSchema>
+
 /** Observations describe this launch. They are not credentials, a resume grant,
  * or proof that an external process cannot start executing later. */
 export const ExecutionContextSchema = z.object({
@@ -36,11 +46,17 @@ export const ExecutionContextSchema = z.object({
     z.object({ kind: z.literal("reported"), principal: z.string().min(1), backend: z.string().min(1), via: z.string().min(1) }),
     z.object({ kind: z.literal("unavailable"), reason: z.string().min(1), backend: z.string().optional() }),
   ]),
+  /** Optional only for older journals. A missing field is unverified. */
+  credential: ExecutionCredentialSchema.optional(),
+  service: z.union([
+    z.object({ kind: z.literal("reported"), authority: z.string().min(1), via: z.string().min(1) }),
+    unavailable,
+  ]).optional(),
   store: z.union([
     z.object({ kind: z.literal("located"), path: z.string().min(1) }),
     unavailable,
   ]),
   /** Receipt from a native import response, never inferred from copy support. */
-  sourceImport: z.object({ source: z.string().min(1), destination: z.string().min(1), nativeId: z.string().min(1), via: z.string().min(1) }).optional(),
+  sourceImport: z.object({ source: z.string().min(1), destination: z.string().min(1), nativeId: z.string().min(1), via: z.string().min(1), revision: z.string().min(1).optional() }).optional(),
 })
 export type ExecutionContext = z.infer<typeof ExecutionContextSchema>

@@ -321,12 +321,13 @@ async function launch(
   // Keep the tail of stderr: when a CLI fails it says why there, and "exit
   // code 1" with no words is the worst message this feature could show.
   let stderr = ""
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = (stderr + chunk.toString()).slice(-4000)
+  child.stderr?.setEncoding("utf8")
+  child.stderr?.on("data", (chunk: string) => {
+    stderr = (stderr + chunk).slice(-4000)
   })
   if (captureOutput) {
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString()
+    child.stdout?.setEncoding("utf8")
+    child.stdout?.on("data", (text: string) => {
       run.stdout = (run.stdout + text).slice(-1024 * 1024)
       for (const subscriber of run.outputSubscribers) subscriber(text)
     })
@@ -334,17 +335,19 @@ async function launch(
     child.stdout?.resume()
   }
 
-  child.on("error", (error) => {
-    finish(run, {
-      status: "failed",
-      error: error.message.includes("ENOENT")
-        ? `${command} is not installed`
-        : error.message,
-    })
-  })
-  child.on("exit", (code, signal) => {
+  let processError: Error | undefined
+  child.on("error", (error) => { processError = error })
+  // Exit is not output/child cleanup: a descendant can still hold these
+  // pipes. Retain this exact claim until close drains them, including spawn
+  // errors. Never admit a replacement using the leader's exit alone.
+  child.once("close", (code, signal) => {
     if (run.state.status !== "running") return
-    if (signal === "SIGTERM" || signal === "SIGKILL") {
+    if (processError) {
+      finish(run, {
+        status: "failed",
+        error: processError.message.includes("ENOENT") ? `${command} is not installed` : processError.message,
+      })
+    } else if (signal === "SIGTERM" || signal === "SIGKILL") {
       finish(run, { status: "stopped" })
     } else if (code === 0) {
       finish(run, { status: "done" })
@@ -380,10 +383,13 @@ export function stopDrivers(): void {
 }
 
 function finish(run: Run, next: Partial<ThreadRunState>): void {
+  if (run.state.status !== "running") return
   const release = run.releaseSession
   run.releaseSession = undefined
   release?.()
   run.state = { ...run.state, ...next }
+  // A late event owns only this launch, never a later run at the same path.
+  if (runs.get(run.state.path) !== run) return
   runs.delete(run.state.path)
   runs.set(run.state.path, run)
   while (runs.size > MAX_REMEMBERED_RUNS) {

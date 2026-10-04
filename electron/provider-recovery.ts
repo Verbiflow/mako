@@ -32,6 +32,8 @@ export async function verifyRecoveredSession(binding: ProviderBinding, session: 
     const evidence = await driver.inspectNativeSession?.(binding)
     if (evidence?.kind !== "available" || evidence.strategy !== "copy")
       throw new Error("The adapter could not verify the imported native source. No prompt was dispatched; the saved binding was preserved.")
+    if (!receipt.revision || receipt.revision !== evidence.checkpoint)
+      throw new Error("The imported snapshot's revision could not be matched to the current native source. No prompt was dispatched; the saved binding was preserved.")
     imported = true
     hostLog("recovery", "native source import verified", { harness: binding.provider, binding: binding.id, via: receipt.via })
   }
