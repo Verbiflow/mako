@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { realpathSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
@@ -28,12 +29,13 @@ export function readOpenCodeResumeRecord(path: string, nativeId: string): OpenCo
     return { kind: "unavailable", reason: "The saved OpenCode source does not match its native session ID." }
   let db: DatabaseSync | undefined
   try {
-    db = openNativeStore(target.database)
+    const database = realpathSync(target.database)
+    db = openNativeStore(database)
     db.exec("PRAGMA busy_timeout=100; BEGIN")
     const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
     const sessionTable = target.v2 ? "session_v2" : "session"
     // The unmarked locator in a mixed database names the legacy session table.
-    const legacy = !target.v2 && tables.has("message") && tables.has("part") && !target.database.endsWith("opencode-next.db")
+    const legacy = !target.v2 && tables.has("message") && tables.has("part") && !database.endsWith("opencode-next.db")
     if (legacy) return { kind: "unavailable", reason: "OpenCode v1 sessions are no longer supported for continuation. Saved history remains available." }
     const contentTables = ["session_message"]
     if (!tables.has(sessionTable) || contentTables.some(table => !tables.has(table)))

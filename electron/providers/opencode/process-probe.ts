@@ -1,3 +1,4 @@
+import { probeOpenFiles } from "../open-files-probe.js"
 import { processIdentityMatches } from "../process-liveness.js"
 import { open, readdir } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -65,11 +66,11 @@ async function responseText(
 async function serviceActivity(
   path: string,
   signal: AbortSignal
-): Promise<ProviderActivitySession[]> {
+): Promise<{ sessions: ProviderActivitySession[]; pid?: number }> {
   const info = await readRegistration(path, signal)
   // Native service registrations can outlive their process. A dead PID is
   // stale evidence; permission failures and live identity mismatches remain unknown.
-  if (!(await processIdentityMatches({ pid: info.pid, signal }))) return []
+  if (!(await processIdentityMatches({ pid: info.pid, signal }))) return { sessions: [] }
   const endpoint = new URL(info.url)
   if (
     endpoint.protocol !== "http:" ||
@@ -103,10 +104,10 @@ async function serviceActivity(
       )
     )
   )
-  return Object.keys(active.data).map((nativeId) => ({
+  return { pid: info.pid, sessions: Object.keys(active.data).map((nativeId) => ({
     nativeId,
     status: "active",
-  }))
+  })) }
 }
 
 export function openCodeProcessProbeFor(
@@ -120,7 +121,7 @@ export function openCodeProcessProbeFor(
     pollIntervalMs: 3_000,
     timeoutMs: 4_000,
     staleAfterMs: 10_000,
-    async probe(signal) {
+    async probe(signal, target) {
       try {
         let files: string[]
         try {
@@ -139,13 +140,25 @@ export function openCodeProcessProbeFor(
         if (files.length > 16)
           throw new Error("Too many OpenCode services to poll")
         const sessions: ProviderActivitySession[] = []
+        const registered = new Set<number>()
         for (let offset = 0; offset < files.length; offset += 4) {
           const batch = await Promise.all(
             files
               .slice(offset, offset + 4)
               .map((file) => serviceActivity(join(stateRoot, file), signal))
           )
-          sessions.push(...batch.flat())
+          for (const service of batch) {
+            sessions.push(...service.sessions)
+            if (service.pid) registered.add(service.pid)
+          }
+        }
+        if (target && !sessions.some(session => session.nativeId === target.nativeId)) {
+          // Native 2.0.1 `serve --stdio` does not publish service.json.
+          // An empty registered API snapshot cannot clear that executor.
+          const processes = await probeOpenFiles({ processNames: ["/^opencode$/", "/^opencode2$/"], signal, accept: () => false })
+          if (processes.kind === "unavailable") return processes
+          if (processes.pids.some(pid => !registered.has(pid)))
+            return { kind: "unavailable", reason: "incomplete" }
         }
         return { kind: "available", sessions }
       } catch {

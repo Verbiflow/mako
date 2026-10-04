@@ -9,6 +9,9 @@ import { isOpenCodeInstruction, openCodeNoticeLabel, PROVIDER_TURN_FALLBACK } fr
 import { compactionFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { z } from "zod"
 import { applyControlEnvironment } from "../../control-launch.js"
+import { launchContext, reportedRuntime } from "../../execution-context.js"
+import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
+import { openCodeRecordLocator } from "./resume-store.js"
 import { applyThreadEnvironment } from "../../thread-environment.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { traceProviderLaunch } from "../../provider-launch.js"
@@ -49,6 +52,11 @@ import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
 import { openCodeCheckpoint, inspectOpenCodeSession } from "./resume.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
+
+const OPENCODE_NATIVE_IDENTITY = {
+  kind: "unavailable",
+  reason: "The native API reports provider configuration, not the effective identity for each selected model backend.",
+} as const
 
 type NoticePayload = Extract<Extract<OpenCodeEvent, { type: "session.inbox.enqueued" }>["data"]["item"], { type: "synthetic" }>["payload"]
 
@@ -610,6 +618,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   return {
     provider: "opencode",
+    nativeIdentity: OPENCODE_NATIVE_IDENTITY,
+    nativeExclusion: NO_NATIVE_EXCLUSION,
     planning: { via: "mode", mode: OPENCODE_PLAN_AGENT, proposal: "The Plan agent's reply to a step that ends its turn, built by a message to Build" },
     approvalEvidence: {
       kind: "native-decisions",
@@ -634,6 +644,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     },
     canResume: true,
     checkpoint: openCodeCheckpoint,
+    nativeSource: (path, nativeId) => {
+      const source = openCodeRecordLocator(path)
+      return source && source.nativeId === nativeId
+        ? { path: source.database, record: `${source.v2 ? "v2" : "unmarked"}:${source.nativeId}` }
+        : undefined
+    },
     inspectNativeSession: inspectOpenCodeSession,
     modes: openCodeModes,
     defaultMode: OPENCODE_DEFAULT_MODE,
@@ -655,11 +671,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const servers = await trace.step("mcp-preparation", () => mcpServers(options))
       const approvalRoot = await dependencies.approvalRoot()
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
+      const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, undefined, installation.command)
+      context.runtime = reportedRuntime(api.health.version, "launched native API health.version")
       const live: Live = {
         api, cwd, env, emit: options.emit, launchAccess, capture: null, catalogGeneration: 0, turn: null, queue: Promise.resolve(),
         mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
         settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
         state: {
+          executionContext: context,
           id: options.conversationId, harness: "opencode", cwd, title: options.title, nativeId: options.resume, nativePath,
           status: "starting", connection: "starting", modes: [...openCodeModes], currentMode: null, configOptions: [], settings: options.tuning,
         },
