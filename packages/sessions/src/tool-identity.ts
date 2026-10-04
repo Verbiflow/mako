@@ -135,6 +135,8 @@ interface ArgumentWrapper {
   server?: string
   /** A server name that means the harness's own built-in tools. */
   builtin?: string
+  /** This native projection retains the exact server/tool title when input is clipped. */
+  titleRoute?: true
 }
 
 /** A script calls the real tools; the script is under `key`, or is the whole input. */
@@ -219,6 +221,8 @@ const HARNESSES: ReadonlyMap<string, Vocabulary> = new Map([
   ])],
   ["cursor", vocabulary([
     [["calldynamictool"], { kind: "mcp", wraps: { form: "arguments", server: "namespace", tool: "toolName", args: "arguments", builtin: "cursor" } }],
+    // SDK 1.0.31 McpArgsSchema; Desktop's CallDynamicTool is a separate wire shape.
+    [["mcp"], { kind: "mcp", label: "MCP tool", wraps: { form: "arguments", server: "providerIdentifier", tool: "toolName", args: "args", titleRoute: true } }],
   ])],
   ["grok", vocabulary([
     [["use_tool"], { kind: "mcp", wraps: { form: "arguments", tool: "tool_name", args: "tool_input" } }],
@@ -528,7 +532,14 @@ function unwrap(source: ToolSource, name: string, wrapper: ArgumentWrapper | Scr
 function unwrapArguments(source: ToolSource, name: string, wrapper: ArgumentWrapper): ToolIdentity | undefined {
   const args = parseArguments(source.input)
   const tool = textOf(args?.[wrapper.tool])
-  if (!args || !tool) return undefined
+  if (!args || !tool) {
+    const title = wrapper.titleRoute ? nameFromTitle(source.title) : undefined
+    const route = title ? mcpName(title) : undefined
+    if (!route) return undefined
+    const identity = describeMcp(source, name, route, undefined)
+    identity.via = name
+    return identity
+  }
   const server = wrapper.server ? textOf(args[wrapper.server]) : undefined
   const innerArgs = Arguments.safeParse(args[wrapper.args])
   const inputText = innerArgs.success ? JSON.stringify(innerArgs.data) : undefined
