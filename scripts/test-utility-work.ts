@@ -50,7 +50,20 @@ assert.deepEqual(workDefault("claude", claudeModels), { model: "claude-opus-5-5"
 assert.deepEqual(workDefault("codex", codexModels), { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }, "not the Astra a config file pins")
 assert.equal(workDefault("codex", [model("gpt-5.5", "GPT-5.5")]), undefined, "a catalog without Mako's pick keeps the harness's own default")
 assert.equal(workDefault("pi", claudeModels), undefined, "a harness Mako has no defaults for keeps its own")
-assert.deepEqual(workDefault("cursor", [model("auto-smart", "Auto", [{ id: "optimize_for", label: "Optimize", kind: "select", values: [{ value: "balanced", label: "Balanced" }, { value: "intelligence", label: "Intelligence" }] }])]), { model: "auto-smart", options: { optimize_for: "intelligence" } })
+const cursorFast: ModelOption = { id: "fast", label: "Fast", role: "speed", kind: "select", values: [{ value: "false", label: "Off" }, { value: "true", label: "On" }] }
+const cursorModels = [
+  model("auto-smart", "Auto"),
+  model("grok-4.7", "Grok 4.7", [effort(["low", "medium", "high", "xhigh"]), cursorFast]),
+  model("claude-opus-5-5", "Claude Opus 5.5", [effort(levels), cursorFast]),
+]
+assert.deepEqual(workDefault("cursor", cursorModels), { model: "claude-opus-5-5", options: { effort: "high", fast: "false" } }, "Cursor works on Opus 5.5, not Auto")
+assert.deepEqual(lightDefault("cursor", cursorModels), { model: cursorModels[1], options: { effort: "low", fast: "false" } }, "and names things with Grok 4.7 at low")
+const openCodeModels = [
+  model("openai/gpt-6.1-sol", "GPT-6.1 Sol", [effort(levels)]),
+  model("opencode/muse-spark-1.3-contributor-free", "Muse Spark 1.3 Free", [effort(["minimal", "low", "medium", "high", "xhigh"])]),
+]
+assert.equal(workDefault("opencode", openCodeModels), undefined, "OpenCode keeps its own default, the free model it changes itself")
+assert.deepEqual(lightDefault("opencode", openCodeModels, "opencode/muse-spark-1.3-contributor-free"), { model: openCodeModels[1], options: { effort: "low" } }, "and its own default runs light at low")
 
 const claudeLight = lightDefault("claude", claudeModels)
 assert.equal(claudeLight?.model.id, "claude-haiku-4-5-20251001", "a dated id matches the pick it was released as")
@@ -58,7 +71,7 @@ assert.deepEqual(claudeLight?.options, { fast: false }, "Haiku has no reasoning 
 assert.deepEqual(lightDefault("codex", codexModels)?.options, { effort: "low", serviceTier: "default" }, "Luna at low reasoning, standard lane")
 assert.equal(lightDefault("grok", [model("grok-4.7", "Grok 4.7", [effort(["xhigh", "high", "medium", "low"])]), model("grok-4.7-build-fast", "Build fast")])?.model.id, "grok-4.7", "Grok's own model at low, not the pricier fast build")
 assert.deepEqual(lightDefault("grok", [model("grok-4.7", "Grok 4.7", [effort(["xhigh", "high", "medium", "low"])])])?.options, { effort: "low" })
-assert.deepEqual(lightDefault("opencode", [model("google/gemini-3.8-flash", "Gemini 3.8 Flash", [effort(["low", "medium", "high"], "high")])])?.options, { effort: "low" }, "the next pick when the first isn't offered")
+assert.deepEqual(lightDefault("devin", [model("gemini-3.8-flash", "Gemini 3.8 Flash", [effort(["low", "medium", "high"], "high")])])?.options, { effort: "low" }, "the next pick when the first isn't offered")
 
 // Without a pick, the catalog's own fast or cheap model, at its lowest sensible level.
 assert.equal(lightModel([model("big", "Big", [], "Most capable"), model("luna", "Luna", [], "Fast and affordable")])?.id, "luna")

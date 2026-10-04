@@ -166,9 +166,9 @@ function HarnessOrderRow({
 }) {
   const preference = usePrefs((prefs) => prefs.providerSettings[harness])
   const signedIn = Boolean(profile?.available)
-  const pending = Boolean(profile?.pending && !profile.available)
+  const pending = !profile || Boolean(profile.pending && !profile.available)
   const setup = signedIn ? harnessDefaults(harness, profile, preference) : undefined
-  const light = signedIn && profile ? lightDefault(harness, profile.models) : undefined
+  const light = signedIn && profile ? lightDefault(harness, profile.models, profile.defaultModel) : undefined
   const keys = (event: KeyboardEvent) => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
     event.preventDefault()
@@ -202,19 +202,20 @@ function HarnessOrderRow({
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-ui font-medium">{harnessLabel(harness)}</p>
-        <p className="flex min-w-0 gap-3 text-label text-faint">
+        <p className="flex min-w-0 flex-wrap gap-x-3 text-label text-faint">
           {pending ? (
             <span>Asking for its models…</span>
           ) : !signedIn ? (
             <span>Not signed in</span>
           ) : (
             <>
-              <span className="truncate">
+              <span>
                 Setup <span className="text-muted-foreground">{setup?.model ? summary(setup.model, setup.resolved.settings.options) : "its own default"}</span>
               </span>
-              <span className="truncate">
+              <span>
                 Names and commits{" "}
-                <span className="text-muted-foreground">{!runs ? "not supported yet" : light ? summary(light.model, light.options) : "no light model"}</span>
+                <span className="text-muted-foreground">{light ? summary(light.model, light.options) : "no light model"}</span>
+                {light && !runs ? " (not supported yet)" : null}
               </span>
             </>
           )}

@@ -362,6 +362,33 @@ console.log("composer settings: role cycling walks only reported options")
 }
 console.log("composer settings: the loadout orders, bounds, and applies its picks")
 
+// A default chosen in Settings is kept; choosing the recommendation again
+// saves nothing, so the harness follows Mako's next recommendation.
+{
+  const { saveHarnessDefaults } = await import("../src/state/composer-settings.ts")
+  const { prefsStore, setPref } = await import("../src/state/prefs.ts")
+  const reasoning = {
+    id: "effort",
+    label: "Effort",
+    kind: "select" as const,
+    role: "reasoning" as const,
+    values: [{ value: "medium", label: "Medium" }, { value: "high", label: "High" }],
+  }
+  const recommended = {
+    ...profile,
+    settings: { model: "opus", options: { effort: "high" } },
+    models: [{ id: "opus", label: "Opus", options: [reasoning] }, { id: "sonnet", label: "Sonnet", options: [reasoning] }],
+  }
+  setPref("providerSettings", {})
+  saveHarnessDefaults("claude", { model: "sonnet", options: { effort: "medium" } }, recommended)
+  assert.equal(prefsStore.get().providerSettings.claude?.settings.model, "sonnet", "a different model is the person's own default")
+  saveHarnessDefaults("claude", { model: "opus", options: { effort: "medium" } }, recommended)
+  assert.equal(prefsStore.get().providerSettings.claude?.settings.options?.effort, "medium", "so is the recommended model at another level")
+  saveHarnessDefaults("claude", { model: "opus", options: { effort: "high" } }, recommended)
+  assert.equal(prefsStore.get().providerSettings.claude, undefined, "the recommendation itself is not saved as the person's own")
+}
+console.log("composer settings: choosing the recommended default keeps following it")
+
 // Stale saved entries remain removable, but neither shortcut nor picker may
 // change intent using a model absent from the current workspace discovery.
 {

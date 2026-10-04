@@ -211,7 +211,7 @@ function HarnessDefaults({ harness }: { harness: string }) {
   const { resolved, model, options } = harnessDefaults(harness, profile, preference)
   const models = profile?.models ?? []
 
-  const save = (settings: SessionSettings) => saveHarnessDefaults(harness, settings)
+  const save = (settings: SessionSettings) => saveHarnessDefaults(harness, settings, profile)
   const chooseModel = (id: string) => {
     const next = models.find((entry) => entry.id === id)
     // Speed carries to the new model when it has the same lane; reasoning
@@ -248,8 +248,8 @@ function HarnessDefaults({ harness }: { harness: string }) {
           <Action size="xs" onClick={() => resetHarnessDefaults(harness)}>
             Use recommended
           </Action>
-        ) : ready && profile.available && workDefault(harness, models) ? (
-          <Chip>Recommended</Chip>
+        ) : ready && profile.available ? (
+          <Chip>{workDefault(harness, models) ? "Recommended" : `${harnessLabel(harness)}'s default`}</Chip>
         ) : null}
       </div>
       {ready && profile.available ? (

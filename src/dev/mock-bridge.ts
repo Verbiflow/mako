@@ -2019,7 +2019,7 @@ const MOCK_PROFILES = [
       mockModel("composer-2.5", "Composer 2.5", [mockFast]),
       mockModel("claude-opus-5-5", "Claude Opus 5.5", [mockContext("1m", ["300k", "1m"]), mockEffort("medium", ["low", "medium", "high", "xhigh", "max"]), mockFast]),
       mockModel("gpt-5.6-sol", "GPT-5.6 Sol", [mockContext("1m", ["272k", "1m"]), mockEffort("medium", ["low", "medium", "high"]), mockFast]),
-      mockModel("grok-4.7", "Grok 4.7"),
+      mockModel("grok-4.7", "Grok 4.7", [mockEffort("high", ["low", "medium", "high", "xhigh"]), mockFast]),
     ].map((model) => ({ ...model, options: [...model.options, mockPlan] })),
   },
   {
@@ -2045,7 +2045,12 @@ const MOCK_PROFILES = [
     defaultModel: "adaptive",
     settings: { model: "adaptive" },
     capabilities: ["stream"],
-    models: [mockModel("adaptive", "Adaptive"), mockModel("gpt-6-astra", "GPT-6 Astra", [mockEffort("high", ["low", "medium", "high"])])],
+    models: [
+      mockModel("adaptive", "Adaptive"),
+      mockModel("swe-2", "SWE-2", [mockEffort("medium", ["medium", "high", "max"])]),
+      mockModel("gpt-6-astra", "GPT-6 Astra", [mockEffort("high", ["low", "medium", "high"])]),
+      mockModel("gpt-6-luna", "GPT-6 Luna", [mockEffort("medium", ["none", "low", "medium", "high", "xhigh", "max"]), mockFast]),
+    ],
   },
   {
     id: "opencode",
@@ -2056,7 +2061,7 @@ const MOCK_PROFILES = [
     settings: { model: "opencode/x-preview-f-free" },
     capabilities: ["stream", "resume", "models"],
     models: [
-      mockModel("opencode/x-preview-f-free", "Ox Alpha Free (Unlimited)"),
+      mockModel("opencode/x-preview-f-free", "Ox Alpha Free (Unlimited)", [mockEffort("high", ["minimal", "low", "medium", "high", "xhigh"])]),
       mockModel("openai/gpt-5.4", "GPT-5.4", [mockEffort("medium", ["low", "medium", "high"])]),
       mockModel("anthropic/claude-opus-5-5", "Claude Opus 5.5"),
     ],

@@ -24,6 +24,9 @@ import {
  * offers wins, so a harness without the newest model falls back to the one
  * before it. Without a match, `work` keeps the harness's own default and
  * `light` takes the catalog's first model it describes as fast or cheap.
+ * `light: "own"` runs the harness's own default model at low reasoning, for
+ * a harness such as OpenCode whose default is a free model it changes
+ * itself.
  */
 export const HARNESS_ORDER = ["claude", "codex", "cursor", "opencode", "grok", "devin"] as const
 
@@ -36,7 +39,7 @@ interface ModelPick {
 
 interface HarnessDefaults {
   work: readonly ModelPick[]
-  light: readonly ModelPick[]
+  light: readonly ModelPick[] | "own"
 }
 
 const HARNESS_DEFAULTS = {
@@ -49,19 +52,12 @@ const HARNESS_DEFAULTS = {
     light: [{ model: "gpt-6-luna", options: { effort: "low", serviceTier: "default" } }],
   },
   cursor: {
-    work: [{ model: "auto-smart", options: { optimize_for: "intelligence" } }],
-    light: [
-      { model: "composer-2.5", options: { fast: "false" } },
-      { model: "gpt-5.4-nano", options: { effort: "low" } },
-    ],
+    work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: "false" } }],
+    light: [{ model: "grok-4.7", options: { effort: "low", fast: "false" } }],
   },
   opencode: {
-    work: [{ model: "openai/gpt-6.1-sol", options: { effort: "medium" } }],
-    light: [
-      { model: "openai/gpt-6-luna", options: { effort: "low" } },
-      { model: "google/gemini-3.8-flash", options: { effort: "low" } },
-      { model: "google/gemini-flash-lite-latest", options: { effort: "low" } },
-    ],
+    work: [],
+    light: "own",
   },
   grok: {
     work: [{ model: "grok-4.7", options: { effort: "high" } }],
@@ -108,11 +104,16 @@ export function workDefault(harness: string, models: readonly SessionModel[]): S
   return pick ? { model: pick.model.id, options: pick.options } : undefined
 }
 
-/** The model that names Threads and drafts commit messages through this harness, at low reasoning. */
-export function lightDefault(harness: string, models: readonly SessionModel[]): HarnessPick | undefined {
-  const pick = firstPick(defaultsFor(harness)?.light ?? [], models)
+/**
+ * The model that names Threads and drafts commit messages through this
+ * harness, at low reasoning. `ownDefault` is the model the harness itself
+ * starts on, from its catalog.
+ */
+export function lightDefault(harness: string, models: readonly SessionModel[], ownDefault?: string): HarnessPick | undefined {
+  const light = defaultsFor(harness)?.light ?? []
+  const pick = light === "own" ? undefined : firstPick(light, models)
   if (pick) return { model: pick.model, options: { ...lightOptions(pick.model), ...pick.options } }
-  const model = lightModel(models)
+  const model = (light === "own" && ownDefault ? catalogModel(models, ownDefault) : undefined) ?? lightModel(models)
   return model ? { model, options: lightOptions(model) } : undefined
 }
 

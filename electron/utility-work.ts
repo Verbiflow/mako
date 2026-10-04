@@ -24,6 +24,8 @@ export interface UtilityAgent {
   harness: string
   label: string
   models: readonly SessionModel[]
+  /** The model the harness itself starts on. */
+  defaultModel?: string
   runner: ProviderUtilityRunner
 }
 
@@ -145,7 +147,7 @@ export class UtilityWork {
     const connections = settings.connections.filter((connection) => !settings.issues.some(({ provider }) => provider === connection.provider))
     const list: UtilityModelOption[] = []
     for (const agent of agents) {
-      const light = lightDefault(agent.harness, agent.models)?.model
+      const light = lightDefault(agent.harness, agent.models, agent.defaultModel)?.model
       for (const model of light ? [light, ...agent.models.filter((entry) => entry !== light)] : agent.models)
         list.push({ id: agentModelId(agent.harness, model.id), label: model.label, via: agent.label, kind: "agent", source: agent.harness, light: model === light || undefined })
     }
@@ -158,7 +160,7 @@ export class UtilityWork {
     if (choice === OFF) return task === "title" ? { kind: "off" } : this.find(task, AUTOMATIC, available)
     if (choice === AUTOMATIC) {
       for (const agent of available.agents) {
-        const light = lightDefault(agent.harness, agent.models)
+        const light = lightDefault(agent.harness, agent.models, agent.defaultModel)
         if (light) return this.agentModel(agent, light.model, light.options, available)
       }
       const connection = available.connections[0]

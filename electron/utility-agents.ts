@@ -7,7 +7,7 @@ export async function utilityAgents(): Promise<UtilityAgent[]> {
   const profiles = await harnessProfiles()
   return profiles.flatMap((profile) => {
     const runner = providerHost.utilityRunners.get(profile.id)
-    return profile.available && runner ? [{ harness: profile.id, label: profile.label, models: profile.models, runner }] : []
+    return profile.available && runner ? [{ harness: profile.id, label: profile.label, models: profile.models, defaultModel: profile.defaultModel, runner }] : []
   })
 }
 

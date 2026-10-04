@@ -2,6 +2,7 @@ import { getMako } from "@/lib/bridge"
 import { harnessOrder, isDefaultOrder } from "../../electron/contracts/harness-defaults"
 import { providerStore, useProviders } from "./providers"
 import { createHook, createStore, shallowEqual } from "./store"
+import { threadsStore, useThreads } from "./thread-store"
 
 /**
  * The order Mako tries harnesses in when it picks one itself: setting a
@@ -24,8 +25,13 @@ export function loadHarnessOrder(): Promise<void> {
 }
 
 /** These harnesses, by default every one Mako knows, in the person's order. */
-export function currentHarnessOrder(known: readonly string[] = Object.keys(providerStore.get().profiles)): string[] {
+export function currentHarnessOrder(known: readonly string[] = knownHarnesses(Object.keys(providerStore.get().profiles), threadsStore.get().descriptors)): string[] {
   return harnessOrder(saved.get().order, known)
+}
+
+/** Every registered harness, listed before its catalog arrives. */
+function knownHarnesses(profiles: readonly string[], descriptors: readonly { provider: string }[]): string[] {
+  return [...new Set([...profiles, ...descriptors.map((entry) => entry.provider)])]
 }
 
 /** The order the person saved; empty while it is Mako's own. */
@@ -34,9 +40,10 @@ export function useSavedHarnessOrder(): string[] {
 }
 
 export function useHarnessOrder(): string[] {
-  const known = useProviders((state) => Object.keys(state.profiles), shallowEqual)
+  const profiles = useProviders((state) => Object.keys(state.profiles), shallowEqual)
+  const descriptors = useThreads((state) => state.descriptors)
   const order = useSaved((state) => state.order)
-  return harnessOrder(order, known)
+  return harnessOrder(order, knownHarnesses(profiles, descriptors))
 }
 
 /** Save a new order; Mako's own is saved as none, so later defaults still reach it. */

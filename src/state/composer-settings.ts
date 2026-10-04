@@ -450,15 +450,32 @@ export function harnessDefaults(
   })
 }
 
+/** True when `settings` start a new conversation exactly as Mako's recommendation for `harness` does. */
+export function isRecommendedDefault(harness: string, profile: HarnessProfile | undefined, settings: SessionSettings): boolean {
+  const recommended = harnessDefaults(harness, profile, undefined).resolved.settings
+  const chosen = harnessDefaults(harness, profile, { source: "saved", settings }).resolved.settings
+  if (recommended.model !== chosen.model) return false
+  const ids = new Set([...Object.keys(recommended.options ?? {}), ...Object.keys(chosen.options ?? {})])
+  return [...ids].every((id) => recommended.options?.[id] === chosen.options?.[id])
+}
+
 /**
  * Save a harness's defaults for new conversations. A composer choice made
  * for a new conversation in some workspace would outrank them there, so
- * those pending choices are dropped for this harness.
+ * those pending choices are dropped for this harness. Choosing exactly the
+ * recommendation saves nothing, so the harness keeps following it as Mako
+ * moves to newer models.
  */
 export function saveHarnessDefaults(
   harness: string,
-  settings: SessionSettings
+  settings: SessionSettings,
+  profile?: HarnessProfile
 ): void {
+  if (profile && isRecommendedDefault(harness, profile, settings)) {
+    rememberModelSettings({ kind: "new", harness, cwd: "" }, settings)
+    resetHarnessDefaults(harness)
+    return
+  }
   rememberModelSettings({ kind: "new", harness, cwd: "" }, settings)
   setPref("providerSettings", {
     ...prefsStore.get().providerSettings,
