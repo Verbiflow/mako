@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite"
 import { cursorSdkAgentIdForDirectory, cursorSdkIndexPath, readCursorSdkAgent } from "@mako/sessions"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
+import { readLegacyStoreSnapshot } from "./legacy-store.js"
 
 /**
  * Checkpoints for Cursor's stores: what the conversation's head was when a
@@ -15,23 +16,6 @@ import { z } from "zod"
  * mode, so new turns sit in `store.db-wal` while `store.db` is unchanged,
  * and hashing a 45 MB file per turn is a cost with no information in it.
  */
-const MetaSchema = z.object({
-  agentId: z.string().optional(),
-  latestRootBlobId: z.string().optional(),
-})
-
-/** Cursor stores the meta row as JSON text, sometimes hex-encoded, sometimes as bytes. */
-const MetaRowSchema = z.object({
-  value: z.union([
-    z
-      .string()
-      .transform((raw) =>
-        /^[0-9a-f]+$/i.test(raw) ? Buffer.from(raw, "hex").toString("utf8") : raw
-      ),
-    z.instanceof(Uint8Array).transform((raw) => Buffer.from(raw).toString("utf8")),
-  ]),
-})
-
 const CountSchema = z.object({ n: z.number() })
 
 function blobCount(db: DatabaseSync): number | null {
@@ -48,18 +32,10 @@ function digest(parts: readonly (string | number | null)[]): string {
  * in the store's own meta row.
  */
 export function cursorLegacyCheckpoint(path: string, id: string): string | undefined {
-  let db: DatabaseSync | undefined
   try {
-    db = openNativeStore(path)
-    const row = MetaRowSchema.safeParse(db.prepare("SELECT value FROM meta WHERE key = '0'").get())
-    if (!row.success) return undefined
-    const meta = MetaSchema.safeParse(JSON.parse(row.data.value))
-    if (!meta.success || !meta.data.latestRootBlobId) return undefined
-    return digest([id, meta.data.latestRootBlobId, blobCount(db)])
+    return readLegacyStoreSnapshot(path, id).revision
   } catch {
     return undefined
-  } finally {
-    db?.close()
   }
 }
 
