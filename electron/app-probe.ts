@@ -38,6 +38,9 @@ const ITEMS_FOLDER = "/private/var/db/com.apple.backgroundtaskmanagement"
  * Folders, under home, where apps keep state outside their checkout. One
  * level down names an app's folder. The file system's history sees a change
  * at any depth in them; modification times see one two levels down.
+ * Library/Containers and Library/Group Containers are left out: reading in
+ * another app's container makes macOS ask the user to let Mako access data
+ * from other apps, and it asks again on every read.
  */
 const WATCHED = [
   "Library/Application Support",
@@ -45,7 +48,6 @@ const WATCHED = [
   "Library/Preferences",
   "Library/Logs",
   "Library/LaunchAgents",
-  "Library/Containers",
   ".config",
   ".cache",
   ".local/share",
