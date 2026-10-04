@@ -10,7 +10,10 @@ export const section = {
   keywords: [
     "git",
     "worktree",
+    "own branch",
     "branch",
+    "new threads",
+    "project folder",
     "checkout",
     "disk",
     "space",

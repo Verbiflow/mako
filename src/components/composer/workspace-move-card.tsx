@@ -94,7 +94,7 @@ export function WorkspaceMoveCard() {
               Allow
             </button>
             <span
-              title={`Agents in ${project} move to their own branch without asking. Settings › Conversation lists the projects that allow it.`}
+              title={`Agents in ${project} move to their own branch without asking. Settings › Worktrees lists the projects that allow it.`}
             >
               <NoticeAction
                 onClick={() => void workspaceMoves.answer(request.id, "always")}

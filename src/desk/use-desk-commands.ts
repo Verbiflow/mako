@@ -278,6 +278,24 @@ const DESK_COMMANDS: DeskCommand[] = [
     run: () => void actions.pickWorkspace(),
   },
   {
+    id: "workspace.own-branch",
+    title: "Own branch or project folder",
+    section: "Workspace",
+    keys: "mod+shift+b",
+    hint: "Where the next Thread makes changes; on an open Thread, its menu",
+    keywords: "worktree branch project folder new thread",
+    when: () => Boolean(store.get().git?.root),
+    run: () => {
+      const here = currentOnScreen()
+      if (here.draft) return
+      if (here.thread) {
+        document.querySelector<HTMLButtonElement>('[data-workspace-scope="thread"]')?.click()
+        return
+      }
+      setPref("newThreadsInWorktree", !prefsStore.get().newThreadsInWorktree)
+    },
+  },
+  {
     id: "workspace.generate-commit",
     title: "Draft a commit message",
     section: "Workspace",

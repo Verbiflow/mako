@@ -2,7 +2,9 @@ import { useEffect, useState, type ReactNode } from "react"
 import { RadioGroup } from "radix-ui"
 import { CheckIcon, FolderIcon, GitBranchIcon, LoaderCircleIcon } from "lucide-react"
 import { WORKTREE_BRANCH_PREFIX, worktreeSlug } from "../../../electron/contracts/thread-worktrees.ts"
+import { Keys } from "@/components/ui/kit"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { formatChord } from "@/extend/commands"
 import { homeRelative } from "@/lib/skill-matrix"
 import { acpStore, useAcp } from "@/state/acp"
 import { titleFromPrompt } from "@/state/acp-start"
@@ -29,6 +31,7 @@ const OPTIONS = [
 
 const optionClass = "pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover data-[state=checked]:bg-fill-selected data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
 const triggerClass = "pressable flex h-7 max-w-48 min-w-0 items-center gap-1.5 rounded-md px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-60"
+const OWN_BRANCH_COMMAND = "workspace.own-branch"
 const OWN_BRANCH = "A worktree with its own checkout and branch, so your folder and other threads aren't touched. Your .env files and installed packages come along"
 
 function plural(count: number, one: string, many: string): string {
@@ -62,7 +65,10 @@ function WorkspaceMenu({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
-        <p className="px-2 py-1.5 text-label text-faint">{heading}</p>
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+          <p className="text-label text-faint">{heading}</p>
+          <ShortcutKeys />
+        </div>
         <RadioGroup.Root
           aria-label={heading}
           value={value}
@@ -90,6 +96,12 @@ function WorkspaceMenu({
       </PopoverContent>
     </Popover>
   )
+}
+
+/** The shortcut that switches the next Thread, or opens this menu on an open one, as bound now. */
+function ShortcutKeys() {
+  const chord = usePrefs((prefs) => prefs.keybindings[OWN_BRANCH_COMMAND] ?? "mod+shift+b")
+  return chord ? <Keys keys={formatChord(chord)} /> : null
 }
 
 /**
@@ -172,6 +184,7 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
         <button
           type="button"
           data-workspace={branch ? "own-branch" : "project-folder"}
+          data-workspace-scope="thread"
           data-worktree-origin={outside ? "outside" : undefined}
           disabled={moving}
           aria-label={moving ? "Moving to its own branch" : branch ? `Makes changes on its own branch, ${branch}${outside ? ", in a worktree made outside Mako" : ""}` : "Makes changes in the project folder"}
@@ -190,7 +203,7 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
 
 /**
  * A new Thread in a Git project. The choice is remembered, and is the same
- * setting as Settings > Conversation. On its own branch it names the branch
+ * setting as Settings › Worktrees. On its own branch it names the branch
  * the send will make, and keeps worktrees of the project ready so the send
  * doesn't wait for one.
  */
@@ -223,6 +236,7 @@ function NewThreadWorkspace() {
         <button
           type="button"
           data-workspace={value}
+          data-workspace-scope="new"
           data-worktree-branch={branch || undefined}
           aria-label={branch ? `Starts on its own branch, ${WORKTREE_BRANCH_PREFIX}${branch}` : ownBranch ? "Starts on its own branch" : "Starts in the project folder"}
           title={branch ? `A new worktree on ${WORKTREE_BRANCH_PREFIX}${branch}` : ownBranch ? OWN_BRANCH : "Makes changes in the project folder"}
