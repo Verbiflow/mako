@@ -51,6 +51,8 @@ export interface CursorSdkImport {
   identity: string
   /** The agent id the legacy store's own meta row names. */
   agentId: string
+  /** Native checkpoint of the copied snapshot; absent on older imports. */
+  revision?: string
 }
 
 /**
@@ -158,14 +160,18 @@ function checkpointBlobId(raw: string | undefined): string | undefined {
 function importRecord(raw: string | undefined): CursorSdkImport | undefined {
   if (!raw) return undefined
   try {
-    const parsed: { [CURSOR_SDK_IMPORT_METADATA_KEY]?: { path?: string; identity?: string; agentId?: string } } =
+    const parsed: { [CURSOR_SDK_IMPORT_METADATA_KEY]?: { path?: string; identity?: string; agentId?: string; revision?: string } } =
       JSON.parse(raw)
     const record = parsed[CURSOR_SDK_IMPORT_METADATA_KEY]
     if (!record) return undefined
     const path = text(record.path)
     const identity = text(record.identity)
     const agentId = text(record.agentId)
-    return path && identity && agentId ? { path, identity, agentId } : undefined
+    if (!path || !identity || !agentId) return undefined
+    const imported: CursorSdkImport = { path, identity, agentId }
+    const revision = text(record.revision)
+    if (revision) imported.revision = revision
+    return imported
   } catch {
     return undefined
   }
