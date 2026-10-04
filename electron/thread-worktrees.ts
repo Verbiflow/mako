@@ -9,7 +9,7 @@ import type { ThreadStore } from "./thread-store.js"
 import type { ThreadId } from "./contracts/thread-identity.js"
 import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, worktreeSlug } from "./contracts/thread-worktrees.js"
 import type { GitDiff } from "./contracts/git-workspace-search.js"
-import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep } from "./contracts/thread-worktrees.js"
+import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
@@ -25,6 +25,18 @@ const UNDER_WAY: readonly (readonly [string, string])[] = [
 const MAX_REMEMBERED_CARRIES = 64
 /** A new Thread's branch search lists this many branches, the most recently committed. */
 const LISTED_BRANCHES = 200
+const BRANCH_PULLS_EVERY_MS = 60_000
+
+/**
+ * The pull request for `branch`: by its head branch, or by number for a
+ * fork's pull request fetched as `pr-N`. An open one wins over a closed one;
+ * otherwise the newest.
+ */
+function branchPull(pulls: readonly WorktreeBranchPull[], branch: string): WorktreeBranchPull | null {
+  const number = /^pr-(\d+)$/.exec(branch)?.[1]
+  const mine = pulls.filter((pull) => pull.branch === branch || (number !== undefined && pull.number === Number(number)))
+  return mine.find((pull) => pull.state === "open" || pull.state === "draft") ?? mine[0] ?? null
+}
 
 const ReceiptSchema = z.object({
   conversation: z.string().uuid(),
@@ -178,6 +190,7 @@ export class ThreadWorktreeService {
   private readonly spares: WorktreeSpares
   private readonly starts = new WorktreeStarts()
   private readonly skips = new Map<string, () => void>()
+  private readonly branchPulls = new Map<string, { at: number; pulls: Promise<WorktreeBranchPull[] | null> }>()
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
@@ -405,6 +418,44 @@ export class ThreadWorktreeService {
     } catch {
       return { kind: "unknown" }
     }
+  }
+
+  /**
+   * How every worktree's branch stands: commits main doesn't have, uncommitted
+   * files, whether it landed, and its pull request. `pullsOf` lists a
+   * repository's pull requests, newest first, and is asked at most once a
+   * minute per repository.
+   */
+  async summaries(pullsOf?: (repoRoot: string) => Promise<WorktreeBranchPull[] | null>): Promise<WorktreeSummary[]> {
+    const { worktrees } = await this.list()
+    const pullsIn = (repoRoot: string) => {
+      const now = Date.now()
+      const cached = this.branchPulls.get(repoRoot)
+      if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
+      const pulls = (pullsOf?.(repoRoot) ?? Promise.resolve(null)).catch(() => null)
+      this.branchPulls.set(repoRoot, { at: now, pulls })
+      return pulls
+    }
+    return mapLimited(worktrees, 4, async (worktree): Promise<WorktreeSummary> => {
+      const [status, landing, into, tip, pulls] = await Promise.all([
+        git(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => ""),
+        this.landing(worktree),
+        git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""),
+        git(worktree.repoRoot, ["rev-parse", "--verify", "--quiet", `refs/heads/${worktree.branch}`]).catch(() => ""),
+        pullsIn(worktree.repoRoot),
+      ])
+      const ahead = Number(await git(worktree.repoRoot, ["rev-list", "--count", into ? `${into}..${worktree.branch}` : `${worktree.base}..${worktree.branch}`]).catch(() => "0"))
+      const pull = branchPull(pulls ?? [], worktree.branch)
+      const squashedThere = landing.kind === "open" && pull?.state === "merged" && pull.head === tip
+      return {
+        path: worktree.path,
+        into: into || null,
+        ahead,
+        changes: status ? status.split("\n").length : 0,
+        landing: squashedThere ? { kind: "merged", into: landing.into } : landing,
+        pull,
+      }
+    })
   }
 
   /** Commits on a worktree's branch since the commit it started at; undefined for a folder that isn't one of Mako's worktrees. */

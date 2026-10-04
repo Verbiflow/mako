@@ -77,7 +77,7 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu"
-import { useWorktrees } from "@/state/worktrees"
+import { useKeepWorktreeSummaries, useWorktrees } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
 import { Blank } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
@@ -191,6 +191,7 @@ export function AgentThreads() {
   const grouping = usePrefs((prefs) => prefs.railGrouping)
   const folderUse = usePrefs((prefs) => prefs.folderUse)
   const scroller = useRef<HTMLDivElement>(null)
+  useKeepWorktreeSummaries()
   // The order caught when the pointer entered the rail; held until it leaves,
   // so nothing can change place under a click.
   const [hold, setHold] = useState<{ ranks: RailRanks; folderRanks: FolderRanks } | null>(null)

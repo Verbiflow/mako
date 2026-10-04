@@ -8,6 +8,9 @@ import { join } from "node:path"
 import { ThreadStore } from "../electron/thread-store.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 import { WorktreeStarts } from "../electron/worktree-start.js"
+import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
+import type { WorktreeBranchPull, WorktreeSummary } from "../electron/contracts/thread-worktrees.js"
+import { worktreeMark, worktreeMarkLabel, worktreeTip } from "../src/lib/worktree-marks.ts"
 
 /**
  * Where a new Thread's branch starts: the project folder's branch, or its
@@ -171,7 +174,7 @@ assert.equal(git(project, "rev-parse", "--abbrev-ref", "remote-only@{upstream}")
 const onPull = await service.prepare(randomUUID(), project, "Pull", { kind: "pull", number: 6, branch: "pr-branch", cross: false })
 assert.equal(onPull.branch, "pr-branch")
 assert.equal(git(onPull.path, "rev-parse", "HEAD"), git(seed, "rev-parse", "pr-branch"))
-const onFork = await service.prepare(randomUUID(), project, "Fork", { kind: "pull", number: 7, branch: "patch-1", cross: true })
+const onFork = await service.prepare(placed(), project, "Fork", { kind: "pull", number: 7, branch: "patch-1", cross: true })
 assert.equal(onFork.branch, "pr-7")
 assert.equal(git(onFork.path, "rev-parse", "HEAD"), git(seed, "rev-parse", "pr-branch"))
 
@@ -197,6 +200,41 @@ const kept = randomUUID()
 const keptPath = (await service.unlessSkipped(kept, service.prepare(kept, project, "Kept", { kind: "newest" })))?.path
 service.skip(kept)
 assert.ok(keptPath && existsSync(keptPath), "skipping after the worktree is ready changes nothing")
+
+// The rail's summaries: commits main doesn't have, uncommitted files, and the pull request by branch.
+commit(moved.path, "thread work")
+writeFileSync(join(moved.path, "scratch.txt"), "not yet\n")
+const movedTip = git(moved.path, "rev-parse", "HEAD")
+let asked = 0
+const pulls = async (): Promise<WorktreeBranchPull[]> => {
+  asked++
+  return [
+    { number: 9, title: "Here", url: "https://example.test/9", branch: moved.branch, state: "merged", head: movedTip, checks: "passed" },
+    { number: 7, title: "Fork", url: "https://example.test/7", branch: "patch-1", state: "open", head: "abc", checks: "running" },
+  ]
+}
+const summaryOf = async (path: string) => (await service.summaries(pulls)).find((summary) => summary.path === path)
+const squashed = await summaryOf(moved.path)
+assert.deepEqual([squashed?.into, squashed?.ahead, squashed?.changes, squashed?.landing.kind, squashed?.pull?.number], ["main", 1, 1, "merged", 9],
+  "a pull request merged with the branch's tip as its head has landed, though main never got the commit")
+assert.equal((await summaryOf(onFork.path))?.pull?.number, 7, "a fork's pull request is found by its number")
+commit(moved.path, "after the merge")
+assert.equal((await summaryOf(moved.path))?.landing.kind, "open", "a commit after the merge isn't in it")
+assert.equal(asked, 1, "GitHub is asked once a minute per repository")
+assert.equal((await service.summaries()).find((summary) => summary.path === moved.path)?.pull?.number, 9, "within the minute the last answer stands")
+
+// The mark and the tip say the same thing in a glyph and in words.
+const opened = { path: "/w", into: "main", ahead: 3, changes: 2, landing: { kind: "open", into: "main", commits: 3 }, pull: null } satisfies WorktreeSummary
+const worktree = { path: "/w", thread: ThreadIdSchema.parse(randomUUID()), repoRoot: "/r", project: "/r", branch: "mako/x", base: "abc", createdAt: 0, start: { from: "main", adopted: false, tookMs: 400, copied: 0, spare: true } }
+assert.deepEqual(worktreeMark(undefined), { kind: "branch" })
+assert.deepEqual(worktreeMark(opened), { kind: "ahead", ahead: 3 })
+assert.deepEqual(worktreeMark({ ...opened, pull: { number: 4, title: "", url: "", branch: "mako/x", state: "draft", head: "", checks: null } }), { kind: "pull", number: 4, draft: true })
+assert.deepEqual(worktreeMark({ ...opened, pull: { number: 4, title: "", url: "", branch: "mako/x", state: "closed", head: "", checks: null } }), { kind: "ahead", ahead: 3 }, "a closed pull request leaves the branch's own state")
+assert.deepEqual(worktreeMark({ ...opened, landing: { kind: "merged", into: "main" } }), { kind: "landed" })
+assert.deepEqual(worktreeTip(worktree, opened), ["On mako/x from main", "3 commits not in main · 2 files not committed"])
+assert.deepEqual(worktreeTip(worktree, { ...opened, ahead: 0, landing: { kind: "empty" } }), ["On mako/x from main", "2 files not committed yet"])
+assert.deepEqual(worktreeTip(worktree, { ...opened, changes: 0, pull: { number: 4, title: "", url: "", branch: "mako/x", state: "open", head: "", checks: "failed" } }), ["On mako/x from main", "3 commits not in main", "#4 open · checks failed"])
+assert.equal(worktreeMarkLabel({ kind: "ahead", ahead: 1 }, worktree, "main"), "mako/x: 1 commit not in main")
 
 threads.close()
 rmSync(root, { recursive: true, force: true })

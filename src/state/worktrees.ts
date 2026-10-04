@@ -3,7 +3,7 @@ import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
 import type { GitStatus, ThreadRef } from "@/lib/types"
-import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStart, WorktreeStartPoint } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
@@ -129,6 +129,52 @@ export async function refreshWorktrees(): Promise<void> {
   const mine = ++reads
   const { worktrees } = await getMako().worktrees()
   if (mine === reads) worktreesStore.set(stateOf(worktrees))
+}
+
+const SUMMARIES_EVERY_MS = 30_000
+
+/** How each of Mako's worktrees' branches stands, by path, for the rail's marks. */
+export const worktreeSummariesStore = createStore<{ byPath: Readonly<Record<string, WorktreeSummary>> }>({ byPath: {} })
+export const useWorktreeSummaries = createHook(worktreeSummariesStore)
+
+let summaryReads = 0
+
+export async function refreshWorktreeSummaries(): Promise<void> {
+  if (!hasBridge()) return
+  const mine = ++summaryReads
+  const summaries = await getMako().worktreeSummaries()
+  if (mine === summaryReads) worktreeSummariesStore.set({ byPath: Object.fromEntries(summaries.map((summary) => [summary.path, summary])) })
+}
+
+/**
+ * Keeps the summaries current while the rail shows: when the window comes
+ * back, when the worktrees change, and every half minute while it's
+ * visible. The host asks GitHub at most once a minute.
+ */
+export function useKeepWorktreeSummaries(): void {
+  useEffect(() => {
+    const refresh = () => void refreshWorktreeSummaries().catch(() => {})
+    const tick = () => {
+      if (document.visibilityState === "visible") refresh()
+    }
+    refresh()
+    let listed = worktreesStore.get().worktrees
+    const unsubscribe = worktreesStore.subscribe(() => {
+      const { worktrees } = worktreesStore.get()
+      if (worktrees === listed) return
+      listed = worktrees
+      refresh()
+    })
+    const timer = window.setInterval(tick, SUMMARIES_EVERY_MS)
+    window.addEventListener("focus", refresh)
+    document.addEventListener("visibilitychange", tick)
+    return () => {
+      unsubscribe()
+      window.clearInterval(timer)
+      window.removeEventListener("focus", refresh)
+      document.removeEventListener("visibilitychange", tick)
+    }
+  }, [])
 }
 
 /**

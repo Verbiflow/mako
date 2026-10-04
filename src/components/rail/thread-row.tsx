@@ -24,7 +24,9 @@ import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { followCheckouts } from "@/state/checkout-heads"
-import { useWorktrees, workingFolder, worktreeAt } from "@/state/worktrees"
+import { useWorktrees, useWorktreeSummaries, workingFolder, worktreeAt } from "@/state/worktrees"
+import { worktreeTip } from "@/lib/worktree-marks"
+import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
@@ -181,10 +183,9 @@ export const ThreadRow = memo(function ThreadRow({
   useEffect(() => {
     if (ownCheckouts) followCheckouts(ownCheckouts.split("\n"))
   }, [ownCheckouts])
-  const branch = useWorktrees((state) => {
-    const workingIn = workingFolder(state, ref)
-    return worktreeAt(state.worktrees, workingIn)?.worktree.branch ?? worktreeAt(state.outside, workingIn)?.worktree.branch
-  })
+  const made = useWorktrees((state) => worktreeAt(state.worktrees, workingFolder(state, ref))?.worktree)
+  const branch = useWorktrees((state) => made?.branch ?? worktreeAt(state.outside, workingFolder(state, ref))?.worktree.branch)
+  const summary = useWorktreeSummaries((state) => (made ? state.byPath[made.path] : undefined))
   // A worktree's app is its Thread's own; the project folder's app is marked on the folder's header.
   const checkout = useWorktrees((state) => {
     const workingIn = workingFolder(state, ref)
@@ -287,8 +288,9 @@ export const ThreadRow = memo(function ThreadRow({
           ].join(" → "),
           ref.model,
           ref.cwd,
-          branch ? `Worktree on ${branch}` : undefined,
+          !made && branch ? `Worktree on ${branch}` : undefined,
           "Double-click the title to rename",
+          made ? `\n${worktreeTip(made, summary).join("\n")}` : undefined,
         ]
           .filter(Boolean)
           .join("\n")}
@@ -360,7 +362,9 @@ export const ThreadRow = memo(function ThreadRow({
         {folded ? <SessionCount count={folded.members.length} /> : null}
         {/* The branch itself is in the tip and on the chat's strip; the row
             spends its width on the title. */}
-        {branch ? (
+        {made ? (
+          <WorktreeMark worktree={made} summary={summary} />
+        ) : branch ? (
           <FolderGit2Icon data-thread-worktree={branch} className="size-3 shrink-0 text-faint/80" aria-label={`In a worktree on ${branch}`} />
         ) : null}
         {showFolder && ref.cwd ? (

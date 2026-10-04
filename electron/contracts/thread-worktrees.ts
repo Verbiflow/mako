@@ -61,6 +61,32 @@ export interface WorktreeDetail extends Omit<ThreadWorktree, "thread"> {
   bytes: number | null
 }
 
+/** A pull request whose head is a worktree's branch. */
+export interface WorktreeBranchPull {
+  number: number
+  title: string
+  url: string
+  branch: string
+  state: "open" | "draft" | "merged" | "closed"
+  /** The commit GitHub has as its head. */
+  head: string
+  checks: "passed" | "failed" | "running" | null
+}
+
+/** How a worktree's branch stands, for the rail's mark and its tip. */
+export interface WorktreeSummary {
+  path: string
+  /** The main checkout's branch, or null when it isn't on one. */
+  into: string | null
+  /** Commits on the branch that `into` doesn't have. */
+  ahead: number
+  /** Files with uncommitted changes, untracked ones included. */
+  changes: number
+  /** Merged also when its pull request merged with the branch's current tip as its head. */
+  landing: WorktreeLanding
+  pull: WorktreeBranchPull | null
+}
+
 export interface WorktreeInventory {
   worktrees: WorktreeDetail[]
   /** Checkouts kept ready for new Threads, and their own files' size. */

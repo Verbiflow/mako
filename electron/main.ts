@@ -146,6 +146,7 @@ import {
 import {
   createPull,
   githubStatus,
+  listBranchPulls,
   listPullHeads,
   listPulls,
   listRemoteBranches,
@@ -2391,7 +2392,7 @@ app.whenReady().then(async () => {
   followNativeArchives(threadLifecycle, subscribeThreadEvents, emit)
   installThreadGroupsIpc(threadStore, liveConversations, threadStoreProblem, (message) => emit({ type: "notice", level: "error", message }))
   installThreadTitlesIpc({ store: threadStore, emit })
-  installThreadWorktreesIpc(threadWorktrees, listPullHeads)
+  installThreadWorktreesIpc(threadWorktrees, { heads: listPullHeads, branches: listBranchPulls })
   installChatFoldersIpc()
   installWorkspaceMovesIpc(moves)
   installPlanBuildsIpc(planBuilds)

@@ -11,7 +11,7 @@ import type {
   CheckSummary,
   ReviewSummary,
 } from "./shared.js"
-import type { WorktreePull } from "./contracts/thread-worktrees.js"
+import type { WorktreeBranchPull, WorktreePull } from "./contracts/thread-worktrees.js"
 
 const run = promisify(execFile)
 
@@ -412,6 +412,45 @@ export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null>
           author: parseOptionalUser(entry.author)?.login ?? null,
           updatedAt: stringValue(entry.updatedAt) ?? null,
           cross: booleanValue(entry.isCrossRepository) ?? false,
+        })
+      }
+      return pulls
+    }
+  )
+}
+
+/** Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh` can't answer here. */
+export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[] | null> {
+  return ghJson(
+    cwd,
+    ["pr", "list", "--state", "all", "--limit", "60", "--json", "number,title,url,headRefName,headRefOid,state,isDraft,statusCheckRollup"],
+    (value) => {
+      if (!Array.isArray(value)) return null
+      const pulls: WorktreeBranchPull[] = []
+      for (const entry of value) {
+        if (!isJsonObject(entry)) continue
+        const number = numberValue(entry.number)
+        const title = stringValue(entry.title)
+        const url = stringValue(entry.url)
+        const branch = stringValue(entry.headRefName)
+        const head = stringValue(entry.headRefOid)
+        const state = stringValue(entry.state)
+        if (number === undefined || title === undefined || url === undefined || !branch || !head || !state) continue
+        const checks = (parseJsonArray(entry.statusCheckRollup, parseRawCheck) ?? []).map(toCheck)
+        pulls.push({
+          number,
+          title,
+          url,
+          branch,
+          head,
+          state: state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : booleanValue(entry.isDraft) ? "draft" : "open",
+          checks: checks.length === 0
+            ? null
+            : checks.some((check) => check.state === "failed")
+              ? "failed"
+              : checks.some((check) => check.state === "running")
+                ? "running"
+                : "passed",
         })
       }
       return pulls

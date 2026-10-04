@@ -1,15 +1,24 @@
 import { registerIpc } from "./register.js"
 import type { ThreadWorktreeService } from "../thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary } from "../contracts/thread-worktrees.js"
+
+interface PullLists {
+  /** Open pull requests a new Thread can work on. */
+  heads: (cwd: string) => Promise<WorktreePull[] | null>
+  /** Recent pull requests in any state, to find each worktree branch's. */
+  branches: (cwd: string) => Promise<WorktreeBranchPull[] | null>
+}
 
 const UNAVAILABLE = "This Mako couldn't open its Thread store, so it can't keep worktrees."
 
 /** This device's Thread worktrees, removing one that has nothing uncommitted, and keeping spares of a project ready. */
-export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | null, pulls: (cwd: string) => Promise<WorktreePull[] | null>) {
+export function installThreadWorktreesIpc(worktrees: ThreadWorktreeService | null, pulls: PullLists) {
   registerIpc("mako:worktree-branches", async (_event, cwd: string): Promise<WorktreeBranch[]> =>
     (await worktrees?.branches(cwd)) ?? [])
-  registerIpc("mako:worktree-pulls", (_event, cwd: string): Promise<WorktreePull[] | null> => pulls(cwd))
+  registerIpc("mako:worktree-pulls", (_event, cwd: string): Promise<WorktreePull[] | null> => pulls.heads(cwd))
+  registerIpc("mako:worktree-summaries", async (): Promise<WorktreeSummary[]> =>
+    (await worktrees?.summaries(pulls.branches)) ?? [])
   registerIpc("mako:worktree-skip", (_event, conversationId: string): void => {
     worktrees?.skip(conversationId)
   })

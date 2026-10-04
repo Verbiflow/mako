@@ -5,8 +5,8 @@ import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema, type ThreadId } from "../../electron/contracts/thread-identity"
-import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeStartPoint } from "../../electron/contracts/thread-worktrees"
-import { RAIL_PURPOSES, RAIL_RUNS, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
+import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeStartPoint, type WorktreeSummary } from "../../electron/contracts/thread-worktrees"
+import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
@@ -347,6 +347,10 @@ export function installMockBridge() {
         { name: "origin/docs-refresh", remote: true, at: hours(200), checkedOut: null },
       ]
     },
+    worktreeSummaries: async (): Promise<WorktreeSummary[]> => [
+      ...madeWorktrees.map((worktree) => ({ path: worktree.path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" as const }, pull: null })),
+      ...(scene === "rail" ? RAIL_SUMMARIES : []),
+    ],
     worktreePulls: async () => {
       await new Promise((resolve) => setTimeout(resolve, 500))
       const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()

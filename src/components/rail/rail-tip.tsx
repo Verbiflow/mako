@@ -111,7 +111,9 @@ export function RailTip({ scroller }: { scroller: RefObject<HTMLElement | null> 
   }, [tip])
 
   if (!tip) return null
-  const [title, ...rest] = tip.text.split("\n")
+  // A blank line starts a section of its own: a row's branch, under the row.
+  const [head = "", ...sections] = tip.text.split("\n\n")
+  const [title, ...rest] = head.split("\n")
   return createPortal(
     <div
       ref={node}
@@ -125,6 +127,19 @@ export function RailTip({ scroller }: { scroller: RefObject<HTMLElement | null> 
           {line}
         </p>
       ))}
+      {sections.map((section, index) => {
+        const [lead, ...lines] = section.split("\n")
+        return (
+          <div key={index} className="mt-1.5 border-t border-background/15 pt-1.5">
+            <p className="text-background/90">{lead}</p>
+            {lines.map((line, at) => (
+              <p key={at} className="tabular text-background/70">
+                {line}
+              </p>
+            ))}
+          </div>
+        )
+      })}
     </div>,
     document.body
   )

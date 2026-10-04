@@ -3,7 +3,7 @@ import type { ThreadGroup } from "../../electron/contracts/thread-groups"
 import type { ThreadRunState } from "../../electron/contracts/conversation-session"
 import type { AppMark, RoomApp, RoomView } from "../../electron/contracts/thread-app"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
-import type { ThreadWorktree, WorktreeStartReceipt } from "../../electron/contracts/thread-worktrees"
+import type { ThreadWorktree, WorktreeStartReceipt, WorktreeSummary } from "../../electron/contracts/thread-worktrees"
 
 /**
  * The fixture desk's `?mock&app=rail`: four of the api project's Threads in
@@ -35,6 +35,20 @@ export const RAIL_WORKTREES: ThreadWorktree[] = MOVED.map((entry, index) => {
   if (entry.start) worktree.start = entry.start
   return worktree
 })
+
+/** One of each mark: a pull request open with its checks, commits not in main, landed, and nothing committed. */
+export const RAIL_SUMMARIES: WorktreeSummary[] = [
+  {
+    path: `${ROOT}/api-billing-webhooks`, into: "main", ahead: 3, changes: 0, landing: { kind: "open", into: "main", commits: 3 },
+    pull: { number: 812, title: "Retry billing webhooks with backoff", url: "https://github.com/you/api/pull/812", branch: "mako/billing-webhooks", state: "open", head: "9a1c2e4", checks: "passed" },
+  },
+  { path: `${ROOT}/api-set-up`, into: "main", ahead: 0, changes: 2, landing: { kind: "empty" }, pull: null },
+  { path: `${ROOT}/api-payments-queue`, into: "main", ahead: 2, changes: 1, landing: { kind: "open", into: "main", commits: 2 }, pull: null },
+  {
+    path: `${ROOT}/api-retry-budget`, into: "main", ahead: 1, changes: 0, landing: { kind: "merged", into: "main" },
+    pull: { number: 798, title: "Tighten the retry budget", url: "https://github.com/you/api/pull/798", branch: "fix/retry-budget", state: "merged", head: "4f1c2e9", checks: "passed" },
+  },
+]
 
 export const RAIL_MARKS: AppMark[] = [
   ...MOVED.map((entry) => ({ checkout: `${ROOT}/${entry.folder}`, ...entry.mark })),
