@@ -5,6 +5,7 @@ import { basename, isAbsolute, join, relative, sep } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { AppProbeView, Capped } from "./contracts/thread-app.js"
+import type { Container } from "./container-runtime.js"
 import { HistoryMarkSchema } from "./contracts/watcher-child.js"
 import { listed, toolText, when } from "./tool-text.js"
 import type { FileHistory } from "./watch-backend.js"
@@ -361,6 +362,8 @@ export interface ProbeInput {
   /** Their full command lines, to find the app bundles it runs. */
   commands: string[]
   leftovers: { pid: number; command: string; sure: boolean }[]
+  /** Its running containers, or undefined when no container runtime answered. */
+  containers?: Container[]
   /** When its processes last came up from none running. */
   since?: number
   /** Where it may write freely: its checkout, data folder and Mako's records. */
@@ -441,6 +444,15 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
   }
   if (since !== undefined) view.upSince = since
   if (down) view.stoppedAt = down.at
+  if (input.containers) {
+    view.containers = input.containers.map((container) => {
+      const entry: NonNullable<AppProbeView["containers"]>[number] = { name: container.name, image: container.image, ports: container.ports.map((port) => ({ port, fixed: !ours(port) })) }
+      if (container.bytes !== undefined) entry.bytes = container.bytes
+      return entry
+    })
+    if (input.containers.length && !view.running) notes.push("containers are still running though the app's processes aren't: a stop ends what Mako started, and a `docker compose up -d` or `docker run -d` hands its containers to the runtime. Run Compose in the foreground as one of the recipe's processes, so stopping the app stops them.")
+    if (view.containers.some((entry) => entry.ports.some((port) => port.fixed))) notes.push("A container publishing a port outside this Thread's block makes a second copy's container fight over it; publish it on one of the Thread's ports.")
+  }
   if (owners.length) notes.unshift("connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it.")
   if (writing.length) notes.push("writing is files the app holds open for writing outside this checkout and this Thread's data folder; two copies writing one file is a conflict.")
   if (input.leftovers.length) notes.push("leftovers, by pid, look left behind by the app: each started since it came up and outlived the process that started it, so stopping the app doesn't end it. One that carries the app's mark (set in the environment of everything Mako starts for it) is surely the app's; one Mako can't read the environment of counts because it works in this checkout or data folder.")
@@ -469,11 +481,22 @@ export function probeText(view: AppProbeView): string {
     writing: listed({ entries: view.writing.entries.map((entry) => entry.path), more: view.writing.more }),
     leftovers: Object.fromEntries(view.leftovers.map((entry) =>
       [entry.pid, entry.sure ? `${entry.command} (carries the app's mark)` : `${entry.command} (works in this checkout or data folder; Mako can't read its environment to be sure it's the app's)`])),
+    containers: view.containers?.length
+      ? Object.fromEntries(view.containers.map((entry) => [entry.name, [
+          entry.image,
+          entry.bytes === undefined ? undefined : `holds ${megabytes(entry.bytes)}`,
+          ...entry.ports.map((port) => port.fixed ? `publishes ${port.port}, outside this Thread's ports ${first}-${last}, so a second copy would fight over it` : `publishes ${port.port}`),
+        ].filter(Boolean).join("; ")]))
+      : undefined,
     changedFolders: view.upSince === undefined ? undefined : Object.fromEntries(changed),
     moreChangedFolders: view.changed.more,
     registered: view.registered.length ? view.registered.map((entry) => `${entry.name.replace(/:$/, "")}: ${entry.detail}`) : undefined,
     notes: view.notes.length ? view.notes : undefined,
   })
+}
+
+function megabytes(value: number): string {
+  return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GB` : `${Math.round(value / 1024 ** 2)} MB`
 }
 
 function shallowReason(trace: Trace | undefined, read: boolean, history: FileHistory | undefined, stopped: boolean): string {

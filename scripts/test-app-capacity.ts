@@ -13,6 +13,7 @@ import { commandEnvironment, environmentTools } from "../electron/environment-to
 import { spareInstaller } from "../electron/spare-install.js"
 import { folderApp, portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
+import type { ContainerLook } from "../electron/container-runtime.js"
 import { inputsDigest, projectRecipe, RecipeSchema, RECIPE_PATH } from "../electron/thread-recipe.js"
 import { ThreadStore } from "../electron/thread-store.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
@@ -30,7 +31,9 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-app-capacity-")))
 const records = join(root, "thread-environments")
 let skew = 0
 const now = () => Date.now() + skew
-const processes = new ThreadProcesses({ root: records, listening: portListening, now })
+/** The container runtime the processes read; none until the container cases set one. */
+let runtime: ContainerLook | undefined
+const processes = new ThreadProcesses({ root: records, listening: portListening, now, containers: async () => runtime })
 const owned: AppKey[] = []
 
 function git(cwd: string, ...args: string[]): string {
@@ -298,10 +301,42 @@ try {
   await until("the container client", async () => (await processes.memory()).apps.get(boxedApp)?.containers)
   skew += 61_000
   await processes.memory()
-  assert.deepEqual(await processes.estimate(boxed), { kind: "containers" })
+  assert.deepEqual(await processes.estimate(boxed), { kind: "containers" }, "with no runtime to read, a project that starts containers gets no estimate")
   await processes.stop(boxedApp)
 
-  console.log(`app capacity: spares run their install in the background and hand the record over on claim (no second install; a claim mid-install hands the run over, the start waits for it, the Room names its Thread); memory peaks kept per project across runs and hosts, "about N at once" only after ${FIT_RUNS} settled runs, a start that won't fit in free memory stops quiet apps first, containers never estimated; the Room lists apps with project, Thread, memory, up and used times, and stops them`)
+  // With a runtime, the containers Compose ran in the checkout are the app's: their memory counts, and copies are fitted to the runtime's machine too.
+  const MB = 1024 * 1024
+  const ours = { id: "a1", name: "boxed-db-1", image: "postgres:16", bytes: 300 * MB, folders: [join(boxed, "data")], project: "boxed", ports: [5432] }
+  const stranger = { id: "b2", name: "elsewhere-1", image: "redis", bytes: 1_500 * MB, folders: [join(root, "elsewhere")], ports: [] }
+  runtime = { at: now(), containers: [ours, stranger], totalBytes: 2_048 * MB }
+  await processes.touch(boxedApp, boxed)
+  for (let index = 0; index < FIT_RUNS; index += 1) {
+    await processes.start(boxedApp, [{ kind: "process", name: "db", command: `${docker} compose up`, cwd: boxed, env: process.env }])
+    const held = await until("the containers counted", async () => (await processes.memory()).apps.get(boxedApp))
+    assert.equal(held.containerBytes, 300 * MB, "the app's containers are counted, the stranger's aren't")
+    assert.ok(held.bytes > 300 * MB && !held.containers, "inside its memory, with nothing left unseen")
+    skew += 61_000
+    await processes.memory()
+    await processes.stop(boxedApp)
+  }
+  const boxedEstimate = await processes.estimate(boxed)
+  assert.equal(boxedEstimate.kind, "ready", "once read, the earlier unread run no longer blocks the estimate")
+  assert.equal(boxedEstimate.kind === "ready" && boxedEstimate.containerBytes, 300 * MB)
+  assert.deepEqual((await processes.appContainers(boxedApp))?.map((container) => container.name), ["boxed-db-1"], "a container that outlives the app is still its own")
+  await processes.start(boxedApp, [{ kind: "process", name: "db", command: `${docker} compose up`, cwd: boxed, env: process.env }])
+  await until("the boxed app's memory", async () => (await processes.memory()).apps.get(boxedApp)?.containerBytes)
+  free = { freeBytes: 64 * 1024 * MB, totalBytes: 128 * 1024 * MB }
+  const boxedView = await tools.desk.room()
+  const boxedRow = boxedView.apps.find((entry) => entry.app === boxedApp)!
+  assert.equal(boxedRow.containerBytes, 300 * MB)
+  assert.deepEqual(boxedView.containerRuntime, { totalBytes: 2_048 * MB, usedBytes: 1_800 * MB })
+  const boxedFit = boxedView.fits.find((entry) => entry.root === boxed)?.estimate
+  assert.ok(boxedFit?.kind === "ready" && boxedFit.limitedBy === "containers" && boxedFit.atOnce === boxedFit.running,
+    `the runtime's machine has 248 MB left, less than a copy's containers, so no more fit though free memory is plenty (${JSON.stringify(boxedFit)})`)
+  await processes.stop(boxedApp)
+  runtime = undefined
+
+  console.log(`app capacity: spares run their install in the background and hand the record over on claim (no second install; a claim mid-install hands the run over, the start waits for it, the Room names its Thread); memory peaks kept per project across runs and hosts, "about N at once" only after ${FIT_RUNS} settled runs, a start that won't fit in free memory stops quiet apps first, containers unread never estimated and read ones counted in memory, peaks and fits; the Room lists apps with project, Thread, memory, up and used times, and stops them`)
 } finally {
   rmSync(hold, { force: true })
   const started = readdirSync(records).flatMap((name) => AppKeySchema.safeParse(name).data ?? [])

@@ -10,6 +10,7 @@ import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.j
 import { belowAgents } from "./background-priority.js"
 import { FIT_RUNS } from "./contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
+import { containersBy, lookAtContainers, type Container, type ContainerLook } from "./container-runtime.js"
 
 const run = promisify(execFile)
 
@@ -50,7 +51,7 @@ const FOOTPRINT_MAX_PIDS = 48
 /** A footprint is read again once its process's resident size has moved this much, or once it's this old. */
 const FOOTPRINT_DRIFT = 0.05
 const FOOTPRINT_KEEP_MS = 5 * 60_000
-/** Their processes are clients; the containers run in the runtime's VM, outside every process tree here. */
+/** Their processes are clients; the containers run in the runtime's VM, outside every process tree here, and are read from the runtime. */
 const CONTAINER_CLIENT = /(?:^|\/)(?:docker|docker-compose|podman|podman-compose|nerdctl|finch)(?:\s|$)/
 /**
  * Waits for `go` on stdin, so Mako can read its start time before a quick
@@ -174,10 +175,16 @@ export interface Leftover {
 
 export type MemoryPressure = "normal" | "warning" | "critical"
 
-/** What an app's processes held at one look: physical footprint on macOS, as Activity Monitor counts it, else resident memory. */
+/**
+ * What an app held at one look: its processes' physical footprint on macOS,
+ * as Activity Monitor counts it, else resident memory, and what its
+ * containers hold in the container runtime.
+ */
 export interface AppMemory {
   bytes: number
-  /** Its processes start containers, whose memory is in the container runtime's VM and isn't counted. */
+  /** What its containers hold, counted in `bytes`: those Compose ran in its checkout or that mount a folder of it. */
+  containerBytes?: number
+  /** It runs a container client and none of its containers could be read, so their memory isn't in `bytes`. */
   containers?: true
 }
 
@@ -187,14 +194,17 @@ export interface MemoryLook {
   freeBytes?: number
   totalBytes?: number
   apps: Map<AppKey, AppMemory>
+  /** The container runtime's machine: what it can give containers in all, and what every running container holds. */
+  containerRuntime?: { totalBytes: number; usedBytes: number }
 }
 
 /** How much a copy of a project's app takes at its peak, from its earlier runs. */
 export type MemoryEstimate =
   | { kind: "learning"; runs: number }
-  /** Its runs start containers, whose memory can't be seen. */
+  /** Its runs start containers whose memory couldn't be read. */
   | { kind: "containers" }
-  | { kind: "ready"; runs: number; peakBytes: number }
+  /** `containerBytes`, inside `peakBytes`, is what its containers held at the median run, when they were read. */
+  | { kind: "ready"; runs: number; peakBytes: number; containerBytes?: number }
 
 const PeaksSchema = z.object({
   project: z.string(),
@@ -206,10 +216,27 @@ const PeaksSchema = z.object({
     bytes: z.number(),
     /** Measured once it had been up `PEAK_STEADY_MS`. */
     steady: z.boolean().optional(),
+    /** Its containers ran and couldn't be read: `bytes` misses them. */
     containers: z.boolean().optional(),
+    /** What its containers held at their most, inside `bytes`. */
+    containerBytes: z.number().optional(),
   })),
 })
 type Peaks = z.infer<typeof PeaksSchema>
+/** A running app's peak at one look, for its project's estimate. */
+interface Seen {
+  app: AppKey
+  up: number
+  bytes: number
+  containers: boolean
+  containerBytes?: number
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle]! : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2)
+}
 
 /** What a checkout's install steps last did, kept per checkout so it stays with the files it describes. */
 const PreparedSchema = z.object({
@@ -238,6 +265,8 @@ export interface ThreadProcessDependencies {
    * record what it compares against. A failure starts the app regardless.
    */
   cameUp?: (folder: string, at: number) => Promise<void>
+  /** The container runtime's running containers, or undefined when none answers; the engine's API by default. */
+  containers?: () => Promise<ContainerLook | undefined>
   now?: () => number
 }
 
@@ -659,29 +688,64 @@ export class ThreadProcesses {
     const counted = (await this.readPeaks(project)).runs.filter((entry) => entry.steady && entry.bytes > 0)
     if (counted.some((entry) => entry.containers)) return { kind: "containers" }
     if (counted.length < FIT_RUNS) return { kind: "learning", runs: counted.length }
-    const sorted = counted.map((entry) => entry.bytes).sort((a, b) => a - b)
-    const middle = Math.floor(sorted.length / 2)
-    const peakBytes = sorted.length % 2 ? sorted[middle]! : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2)
-    return { kind: "ready", runs: counted.length, peakBytes }
+    const estimate: MemoryEstimate = { kind: "ready", runs: counted.length, peakBytes: median(counted.map((entry) => entry.bytes)) }
+    const contained = counted.flatMap((entry) => (entry.containerBytes ? [entry.containerBytes] : []))
+    if (contained.length) estimate.containerBytes = median(contained)
+    return estimate
+  }
+
+  /**
+   * The app's running containers, wherever they are in its life: those
+   * Compose ran in its checkout or that mount a folder of it, when no other
+   * app's checkout holds that folder more closely. Undefined when no
+   * container runtime answers.
+   */
+  async appContainers(app: AppKey): Promise<Container[] | undefined> {
+    const look = await this.containerLook()
+    if (!look) return undefined
+    const owners: { owner: AppKey; folders: string[] }[] = []
+    for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
+      const other = AppKeySchema.safeParse(folder)
+      if (other.success) owners.push({ owner: other.data, folders: this.foldersOf(other.data, Object.values(await this.runs(other.data).catch(() => ({})))) })
+    }
+    return containersBy(look, owners).get(app) ?? []
+  }
+
+  /** The folders an app's containers are tied to it by: its checkout and its runs' folders. */
+  private foldersOf(app: AppKey, runs: Run[]): string[] {
+    const checkout = this.checkoutOf(app)
+    return [...new Set([...(checkout ? [checkout] : []), ...runs.map((record) => record.cwd)])]
+  }
+
+  /** One look at the container runtime shared by a measure, the probe and a stop; a missing runtime is no runtime. */
+  private containerLook(): Promise<ContainerLook | undefined> {
+    return (this.dependencies.containers ?? lookAtContainers)().catch(() => undefined)
   }
 
   private async measure(): Promise<MemoryLook> {
     const at = this.now()
     const [system, apps] = await Promise.all([freeMemory(), this.appMemory()])
-    const look: MemoryLook = { at, apps: new Map([...apps].map(([app, entry]) => [app, entry.memory])) }
+    const look: MemoryLook = { at, apps: new Map([...apps.found].map(([app, entry]) => [app, entry.memory])) }
     if (system) Object.assign(look, system)
-    const byProject = new Map<string, { app: AppKey; up: number; bytes: number; containers: boolean }[]>()
-    for (const [app, entry] of apps) {
+    if (apps.runtime) look.containerRuntime = apps.runtime
+    const byProject = new Map<string, Seen[]>()
+    for (const [app, entry] of apps.found) {
       const [project, up] = await Promise.all([this.projectOf(app), this.upAt(app)])
       if (!project || up === undefined || !entry.peakBytes) continue
-      byProject.set(project, [...(byProject.get(project) ?? []), { app, up, bytes: entry.peakBytes, containers: Boolean(entry.memory.containers) }])
+      const seen: Seen = { app, up, bytes: entry.peakBytes, containers: Boolean(entry.memory.containers) }
+      if (entry.memory.containerBytes) seen.containerBytes = entry.memory.containerBytes
+      byProject.set(project, [...(byProject.get(project) ?? []), seen])
     }
     for (const [project, seen] of byProject) await this.recordPeaks(project, seen, at).catch(() => {})
     return look
   }
 
-  /** Each running app's memory, and the most its process runs have held. */
-  private async appMemory(): Promise<Map<AppKey, { memory: AppMemory; peakBytes: number }>> {
+  /**
+   * Each running app's memory, and the most its process runs have held, with
+   * the containers it runs; and the container runtime's machine, when one
+   * answered.
+   */
+  private async appMemory(): Promise<{ found: Map<AppKey, { memory: AppMemory; peakBytes: number }>; runtime?: MemoryLook["containerRuntime"] }> {
     const found = new Map<AppKey, { memory: AppMemory; peakBytes: number }>()
     const apps: { app: AppKey; runs: Run[] }[] = []
     for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
@@ -690,21 +754,30 @@ export class ThreadProcesses {
       const runs = Object.values(await this.runs(app.data).catch(() => ({})))
       if (runs.length) apps.push({ app: app.data, runs })
     }
-    if (!apps.some((entry) => entry.runs.some((record) => groupAlive(record.pid)))) return found
-    const rows = await sharedProcessTable()
+    if (!apps.some((entry) => entry.runs.some((record) => groupAlive(record.pid)))) return { found }
+    const [rows, containerLook] = await Promise.all([sharedProcessTable(), this.containerLook()])
     const held = apps.map(({ app, runs }) => ({ app, runs: runs.map((record) => ({ record, rows: members(rows, record) })) }))
     const footprints = await this.footprintsOf(held.flatMap((entry) => entry.runs.flatMap((one) => one.rows)))
     const bytesOf = (row: Row) => footprints.get(row.pid)?.bytes ?? row.rssKb * 1024
     const peakOf = (row: Row) => footprints.get(row.pid)?.peakBytes ?? bytesOf(row)
     const sum = (runs: typeof held[number]["runs"], of: (row: Row) => number) => runs.reduce((total, one) => total + one.rows.reduce((part, row) => part + of(row), 0), 0)
-    for (const { app, runs } of held) {
-      const live = runs.filter((one) => one.rows.length)
-      if (!live.length) continue
-      const memory: AppMemory = { bytes: sum(live, bytesOf) }
-      if (live.some((one) => one.rows.some((row) => CONTAINER_CLIENT.test(row.command)))) memory.containers = true
-      found.set(app, { memory, peakBytes: sum(live.filter((one) => one.record.kind === "process"), peakOf) })
+    // A container is the running app's whose checkout or run folder holds its folders most closely.
+    const live = held.flatMap(({ app, runs }) => {
+      const up = runs.filter((one) => one.rows.length)
+      return up.length ? [{ app, up }] : []
+    })
+    const contained = containerLook ? containersBy(containerLook, live.map(({ app, up }) => ({ owner: app, folders: this.foldersOf(app, up.map((one) => one.record)) }))) : new Map<AppKey, Container[]>()
+    for (const { app, up } of live) {
+      const memory: AppMemory = { bytes: sum(up, bytesOf) }
+      const containerBytes = (contained.get(app) ?? []).reduce((total, container) => total + (container.bytes ?? 0), 0)
+      if (containerBytes) {
+        memory.bytes += containerBytes
+        memory.containerBytes = containerBytes
+      } else if (up.some((one) => one.rows.some((row) => CONTAINER_CLIENT.test(row.command)))) memory.containers = true
+      found.set(app, { memory, peakBytes: sum(up.filter((one) => one.record.kind === "process"), peakOf) + containerBytes })
     }
-    return found
+    const total = containerLook?.totalBytes
+    return total ? { found, runtime: { totalBytes: total, usedBytes: containerLook.containers.reduce((sum, container) => sum + (container.bytes ?? 0), 0) } } : { found }
   }
 
   /**
@@ -733,7 +806,7 @@ export class ThreadProcesses {
     }))
   }
 
-  private async recordPeaks(project: string, seen: { app: AppKey; up: number; bytes: number; containers: boolean }[], at: number): Promise<void> {
+  private async recordPeaks(project: string, seen: Seen[], at: number): Promise<void> {
     const changed = seen.filter((entry) => {
       const written = this.peaks.get(`${entry.app}:${entry.up}`)
       return !written || entry.bytes > written.bytes * PEAK_GROWTH || (!written.steady && at - entry.up >= PEAK_STEADY_MS)
@@ -743,12 +816,18 @@ export class ThreadProcesses {
     for (const entry of changed) {
       const steady = at - entry.up >= PEAK_STEADY_MS
       const current = peaks.runs.find((run) => run.app === entry.app && run.up === entry.up)
-      const next = { app: entry.app, up: entry.up, bytes: Math.max(entry.bytes, current?.bytes ?? 0), steady: steady || Boolean(current?.steady) }
-      const kept = entry.containers || current?.containers ? { ...next, containers: true } : next
-      if (current) Object.assign(current, kept)
-      else peaks.runs.push(kept)
-      this.peaks.set(`${entry.app}:${entry.up}`, { bytes: kept.bytes, steady: kept.steady })
+      const kept: Peaks["runs"][number] = { app: entry.app, up: entry.up, bytes: Math.max(entry.bytes, current?.bytes ?? 0), steady: steady || Boolean(current?.steady) }
+      const containerBytes = Math.max(entry.containerBytes ?? 0, current?.containerBytes ?? 0)
+      if (containerBytes) kept.containerBytes = containerBytes
+      else if (entry.containers || current?.containers) kept.containers = true
+      if (current) {
+        delete current.containers
+        Object.assign(current, kept)
+      } else peaks.runs.push(kept)
+      this.peaks.set(`${entry.app}:${entry.up}`, { bytes: kept.bytes, steady: Boolean(kept.steady) })
     }
+    // Runs from before Mako read containers miss what theirs held; once one is read they say nothing true.
+    if (peaks.runs.some((run) => run.containerBytes)) peaks.runs = peaks.runs.filter((run) => !run.containers)
     peaks.runs = peaks.runs.sort((a, b) => a.up - b.up).slice(-PEAK_RUNS)
     const path = this.peaksFile(project)
     await mkdir(join(this.dependencies.root, MEMORY), { recursive: true, mode: 0o700 })

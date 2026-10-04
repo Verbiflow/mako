@@ -124,6 +124,12 @@ export interface AppProbeView {
   writing: Capped<{ path: string; pid: number }>
   /** Processes it left that no stop ends; `sure` when they carry the app's mark, not only work in its folders. */
   leftovers: { pid: number; command: string; sure: boolean }[]
+  /**
+   * Its running containers: those Compose ran in its checkout or that mount
+   * a folder of it. `fixed` is a published port outside the Thread's block.
+   * Missing when no container runtime answered.
+   */
+  containers?: { name: string; image: string; bytes?: number; ports: { port: number; fixed: boolean }[] }[]
   /** Folders where apps keep state with something changed since it came up, with who had files open there. */
   changed: Capped<{ folder: string; paths: string[]; more: boolean; who: string }>
   /** `history`: read from the file system's history, any depth. `times`: modification times one or two levels down. */
@@ -155,9 +161,11 @@ export interface RoomApp {
   /** What runs: process names, "install", or a check's tier. */
   runs: string[]
   port?: number
-  /** Its processes' physical footprint at the last look. */
+  /** Its processes' physical footprint at the last look, and its containers'. */
   memoryBytes?: number
-  /** It starts containers, whose memory isn't counted. */
+  /** What its containers hold, inside `memoryBytes`. */
+  containerBytes?: number
+  /** It starts containers none of which Mako could read, so their memory isn't counted. */
   containers?: true
   upAt?: number
   usedAt?: number
@@ -174,10 +182,15 @@ export interface RoomFit {
   estimate:
     /** Fewer than `FIT_RUNS` runs stayed up a minute. */
     | { kind: "learning"; runs: number }
-    /** Its runs start containers, whose memory isn't counted. */
+    /** Its runs start containers Mako couldn't read, so their memory isn't counted. */
     | { kind: "containers" }
-    /** `peakBytes` is the median of its runs' peaks; `atOnce` counts the copies running and as many more as free memory holds, when Mako can read that. */
-    | { kind: "ready"; runs: number; peakBytes: number; running: number; atOnce?: number }
+    /**
+     * `peakBytes` is the median of its runs' peaks, `containerBytes` the part
+     * its containers held; `atOnce` counts the copies running and as many more
+     * as free memory holds, when Mako can read that, or as many as the
+     * container runtime's machine holds when that is fewer (`limitedBy`).
+     */
+    | { kind: "ready"; runs: number; peakBytes: number; containerBytes?: number; running: number; atOnce?: number; limitedBy?: "containers" }
 }
 
 export interface RoomView {
@@ -185,6 +198,8 @@ export interface RoomView {
   pressure: "normal" | "warning" | "critical"
   freeBytes?: number
   totalBytes?: number
+  /** The container runtime's machine: what it can give containers in all, and what every running container holds. */
+  containerRuntime?: { totalBytes: number; usedBytes: number }
   apps: RoomApp[]
   /** Projects with an app listed. */
   fits: RoomFit[]

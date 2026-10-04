@@ -53,8 +53,8 @@ export function roomTip(app: RoomApp, now: number): string {
     app.checkout,
     roomDetail(app, now),
     app.port === undefined ? undefined : `Port ${app.port}`,
-    app.memoryBytes === undefined ? undefined : `Holds ${formatBytes(app.memoryBytes)} of memory.`,
-    app.containers ? "It starts containers too; their memory is in the container runtime and isn't counted here." : undefined,
+    app.memoryBytes === undefined ? undefined : app.containerBytes ? `Holds ${formatBytes(app.memoryBytes)} of memory, ${formatBytes(app.containerBytes)} of it in its containers.` : `Holds ${formatBytes(app.memoryBytes)} of memory.`,
+    app.containers ? "It starts containers Mako couldn't read: none was started by Compose in its checkout or mounts a folder of it, or no container runtime answered. Their memory isn't counted here." : undefined,
   ].filter(Boolean).join("\n")
 }
 
@@ -74,14 +74,15 @@ export function fitLine(fit: RoomFit): FitLine {
   if (estimate.kind === "containers")
     return {
       text: `${name}: uses containers`,
-      tip: `${name}'s app starts containers. Their memory is in the container runtime, which Mako can't see, so it can't say how many copies fit.`,
+      tip: `${name}'s app starts containers Mako couldn't read, so it can't say how many copies fit. Mako reads the containers Compose starts in the app's checkout, and those that mount a folder of it.`,
     }
-  const each = `Each copy of ${name}'s app peaks around ${formatBytes(estimate.peakBytes)}, the median of its last ${estimate.runs} runs.`
+  const contained = estimate.containerBytes ? `, ${formatBytes(estimate.containerBytes)} of it in its containers` : ""
+  const each = `Each copy of ${name}'s app peaks around ${formatBytes(estimate.peakBytes)}${contained}, the median of its last ${estimate.runs} runs.`
   if (estimate.atOnce === undefined) return { text: `${name}: about ${formatBytes(estimate.peakBytes)} each`, tip: each }
-  return {
-    text: `${name}: about ${estimate.atOnce} at once`,
-    tip: `${each} With the memory free now, about ${estimate.atOnce} fit at once, counting the ${estimate.running} running.`,
-  }
+  const room = estimate.limitedBy === "containers"
+    ? `The container runtime's machine has room for the containers of about ${estimate.atOnce}, fewer than free memory would hold, counting the ${estimate.running} running.`
+    : `With the memory free now, about ${estimate.atOnce} fit at once, counting the ${estimate.running} running.`
+  return { text: `${name}: about ${estimate.atOnce} at once`, tip: `${each} ${room}` }
 }
 
 export function memoryLine(room: RoomView): string {

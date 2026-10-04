@@ -453,13 +453,25 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     // A link never replaces what the worktree has; a copy makes an entry the recipe stopped linking the worktree's own.
     await bringFiles(root, checkout, recipe.carry ?? [])
   }
-  /** What the app's copies peak at, by its project's estimate, when free memory now is less than that. */
-  const shortFor = async (checkout: string): Promise<{ peakBytes: number; freeBytes: number } | undefined> => {
-    const [estimate, free] = await Promise.all([
+  /**
+   * Why a copy of the app doesn't fit now, by its project's estimate: free
+   * memory is less than a copy's peak, or the container runtime's machine has
+   * less left than its containers'.
+   */
+  const shortFor = async (checkout: string): Promise<string | undefined> => {
+    const [estimate, free, look] = await Promise.all([
       projectRoot(checkout).then((root) => deps.processes.estimate(root)),
       (deps.freeMemory ?? freeMemory)().catch(() => undefined),
+      recentMemory(ROOM_MEMORY_MS),
     ])
-    return estimate.kind === "ready" && free && free.freeBytes < estimate.peakBytes ? { peakBytes: estimate.peakBytes, freeBytes: free.freeBytes } : undefined
+    if (estimate.kind !== "ready") return undefined
+    if (free && free.freeBytes < estimate.peakBytes)
+      return `Each copy of this app peaks around ${bytes(estimate.peakBytes)} (the median of its recent runs) and ${bytes(free.freeBytes)} is free`
+    const runtime = look?.containerRuntime
+    const left = runtime ? Math.max(0, runtime.totalBytes - runtime.usedBytes) : undefined
+    if (estimate.containerBytes && runtime && left !== undefined && left < estimate.containerBytes)
+      return `Each copy's containers peak around ${bytes(estimate.containerBytes)} and the container runtime's machine has ${bytes(left)} of its ${bytes(runtime.totalBytes)} left`
+    return undefined
   }
   /**
    * Under memory pressure, or when the app's copies peak at more than is
@@ -490,7 +502,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const level = await pressure()
     if (level === "normal") {
       const short = await shortFor(checkout)
-      return { notes: short ? [...notes, `Each copy of this app peaks around ${bytes(short.peakBytes)} (the median of its recent runs) and ${bytes(short.freeBytes)} is free; the app starts anyway.`] : notes }
+      return { notes: short ? [...notes, `${short}; the app starts anyway.`] : notes }
     }
     if (level !== "critical") return { notes: [...notes, "This Mac is short of memory; the app starts anyway."] }
     const running = (await deps.processes.active()).filter((entry) => entry.app !== app)
@@ -693,8 +705,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const left = stayed.length
       ? ` Still running ${seconds(waited)} later, though, and likely left behind by the app: ${stayed.map((entry) => `pid ${entry.pid} (${entry.command})`).join("; ")}. Each started since the app came up and outlived the process that started it, so no stop reaches it; ${stayed.every((entry) => entry.sure) ? "each carries the app's mark" : "each carries the app's mark or works in this checkout or data folder"}. Stop one yourself if it's the app's and shouldn't outlive it.`
       : ""
-    if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.${went}${left}`
-    return (inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running.") + went + left
+    const running = await deps.processes.appContainers(current.environment.app)
+    const contained = running?.length
+      ? ` Its containers ${running.map((container) => container.name).join(", ")} are still running: a stop ends what Mako started, and Compose or docker run with -d hands containers to the runtime. Stop them with docker compose down (or docker stop) if they shouldn't outlive the app, and run Compose in the foreground as one of the recipe's processes so the next stop ends them.`
+      : ""
+    if (were.length) return `Stopped ${were.join(", ")}, with every process each had started.${went}${left}${contained}`
+    return (inLine ? "Nothing was running; the start waiting for memory was taken out of the line." : "Nothing was running.") + went + left + contained
   }
   const probe = async ({ environment, checkout }: Context): Promise<AppProbeView> => {
     const { pids, commands, leftovers, since, records, folder } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
@@ -715,6 +731,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (since !== undefined) input.since = since
     if (deps.history) input.history = deps.history
     if (deps.now) input.now = deps.now
+    const containers = await deps.processes.appContainers(environment.app)
+    if (containers) input.containers = containers
     return probeApp(input)
   }
   /**
@@ -1030,18 +1048,33 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (last && (deps.now ?? Date.now)() - last.at < ms) return last
     return deps.processes.memory().catch(() => last)
   }
-  /** About how many copies of the project's app fit: those running, and as many more as free memory holds at the median peak. */
-  const fitOf = async (root: string, freeBytes: number | undefined, running: number): Promise<RoomFit["estimate"]> => {
+  /**
+   * About how many copies of the project's app fit: those running, and as
+   * many more as free memory holds at the median peak, or as the container
+   * runtime's machine holds of their containers when that's fewer.
+   */
+  const fitOf = async (root: string, freeBytes: number | undefined, running: number, runtime?: MemoryLook["containerRuntime"]): Promise<RoomFit["estimate"]> => {
     const estimate = await deps.processes.estimate(root)
     if (estimate.kind !== "ready") return estimate
-    const fit: RoomFit["estimate"] = { ...estimate, running }
-    return freeBytes === undefined ? fit : { ...fit, atOnce: running + Math.floor(freeBytes / estimate.peakBytes) }
+    const fit: Extract<RoomFit["estimate"], { kind: "ready" }> = { ...estimate, running }
+    if (freeBytes === undefined) return fit
+    let more = Math.floor(freeBytes / estimate.peakBytes)
+    if (estimate.containerBytes && runtime) {
+      const inRuntime = Math.floor(Math.max(0, runtime.totalBytes - runtime.usedBytes) / estimate.containerBytes)
+      if (inRuntime < more) {
+        more = inRuntime
+        fit.limitedBy = "containers"
+      }
+    }
+    return { ...fit, atOnce: running + more }
   }
   /** Said only once it's known: nothing while Mako is still learning the app's size. */
   const fitText = (estimate: RoomFit["estimate"], freeBytes: number | undefined) => {
-    if (estimate.kind === "containers") return "this app starts containers, whose memory Mako can't see, so it can't say how many copies of it fit"
+    if (estimate.kind === "containers") return "this app starts containers Mako couldn't read (none was started by Compose in this checkout or mounts a folder of it, or no container runtime answered), so it can't say how many copies of it fit"
     if (estimate.kind !== "ready" || estimate.atOnce === undefined || freeBytes === undefined) return undefined
-    return `each copy of this app peaks around ${bytes(estimate.peakBytes)} (the median of its last ${estimate.runs} runs); with ${bytes(freeBytes)} free, about ${estimate.atOnce} fit at once, counting the ${estimate.running} running now`
+    const contained = estimate.containerBytes ? `, ${bytes(estimate.containerBytes)} of it in its containers` : ""
+    const limit = estimate.limitedBy === "containers" ? ", limited by what the container runtime's machine has left for containers" : ""
+    return `each copy of this app peaks around ${bytes(estimate.peakBytes)}${contained} (the median of its last ${estimate.runs} runs); with ${bytes(freeBytes)} free, about ${estimate.atOnce} fit at once${limit}, counting the ${estimate.running} running now`
   }
   const roomReport = async (app: AppKey, checkout: string): Promise<string> => {
     const [overview, level, free, root] = await Promise.all([deps.processes.overview(), pressure(), (deps.freeMemory ?? freeMemory)().catch(() => undefined), rootOf(checkout)])
@@ -1052,7 +1085,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const queued = line.get(app)
     return [
       `memory ${level}; ${running} app${running === 1 ? "" : "s"} running on this Mac`,
-      fitText(await fitOf(root, free?.freeBytes, copies), free?.freeBytes),
+      fitText(await fitOf(root, free?.freeBytes, copies, (await recentMemory(ROOM_MEMORY_MS))?.containerRuntime), free?.freeBytes),
       queued ? `waiting in line for memory since ${minutes((deps.now ?? Date.now)() - queued.since)} ago; it starts by itself once there's room` : undefined,
     ].filter(Boolean).join("; ")
   }
@@ -1089,6 +1122,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (port !== undefined) room.port = port
     const memory = up.length ? look?.apps.get(entry.app) : undefined
     if (memory) room.memoryBytes = memory.bytes
+    if (memory?.containerBytes) room.containerBytes = memory.containerBytes
     if (memory?.containers) room.containers = true
     if (up.length && entry.upAt !== undefined) room.upAt = entry.upAt
     if (entry.usedAt) room.usedAt = entry.usedAt
@@ -1430,11 +1464,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const roots = new Map(apps.flatMap((entry) => entry.project ? [[entry.project.root, entry.project.name] as const] : []))
       const fits = await Promise.all([...roots].map(async ([root, name]): Promise<RoomFit> => {
         const running = apps.filter((entry) => entry.project?.root === root && entry.kind !== "spare" && entry.state === "running").length
-        return { root, name, estimate: await fitOf(root, look?.freeBytes, running) }
+        return { root, name, estimate: await fitOf(root, look?.freeBytes, running, look?.containerRuntime) }
       }))
       const view: RoomView = { at: (deps.now ?? Date.now)(), pressure: level, apps, fits, marks: marksFrom(overview) }
       if (look?.freeBytes !== undefined) view.freeBytes = look.freeBytes
       if (look?.totalBytes !== undefined) view.totalBytes = look.totalBytes
+      if (look?.containerRuntime) view.containerRuntime = look.containerRuntime
       return view
     },
     async stopApps(keys) {

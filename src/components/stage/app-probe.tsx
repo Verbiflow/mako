@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { MenuItem, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger } from "@/components/ui/menu"
 import { Shimmer } from "@/components/ui/shimmer"
 import { cn } from "@/lib/utils"
-import { formatAgo, probeThreadApp, useThreadApp, type AppProbeView } from "@/state/thread-app"
+import { formatAgo, formatBytes, probeThreadApp, useThreadApp, type AppProbeView } from "@/state/thread-app"
 
 /**
  * The app's probe, a row of its menu: what it touches on this Mac beyond
@@ -58,6 +58,7 @@ export function ProbeReport({ view }: { view: AppProbeView }) {
     view.connectsOutside.entries.length,
     view.writing.entries.length,
     view.leftovers.length,
+    view.containers?.length,
     view.changed.entries.length,
     view.registered.length,
   ].some(Boolean)
@@ -112,6 +113,29 @@ export function ProbeReport({ view }: { view: AppProbeView }) {
                 : "It works in this folder. Mako can't read its environment, so it may not be the app's."}
             </Finding>
           ))}
+        </Section>
+      ) : null}
+      {view.containers?.length ? (
+        <Section
+          title="Containers"
+          note={view.running
+            ? "Started by Compose in this folder, or mounting a folder of it. Their memory counts toward the app's."
+            : "Still running though the app isn't: a detached Compose or docker run hands containers to the runtime, so stopping the app doesn't end them."}
+        >
+          {view.containers.map((entry) => {
+            const fixed = entry.ports.filter((port) => port.fixed).map((port) => port.port)
+            const published = entry.ports.map((port) => port.port)
+            return (
+              <Finding key={entry.name} name={entry.name} aside={entry.bytes === undefined ? undefined : formatBytes(entry.bytes)} caution={fixed.length > 0 || !view.running}>
+                {[
+                  entry.image,
+                  fixed.length
+                    ? `Publishes ${fixed.join(", ")}, outside this Thread's ports ${first} to ${last}, so a second copy's container would fight over ${fixed.length === 1 ? "it" : "them"}.`
+                    : published.length ? `Publishes ${published.join(", ")}.` : undefined,
+                ].filter(Boolean).join(". ")}
+              </Finding>
+            )
+          })}
         </Section>
       ) : null}
       {view.changed.entries.length ? (
