@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { processIdentityMatches } from "../process-liveness.js"
+import { probeOpenFiles } from "../open-files-probe.js"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
@@ -34,22 +35,24 @@ export function parseGrokActiveSessions<Value>(
 async function validatedSessions<Value>(
   value: Value,
   signal: AbortSignal
-): Promise<ProviderActivitySession[]> {
+): Promise<{ sessions: ProviderActivitySession[]; pids: Set<number> }> {
   const active: ProviderActivitySession[] = []
+  const pids = new Set<number>()
   for (const session of GrokActiveSessionsSchema.parse(value)) {
     const nativeId = session.session_id ?? session.sessionId ?? session.id
     if (!nativeId) throw new Error("Grok activity record has no session identity")
     if (
-      nativeId &&
       (await processIdentityMatches({
         pid: session.pid,
         startedAt: session.opened_at ?? session.openedAt,
         signal,
       }))
-    )
+    ) {
       active.push({ nativeId, status: "open" })
+      pids.add(session.pid)
+    }
   }
-  return active
+  return { sessions: active, pids }
 }
 
 function grokHome(): string {
@@ -69,20 +72,28 @@ export const grokProcessProbe: ProviderProcessProbe = {
     try {
       info = await stat(path)
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT")
-        return { kind: "available", sessions: [] }
-      return { kind: "unavailable", reason: "failed" }
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+        return { kind: "unavailable", reason: "failed" }
     }
-    if (info.size > MAX_REGISTRY_BYTES)
+    if (info && info.size > MAX_REGISTRY_BYTES)
       return { kind: "unavailable", reason: "failed" }
     try {
-      return {
-        kind: "available",
-        sessions: await validatedSessions(
+      const registered = info ? await validatedSessions(
           JSON.parse(await readFile(path, { encoding: "utf8", signal })),
           signal
-        ),
-      }
+        ) : { sessions: [], pids: new Set<number>() }
+      if (!target || registered.sessions.some(session => session.nativeId === target.nativeId))
+        return { kind: "available", sessions: registered.sessions }
+      // Grok 1.0.44 ACP does not enter active_sessions.json. An absent or
+      // empty registry cannot clear a live, unregistered native process.
+      // lsof's plain -c is a prefix match: Grok also selects Grok Bot.app.
+      // That unrelated desktop executable is not a CLI ownership record.
+      // Grok 1.0.44 reports grok in ps but grok-native in lsof's command field.
+      const running = await probeOpenFiles({ processNames: ["/^grok$/", "/^grok-native$/", "/^Grok$/"], signal, accept: () => false })
+      if (running.kind === "unavailable") return running
+      if (running.pids.some(pid => !registered.pids.has(pid)))
+        return { kind: "unavailable", reason: "incomplete" }
+      return { kind: "available", sessions: registered.sessions }
     } catch {
       return { kind: "unavailable", reason: "failed" }
     }

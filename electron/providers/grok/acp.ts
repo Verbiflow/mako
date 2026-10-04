@@ -220,6 +220,7 @@ export const grokAcpSource: ProviderAcpSource = {
     args.push("stdio")
     const launch: AcpLaunch = {
       command: "grok",
+      versionArgs: ["--version"],
       args,
       configureEnvironment(env) {
         env.GROK_DISABLE_AUTOUPDATER = "1"
