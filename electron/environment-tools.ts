@@ -51,6 +51,7 @@ import {
   versionHistory,
   versionNumbers,
   withLinkDefault,
+  perThreadValues,
   type VersionHistory,
   type CheckTier,
   type Recipe,
@@ -2148,10 +2149,12 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
       if (!parsed.success) throw new Error(`Not saved: ${recipeIssues(parsed.error)}`)
       const saving = withLinkDefault(parsed.data)
       const defaulted = saving.prepare.filter((step, index) => step.link && parsed.data.prepare[index]!.link === undefined).map((step) => step.command)
+      const named = saving.cleanup ? [] : perThreadValues(saving)
       return [
         await tools.save(conversationId(), saving, reason),
         recipe && "secrets" in recipe ? "secrets is now part of carry: its files are under carry, copied like any other. Write them in carry from now on." : undefined,
         defaulted.length ? `${defaulted.join(", ")} didn't say whether to link ${defaulted.length === 1 ? "its" : "their"} outputs, so ${defaulted.length === 1 ? "it links them" : "they link them"}, Mako's default, and the saved version says "link": true.` : undefined,
+        named.length ? `${named.join(", ")} ${named.length === 1 ? "names" : "name"} something for each Thread, and the recipe has no cleanup. Whatever the app makes under ${named.length === 1 ? "that name" : "those names"}, such as a database, a Compose project's volumes or a profile folder, stays after the Thread's worktree is removed. Add a cleanup that removes the Thread's own and nothing shared; none is needed if nothing is kept under the name.` : undefined,
       ].filter(Boolean).join("\n")
     })
   )

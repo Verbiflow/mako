@@ -76,7 +76,7 @@ Pass it to recipe_save as the recipe, with a one-line reason. Mako checks it aga
 The fields:
 
 - values: names the app reads. Mako sets them in every agent's shell and in every process, and every command reads them from there, as "$PORT".
-  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}, here and in a process's port and values only. {thread} names this app, for a profile, database, branch or Compose project name: lowercase letters, digits and hyphens, at most 36 characters, so quote it where a hyphen needs quoting. Threads that share a checkout share its app, so they get the same values.
+  - The placeholders are {port}, {port+N} (N up to 9), {host}, {url}, {data} and {thread}, here and in a process's port and values only. {thread} names this app, for a profile, database, branch or Compose project name: lowercase letters, digits and hyphens, at most 36 characters, so quote it where a hyphen needs quoting. Threads that share a checkout share its app, so they get the same values. What the app keeps under a {thread} name, such as a database or a profile folder, outlives the Thread unless the recipe's cleanup removes it, so a recipe that names one needs a cleanup; recipe_save says when it's missing.
   - PATH, HOME, SHELL, USER, TMPDIR and PWD can't be set here, because the agent's own shell needs them.
   - MAKO_THREAD_* and MAKO_CONTROL_* are Mako's own. The project's own MAKO_ names are fine.
 - processes: what runs the app, as the project's own commands. Names are lowercase letters, digits and hyphens.
@@ -193,6 +193,7 @@ Never write to production data, delete data, or stop a process you didn't start.
    - what stays shared, and the rule for it; each database's pattern;
    - the credentials files every Thread gets copied, and what the app needs them for;
    - anything linked rather than copied, and why nothing writes there;
+   - what each Thread's cleanup removes when its worktree goes, or why it needs none;
    - each change to the project, which rung it used, and what it buys; fixes to things that were already broken, separately;
    - the proof: the version published, the processes that ran and their ports, and how it was verified.
 3. If you changed the project, say that other branches run the recipe without that change until it's merged, and what that means for them, such as two copies still sharing one port. Offer to merge or open a pull request; the user decides.

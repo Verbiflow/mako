@@ -208,6 +208,12 @@ export function withLinkDefault(recipe: Recipe): Recipe {
   if (!recipe.prepare.some((step) => step.outputs?.length && step.link === undefined)) return recipe
   return { ...recipe, prepare: recipe.prepare.map((step) => (step.outputs?.length && step.link === undefined ? { ...step, link: true } : step)) }
 }
+
+/** The values that name something for the Thread, such as its database or profile, each as `NAME (template)`. */
+export function perThreadValues(recipe: Recipe): string[] {
+  const values = [recipe.values, ...Object.values(recipe.processes).map((process) => process.values ?? {})].flatMap(Object.entries)
+  return [...new Set(values.filter(([, text]) => text.includes("{thread}")).map(([name, text]) => `${name} (${text})`))]
+}
 export type RecipeTarget = z.infer<typeof targetSchema>
 export type RecipeProcess = z.infer<typeof processSchema>
 export type CheckTier = keyof Recipe["checks"]

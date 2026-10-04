@@ -7,7 +7,7 @@ import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thre
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
-import { publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "../electron/thread-recipe.js"
+import { perThreadValues, publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "../electron/thread-recipe.js"
 import { childHistory } from "../electron/watch-backend.js"
 import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, ownPackages } from "../electron/worktree-carry.js"
 import { parse as parseYaml } from "yaml"
@@ -64,6 +64,15 @@ try {
   assert.equal(withLinkDefault(RecipeSchema.parse({ prepare: [{ command: "make", inputs: ["Makefile"] }] })).prepare[0]!.link, undefined, "a step without outputs has nothing to link")
   const bare = RecipeSchema.parse({ prepare: [{ ...install, link: false }] })
   assert.equal(withLinkDefault(bare), bare, "nothing to fill in returns the recipe as it is")
+  assert.deepEqual(
+    perThreadValues(RecipeSchema.parse({
+      values: { PORT: "{port}", DB: "app_{thread}", SCOPE: "local-{thread}" },
+      processes: { web: { command: "npm run dev", port: "{port}", values: { PROFILE: "app-{thread}", DB: "app_{thread}" } } },
+    })),
+    ["DB (app_{thread})", "SCOPE (local-{thread})", "PROFILE (app-{thread})"],
+    "values that name something for the Thread, top-level and a process's, each once",
+  )
+  assert.deepEqual(perThreadValues(RecipeSchema.parse({ values: { PORT: "{port}" } })), [], "nothing named for the Thread")
   assert.match((await carryReport(RecipeSchema.parse({ prepare: [install] }), main)).join("\n"), /npm install: a new worktree's node_modules link each entry to the main checkout's when package-lock.json is the same there/)
 
   // Other outputs link entry by entry: what's made in the folder later stays the checkout's own.
