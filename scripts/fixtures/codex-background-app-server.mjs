@@ -21,10 +21,10 @@ const message = (turnId, text) => {
   notify("item/agentMessage/delta", { turnId, itemId: item.id, delta: text })
   notify("item/completed", { turnId, item })
 }
-const sleep = (turnId, id, thread = threadId) => {
+const sleep = (turnId, id, thread = threadId, announce = true) => {
   const child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" })
   child.unref()
-  notify("item/started", { threadId: thread, turnId, item: command(id, "inProgress") })
+  if (announce) notify("item/started", { threadId: thread, turnId, item: { ...command(id, "inProgress"), processId: String(child.pid) } })
   return child
 }
 
@@ -42,7 +42,9 @@ function spawnSubagent(parentTurnId) {
 
 function startTurn(id, text) {
   const turnId = `turn-${++turn}`
-  send({ id, result: { turn: { id: turnId, status: "inProgress", items: [], error: null } } })
+  const accepted = () => send({ id, result: { turn: { id: turnId, status: "inProgress", items: [], error: null } } })
+  if (text === "late-acceptance") setTimeout(accepted, 500)
+  else accepted()
   notify("turn/started", { turn: { id: turnId } })
   if (text === "start") {
     const itemId = `terminal-${turn}`
@@ -53,9 +55,9 @@ function startTurn(id, text) {
   } else if (text === "spawn") {
     message(turnId, `subagent ${spawnSubagent(turnId).pid}`)
     completed(turnId, "completed")
-  } else if (text === "work") {
-    foreground = { turnId, itemId: `command-${turn}`, child: null }
-    foreground.child = sleep(turnId, foreground.itemId)
+  } else if (text === "work" || text === "late" || text === "late-acceptance") {
+    foreground = { turnId, itemId: `command-${turn}`, child: null, late: text === "late" }
+    foreground.child = sleep(turnId, foreground.itemId, threadId, !foreground.late)
     message(turnId, `foreground ${foreground.child.pid}`)
   } else {
     message(turnId, `answered ${text}`)
@@ -81,6 +83,8 @@ function interrupt(id, params) {
   setTimeout(() => {
     terminals.get(threadId).set(interrupted.itemId, interrupted.child)
     completed(interrupted.turnId, "interrupted")
+    if (interrupted.late)
+      notify("item/started", { turnId: interrupted.turnId, item: { ...command(interrupted.itemId, "inProgress"), processId: String(interrupted.child.pid) } })
   }, 50)
 }
 
@@ -91,6 +95,19 @@ function clean(id, thread) {
   }
   terminals.get(thread)?.clear()
   send({ id, result: {} })
+}
+
+function terminate(id, params) {
+  const entries = terminals.get(params.threadId)
+  const terminal = [...entries ?? []].find(([, child]) => String(child.pid) === params.processId)
+  if (!terminal) return send({ id, result: { terminated: false } })
+  const [itemId, child] = terminal
+  child.once("exit", () => {
+    entries.delete(itemId)
+    notify("item/completed", { threadId: params.threadId, turnId: "clean", item: { ...command(itemId, "failed"), exitCode: -1 } })
+    send({ id, result: { terminated: true } })
+  })
+  child.kill()
 }
 
 function turns(id, thread) {
@@ -110,6 +127,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     case "thread/turns/list": return turns(id, params.threadId)
     case "thread/backgroundTerminals/list":
       return send({ id, result: { data: [...terminals.get(params.threadId) ?? []].map(([itemId, child]) => ({ itemId, processId: String(child.pid), command: "sleep 300", cwd: process.cwd() })), nextCursor: null } })
+    case "thread/backgroundTerminals/terminate": return terminate(id, params)
     case "thread/backgroundTerminals/clean": return clean(id, params.threadId)
     default: return send({ id, error: { code: -32601, message: `Unexpected ${method}` } })
   }

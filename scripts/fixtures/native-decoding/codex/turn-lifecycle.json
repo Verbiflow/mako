@@ -201,6 +201,16 @@
       },
       "decoded": [
         {
+          "kind": "effect",
+          "effect": {
+            "type": "command-started",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "cmd-1",
+            "processId": "(undefined)"
+          }
+        },
+        {
           "kind": "update",
           "update": {
             "kind": "tool",
