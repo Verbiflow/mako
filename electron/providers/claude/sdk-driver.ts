@@ -2,6 +2,8 @@ import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../promp
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
+import { launchContext, reportedIdentity, reportedRuntime } from "../../execution-context.js"
+import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
 import { join } from "node:path"
 import type {
   Options,
@@ -64,6 +66,8 @@ type ClaudeQuery = Pick<
   | "interrupt"
   | "close"
 > & Partial<Pick<Query, "getContextUsage">>
+
+const CLAUDE_NATIVE_IDENTITY = { kind: "reported", via: "SDK initialization.account" } as const
 interface Receipt {
   resolve(result: ProviderSteerResult): void
   reject(error: Error): void
@@ -189,6 +193,11 @@ async function pump(engine: Engine, live: Live): Promise<void> {
   try {
     for await (const message of live.query) {
       if (live.closed) return
+      if (message.type === "system" && message.subtype === "init" && live.state.executionContext)
+        engine.patch(live, { executionContext: {
+          ...live.state.executionContext,
+          runtime: reportedRuntime(message.claude_code_version, "system/init.claude_code_version"),
+        } })
       if (live.state.status === "starting" && message.type === "system" &&
         (message.subtype === "hook_started" || message.subtype === "hook_response"))
         hostLog("claude-sdk", "startup event", {
@@ -308,6 +317,8 @@ export function createClaudeSdkDriver(
   }
   return {
     provider: "claude",
+    nativeIdentity: CLAUDE_NATIVE_IDENTITY,
+    nativeExclusion: NO_NATIVE_EXCLUSION,
     approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question", ...(dependencies.prepareApprovals ? ["tool-permission" as const] : [])], coverage: "Parent AskUserQuestion results in the saved branch; parent tool decisions from the bundled runtime's local native event exporter, retained before delivery. Existing telemetry configuration, custom runtimes, child tools and MCP elicitation retain submission evidence unless a matching observer is available. Missing native events never confirm an answer." },
     planning: { via: "mode", mode: "plan", proposal: "ExitPlanMode's `plan` input, built by answering its permission request" },
     approvalAnswerDigest: claudeApprovalAnswerDigest,
@@ -437,6 +448,7 @@ export function createClaudeSdkDriver(
           onElicitation: permissions.elicitation,
         },
       }) } catch (error) { await disposeApprovals(); throw error }
+      const context = launchContext("claude-agent-sdk", CLAUDE_NATIVE_IDENTITY, account, config.pathToClaudeCodeExecutable)
       const live: Live = {
         account: account.name,
         query,
@@ -456,6 +468,7 @@ export function createClaudeSdkDriver(
         steered: false,
         finishing: false,
         state: {
+          executionContext: context,
           id: options.conversationId,
           harness: "claude",
           cwd,
@@ -476,7 +489,7 @@ export function createClaudeSdkDriver(
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         const initialization = query.initializationResult()
-        await trace.step("sdk-initialization", () => Promise.race([
+        const initialized = await trace.step("sdk-initialization", () => Promise.race([
           initialization,
           spawned.then((watch) => watch.step("SDK initialization", initialization)),
           new Promise<never>((_, reject) => {
@@ -489,6 +502,10 @@ export function createClaudeSdkDriver(
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
         engine.patch(live, {
+          executionContext: {
+            ...(live.state.executionContext ?? context),
+            identity: reportedIdentity(initialized.account.email, initialized.account.apiProvider ?? "firstParty", CLAUDE_NATIVE_IDENTITY.via),
+          },
           status: "ready",
           connection: "connected",
           nativePath: transcript.path,
