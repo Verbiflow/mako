@@ -10,12 +10,11 @@ import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { UTILITY_AUTOMATIC, UTILITY_OFF, type HarnessModel, type HarnessProfile, type UtilityModelSettings, type UtilityTaskState } from "@/lib/types"
 import { refreshCommitModel } from "@/state/commit-model"
-import { harnessDefaults } from "@/state/composer-settings"
 import { loadHarnessOrder, saveHarnessOrder, useHarnessOrder, useSavedHarnessOrder } from "@/state/harness-order"
 import { utilityModels } from "@/state/model-runtime"
-import { usePrefs } from "@/state/prefs"
 import { useSetupAgent } from "@/state/project-setup"
 import { useProviders } from "@/state/providers"
+import { HarnessDefaultPicker } from "./harness-default-picker"
 import { UtilityModelPicker } from "./utility-model-picker"
 
 const DRAG_TYPE = "application/x-mako-harness"
@@ -67,10 +66,11 @@ export function HarnessOrderSection() {
     <section className="flex flex-col gap-3">
       <div className="flex items-start justify-between gap-6">
         <div>
-          <h3 className="text-ui font-medium">Harness order</h3>
+          <h3 className="text-ui font-medium">Harnesses</h3>
           <p className="mt-0.5 text-label text-muted-foreground">
-            When Mako picks a harness itself, to set a project up, name threads or draft commit messages, it takes the
-            first one here you're signed in to. Drag to reorder.
+            Each starts new conversations and project setups on the model at the right: Mako's recommendation until
+            you pick another, marked with a dot. When Mako picks a harness itself, it takes the first one here you're
+            signed in to. Drag to reorder.
           </p>
         </div>
         {custom ? (
@@ -164,10 +164,8 @@ function HarnessOrderRow({
   onDragOver(event: DragEvent): void
   onDrop(event: DragEvent): void
 }) {
-  const preference = usePrefs((prefs) => prefs.providerSettings[harness])
   const signedIn = Boolean(profile?.available)
   const pending = !profile || Boolean(profile.pending && !profile.available)
-  const setup = signedIn ? harnessDefaults(harness, profile, preference) : undefined
   const light = signedIn && profile ? lightDefault(harness, profile.models, profile.defaultModel) : undefined
   const keys = (event: KeyboardEvent) => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
@@ -201,32 +199,32 @@ function HarnessOrderRow({
         <HarnessIcon harness={harness} className="size-3.5" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-ui font-medium">{harnessLabel(harness)}</p>
-        <p className="flex min-w-0 flex-wrap gap-x-3 text-label text-faint">
+        <p className="flex items-center gap-2 text-ui font-medium">
+          {harnessLabel(harness)}
+          {roles.map((role) => (
+            <Chip key={role}>{role}</Chip>
+          ))}
+        </p>
+        <p className="text-label text-faint">
           {pending ? (
-            <span>Asking for its models…</span>
+            "Asking for its models…"
           ) : !signedIn ? (
-            <span>Not signed in</span>
+            "Not signed in"
           ) : (
             <>
-              <span>
-                Setup <span className="text-muted-foreground">{setup?.model ? summary(setup.model, setup.resolved.settings.options) : "its own default"}</span>
-              </span>
-              <span>
-                Names and commits{" "}
-                <span className="text-muted-foreground">{light ? summary(light.model, light.options) : "no light model"}</span>
-                {light && !runs ? " (not supported yet)" : null}
-              </span>
+              Names and commits{" "}
+              <span className="text-muted-foreground">{light ? summary(light.model, light.options) : "no light model"}</span>
+              {light && !runs ? " (not supported yet)" : null}
             </>
           )}
         </p>
       </div>
-      {roles.length ? (
-        <span className="flex shrink-0 gap-1">
-          {roles.map((role) => (
-            <Chip key={role}>{role}</Chip>
-          ))}
-        </span>
+      {signedIn && profile ? (
+        <HarnessDefaultPicker harness={harness} profile={profile} />
+      ) : !pending ? (
+        <Action size="xs" onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" }))}>
+          Sign in
+        </Action>
       ) : null}
     </div>
   )

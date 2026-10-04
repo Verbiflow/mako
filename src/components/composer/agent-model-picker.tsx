@@ -13,7 +13,7 @@ import {
   SlidersHorizontalIcon,
   ZapIcon,
 } from "lucide-react"
-import type { ModelOption, SettingValue } from "@mako/sessions/settings"
+import type { ModelOption, ResolvedSessionSettings, ResolvedSetting, SettingValue } from "@mako/sessions/settings"
 import {
   Menu,
   MenuContent,
@@ -49,7 +49,7 @@ import { setComposerHarness } from "@/state/threads"
 import { formatTokens } from "@/lib/format"
 import { fuzzy } from "@/lib/fuzzy"
 import { cn } from "@/lib/utils"
-import type { HarnessModel } from "@/lib/types"
+import type { HarnessModel, HarnessProfile } from "@/lib/types"
 import { settingSourceLabel, settingValueLabel } from "./settings-source"
 import { useComposerSettings, type ComposerSettingsView } from "./use-composer-settings"
 import { flipPlan, PLAN_KEYS, planDetail } from "./plan-actions"
@@ -71,10 +71,6 @@ import { Skeleton } from "@/components/ui/skeleton"
 export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
   const [open, setOpen] = useState(false)
   const harness = view.target.harness
-  const reasoning = view.options.find((option) => option.role === "reasoning")
-  const speed = view.options.find((option) => option.role === "speed")
-  const effort = reasoning ? knownValueLabel(view, reasoning) : undefined
-  const fast = speed ? knownValueLabel(view, speed) === "Fast" : false
   const issues = view.resolved.issues
 
   return (
@@ -104,14 +100,7 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
           )}
         >
           <HarnessIcon harness={harness} className="size-3.5" />
-          <span className="truncate">{view.modelLabel}</span>
-          {effort ? <span className="shrink-0 text-faint">{effort}</span> : null}
-          {fast ? (
-            <ZapIcon aria-label="Fast" className="size-3 shrink-0 fill-current text-foreground/70" />
-          ) : null}
-          {issues.length ? (
-            <AlertCircleIcon aria-label="Check model settings" className="size-3 shrink-0 text-caution" />
-          ) : null}
+          <ModelSummary choice={composerChoice(view)} label={view.modelLabel} />
           <ChevronDownIcon className="size-3 shrink-0 text-faint/70" />
         </button>
       </MenuTrigger>
@@ -119,7 +108,7 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
         <LoadoutRows view={view} />
         <MenuSeparator />
         <HarnessRows view={view} />
-        <OptionRows view={view} />
+        <ModelOptionRows choice={composerChoice(view)} />
         <PlanModeRow view={view} />
         <MenuSeparator />
         <MenuItem
@@ -136,8 +125,54 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
   )
 }
 
-function knownValueLabel(view: ComposerSettingsView, option: ModelOption) {
-  const current = view.resolved.options[option.id]
+/**
+ * A harness's selected model and its options, and what choosing an option
+ * does: the composer changes its conversation, Settings a harness's default.
+ */
+export interface ModelChoice {
+  harness: string
+  /** Every model the harness offers, to tell a missing option from one this model lacks. */
+  models: readonly HarnessModel[]
+  model: HarnessModel | undefined
+  options: ModelOption[]
+  resolved: ResolvedSessionSettings
+  chooseOption(id: string, value: SettingValue): void
+  /** Where a value came from, in this place's words. */
+  source(setting: ResolvedSetting): string
+}
+
+function composerChoice(view: ComposerSettingsView): ModelChoice {
+  return {
+    harness: view.target.harness,
+    models: view.profile?.models ?? [],
+    model: view.model,
+    options: view.options,
+    resolved: view.resolved,
+    chooseOption: (id, value) => chooseComposerOption(view.target, id, value),
+    source: settingSourceLabel,
+  }
+}
+
+/** The picker chip's reading: the model, its reasoning, a bolt while the fast lane is on. */
+export function ModelSummary({ choice, label }: { choice: ModelChoice; label: string }) {
+  const reasoning = choice.options.find((option) => option.role === "reasoning")
+  const speed = choice.options.find((option) => option.role === "speed")
+  const effort = reasoning ? knownValueLabel(choice, reasoning) : undefined
+  const fast = speed ? knownValueLabel(choice, speed) === "Fast" : false
+  return (
+    <>
+      <span className="truncate">{label}</span>
+      {effort ? <span className="shrink-0 text-faint">{effort}</span> : null}
+      {fast ? <ZapIcon aria-label="Fast" className="size-3 shrink-0 fill-current text-foreground/70" /> : null}
+      {choice.resolved.issues.length ? (
+        <AlertCircleIcon aria-label="Check model settings" className="size-3 shrink-0 text-caution" />
+      ) : null}
+    </>
+  )
+}
+
+function knownValueLabel(choice: Pick<ModelChoice, "resolved">, option: ModelOption) {
+  const current = choice.resolved.options[option.id]
   return current?.kind === "known" ? settingValueLabel(option, current.value) : undefined
 }
 
@@ -197,7 +232,7 @@ function LoadoutRows({ view }: { view: ComposerSettingsView }) {
   )
 }
 
-function currentEffort(view: ComposerSettingsView) {
+function currentEffort(view: Pick<ModelChoice, "resolved" | "options">) {
   const reasoning = view.options.find((option) => option.role === "reasoning")
   return reasoning ? knownValueLabel(view, reasoning) : undefined
 }
@@ -312,19 +347,48 @@ function HarnessModels({
   active: boolean
   composer: ComposerSettingsView
 }) {
+  const harness = view.target.harness
+  return (
+    <>
+      <ModelList
+        harness={harness}
+        profile={view.profile}
+        failure={view.error}
+        selected={active ? view.model?.id : undefined}
+        onChoose={(model) => chooseHarnessModel(composer, harness, model)}
+      />
+      <ModelOptionRows choice={composerChoice(view)} />
+    </>
+  )
+}
+
+/**
+ * A harness's models, searchable once there are many, each with its
+ * description, context window and a pin for the loadout.
+ */
+export function ModelList({
+  harness,
+  profile,
+  failure: loadFailure,
+  selected,
+  onChoose,
+}: {
+  harness: string
+  profile: HarnessProfile | undefined
+  failure?: string
+  selected: string | undefined
+  onChoose(model: string): void
+}) {
   useHarnessIdentity()
   const [query, setQuery] = useState("")
   const favorites = usePrefs((prefs) => prefs.favoriteModels)
   const loadout = usePrefs((prefs) => prefs.modelLoadout)
-  const harness = view.target.harness
-  const profile = view.profile
   const models = useMemo(
     () => rankModels(profile?.models ?? [], query, favorites, harness),
     [favorites, harness, profile?.models, query]
   )
-  const selected = view.model?.id
   const searchable = (profile?.models.length ?? 0) > 8
-  const failure = view.error ?? profile?.configurationError ?? profile?.error
+  const failure = loadFailure ?? profile?.configurationError ?? profile?.error
 
   return (
     <>
@@ -353,9 +417,9 @@ function HarnessModels({
             <ModelRow
               key={model.id}
               model={model}
-              selected={active && selected === model.id}
+              selected={selected === model.id}
               loadoutIndex={index}
-              onChoose={() => chooseHarnessModel(composer, harness, model.id)}
+              onChoose={() => onChoose(model.id)}
               onLoadout={() => (index >= 0 ? removeFromLoadout(index) : addToLoadout(harness, model.id))}
             />
           )
@@ -384,7 +448,6 @@ function HarnessModels({
           </div>
         ) : null}
       </div>
-      <OptionRows view={view} />
     </>
   )
 }
@@ -470,26 +533,27 @@ function rankModels(
 
 /* ------------------------------------------------------------- options */
 
-function OptionRows({ view }: { view: ComposerSettingsView }) {
-  const ordered = view.options
+/** The selected model's effort, fast lane, context window and other options. */
+export function ModelOptionRows({ choice }: { choice: ModelChoice }) {
+  const ordered = choice.options
     .filter((option) => option.role !== "plan")
     .sort((left, right) => roleOrder(left) - roleOrder(right))
-  const issues = view.resolved.issues
-  const missing = useMissingRoles(view)
+  const issues = choice.resolved.issues
+  const missing = missingRoles(choice)
   if (ordered.length === 0 && issues.length === 0 && missing.length === 0) return null
   return (
     <>
       <MenuSeparator />
-      <MenuLabel>{view.model?.label ?? "Model"} options</MenuLabel>
+      <MenuLabel>{choice.model?.label ?? "Model"} options</MenuLabel>
       {ordered.map((option) =>
         isSwitch(option) ? (
-          <SwitchOption key={option.id} view={view} option={option} />
+          <SwitchOption key={option.id} picker={choice} option={option} />
         ) : (
-          <SelectOption key={option.id} view={view} option={option} />
+          <SelectOption key={option.id} picker={choice} option={option} />
         )
       )}
       {missing.map((role) => (
-        <MenuItem key={role} disabled title={`${view.model?.label ?? "This model"} has no ${ROLE_NAMES[role].toLowerCase()} setting.`}>
+        <MenuItem key={role} disabled title={`${choice.model?.label ?? "This model"} has no ${ROLE_NAMES[role].toLowerCase()} setting.`}>
           <OptionGlyph role={role} />
           <span className="flex-1 truncate">{ROLE_NAMES[role]}</span>
           <span className="text-label text-faint">Not on this model</span>
@@ -530,20 +594,14 @@ function roleOrder(option: ModelOption) {
  * but not the selected one, so switching to such a model reads as the
  * control going away rather than the menu losing a row.
  */
-function useMissingRoles(view: ComposerSettingsView): OptionRole[] {
-  const offered = useProviders(
-    (state) =>
-      ROLE_ORDER.filter(
-        (role) =>
-          role !== "context" && role !== "plan" &&
-          (state.contexts[providerProfileKey(view.target.harness, view.target.cwd)]?.models ?? []).some(
-            (model) => model.options.some((option) => option.role === role)
-          )
-      ),
-    shallowEqual
+function missingRoles(choice: ModelChoice): OptionRole[] {
+  if (!choice.model) return []
+  return ROLE_ORDER.filter(
+    (role) =>
+      role !== "context" && role !== "plan" &&
+      choice.models.some((model) => model.options.some((option) => option.role === role)) &&
+      !choice.options.some((option) => option.role === role)
   )
-  if (!view.model) return []
-  return offered.filter((role) => !view.options.some((option) => option.role === role))
 }
 
 /** Two-valued options read as a switch: on/off, or a provider's fast/standard pair. */
@@ -555,8 +613,8 @@ function optionName(option: ModelOption) {
   return option.role ? ROLE_NAMES[option.role] : option.label
 }
 
-function SwitchOption({ view, option }: { view: ComposerSettingsView; option: ModelOption }) {
-  const current = view.resolved.options[option.id]
+function SwitchOption({ picker, option }: { picker: ModelChoice; option: ModelOption }) {
+  const current = picker.resolved.options[option.id]
   const on =
     current?.kind === "known" &&
     (option.kind === "boolean"
@@ -576,11 +634,11 @@ function SwitchOption({ view, option }: { view: ComposerSettingsView; option: Mo
       role="menuitemcheckbox"
       aria-checked={on}
       disabled={Boolean(option.disabledReason)}
-      title={option.disabledReason ?? settingSourceLabel(current ?? { kind: "unknown" })}
+      title={option.disabledReason ?? picker.source(current ?? { kind: "unknown" })}
       onSelect={(event) => {
         event.preventDefault()
         const value = next()
-        if (value !== undefined) chooseComposerOption(view.target, option.id, value)
+        if (value !== undefined) picker.chooseOption(option.id, value)
       }}
       className="group/option"
     >
@@ -626,9 +684,9 @@ function PlanModeRow({ view }: { view: ComposerSettingsView }) {
   )
 }
 
-function SelectOption({ view, option }: { view: ComposerSettingsView; option: ModelOption }) {
+function SelectOption({ picker, option }: { picker: ModelChoice; option: ModelOption }) {
   if (option.kind !== "select") return null
-  const current = view.resolved.options[option.id]
+  const current = picker.resolved.options[option.id]
   const value = current?.kind === "known" ? String(current.value) : ""
   return (
     <MenuSub>
@@ -646,7 +704,7 @@ function SelectOption({ view, option }: { view: ComposerSettingsView; option: Mo
           value={value}
           onValueChange={(picked) => {
             const choice = option.values.find((entry) => String(entry.value) === picked)
-            if (choice) chooseComposerOption(view.target, option.id, choice.value)
+            if (choice) picker.chooseOption(option.id, choice.value)
           }}
         >
           {option.values.map((choice) => (
@@ -661,7 +719,7 @@ function SelectOption({ view, option }: { view: ComposerSettingsView; option: Mo
           ))}
         </MenuRadioGroup>
         <p className="px-2 pt-1 pb-1.5 text-label text-faint">
-          {settingSourceLabel(current ?? { kind: "unknown" })}
+          {picker.source(current ?? { kind: "unknown" })}
         </p>
       </MenuSubContent>
     </MenuSub>

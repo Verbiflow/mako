@@ -1,32 +1,14 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useState, type DragEvent } from "react"
 import { z } from "zod"
-import { CheckIcon, ChevronDownIcon, ListPlusIcon, XIcon } from "lucide-react"
-import {
-  optionDefault,
-  type ModelOption,
-  type SessionSettings,
-  type SettingValue,
-} from "@mako/sessions/settings"
-import { Action, Chip, Keys, ListCard, Segmented, SettingRow, Toggle } from "@/components/ui/kit"
-import { Collapse } from "@/components/ui/collapse"
+import { XIcon } from "lucide-react"
+import { Keys } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import {
-  Menu,
-  MenuContent,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuTrigger,
-} from "@/components/ui/menu"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import type { HarnessModel } from "@/lib/types"
-import { settingValueLabel } from "@/components/composer/settings-source"
-import { harnessDefaults, resetHarnessDefaults, saveHarnessDefaults } from "@/state/composer-settings"
-import { workDefault } from "../../../electron/contracts/harness-defaults"
 import { HarnessOrderSection } from "./harness-order-section"
 import {
-  addToLoadout,
   LOADOUT_LIMIT,
   placeInLoadout,
   removeFromLoadout,
@@ -34,16 +16,14 @@ import {
 } from "@/state/model-loadout"
 import { usePrefs } from "@/state/prefs"
 import { providers, useProviders } from "@/state/providers"
-import { shallowEqual } from "@/state/store"
 
 const DRAG_TYPE = "application/x-mako-loadout"
 
 /**
  * Models: the loadout the composer's picker opens on and ⌃⌘1–5 reach, and
- * what each harness starts a new conversation on.
+ * each harness with what it starts a new conversation on.
  */
 export function ModelsSection() {
-  const harnesses = useProviders((state) => Object.keys(state.profiles), shallowEqual)
   useEffect(() => {
     void providers.loadAll()
   }, [])
@@ -51,19 +31,6 @@ export function ModelsSection() {
     <>
       <LoadoutSlots />
       <HarnessOrderSection />
-      <section className="flex flex-col gap-3">
-        <div>
-          <h3 className="text-ui font-medium">Defaults for new conversations</h3>
-          <p className="mt-0.5 text-label text-muted-foreground">
-            What each harness starts a new conversation on, and sets a project up with. Until you change one, it
-            follows Mako's recommendation, which moves to newer models as they ship. A pick in the composer changes
-            only that conversation.
-          </p>
-        </div>
-        {harnesses.map((harness) => (
-          <HarnessDefaults key={harness} harness={harness} />
-        ))}
-      </section>
     </>
   )
 }
@@ -84,8 +51,8 @@ function LoadoutSlots() {
       <div>
         <h3 className="text-ui font-medium">Loadout</h3>
         <p className="mt-0.5 text-label text-muted-foreground">
-          The models the composer's picker lists first, a chord away. Drag to reorder, or drag a
-          model from a harness below into a slot.
+          The models the composer's picker lists first, a chord away. Drag to reorder. Pin a model from a harness's
+          menu below, or from the composer's picker.
         </p>
       </div>
       <div className="grid grid-cols-5 gap-2">
@@ -113,7 +80,7 @@ function LoadoutSlots() {
                 target ? "border-foreground/40 bg-fill-hover text-muted-foreground" : "border-border"
               )}
             >
-              {index === loadout.length ? "Drop a model here" : "Empty"}
+              {index === loadout.length ? "Pin a model" : "Empty"}
               <Keys keys={["⌃", "⌘", String(index + 1)]} />
             </div>
           )
@@ -196,247 +163,5 @@ function readDrag(event: DragEvent): LoadoutEntry | null {
 function useModel(harness: string, id: string): HarnessModel | undefined {
   return useProviders((state) =>
     state.profiles[harness]?.models.find((model) => model.id === id)
-  )
-}
-
-/* ------------------------------------------------------------ defaults */
-
-function HarnessDefaults({ harness }: { harness: string }) {
-  useHarnessIdentity()
-  const profile = useProviders((state) => state.profiles[harness])
-  const preference = usePrefs((prefs) => prefs.providerSettings[harness])
-  const loadout = usePrefs((prefs) => prefs.modelLoadout)
-  const [showModels, setShowModels] = useState(false)
-  const ready = profile && !profile.pending
-  const { resolved, model, options } = harnessDefaults(harness, profile, preference)
-  const models = profile?.models ?? []
-
-  const save = (settings: SessionSettings) => saveHarnessDefaults(harness, settings, profile)
-  const chooseModel = (id: string) => {
-    const next = models.find((entry) => entry.id === id)
-    // Speed carries to the new model when it has the same lane; reasoning
-    // levels are the model's own, so they start from its default.
-    const carried = Object.fromEntries(
-      Object.entries(resolved.settings.options ?? {}).filter(([option]) =>
-        next?.options.some((entry) => entry.id === option && entry.role === "speed")
-      )
-    )
-    save({ model: id, options: carried })
-  }
-  const chooseOption = (id: string, value: SettingValue) =>
-    save({ ...resolved.settings, options: { ...resolved.settings.options, [id]: value } })
-
-  return (
-    <ListCard>
-      <div className="flex items-center gap-3 py-3">
-        <span className="flex size-8 items-center justify-center rounded-lg bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
-          <HarnessIcon harness={harness} className="size-4" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-ui font-medium">{harnessLabel(harness)}</p>
-          <p className="truncate text-label text-faint">
-            {!ready
-              ? "Asking for its models…"
-              : !profile.available
-                ? (profile.error ?? "Not set up")
-                : models.length === 1
-                  ? "1 model"
-                  : `${models.length} models`}
-          </p>
-        </div>
-        {preference ? (
-          <Action size="xs" onClick={() => resetHarnessDefaults(harness)}>
-            Use recommended
-          </Action>
-        ) : ready && profile.available ? (
-          <Chip>{workDefault(harness, models) ? "Recommended" : `${harnessLabel(harness)}'s default`}</Chip>
-        ) : null}
-      </div>
-      {ready && profile.available ? (
-        <>
-          <SettingRow title="Model" description="What a new conversation starts on">
-            <ModelSelect
-              models={models}
-              value={model?.id}
-              label={model?.label ?? "Provider default"}
-              onChange={chooseModel}
-            />
-          </SettingRow>
-          {options.filter((option) => option.role !== "plan").map((option) => (
-            <OptionRow
-              key={option.id}
-              option={option}
-              value={resolved.options[option.id]}
-              onChange={(value) => chooseOption(option.id, value)}
-            />
-          ))}
-          <div className="py-2">
-            <button
-              type="button"
-              aria-expanded={showModels}
-              onClick={() => setShowModels((value) => !value)}
-              className="pressable flex h-7 items-center gap-1.5 rounded-md px-1.5 text-label text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-            >
-              <ChevronDownIcon
-                className={cn(
-                  "size-3.5 transition-transform duration-200 ease-[var(--ease-out)]",
-                  showModels ? "rotate-0" : "-rotate-90"
-                )}
-              />
-              All {harnessLabel(harness)} models
-            </button>
-            <Collapse open={showModels}>
-              <div className="grid grid-cols-2 gap-1 pt-1.5 pb-1">
-                {models.map((entry) => (
-                  <ModelChip
-                    key={entry.id}
-                    harness={harness}
-                    model={entry}
-                    slot={loadout.findIndex((held) => held.harness === harness && held.model === entry.id)}
-                  />
-                ))}
-              </div>
-            </Collapse>
-          </div>
-        </>
-      ) : null}
-    </ListCard>
-  )
-}
-
-function ModelSelect({
-  models,
-  value,
-  label,
-  onChange,
-}: {
-  models: HarnessModel[]
-  value: string | undefined
-  label: string
-  onChange(id: string): void
-}) {
-  return (
-    <Menu modal={false}>
-      <MenuTrigger asChild>
-        <button
-          type="button"
-          className="pressable flex h-7 max-w-[16rem] min-w-[10rem] items-center justify-between gap-2 rounded-md bg-raised px-2.5 text-ui [box-shadow:inset_0_0_0_0.5px_var(--hairline)] transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-selected"
-        >
-          <span className="truncate">{label}</span>
-          <ChevronDownIcon className="size-3.5 shrink-0 text-faint" />
-        </button>
-      </MenuTrigger>
-      <MenuContent align="end" className="max-h-[22rem] w-[18rem] overflow-y-auto">
-        <MenuRadioGroup value={value ?? ""} onValueChange={onChange}>
-          {models.map((model) => (
-            <MenuRadioItem key={model.id} value={model.id} className="py-1.5">
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{model.label}</span>
-                {model.description ? (
-                  <span className="block truncate text-label text-faint">{model.description}</span>
-                ) : null}
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </MenuContent>
-    </Menu>
-  )
-}
-
-function OptionRow({
-  option,
-  value,
-  onChange,
-}: {
-  option: ModelOption
-  value: { kind: "known"; value: SettingValue } | { kind: "unknown" } | undefined
-  onChange(value: SettingValue): void
-}) {
-  const current = value?.kind === "known" ? value.value : optionDefault(option)
-  const title = option.role === "reasoning" ? "Reasoning" : option.role === "speed" ? "Fast" : option.label
-  const description =
-    option.role === "speed"
-      ? "Answers sooner where the provider offers a faster lane"
-      : option.role === "reasoning"
-        ? "How long the model thinks before it answers"
-        : undefined
-  const pair = option.kind === "select" ? option.booleanValues : undefined
-  if (option.kind === "boolean" || pair) {
-    const on = pair ? current === pair.on : current === true
-    return (
-      <SettingRow title={title} description={description}>
-        <Toggle
-          label={title}
-          on={on}
-          disabled={Boolean(option.disabledReason)}
-          onChange={() => onChange(pair ? (on ? pair.off : pair.on) : !on)}
-        />
-      </SettingRow>
-    )
-  }
-  const choices = option.values.map((choice) => ({ value: choice.value, label: choice.label }))
-  return (
-    <SettingRow title={title} description={description}>
-      {choices.length <= 5 ? (
-        <Segmented
-          label={title}
-          value={current === undefined ? "" : String(current)}
-          options={choices}
-          disabled={Boolean(option.disabledReason)}
-          onChange={onChange}
-        />
-      ) : (
-        <Menu modal={false}>
-          <MenuTrigger asChild>
-            <button
-              type="button"
-              className="pressable flex h-7 min-w-[8rem] items-center justify-between gap-2 rounded-md bg-raised px-2.5 text-ui [box-shadow:inset_0_0_0_0.5px_var(--hairline)] hover:bg-fill-hover data-[state=open]:bg-fill-selected"
-            >
-              {current === undefined ? "Default" : settingValueLabel(option, current)}
-              <ChevronDownIcon className="size-3.5 text-faint" />
-            </button>
-          </MenuTrigger>
-          <MenuContent align="end" className="w-[14rem]">
-            <MenuRadioGroup value={current === undefined ? "" : String(current)} onValueChange={onChange}>
-              {choices.map((choice) => (
-                <MenuRadioItem key={choice.value} value={choice.value}>
-                  {choice.label}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </MenuContent>
-        </Menu>
-      )}
-    </SettingRow>
-  )
-}
-
-function ModelChip({ harness, model, slot }: { harness: string; model: HarnessModel; slot: number }) {
-  const entry = { harness, model: model.id }
-  const pinned = slot >= 0
-  return (
-    <div
-      draggable
-      onDragStart={(event) => writeDrag(event, entry)}
-      className="group/chip flex h-8 cursor-grab items-center gap-2 rounded-md px-2 text-ui transition-colors duration-100 hover:bg-fill-hover active:cursor-grabbing"
-    >
-      <span className="min-w-0 flex-1 truncate text-foreground/90">{model.label}</span>
-      {pinned ? (
-        <span className="flex items-center gap-1 text-label text-faint">
-          <CheckIcon className="size-3" />
-          ⌃⌘{slot + 1}
-        </span>
-      ) : (
-        <button
-          type="button"
-          aria-label={`Add ${model.label} to the loadout`}
-          onClick={() => addToLoadout(harness, model.id)}
-          className="pressable rounded p-1 text-faint opacity-0 transition-opacity duration-150 group-hover/chip:opacity-100 hover:text-foreground focus-visible:opacity-100"
-        >
-          <ListPlusIcon className="size-3.5" />
-        </button>
-      )}
-    </div>
   )
 }
