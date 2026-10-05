@@ -1,6 +1,14 @@
 {
   "harness": "claude",
   "source": "Written from the Agent SDK 0.3.283's declared message types and the cases scripts/test-claude-sdk.ts drives; not captured, because a short real turn produces none of these",
+  "native": {
+    "version": "2.1.283",
+    "sdk": {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.3.283"
+    },
+    "origin": "written"
+  },
   "about": "Notices and session state between turns: a retry, an automatic compaction, a refusal fallback and a refusal with none, informational lines at each level, a repeated notification, local command output, a failed and a passing startup hook, changed commands and background tasks, a subagent's task messages, a reached limit, a cleared conversation, bookkeeping, and a kind newer than the SDK.",
   "session": {
     "settings": {

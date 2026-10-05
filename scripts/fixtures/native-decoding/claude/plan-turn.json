@@ -1,6 +1,14 @@
 {
   "harness": "claude",
   "source": "Claude Code 2.1.283 through the Agent SDK 0.3.283, captured through Mako with MAKO_NATIVE_CAPTURE=claude, 2026-10-01; ids renumbered, paths, server names, init's tools and commands, limits and cost replaced, and tool-input deltas after the sixth dropped",
+  "native": {
+    "version": "2.1.283",
+    "sdk": {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.3.283"
+    },
+    "origin": "captured"
+  },
   "about": "One plan-mode turn: the prompt is queued, init reports one server that failed and one that needs sign-in, Claude thinks, streams an ExitPlanMode plan, the approval switches it to default mode, it writes the file and answers. The result reports context usage.",
   "session": {
     "settings": {
@@ -430,7 +438,7 @@
           "update": {
             "kind": "tool-update",
             "id": "toolu-1",
-            "input": ""
+            "inputAppend": ""
           }
         }
       ]
@@ -456,7 +464,7 @@
           "update": {
             "kind": "tool-update",
             "id": "toolu-1",
-            "input": "hello-txt-in-"
+            "inputAppend": "hello-txt-in-"
           }
         }
       ]
@@ -482,7 +490,7 @@
           "update": {
             "kind": "tool-update",
             "id": "toolu-1",
-            "input": "hello-txt-in-whimsical-holler"
+            "inputAppend": "whimsical-holler"
           }
         }
       ]
@@ -508,7 +516,7 @@
           "update": {
             "kind": "tool-update",
             "id": "toolu-1",
-            "input": "hello-txt-in-whimsical-hollerith.md"
+            "inputAppend": "ith.md"
           }
         }
       ]
@@ -534,7 +542,7 @@
           "update": {
             "kind": "tool-update",
             "id": "toolu-1",
-            "input": "hello-txt-in-whimsical-hollerith.md\", \"content\": \"#"
+            "inputAppend": "\", \"content\": \"#"
           }
         }
       ]
@@ -560,7 +568,7 @@
           "update": {
             "kind": "tool-update",
             "id": "toolu-1",
-            "input": "hello-txt-in-whimsical-hollerith.md\", \"content\": \"# Plan: create hello."
+            "inputAppend": " Plan: create hello."
           }
         }
       ]
