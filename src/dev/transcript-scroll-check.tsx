@@ -149,6 +149,13 @@ declare global {
       startTurn: () => string
       appendToTurn: (text: string) => void
       finishTurn: () => void
+      /**
+       * What a host checkpoint does after a turn: every message comes back
+       * from native history, under its id there. `retold` writes each prompt
+       * as a native store might, `reworded` gives every prompt other words,
+       * and `uneven` adds a prompt near the end and drops an early one.
+       */
+      checkpoint: (variant?: "renamed" | "retold" | "reworded" | "uneven") => void
     }
   }
 }
@@ -191,6 +198,26 @@ window.probe = {
   },
   finishTurn() {
     setProbe((state) => ({ ...state, streamingId: undefined }))
+  },
+  checkpoint(variant = "renamed") {
+    setProbe((state) => {
+      const messages: ChatMessage[] = state.messages.map((message, index) => ({
+        ...message,
+        id: `native-${message.role}-${message.id}`,
+        blocks: message.blocks.map((block) => {
+          if (block.type === "toolCall" || block.type === "toolResult") return { ...block, id: `native-${block.id}` }
+          if (message.role !== "user" || block.type !== "text") return block
+          if (variant === "retold") return { ...block, text: `[Attachment 1]\n\n${block.text.replace(/ /g, "  ")}` }
+          if (variant === "reworded") return { ...block, text: `Native prompt ${index}` }
+          return block
+        }),
+      }))
+      if (variant === "uneven") {
+        messages.splice(2, 2)
+        messages.splice(-2, 0, { id: "native-user-continue", role: "user", blocks: [{ type: "text", text: "Continue where you left off." }] })
+      }
+      return { ...state, messages }
+    })
   },
 }
 

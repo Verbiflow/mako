@@ -22,6 +22,7 @@ import {
 import {
   LEAD_EXCHANGE_ID,
   isInterruptedNote,
+  renamedExchanges,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
 import type { MakoPrompt, TurnStop } from "@/state/prompt-delivery"
@@ -46,6 +47,33 @@ const LOAD_AHEAD = 720
  */
 const INITIAL_TURNS = 30
 const MORE_TURNS = 30
+
+const NO_KEYS: ReadonlyMap<string, string> = new Map()
+const NO_RENAMES: ReadonlyMap<string, string> = new Map()
+
+/**
+ * The keys of turns that were renamed, by their current id; every other turn
+ * is keyed by its id. A key belongs to one turn: a turn whose own id is
+ * another's inherited key keeps it, and the other goes by its id.
+ */
+function turnKeys(
+  previous: ReadonlyMap<string, string>,
+  exchanges: readonly ExchangeData[],
+  renamed: ReadonlyMap<string, string>
+): ReadonlyMap<string, string> {
+  if (previous.size === 0 && renamed.size === 0) return NO_KEYS
+  const keys = new Map<string, string>()
+  for (const [old, next] of renamed) keys.set(next, previous.get(old) ?? old)
+  for (const exchange of exchanges) {
+    const key = previous.get(exchange.id)
+    if (key && !keys.has(exchange.id)) keys.set(exchange.id, key)
+  }
+  const own = new Set(
+    exchanges.filter((exchange) => !keys.has(exchange.id)).map((exchange) => exchange.id)
+  )
+  for (const [id, key] of keys) if (own.has(key)) keys.delete(id)
+  return keys.size === 0 ? NO_KEYS : keys
+}
 
 interface ScrollAnchor {
   exchangeId?: string
@@ -274,6 +302,23 @@ export function ConversationTimeline({
   const readingAnchor = useRef<ScrollAnchor | null>(null)
   const restoringReader = useRef<ScrollAnchor | null>(null)
   const pendingJump = useRef<string | null>(null)
+  /** Keep the reading position where it was, unless the reader is moving it. */
+  const holdReader = useCallback(
+    (node: HTMLDivElement) => {
+      const snapshot = restore.current ?? readingAnchor.current
+      if (
+        userScrolling.current ||
+        !snapshot?.exchangeId ||
+        !node.querySelector(
+          `[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`
+        )
+      )
+        return
+      preserveScrollAnchor(node, snapshot)
+      owned(node)
+    },
+    [owned]
+  )
   /**
    * One request for earlier history at a time, from the moment it is asked
    * for until the turns are on screen and the reading position is restored.
@@ -289,9 +334,57 @@ export function ConversationTimeline({
   const [showJump, setShowJump] = useState(false)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
+   * Each turn's React key, for the turns that came back under another id. A
+   * renamed turn keeps the key it had, so it stays mounted at its laid-out
+   * size rather than arriving as a placeholder, and every reference to it
+   * follows it to its new id before the column is measured.
+   */
+  const named = useRef({ identity, exchanges, keys: NO_KEYS })
+  const renamed =
+    named.current.exchanges === exchanges || named.current.identity !== identity
+      ? NO_RENAMES
+      : renamedExchanges(named.current.exchanges, exchanges)
+  const keys =
+    named.current.exchanges === exchanges
+      ? named.current.keys
+      : turnKeys(
+          named.current.identity === identity ? named.current.keys : NO_KEYS,
+          exchanges,
+          renamed
+        )
+  useLayoutEffect(() => {
+    const before = named.current
+    named.current = { identity, exchanges, keys }
+    if (renamed.size === 0) return
+    const follow = (id: string) => {
+      const next = renamed.get(id)
+      if (next) return next
+      if (exchanges.some((exchange) => exchange.id === id)) return id
+      // Gone without a match: the turn as far from the end stands in, so the
+      // reader stays among the same turns rather than wherever the offset lands.
+      const at = before.exchanges.findIndex((exchange) => exchange.id === id)
+      if (at < 0 || exchanges.length === 0) return id
+      const index = exchanges.length - (before.exchanges.length - at)
+      return exchanges[Math.max(0, Math.min(exchanges.length - 1, index))]!.id
+    }
+    const moved = (anchor: ScrollAnchor | null) =>
+      anchor?.exchangeId
+        ? { ...anchor, exchangeId: follow(anchor.exchangeId) }
+        : anchor
+    restore.current = moved(restore.current)
+    readingAnchor.current = moved(readingAnchor.current)
+    restoringReader.current = moved(restoringReader.current)
+    if (pendingJump.current) pendingJump.current = follow(pendingJump.current)
+    setActiveTurn((current) => (current ? follow(current) : current))
+    // Turns can trade places at the same total height, which no resize reports.
+    if (viewport.current && !pinned.current) holdReader(viewport.current)
+  }, [identity, exchanges, keys, renamed, holdReader])
+  /**
    * How many of the newest turns are mounted, and the newest turn it was
-   * counted against. Turns arriving below raise the count, so they never
-   * unmount one above the reader; history arriving above waits for a reveal.
+   * counted against. Turns arriving below the first mounted one raise the
+   * count and turns leaving lower it, so the same first turn stays mounted
+   * and none above the reader unmounts; history arriving above waits for a
+   * reveal.
    */
   const [tail, setTail] = useState({
     limit: INITIAL_TURNS,
@@ -299,12 +392,29 @@ export function ConversationTimeline({
   })
   const newest = exchanges.at(-1)?.id
   if (tail.last !== newest) {
-    const previous =
-      tail.last === undefined
+    const before =
+      named.current.identity === identity ? named.current.exchanges : []
+    const from = before.length - Math.min(before.length, tail.limit)
+    const firstId = before[from]?.id
+    const first =
+      firstId === undefined
         ? -1
-        : exchanges.findIndex((exchange) => exchange.id === tail.last)
-    const arrived = previous < 0 ? 0 : exchanges.length - 1 - previous
-    setTail({ limit: tail.limit + arrived, last: newest })
+        : exchanges.findIndex(
+            (exchange) => exchange.id === (renamed.get(firstId) ?? firstId)
+          )
+    const last =
+      tail.last === undefined ? undefined : (renamed.get(tail.last) ?? tail.last)
+    const previous =
+      last === undefined
+        ? -1
+        : exchanges.findIndex((exchange) => exchange.id === last)
+    const arrived =
+      first >= 0
+        ? exchanges.length - first - (before.length - from)
+        : previous < 0
+          ? 0
+          : exchanges.length - 1 - previous
+    setTail({ limit: Math.max(INITIAL_TURNS, tail.limit + arrived), last: newest })
   }
   const [everMore, setEverMore] = useState(false)
   const windowed = exchanges.length > 200
@@ -323,7 +433,7 @@ export function ConversationTimeline({
     enabled: windowed,
     getScrollElement: () => viewport.current,
     estimateSize: () => 360,
-    getItemKey: (index) => exchanges[index]!.id,
+    getItemKey: (index) => keys.get(exchanges[index]!.id) ?? exchanges[index]!.id,
     overscan: 6,
     scrollMargin: edge ? 80 : 24,
     useAnimationFrameWithResizeObserver: true,
@@ -548,17 +658,7 @@ export function ConversationTimeline({
     if (!node) return
     const pin = () => {
       if (!pinned.current) {
-        const snapshot = restore.current ?? readingAnchor.current
-        if (
-          !userScrolling.current &&
-          snapshot?.exchangeId &&
-          node.querySelector(
-            `[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`
-          )
-        ) {
-          preserveScrollAnchor(node, snapshot)
-          owned(node)
-        }
+        holdReader(node)
         return
       }
       node.scrollTop = node.scrollHeight
@@ -571,7 +671,7 @@ export function ConversationTimeline({
     grown.observe(node)
     if (node.firstElementChild) grown.observe(node.firstElementChild)
     return () => grown.disconnect()
-  }, [identity, isEmpty, owned])
+  }, [identity, isEmpty, owned, holdReader])
 
   const endEarlier = useCallback((progressed: boolean) => {
     awaitingEarlier.current = false
@@ -808,7 +908,7 @@ export function ConversationTimeline({
   const showNavigator = !isEmpty && exchanges.length >= 3
   const renderExchange = (exchange: ExchangeData) => (
     <Exchange
-      key={exchange.id}
+      key={keys.get(exchange.id) ?? exchange.id}
       exchange={exchange}
       streaming={exchange.id === streamingId}
       interrupted={

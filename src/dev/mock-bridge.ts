@@ -14,6 +14,8 @@ import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
+import type { ExecutionContext } from "../../electron/contracts/execution-context"
+import { confirmAccount } from "../../electron/execution-context"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
@@ -21,7 +23,10 @@ import { playSetupTurn } from "./mock-setup-turn"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
 import type {
-  AccountUsage, ResetCreditOutcome,
+  AccountLogin,
+  AccountLoginResult,
+  AccountProviderInfo,
+  AccountUsage, HarnessAccount, ResetCreditOutcome,
   ThreadContextOptions,
   ThreadFileContext,
   ThreadInlineContext,
@@ -125,6 +130,8 @@ const MOCK_UTILITY_OPTIONS: UtilityModelOption[] = [
 ]
 
 let mockHarnessOrder: string[] = []
+/** `harness:name` of fixture accounts signed in again, whose usage reads again. */
+const mockRenewed = new Set<string>()
 const MOCK_RUNNERS = ["claude", "codex"]
 
 /** Automatic resolves to the first harness's light model in the saved order, as the host's `UtilityWork` does. */
@@ -189,6 +196,30 @@ export function installMockBridge() {
 
   const nativeRequests: NativeRequest[] = []
   const liveSnapshots = new Map<string, LiveSnapshot>()
+  /** The fixture's logins, read by live sessions to launch and switch accounts as the host does. */
+  let fixtureAccounts: () => HarnessAccount[] = () => []
+  /** What a session launched now runs as: the harness's selected login, confirmed where the harness reports one. */
+  const accountContext = (harness: string): ExecutionContext | undefined => {
+    const selected = fixtureAccounts().find((account) => account.harness === harness && account.active && !account.missing)
+    if (!selected || selected.source === "opencode") return undefined
+    const reports = harness === "claude" || harness === "codex" || harness === "cursor"
+    // The Claude login named "account-team" stays signed in natively as someone
+    // else, so the fixture can show a session refusing to run as the wrong person.
+    const principal = selected.name === "account-team" ? "personal@example.com" : selected.email
+    const identity: ExecutionContext["identity"] = reports && principal
+      ? { kind: "reported", principal, backend: "subscription", via: "fixture" }
+      : { kind: "unavailable", reason: "The fixture harness does not report an identity." }
+    return {
+      transport: "fixture",
+      runtime: { kind: "unavailable", reason: "Fixture." },
+      account: { kind: "configured", name: selected.name, managed: selected.source === "mako" },
+      identity,
+      credential: { kind: "unavailable", reason: "Fixture." },
+      confirmation: confirmAccount(identity, selected.email),
+      service: { kind: "unavailable", reason: "Fixture." },
+      store: { kind: "unavailable", reason: "Fixture." },
+    }
+  }
   const boot: BootPayload = {
     live: [],
     tabs: [
@@ -1093,68 +1124,172 @@ export function installMockBridge() {
     providerConnectionAction: async () => {
       throw new Error("Fixture providers keep no sign-in")
     },
-    accounts: async () => ({
-      providers: [
-        { provider: "claude", label: "Claude Code", mode: "selectable", loginCommand: "claude /login" },
-        { provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login" },
-        { provider: "cursor", label: "Cursor", mode: "observed", loginCommand: "cursor-agent login" },
-        { provider: "grok", label: "Grok", mode: "observed", loginCommand: "grok login" },
-        { provider: "devin", label: "Devin", mode: "observed", loginCommand: "devin auth login" },
-        { provider: "opencode", label: "OpenCode", mode: "observed", loginCommand: "opencode auth login" },
-      ],
-      accounts: [
-        { harness: "claude", name: "default", email: "personal@example.com", dir: "~/.claude", active: true },
+    ...(() => {
+      // The fixture keeps its logins in memory, so switching, removing,
+      // adding and signing in again can be tried without a host. Each
+      // provider asks for what its real sign-in does: Claude takes a code
+      // when the browser can't hand back, Grok the address the browser
+      // ended on, Devin always a code, and Cursor's page is opened by the
+      // window. A sign-in "finishes" 20 seconds after it starts, or a moment
+      // after something is pasted. The Devin account selected here no longer
+      // exists, as when its folder was deleted outside Mako.
+      const providers = [
+        { provider: "claude", label: "Claude Code", mode: "selectable", loginCommand: "claude /login", nativeLogin: true },
+        { provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login", nativeLogin: true },
+        { provider: "cursor", label: "Cursor", mode: "selectable", loginCommand: "cursor-agent login", nativeLogin: true },
+        { provider: "grok", label: "Grok", mode: "selectable", loginCommand: "grok login", nativeLogin: true },
+        { provider: "devin", label: "Devin", mode: "selectable", loginCommand: "devin auth login", nativeLogin: true },
+        {
+          provider: "opencode",
+          label: "OpenCode",
+          mode: "observed",
+          loginCommand: "opencode auth login",
+          readOnlyReason: "OpenCode keeps its logins inside the database that holds its sessions, so a second OpenCode login would split your OpenCode history.",
+        },
+      ] satisfies AccountProviderInfo[]
+      const pasteKinds = new Map<string, NonNullable<AccountLogin["paste"]>>([["claude", "code"], ["grok", "address"], ["devin", "code"]])
+      const pageUrls = new Map([
+        ["claude", "https://claude.ai/oauth/authorize?code=true&client_id=fixture"],
+        ["codex", "https://auth.openai.com/oauth/authorize?client_id=fixture"],
+        ["cursor", "https://cursor.com/loginDeepControl?challenge=fixture"],
+        ["grok", "https://auth.x.ai/oauth2/authorize?client_id=fixture"],
+        ["devin", "https://app.devin.ai/auth/cli/continue?state=fixture"],
+      ])
+      let list: HarnessAccount[] = [
+        { harness: "claude", name: "default", email: "personal@example.com", dir: "~/.claude", active: true, route: "native" },
         {
           harness: "claude",
-          name: "work@example.com",
+          name: "account-work",
           email: "work@example.com",
-          dir: "~/.subrouter/codex/claude/_p1",
+          dir: "~/.mako/accounts/claude/account-work",
           active: false,
-          source: "subrouter" as const,
+          source: "mako",
+          route: "managed",
+          signedOut: true,
         },
-        { harness: "codex", name: "default", email: "codex@example.com", dir: "~/.codex", active: false },
+        {
+          harness: "claude",
+          name: "account-team",
+          email: "team@example.com",
+          dir: "~/.mako/accounts/claude/account-team",
+          active: false,
+          source: "mako",
+          route: "managed",
+        },
+        { harness: "codex", name: "default", email: "codex@example.com", dir: "~/.codex", active: false, route: "native" },
         {
           harness: "codex",
           name: "personal",
           email: "personal@work.dev",
           dir: "~/.mako/accounts/codex/personal",
           active: true,
+          source: "mako",
+          route: "managed",
         },
-        { harness: "cursor", name: "default", email: "developer@example.com", dir: "~/.cursor", active: true, source: "cli" as const },
-        { harness: "grok", name: "default", email: "developer@example.com", dir: "~/.grok/auth.json", active: true, source: "cli" as const },
+        { harness: "cursor", name: "default", email: "developer@example.com", dir: "~/.cursor", active: true, source: "cli" },
+        { harness: "grok", name: "default", email: "developer@example.com", dir: "~/.grok/auth.json", active: true, source: "cli" },
         {
           harness: "devin",
           name: "default",
           email: "developer@example.com",
           dir: "~/.local/share/devin/credentials.toml",
-          active: true,
-          source: "cli" as const,
+          active: false,
+          source: "cli",
         },
+        { harness: "devin", name: "account-old", dir: "", active: true, source: "mako", missing: true },
         {
           harness: "opencode",
           name: "openai",
           providerId: "openai",
-          authType: "oauth" as const,
+          authType: "oauth",
           email: "developer@example.com",
           accountId: "account-example",
-          dir: "~/.local/share/opencode/auth.json",
+          dir: "~/.local/share/opencode/opencode.db",
           active: true,
-          source: "opencode" as const,
+          source: "opencode",
         },
         {
           harness: "opencode",
-          name: "anthropic",
-          providerId: "anthropic",
-          authType: "api" as const,
-          dir: "~/.local/share/opencode/auth.json",
+          name: "google",
+          providerId: "google",
+          authType: "api",
+          dir: "~/.local/share/opencode/opencode.db",
           active: true,
-          source: "opencode" as const,
+          source: "opencode",
         },
-      ],
-    }),
-    captureAccount: async () => {},
-    selectAccount: async () => {},
-    removeAccount: async () => {},
+      ]
+      const logins = new Map<string, { login: AccountLogin; finish: (result: AccountLoginResult) => void; result: Promise<AccountLoginResult> }>()
+      let added = 0
+      const finish = (id: string) => {
+        const running = logins.get(id)
+        if (!running) return
+        const { harness, renew } = running.login
+        if (renew) {
+          list = list.map((account) => {
+            if (account.harness !== harness || account.name !== renew) return account
+            const signedIn = { ...account }
+            delete signedIn.signedOut
+            return signedIn
+          })
+          mockRenewed.add(`${harness}:${renew}`)
+          const email = list.find((account) => account.harness === harness && account.name === renew)?.email
+          running.finish(email === undefined ? { status: "renewed", name: renew } : { status: "renewed", name: renew, email })
+          return
+        }
+        added += 1
+        const email = `teammate${added > 1 ? added : ""}@example.com`
+        const name = `account-fixture${added}`
+        list = [...list, { harness, name, email, dir: `~/.mako/accounts/${harness}/${name}`, active: false, source: "mako", route: "managed" }]
+        running.finish({ status: "added", name, email })
+      }
+      fixtureAccounts = () => list
+      return {
+        accounts: async () => ({ providers, accounts: list }),
+        captureAccount: async () => {},
+        selectAccount: async (harness: string, name: string | null) => {
+          await new Promise((resolve) => setTimeout(resolve, 250))
+          list = list
+            .filter((account) => account.harness !== harness || !account.missing)
+            .map((account) => account.harness === harness ? { ...account, active: account.name === (name ?? "default") } : account)
+        },
+        removeAccount: async (harness: string, name: string) => {
+          list = list.filter((account) => account.harness !== harness || account.name !== name)
+        },
+        startAccountLogin: async (harness: string, renew?: string): Promise<AccountLogin> => {
+          await new Promise((resolve) => setTimeout(resolve, 700))
+          const id = `fixture-login-${Date.now()}`
+          const login: AccountLogin = {
+            id,
+            harness,
+            url: pageUrls.get(harness) ?? "https://example.com/fixture-sign-in",
+            // A real window would open these; the fixture leaves the browser alone.
+            openPage: false,
+          }
+          const paste = pasteKinds.get(harness)
+          if (paste) login.paste = paste
+          if (harness === "devin") login.pasteOnly = true
+          if (renew) login.renew = renew
+          let resolve!: (result: AccountLoginResult) => void
+          const result = new Promise<AccountLoginResult>((done) => { resolve = done })
+          logins.set(id, { login, finish: resolve, result })
+          setTimeout(() => finish(id), 20_000)
+          void result.finally(() => logins.delete(id))
+          return login
+        },
+        waitAccountLogin: async (id: string) => {
+          const running = logins.get(id)
+          if (!running) throw new Error("This sign-in already ended.")
+          return running.result
+        },
+        submitAccountLoginCode: async (id: string) => {
+          await new Promise((resolve) => setTimeout(resolve, 600))
+          finish(id)
+        },
+        cancelAccountLogin: async (id: string) => {
+          logins.get(id)?.finish({ status: "cancelled" })
+        },
+      }
+    })(),
     ...(() => {
     // Devin's daily window resets shortly after load, and a spent reset
     // empties the personal Codex account, so both are visible here.
@@ -1185,7 +1320,16 @@ export function installMockBridge() {
           ],
           balances: [{ label: "Extra usage", remaining: 37.6, total: 50, unit: "usd" }],
         },
-        "claude:work@example.com": { status: "stale-token", detail: "Usage returns after this account’s next Claude Code run" },
+        "claude:account-work": mockRenewed.has("claude:account-work")
+          ? {
+              status: "ok",
+              plan: "team",
+              windows: [
+                { usedPercent: 6, windowMinutes: 300, resetsAt: now + 4 * hour },
+                { usedPercent: 31, windowMinutes: 10_080, resetsAt: now + 5 * day },
+              ],
+            }
+          : { status: "missing-credentials" },
         "codex:default": {
           status: "ok",
           plan: "pro",
@@ -1244,7 +1388,7 @@ export function installMockBridge() {
             { usedPercent: 61, windowMinutes: 10_080, resetsAt: now + 3 * day },
           ],
         },
-        "opencode:anthropic": { status: "unavailable", detail: "API keys have no plan limits" },
+        "opencode:google": { status: "unavailable", detail: "API keys have no plan limits" },
       } satisfies Record<string, AccountUsage>))
       return fixtures.get(`${harness}:${name}`) ?? { status: "unavailable" }
     },
@@ -1366,6 +1510,7 @@ export function installMockBridge() {
         configOptions: [],
         // The host reports the tuning it started with until the provider says otherwise.
         settings: options.tuning,
+        executionContext: accountContext(harness),
       }
       acpSessions.set(session.id, session)
       const base = options.threadPath
@@ -1750,7 +1895,7 @@ export function installMockBridge() {
       attachments = [],
       tuning?: SessionSettings
     ) => {
-      const snapshot = liveSnapshots.get(id)
+      let snapshot = liveSnapshots.get(id)
       if (!snapshot) throw new Error("Mock session is closed")
       if (setupScene && text === ENVIRONMENT_SETUP_PROMPT) {
         const asked: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
@@ -1759,6 +1904,34 @@ export function installMockBridge() {
         pushLive(id, [{ kind: "user", requestId, text }])
         beginSetup(id, snapshot.session.title ?? "Set up", snapshot.session.harness, session.cwd)
         return asked
+      }
+      // As the host does: the account follows the global selection on the
+      // next message, waits while background work holds the old process,
+      // and nothing sends when the agent reports someone else.
+      const launched = snapshot.session.executionContext?.account
+      const selected = accountContext(snapshot.session.harness)
+      if (launched?.kind === "configured" && selected?.account.kind === "configured" && launched.name !== selected.account.name) {
+        if (snapshot.session.backgroundTasks) {
+          const waiting: LiveRequest = { id: requestId, text, attachments, status: "queued", accountSwitch: { reason: "selection", waitingFor: "background" } }
+          const next = { ...snapshot, revision: snapshot.revision + 1, requests: [...snapshot.requests, waiting] }
+          liveSnapshots.set(id, next)
+          emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], session: snapshot.session, requests: next.requests } })
+          return waiting
+        }
+        snapshot = { ...snapshot, session: { ...snapshot.session, executionContext: selected } }
+      }
+      const confirmation = snapshot.session.executionContext?.confirmation
+      if (confirmation?.kind === "differs") {
+        const refused: LiveRequest = {
+          id: requestId, text, attachments, status: "failed", failure: "wrong-account",
+          nativeDelivery: { attemptId: crypto.randomUUID(), bindingId: id, ownerEpoch: "fixture", evidence: { kind: "not-accepted", source: "preflight", reason: "signed in as someone else" } },
+          error: `This agent is signed in as ${confirmation.principal}, not ${confirmation.expected}, the account this session started with. Nothing was sent. Sign ${confirmation.expected} in again in Settings › Agents, or choose the account it is signed in as.`,
+        }
+        const next = { ...snapshot, revision: snapshot.revision + 1, requests: [...snapshot.requests, refused] }
+        liveSnapshots.set(id, next)
+        acpSessions.set(id, next.session)
+        emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], session: next.session, requests: next.requests } })
+        return refused
       }
       const request: LiveRequest = {
         id: requestId,
@@ -1770,7 +1943,12 @@ export function installMockBridge() {
         ? { ...snapshot.session.settings, ...tuning, options: { ...snapshot.session.settings?.options, ...tuning.options } }
         : snapshot.session.settings
       const { updates, permission } = mockReply({ ...snapshot.session, settings }, request, settings)
-      const session: LiveSessionState = { ...snapshot.session, settings, status: permission ? "running" : "ready" }
+      const session: LiveSessionState = {
+        ...snapshot.session,
+        settings,
+        status: permission ? "running" : "ready",
+      }
+      if (/in the background/i.test(text)) session.backgroundTasks = 1
       const permissions = permission ? [permission] : []
       const next = {
         ...snapshot,
@@ -1842,21 +2020,30 @@ export function installMockBridge() {
         ...session,
         status: "ready",
         lastStop: "canceled",
+        backgroundTasks: 0,
       }
       acpSessions.set(id, next)
       const snapshot = liveSnapshots.get(id)
       if (snapshot) {
+        const waiting = snapshot.requests.find((request) => request.status === "queued" && request.accountSwitch)
+        const requests = snapshot.requests.filter((request) => request !== waiting)
         const updated = {
           ...snapshot,
           session: next,
           permissions: [],
+          requests,
           revision: snapshot.revision + 1,
         }
         liveSnapshots.set(id, updated)
         emit({
           type: "live-batch",
-          batch: { id, revision: updated.revision, session: next, permissions: [], updates: [] },
+          batch: { id, revision: updated.revision, session: next, permissions: [], updates: [], requests },
         })
+        // Stopping the background work frees the session; the waiting message switches it and sends.
+        if (waiting) {
+          await new Promise((resolve) => setTimeout(resolve, 600))
+          await window.mako!.livePrompt(id, waiting.id, waiting.text, waiting.attachments)
+        }
       }
     },
     liveClose: async (id: string) => {
