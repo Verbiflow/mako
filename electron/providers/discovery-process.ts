@@ -10,6 +10,8 @@ interface DiscoveryOptions {
   cwd?: string
   timeoutMs?: number
   priority?: "launch" | "background"
+  /** Cancellation belongs to this query; never terminates another slot's child. */
+  signal?: AbortSignal
 }
 
 interface DiscoveryProcess {
@@ -56,15 +58,41 @@ export async function withDiscoveryProcess<T>(
   if (!executable) throw new Error(`${label} is not installed`)
   const queuedAt = performance.now()
   const priority = options.priority ?? "background"
+  const timeout = options.timeoutMs ?? 30_000
+  options.signal?.throwIfAborted()
   if (available(priority)) reserve(priority)
   else {
     if (pending.launch.length + pending.background.length >= 64)
       throw new Error("Provider discovery queue is full")
-    await new Promise<void>((resolve) => pending[priority].push(resolve))
+    await new Promise<void>((resolve, reject) => {
+      const queue = pending[priority]
+      const cleanup = () => {
+        clearTimeout(timer)
+        options.signal?.removeEventListener("abort", abort)
+      }
+      const resume = () => { cleanup(); resolve() }
+      const refuse = (error: Error) => {
+        const index = queue.indexOf(resume)
+        if (index < 0) return
+        queue.splice(index, 1)
+        cleanup()
+        reject(error)
+      }
+      const abort = () => {
+        const reason: unknown = options.signal?.reason
+        refuse(reason instanceof Error ? reason : new Error("Provider discovery was cancelled"))
+      }
+      const timer = setTimeout(() => refuse(new Error(`${label} discovery timed out in the queue after ${timeout} ms`)), timeout)
+      queue.push(resume)
+      options.signal?.addEventListener("abort", abort, { once: true })
+    })
   }
   const startedAt = performance.now()
   let release: (() => Promise<void>) | undefined
   try {
+    options.signal?.throwIfAborted()
+    if (startedAt - queuedAt >= timeout)
+      throw new Error(`${label} discovery timed out in the queue after ${timeout} ms`)
     const grouped = process.platform !== "win32"
     const child = spawnProviderProcess(executable, options.args, {
       cwd: options.cwd,
@@ -94,7 +122,6 @@ export async function withDiscoveryProcess<T>(
           child.stdout.destroy()
         }
       })
-      const timeout = options.timeoutMs ?? 30_000
       const timer = setTimeout(
         () =>
           fail(
@@ -102,8 +129,10 @@ export async function withDiscoveryProcess<T>(
               `${label} discovery timed out during ${phase} after ${timeout} ms`
             )
           ),
-        timeout
+        Math.max(0, timeout - (startedAt - queuedAt))
       )
+      const abort = () => reject(options.signal?.reason)
+      options.signal?.addEventListener("abort", abort, { once: true })
       const terminate = (signal: NodeJS.Signals) => {
         if (grouped && child.pid) {
           try {
@@ -122,6 +151,7 @@ export async function withDiscoveryProcess<T>(
       }
       release = async () => {
         clearTimeout(timer)
+        options.signal?.removeEventListener("abort", abort)
         try {
           await new Promise<void>((resolve, reject) => {
             if (child.exitCode === null && child.signalCode === null)

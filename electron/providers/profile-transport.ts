@@ -17,10 +17,11 @@ export function runDiscovery(
   args: string[],
   env: NodeJS.ProcessEnv,
   input?: string,
-  cwd?: string
+  cwd?: string,
+  signal?: AbortSignal
 ): Promise<string> {
   return withDiscoveryProcess(
-    { command, args, env, cwd },
+    { command, args, env, cwd, signal },
     async ({ child, exited }) => {
       const chunks: Buffer[] = []
       child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk))

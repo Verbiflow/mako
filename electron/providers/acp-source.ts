@@ -63,7 +63,7 @@ export interface AcpApprovalObserver {
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "inspectNativeSession" | "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop"> {
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "inspectNativeSession" | "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity"> {
   /** Native tool identity supplied by provider extensions to ACP metadata. */
   toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
   /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */

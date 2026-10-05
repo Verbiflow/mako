@@ -4,14 +4,21 @@ import type { ProviderCapability } from "./registry.js"
 import { hostWarn } from "../host-log.js"
 import { workDefault } from "../contracts/harness-defaults.js"
 
+/** This query's owner, independent of a session's native execution authority.
+ * Stop only this query's process on cancellation and await cleanup. A waiter
+ * borrowing another query's catalog must not dispose that other owner's process. */
+export interface ProfileLoadContext {
+  signal: AbortSignal
+}
+
 export interface ProviderProfileLoader extends ProviderCapability {
   label: string
   transport: HarnessProfile["transport"]
   capabilities: string[]
   nativeModelIds?: true
   cacheKey(env: NodeJS.ProcessEnv): string
-  load(env: NodeJS.ProcessEnv, cwd?: string): Promise<HarnessProfile>
-  loadForSend?(env: NodeJS.ProcessEnv, cwd?: string): Promise<HarnessProfile>
+  load(env: NodeJS.ProcessEnv, cwd?: string, context?: ProfileLoadContext): Promise<HarnessProfile>
+  loadForSend?(env: NodeJS.ProcessEnv, cwd?: string, context?: ProfileLoadContext): Promise<HarnessProfile>
 }
 
 export function availableProviderProfile(

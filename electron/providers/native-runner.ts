@@ -1,6 +1,22 @@
 import type { SessionModel as HarnessModel } from "@mako/sessions/settings"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
+import type { ExecutionCredential } from "../contracts/execution-context.js"
+
+/** Private launch environment and public credential provenance from one resolution. */
+export interface NativeLaunch {
+  env: NodeJS.ProcessEnv
+  credential: ExecutionCredential
+}
+
+export type NativeLaunchCredentials =
+  | { kind: "resolved"; resolve(env: NodeJS.ProcessEnv): Promise<NativeLaunch> }
+  | { kind: "unavailable"; reason: string }
+
+export const CLI_OWNED_CREDENTIALS: NativeLaunchCredentials = {
+  kind: "unavailable",
+  reason: "This CLI resolves its native credentials internally; this headless adapter cannot report their source or revision before launch.",
+}
 
 export interface NativeRunOptions extends SessionSettings {
   captureOutput?: boolean
@@ -33,6 +49,8 @@ export interface PreparedRun {
 }
 
 export interface NativeRunner extends ProviderCapability {
+  /** Actual headless transport; never copy the foreground driver's transport. */
+  transport: string
   /** Installation presence only; command preparation validates runtime compatibility. */
   available(): boolean
   fastMode: "supported" | "unsupported"
@@ -43,6 +61,9 @@ export interface NativeRunner extends ProviderCapability {
    */
   carries: readonly string[]
   configureEnvironment?(env: NodeJS.ProcessEnv): void
+  /** Resolve adapter-held credentials once, before model discovery and command construction.
+   * The supplied environment already contains the shared account selection. */
+  launchCredentials: NativeLaunchCredentials
   /**
    * Settle the settings a command line can carry before the command is
    * built, with the account's environment in hand: Cursor resolves the

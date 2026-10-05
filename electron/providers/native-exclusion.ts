@@ -31,11 +31,16 @@ export function withNativeExclusion(driver: ProviderLiveDriver): ProviderLiveDri
     const pending = closing.get(id)
     if (pending) return pending
     const session = sessions.get(id)
+    // A refused acquisition owns no native process. Outer admission may ask
+    // for cleanup after any failed start; never forward it to an external owner.
+    if (!session) return Promise.resolve()
     const operation = Promise.resolve().then(async () => {
       // Opening is also owned. A close during acquisition waits for its result.
-      const opened = session ? await session.catch(() => undefined) : undefined
-      await driver.close(id)
-      if (opened) await opened.lease.release()
+      const opened = await session.catch(() => undefined)
+      if (opened) {
+        await driver.close(id)
+        await opened.lease.release()
+      }
       if (sessions.get(id) === session) sessions.delete(id)
     }).finally(() => {
       if (closing.get(id) === operation) closing.delete(id)

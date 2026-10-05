@@ -16,8 +16,10 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
     throw new Error(`${source.provider}: a resumable ACP source must locate its sessions, or a new session's dropped first turn cannot be continued`)
   return {
     provider: source.provider,
+    launchEnvironment: { kind: "prepared", via: "Shared ACP launch applies the admitted account environment before native process creation." },
     nativeIdentity: ACP_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: source.nativePromptIdentity,
     approvalEvidence: source.approvalEvidence,
     planning: source.planning,
     backgroundStop: source.backgroundStop,

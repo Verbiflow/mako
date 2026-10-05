@@ -102,6 +102,13 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   }
   // Native recovery preconditions must fail before installing any contribution.
   validateLiveDriver(harness.live)
+  if (!isAbsent(harness.nativeRunner) && !harness.nativeRunner.transport?.trim())
+    throw new Error(`${provider} must declare its headless transport`)
+  if (!isAbsent(harness.nativeRunner)) {
+    const credentials = harness.nativeRunner.launchCredentials
+    if (!credentials || (credentials.kind === "resolved" ? !credentials.resolve : credentials.kind !== "unavailable" || !credentials.reason.trim()))
+      throw new Error(`${provider} must declare headless credential resolution or explain why it is unavailable`)
+  }
   const absent: HarnessRecord["absent"] = {}
   const install = <T extends ProviderCapability>(
     registry: ProviderRegistry<T>,

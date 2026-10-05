@@ -20,7 +20,8 @@ import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
 import { UNAVAILABLE_RECOVERY, type RecoveryCapabilities } from "../contracts/recovery.js"
-import { NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
+import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
+import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
 
 /** Admission resolves separately from the correlated live-action-result event.
  * A provider must confirm completion, failure, or cancellation; idle is not proof.
@@ -93,6 +94,9 @@ export function conversationServers(tools: ConversationTools): Array<{ name: str
 
 /** Host-only launch credentials. Never included in the renderer wire contract or journals. */
 export interface ProviderStartOptions extends LiveStartOptions {
+  /** Prepared by shared execution admission. Adapters must use this environment
+   * instead of resolving the global account a second time. Host-only. */
+  accountLaunch?: import("../accounts.js").AccountLaunch
   /** Known native occurrences from this binding, including answered ones. Keep
    * identities on callback replay; observe only, never send saved answers again. */
   observedApprovals?: import("../contracts/approval-response.js").NativeApprovalIdentity[]
@@ -116,9 +120,12 @@ export type PlanningCapability =
   | { via: "setting"; option: string; proposal: string }
 
 export interface ProviderLiveDriver extends ProviderCapability {
+  launchEnvironment: LaunchEnvironmentCapability
   /** Native principal evidence, separately from configured account selection. */
   nativeIdentity: NativeIdentityCapability
   nativeExclusion: NativeExclusionCapability
+  /** Whether an accepted reference identifies a stored user message, independently of the native run ID. */
+  nativePromptIdentity: NativePromptIdentityCapability
   /** Required only for native atomic exclusion. Acquisition must precede
    * opening/resuming, and protect against the native CLI as well as Mako.
    * Failed acquisition must leave no executing session behind. Native writes
@@ -213,8 +220,10 @@ export type ProviderSteerResult =
  * at startup rather than at a call site months later.
  */
 export function validateLiveDriver(driver: ProviderLiveDriver): void {
+  LaunchEnvironmentCapabilitySchema.parse(driver.launchEnvironment)
   NativeIdentityCapabilitySchema.parse(driver.nativeIdentity)
   NativeExclusionCapabilitySchema.parse(driver.nativeExclusion)
+  NativePromptIdentityCapabilitySchema.parse(driver.nativePromptIdentity)
   if ((driver.nativeExclusion.kind === "atomic") !== Boolean(driver.startExclusive))
     throw new Error(`${driver.provider}: native atomic exclusion requires an exclusive start implementation, declared together`)
   if (driver.canResume && (!driver.checkpoint || !driver.inspectNativeSession))
