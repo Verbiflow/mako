@@ -110,11 +110,11 @@ export class WorkspaceGit {
    * A watched change, relative to the workspace, or `undefined` for "anything
    * may have changed". Returns whether Git status can have moved.
    */
-  noteChange(path: string | undefined): boolean {
+  noteChange(path: string | undefined, why = "the workspace watcher asked for a rescan"): boolean {
     if (path === undefined) {
       this.summaries?.clear()
       this.discovery = undefined
-      this.watched?.repository.changedAll()
+      this.watched?.repository.changedAll(why)
       return true
     }
     const slashed = sep === "/" ? path : path.split(sep).join("/")

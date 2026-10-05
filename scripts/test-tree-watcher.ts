@@ -80,11 +80,17 @@ try {
   commits = 0
   await git(linked, "commit", "-q", "--allow-empty", "-m", "b")
   assert.ok(await heardCommit() > 0, "and the next one, after Git replaced the index")
+  await heardCommit()
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  commits = 0
+  for (let read = 0; read < 5; read++) await git(linked, "--no-optional-locks", "status", "--porcelain=v2", "-z")
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  assert.equal(commits, 0, "reading status, which touches the index's access time, is not a change")
   await git(repo, "commit", "-q", "--allow-empty", "-m", "c")
   assert.equal(insideHeard, 0, "a Git directory inside the folder is left to the tree watch")
   outside.close()
   inside.close()
-  console.log("tree watcher: refuses / and home, excludes eight quiet folders, drops dependency writes, reports source writes; a worktree's commits are heard through its outside Git directory")
+  console.log("tree watcher: refuses / and home, excludes eight quiet folders, drops dependency writes, reports source writes; a worktree's commits are heard through its outside Git directory, and its reads are not")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

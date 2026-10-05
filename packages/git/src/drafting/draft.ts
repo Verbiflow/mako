@@ -133,7 +133,7 @@ export async function commitDraft(repository: Repository, draft: CommitDraft, me
         await frozen.dispose()
       }
     } finally {
-      repository.changedAll()
+      repository.changedAll("committed a draft")
     }
   })
 }

@@ -135,7 +135,7 @@ export class AgentHost {
     this.workspaceGit.trackChanges(true)
     this.gitDirWatch = watchOutsideGitDir(this.workspace, () => {
       if (this.workspaceWatcherGeneration !== generation) return
-      this.workspaceGit.noteChange(undefined)
+      this.workspaceGit.noteChange(undefined, "this checkout's index or HEAD changed in its Git folder")
       if (this.foreground) this.scheduleGitRefresh(generation)
     })
   }

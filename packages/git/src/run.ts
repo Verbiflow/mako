@@ -111,6 +111,21 @@ const STDERR_BYTES = 64 * 1024
 const READ_SLOTS = 6
 let readsRunning = 0
 const readsWaiting: Array<() => void> = []
+const running = new Set<{ command: string; cwd: string; started: number }>()
+
+/** The `git` processes running now and the reads waiting for a slot, for `git:doctor`. */
+export interface GitActivity {
+  running: { command: string; cwd: string; ms: number }[]
+  queued: number
+}
+
+export function gitActivity(): GitActivity {
+  const now = performance.now()
+  return {
+    running: [...running].map((live) => ({ command: live.command, cwd: live.cwd, ms: Math.round(now - live.started) })),
+    queued: readsWaiting.length,
+  }
+}
 
 async function readSlot(): Promise<() => void> {
   if (readsRunning >= READ_SLOTS) await new Promise<void>((resolve) => readsWaiting.push(resolve))
@@ -147,6 +162,8 @@ function execute(options: RunOptions, queuedMs: number): Promise<RunResult> {
 
   return new Promise<RunResult>((resolve, reject) => {
     const child = spawn(command, argv, { cwd: options.cwd, env, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true })
+    const live = { command: subcommand, cwd: options.cwd, started }
+    running.add(live)
     const chunks: Buffer[] = []
     let bytes = 0
     let truncated = false
@@ -156,6 +173,7 @@ function execute(options: RunOptions, queuedMs: number): Promise<RunResult> {
     let settled = false
 
     const finish = (outcome: GitTrace["outcome"], code: number | null) => {
+      running.delete(live)
       clearTimeout(timer)
       options.signal?.removeEventListener("abort", cancel)
       if (!runtime.trace) return

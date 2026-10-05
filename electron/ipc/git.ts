@@ -1,6 +1,6 @@
 import { app } from "electron"
 import { electronSecretEncryption } from "../secure-storage.js"
-import { COMMIT_STYLE } from "@mako/git"
+import { COMMIT_STYLE, gitActivity, knownRepository, openRepository } from "@mako/git"
 import type { AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
 import { GitDrafting } from "../git-drafting.js"
@@ -91,6 +91,13 @@ export function installGitIpc(context: GitIpcContext): void {
   registerIpc("mako:git-commit-diff-all", (_event, hash: string) =>
     withHost((host) => host.gitCommitDiffAll(hash))
   )
+  // `npm run git:doctor`: what this host holds for a repository against a fresh read.
+  registerIpc("mako:git-doctor", async (_event, path: string) => {
+    const held = knownRepository(path) !== undefined
+    const repository = await openRepository(path)
+    if (!repository) throw new Error(`${path} isn't inside a Git repository.`)
+    return { held, diagnosis: await repository.diagnose(), activity: gitActivity() }
+  })
   const drafting = new GitDrafting(work)
   const catalog = new UtilityModelCatalog(models)
   registerIpc("mako:utility-model-settings", async () => {

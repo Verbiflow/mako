@@ -5,7 +5,7 @@ import { GitError } from "./errors.js"
 import { ObjectReader } from "./objects.js"
 import { previewBytes, readPreview, type Comparison, type Preview } from "./preview.js"
 import { run, text } from "./run.js"
-import { mergeStatus, parseStatus, within, type StatusEntry, type StatusHead } from "./status.js"
+import { mergeStatus, parseStatus, statusMismatches, within, type StatusEntry, type StatusHead, type StatusMismatch } from "./status.js"
 
 /** A Git command that stopped partway and waits to be continued or aborted. */
 export type Operation = "merge" | "rebase" | "cherry-pick" | "revert"
@@ -15,6 +15,28 @@ export interface RepositoryStatus {
   head: StatusHead
   entries: readonly StatusEntry[]
   operation: Operation | null
+}
+
+/** How a repository's status is kept and whether it still equals Git's. */
+export interface Diagnosis {
+  root: string
+  /** Watchers reporting this tree; with none, every read is a full one. */
+  watchers: number
+  /** Folder names the watchers never report. */
+  unheard: readonly string[]
+  /** Unheard folders re-read on every status; null when there are too many and every read is a full one. */
+  rereads: readonly string[] | null
+  /** What the held status still had to read when asked: changed paths, or everything. */
+  pending: number | "all"
+  heardAgoMs: number | null
+  /** Why the last full read before this call happened, and how long before. */
+  lastFull: { reason: string; agoMs: number } | null
+  heldMs: number
+  freshMs: number
+  held: { entries: number; head: string }
+  fresh: { entries: number; head: string }
+  mismatches: readonly StatusMismatch[]
+  previews: { count: number; bytes: number }
 }
 
 export interface RepositoryLocation {
@@ -29,6 +51,10 @@ export interface RepositoryLocation {
 const STATUS_ARGS = ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"] as const
 /** Past this many changed paths, one full read beats reading each. */
 const PARTIAL_LIMIT = 500
+/** Unheard folders re-read on every status; past this many, every read is a full one. */
+const REREAD_LIMIT = 64
+/** The most `ls-files` output read to find tracked files in unheard folders. */
+const TRACKED_BYTES = 1024 * 1024
 /** Files that change what every path's status means. */
 const GLOBAL_FILES = new Set([".gitignore", ".gitattributes", ".gitmodules"])
 /** What previews keep, by the bytes they carry. */
@@ -61,16 +87,25 @@ export class Repository {
   private watchers = 0
   /** Folder names the watchers never report, such as `node_modules`. */
   private unheard: ReadonlySet<string> = new Set()
-  /** Status can move where no watcher hears it, so every read is a full one. */
-  private blind = false
-  /** Whether the index tracks a file inside an unheard folder, by the index file it was read from. */
-  private tracked: { stamp: string; found: boolean } | undefined
+  /**
+   * Unheard folders where Git tracks or shows files, such as an Electron app's
+   * `build/`. No watcher reports changes there, so every status re-reads them;
+   * null when there are too many to name and every read is a full one.
+   */
+  private rereads: readonly string[] | null = []
+  /** The unheard folders the index tracks files in, by the index file they were read from. */
+  private tracked: { stamp: string; folders: readonly string[] | null } | undefined
   private writes: Promise<unknown> = Promise.resolve()
   private readonly previews = new Map<string, { preview: Preview; bytes: number; path: string; worktree: boolean }>()
   private previewBytes = 0
   private empty: Promise<string> | undefined
   /** The bytes of each status path that isn't valid UTF-8, by the text shown for it. */
   private raw: ReadonlyMap<string, Buffer> = EMPTY_RAW
+  /** When a watcher or a write last named changed paths, by `Date.now()`. */
+  private heard: number | null = null
+  /** Why the next read is a full one, and why and when the last one was. */
+  private fullReason = "first read"
+  private lastFull: { reason: string; at: number } | null = null
 
   constructor(location: RepositoryLocation) {
     this.root = location.root
@@ -87,9 +122,9 @@ export class Repository {
   /**
    * Says a watcher now reports every change under `root`, including Git's own
    * index and HEAD, except inside folders named in `unheard`; status is then
-   * kept between reads. While Git tracks a file in an unheard folder, or
-   * status shows one there, every read stays a full one. Call the returned
-   * function when it stops.
+   * kept between reads. Unheard folders where Git tracks a file, or status
+   * shows one, are re-read on every status. Call the returned function when it
+   * stops.
    */
   watch(unheard: readonly string[] = []): () => void {
     this.watchers += 1
@@ -97,7 +132,7 @@ export class Repository {
       this.unheard = new Set([...this.unheard, ...unheard])
       this.tracked = undefined
     }
-    this.changedAll()
+    this.changedAll("a watcher started")
     let stopped = false
     return () => {
       if (stopped) return
@@ -106,7 +141,7 @@ export class Repository {
       if (this.watchers > 0) return
       this.unheard = new Set()
       this.tracked = undefined
-      this.changedAll()
+      this.changedAll("the last watcher stopped")
     }
   }
 
@@ -116,17 +151,18 @@ export class Repository {
    * this package's own index copies can't.
    */
   changed(paths: Iterable<string>): boolean {
+    this.heard = Date.now()
     let moved = false
     for (const reported of paths) {
       const path = reported.endsWith("/") ? reported.replace(/\/+$/, "") : reported
       if (path === ".git" || path.startsWith(".git/")) {
         if (gitNoise(path.slice(5))) continue
-        this.changedAll()
+        this.changedAll(`${path} changed`)
         return true
       }
       const name = path.slice(path.lastIndexOf("/") + 1)
       if (!path || GLOBAL_FILES.has(name)) {
-        this.changedAll()
+        this.changedAll(`${path || "the whole tree"} changed`)
         return true
       }
       moved = true
@@ -135,15 +171,16 @@ export class Repository {
     }
     if (!moved) return false
     if (this.dirty.size > PARTIAL_LIMIT) {
-      this.changedAll()
+      this.changedAll(`more than ${PARTIAL_LIMIT} paths changed`)
       return true
     }
     this.version += 1
     return true
   }
 
-  /** Anything may have changed: HEAD, the index, or files a watcher missed. */
-  changedAll(): void {
+  /** Anything may have changed: HEAD, the index, or files a watcher missed. `reason` is for `git:doctor`. */
+  changedAll(reason: string): void {
+    this.fullReason = reason
     this.everything = true
     this.dirty.clear()
     this.version += 1
@@ -152,7 +189,15 @@ export class Repository {
 
   /** Status as of this call: changes reported before it are in what it returns. */
   async status(): Promise<RepositoryStatus> {
-    if (!this.watched || this.blind) this.changedAll()
+    if (!this.watched) this.changedAll("nothing watches this tree")
+    else if (this.rereads === null) this.changedAll("too many folders no watcher hears hold files Git sees")
+    else if (this.rereads.length > 0 && !this.everything) {
+      for (const folder of this.rereads) {
+        this.dirty.add(folder)
+        this.forgetPreviews(folder)
+      }
+      this.version += 1
+    }
     const wanted = this.version
     while (!this.cache || this.cache.version < wanted) {
       this.reading ??= this.read().finally(() => {
@@ -186,9 +231,10 @@ export class Repository {
   }
 
   private async readFull(): Promise<RepositoryStatus> {
-    const [result, tracksUnheard] = await Promise.all([run({ cwd: this.root, args: STATUS_ARGS, read: true }), this.tracksUnheard()])
+    this.lastFull = { reason: this.fullReason, at: Date.now() }
+    const [result, tracked] = await Promise.all([run({ cwd: this.root, args: STATUS_ARGS, read: true }), this.trackedUnheard()])
     const { head, entries } = parseStatus(result.stdout)
-    this.blind = tracksUnheard || this.inUnheard(entries)
+    this.rereads = joinFolders(tracked, this.unheardFolders(entries))
     return { root: this.root, head, entries, operation: this.operation() }
   }
 
@@ -196,24 +242,70 @@ export class Repository {
   private async readPaths(previous: RepositoryStatus, scopes: string[]): Promise<RepositoryStatus> {
     const result = await run({ cwd: this.root, args: [...STATUS_ARGS, "--", ...scopes.map((scope) => `:(literal)${scope}`)], read: true })
     const { head, entries } = parseStatus(result.stdout)
-    if (this.inUnheard(entries)) this.blind = true
+    this.rereads = joinFolders(this.rereads, this.unheardFolders(entries))
     return { root: this.root, head, entries: mergeStatus(previous.entries, scopes, entries), operation: previous.operation }
   }
 
-  private inUnheard(entries: readonly StatusEntry[]): boolean {
-    if (this.unheard.size === 0) return false
-    return entries.some((entry) => entry.path.split("/").some((segment) => this.unheard.has(segment)))
+  /** The outermost unheard folder above each entry, such as `app/build` for `app/build/icon.png`. */
+  private unheardFolders(entries: readonly { path: string; raw?: Buffer }[]): readonly string[] | null {
+    if (this.unheard.size === 0) return []
+    const folders = new Set<string>()
+    for (const entry of entries) {
+      const segments = entry.path.split("/")
+      const at = segments.findIndex((segment, index) => index < segments.length - 1 && this.unheard.has(segment))
+      if (at < 0) continue
+      // A folder named by bytes that aren't UTF-8 can't be handed back to Git as text.
+      if (entry.raw) return null
+      folders.add(segments.slice(0, at + 1).join("/"))
+      if (folders.size > REREAD_LIMIT) return null
+    }
+    return [...folders]
   }
 
   /** Read again only when the index file changed: what Git tracks changes nowhere else. */
-  private async tracksUnheard(): Promise<boolean> {
-    if (!this.watched || this.unheard.size === 0) return false
+  private async trackedUnheard(): Promise<readonly string[] | null> {
+    if (!this.watched || this.unheard.size === 0) return []
     const index = await stat(join(this.gitDir, "index")).catch(() => null)
     const stamp = index ? `${index.ino}:${index.size}:${index.mtimeMs}` : ""
-    if (this.tracked?.stamp === stamp) return this.tracked.found
-    const result = await run({ cwd: this.root, args: ["ls-files", "-z", "--cached", "--", ...[...this.unheard].map((name) => `:(glob)**/${name}/**`)], maxBytes: 1, read: true })
-    this.tracked = { stamp, found: result.stdout.length > 0 }
-    return this.tracked.found
+    if (this.tracked?.stamp === stamp) return this.tracked.folders
+    const result = await run({ cwd: this.root, args: ["ls-files", "-z", "--cached", "--", ...[...this.unheard].map((name) => `:(glob)**/${name}/**`)], maxBytes: TRACKED_BYTES, read: true })
+    const listed = result.stdout.toString("utf8")
+    const folders = result.truncated || listed.includes("\ufffd") ? null : this.unheardFolders(listed.split("\0").filter(Boolean).map((path) => ({ path })))
+    this.tracked = { stamp, folders }
+    return folders
+  }
+
+  /**
+   * The status this repository answers with beside a fresh full read, and how
+   * it is kept, for `git:doctor`. A tree that changes between the two reads
+   * shows a mismatch that is not drift; running it again tells them apart.
+   */
+  async diagnose(): Promise<Diagnosis> {
+    const pending = this.everything || !this.cache ? "all" : this.dirty.size
+    const lastFull = this.lastFull && { reason: this.lastFull.reason, agoMs: Date.now() - this.lastFull.at }
+    let started = performance.now()
+    const held = await this.status()
+    const heldMs = performance.now() - started
+    started = performance.now()
+    const result = await run({ cwd: this.root, args: STATUS_ARGS, read: true })
+    const freshMs = performance.now() - started
+    const fresh = parseStatus(result.stdout)
+    const head = (value: StatusHead) => `${value.branch ?? "detached"} ${value.oid?.slice(0, 12) ?? "unborn"} +${value.ahead} -${value.behind}`
+    return {
+      root: this.root,
+      watchers: this.watchers,
+      unheard: [...this.unheard],
+      rereads: this.rereads,
+      lastFull,
+      pending,
+      heardAgoMs: this.heard === null ? null : Date.now() - this.heard,
+      heldMs,
+      freshMs,
+      held: { entries: held.entries.length, head: head(held.head) },
+      fresh: { entries: fresh.entries.length, head: head(fresh.head) },
+      mismatches: statusMismatches(held.entries, fresh.entries),
+      previews: { count: this.previews.size, bytes: this.previewBytes },
+    }
   }
 
   operation(): Operation | null {
@@ -354,7 +446,7 @@ export class Repository {
       try {
         await run({ cwd: this.root, args: ["add", "-A"] })
       } finally {
-        this.changedAll()
+        this.changedAll("staged everything")
       }
     })
   }
@@ -365,7 +457,7 @@ export class Repository {
         const born = (await this.head()).oid !== null
         await run({ cwd: this.root, args: born ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "."], codes: [1] })
       } finally {
-        this.changedAll()
+        this.changedAll("unstaged everything")
       }
     })
   }
@@ -381,7 +473,7 @@ export class Repository {
         if (!input.amend && !(await this.status()).entries.some(staged)) await run({ cwd: this.root, args: ["add", "-A"] })
         await run({ cwd: this.root, args: ["commit", ...(input.amend ? ["--amend"] : []), "--cleanup=whitespace", "--file=-"], input: message, timeoutMs: COMMIT_TIMEOUT_MS, signal: input.signal })
       } finally {
-        this.changedAll()
+        this.changedAll("committed")
       }
     })
   }
@@ -435,4 +527,12 @@ export async function locate(cwd: string, signal?: AbortSignal): Promise<Reposit
   const [root, gitDir, commonDir] = result.stdout.toString("utf8").split("\n")
   if (!root || !gitDir || !commonDir) return null
   return { root, gitDir, commonDir: resolve(cwd, commonDir) }
+}
+
+/** Both lists of folders, or null when either is, or together they pass the limit. */
+function joinFolders(a: readonly string[] | null, b: readonly string[] | null): readonly string[] | null {
+  if (a === null || b === null) return null
+  if (b.length === 0) return a
+  const joined = [...new Set([...a, ...b])]
+  return joined.length > REREAD_LIMIT ? null : joined
 }

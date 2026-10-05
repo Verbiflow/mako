@@ -184,3 +184,32 @@ export function mergeStatus(previous: readonly StatusEntry[], scopes: readonly s
   while (at < kept.length) merged.push(kept[at++]!)
   return merged
 }
+
+/** A path whose status two reads disagree on; null where one has no entry for it. */
+export interface StatusMismatch {
+  path: string
+  held: string | null
+  fresh: string | null
+}
+
+/** Porcelain-style codes for one entry: `MM`, `A.`, `??`, `UU`, with `S` for a submodule. */
+export function statusCode(entry: StatusEntry): string {
+  if (entry.untracked) return "??"
+  if (entry.conflicted) return "UU"
+  const side = (change: Change | null) => change === null ? "." : change === "typechange" ? "T" : change[0]!.toUpperCase()
+  return `${side(entry.index)}${side(entry.worktree)}${entry.submodule ? " S" : ""}`
+}
+
+/** Every path where `held` and `fresh` disagree, in `fresh`'s order and then `held`'s leftovers. */
+export function statusMismatches(held: readonly StatusEntry[], fresh: readonly StatusEntry[]): StatusMismatch[] {
+  const kept = new Map(held.map((entry) => [entry.path, statusCode(entry)]))
+  const mismatches: StatusMismatch[] = []
+  for (const entry of fresh) {
+    const code = statusCode(entry)
+    const was = kept.get(entry.path) ?? null
+    kept.delete(entry.path)
+    if (was !== code) mismatches.push({ path: entry.path, held: was, fresh: code })
+  }
+  for (const [path, code] of kept) mismatches.push({ path, held: code, fresh: null })
+  return mismatches
+}

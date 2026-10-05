@@ -24,6 +24,7 @@ const reads = [
   "mako:git-commit-files",
   "mako:git-commit-file-diff",
   "mako:git-commit-diff-all",
+  "mako:git-doctor",
   "mako:github-status",
   "mako:pull-request",
   "mako:pull-requests",

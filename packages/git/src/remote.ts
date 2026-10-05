@@ -60,7 +60,7 @@ export async function remote(repository: Repository, action: RemoteAction, expec
         }
       }
     } finally {
-      repository.changedAll()
+      repository.changedAll(`ran ${action}`)
     }
   })
 }
@@ -89,7 +89,7 @@ export async function push(repository: Repository, branch: string, signal?: Abor
         : ["--set-upstream", "--", "origin", `${ref}:${ref}`]
       await run({ cwd: repository.root, args: ["push", "--porcelain", "--no-follow-tags", ...target], timeoutMs: NETWORK_TIMEOUT_MS, signal })
     } finally {
-      repository.changedAll()
+      repository.changedAll("pushed")
     }
   })
 }

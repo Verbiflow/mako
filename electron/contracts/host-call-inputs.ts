@@ -80,21 +80,22 @@ export const hostCallInputs = {
   "mako:git-commit-files": z.tuple([z.string()]),
   "mako:git-diff": z.tuple([z.string()]),
   "mako:git-diff-all": z.tuple([]),
-  "mako:git-generate-message": z.tuple([
-    z.object({
-      mode: z.union([z.literal("fast"), z.literal("deep")]).optional(),
-      requestId: z.string(),
-      cwd: z.string(),
-      prompt: z.string().optional(),
-      model: z.string().optional(),
-    }),
-  ]),
+  "mako:git-doctor": z.tuple([z.string()]),
   "mako:git-draft-pull-request": z.tuple([
     z.object({
       mode: z.union([z.literal("fast"), z.literal("deep")]).optional(),
       requestId: z.string(),
       cwd: z.string(),
       base: z.string(),
+      model: z.string().optional(),
+    }),
+  ]),
+  "mako:git-generate-message": z.tuple([
+    z.object({
+      mode: z.union([z.literal("fast"), z.literal("deep")]).optional(),
+      requestId: z.string(),
+      cwd: z.string(),
+      prompt: z.string().optional(),
       model: z.string().optional(),
     }),
   ]),

@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs"
+import { statSync, watch, type FSWatcher } from "node:fs"
 import { realpath } from "node:fs/promises"
 import { join, sep } from "node:path"
 import { locateGitDir } from "./checkout-heads.js"
@@ -21,6 +21,11 @@ export interface GitDirWatch {
  * kqueue handle rather than another FSEvents stream. Git replaces the index
  * by renaming over it, which ends a watch on the old file, so each event
  * moves the watch to the new file before announcing the change.
+ *
+ * Every Git read, even with `--no-optional-locks`, updates the index's access
+ * time, and the watch reports that too. Announcing it would make each status
+ * read schedule the next one, forever, so an event that leaves the file's
+ * inode, size, mtime and ctime as they were is not a change.
  */
 export function watchOutsideGitDir(folder: string, changed: () => void): GitDirWatch {
   let closed = false
@@ -30,8 +35,9 @@ export function watchOutsideGitDir(folder: string, changed: () => void): GitDirW
     watchers.delete(path)
     if (closed) return
     try {
+      const seen = stamp(path)
       const watcher = watch(path, { persistent: false }, () => {
-        if (watchers.get(path) !== watcher) return
+        if (watchers.get(path) !== watcher || stamp(path) === seen) return
         arm(path)
         changed()
       })
@@ -61,5 +67,14 @@ export function watchOutsideGitDir(folder: string, changed: () => void): GitDirW
       for (const watcher of watchers.values()) watcher.close()
       watchers.clear()
     },
+  }
+}
+
+function stamp(path: string): string {
+  try {
+    const stats = statSync(path)
+    return `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+  } catch {
+    return ""
   }
 }
