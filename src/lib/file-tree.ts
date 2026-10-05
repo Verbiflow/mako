@@ -7,6 +7,9 @@ import type { GitFile } from "@/lib/types"
  * virtualizes, and keyboard-navigates uniformly. Directories that contain
  * exactly one child are folded into their parent ("src/components/rail"
  * instead of three rows), which is what keeps a deep repo readable.
+ *
+ * `folders` lists one row per folder that has changed files directly in it,
+ * with only those files beneath, and no nesting: the flat list editors offer.
  */
 
 export interface TreeDir {
@@ -42,7 +45,8 @@ interface Node {
   files: GitFile[]
 }
 
-export function buildFileTree(files: GitFile[], collapsed: string[]): TreeRow[] {
+export function buildFileTree(files: GitFile[], collapsed: string[], view: "tree" | "folders" = "tree"): TreeRow[] {
+  if (view === "folders") return byFolder(files, collapsed)
   const root: Node = { name: "", children: new Map(), files: [] }
 
   for (const file of files) {
@@ -109,6 +113,30 @@ export function buildFileTree(files: GitFile[], collapsed: string[]): TreeRow[] 
   }
 
   walk(root, "", 0)
+  return rows
+}
+
+function byFolder(files: GitFile[], collapsed: string[]): TreeRow[] {
+  const folders = new Map<string, GitFile[]>()
+  for (const file of files) {
+    const slash = file.path.lastIndexOf("/")
+    const folder = slash < 0 ? "" : file.path.slice(0, slash)
+    const inside = folders.get(folder)
+    if (inside) inside.push(file)
+    else folders.set(folder, [file])
+  }
+  const rows: TreeRow[] = []
+  // The repository's own top-level files come first, under no folder row.
+  for (const folder of [...folders.keys()].sort((a, b) => a.localeCompare(b))) {
+    const inside = folders.get(folder)!.sort((a, b) => a.path.localeCompare(b.path))
+    if (folder) {
+      const down = collapsed.includes(folder)
+      rows.push({ kind: "dir", key: folder, label: folder, depth: 0, collapsed: down, ...totals({ name: folder, children: new Map(), files: inside }) })
+      if (down) continue
+    }
+    for (const file of inside)
+      rows.push({ kind: "file", key: file.path, label: file.path.slice(folder ? folder.length + 1 : 0), depth: folder ? 1 : 0, file })
+  }
   return rows
 }
 

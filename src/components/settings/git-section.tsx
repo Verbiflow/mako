@@ -27,6 +27,7 @@ function ChangesView() {
   const layout = usePrefs((prefs) => prefs.changesLayout)
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
+  const filesView = usePrefs((prefs) => prefs.filesView)
   return (
     <section className="flex flex-col gap-3">
       <div>
@@ -52,6 +53,14 @@ function ChangesView() {
         </SettingRow>
         <SettingRow title="Wrap long lines" description="Off scrolls each line sideways instead.">
           <Toggle label="Wrap long lines" on={wrapDiff} onChange={() => setPref("wrapDiff", !wrapDiff)} />
+        </SettingRow>
+        <SettingRow title="Files list" description="A folded tree, or each folder once with its files under it.">
+          <Segmented
+            label="Files list"
+            value={filesView}
+            options={[{ value: "tree", label: "Tree" }, { value: "folders", label: "By folder" }]}
+            onChange={(next) => setPref("filesView", next)}
+          />
         </SettingRow>
       </ListCard>
     </section>

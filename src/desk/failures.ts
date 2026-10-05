@@ -49,6 +49,8 @@ function report(
 
 export function watchForFailures() {
   window.addEventListener("error", (event) => {
+    // The browser deferring resize notifications to the next frame, as virtualized lists do while they measure; nothing failed.
+    if (event.message === "ResizeObserver loop completed with undelivered notifications.") return
     const where = event.filename ? `${event.filename}:${event.lineno}:${event.colno}` : undefined
     report("renderer-error", event.message, event.error?.stack, where)
   })

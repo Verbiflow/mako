@@ -370,6 +370,20 @@ async function check() {
     assert.equal(await evaluate("import('/src/state/session.ts').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
     console.log("Repository selection: switches both ways, keeps the workspace, and shows one shared commit box")
 
+    await evaluate("import('/src/state/session.ts').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map((file, index) => ({...file, path: `src/${index % 2 ? 'a' : 'b/c'}/${file.path}`}))}}))")
+    await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '15'")
+    await evaluate("document.querySelector('[aria-label=\"List by folder\"]').click()")
+    await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '14'")
+    assert.deepEqual(
+      await evaluate("Array.from(document.querySelectorAll('[data-change-row]')).map(row => row.textContent).filter(text => text.startsWith('src/')).map(text => text.match(/^src\\/[a-z/]+/)[0])"),
+      ["src/a", "src/b/c"],
+      "By folder shows each folder once, by its full path"
+    )
+    await captureElement("files-by-folder.png", '[aria-label="Changes in mako"]')
+    await evaluate("document.querySelector('[aria-label=\"Show as a tree\"]').click()")
+    await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '15'")
+    console.log("Files list: switches between the folded tree and one row per folder")
+
     window.setContentSize(1200, 900)
     await fixture("m.selectProject('/fixture/review', 5000)")
     const diffsBefore = await fixture("return m.calls.diffs")
@@ -398,6 +412,13 @@ async function check() {
     const endDiffs = (await fixture("return m.calls.diffs")) - diffsBefore
     assert.ok(endDiffs > screenDiffs && endDiffs < 140, `Scrolling to the end read ${endDiffs} diffs; it must read the last files and not the ones skipped over`)
     await capture("review-stream-end.png", true)
+    await evaluate("window.addEventListener('mako:insert', (event) => { window.reviewMention = event.detail }, { once: true }); void 0")
+    await click('[aria-label="More for file-04999.ts"]')
+    await until("[...document.querySelectorAll('[role=menuitem]')].some(node => node.textContent.includes('Ask the agent about this file'))")
+    await evaluate("[...document.querySelectorAll('[role=menuitem]')].find(node => node.textContent.includes('Ask the agent about this file')).setAttribute('data-ask', ''); void 0")
+    await click('[role=menuitem][data-ask]')
+    await until("window.reviewMention !== undefined")
+    assert.equal(await evaluate("window.reviewMention"), "@file-04999.ts ", "Ask the agent mentions the file the way the file palette does")
     await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('theme', 'light'))")
     await capture("review-stream-light.png", true)
     await evaluate("import('/src/state/prefs.ts').then(m => { m.setPref('theme', 'dark'); m.setPref('changesLayout', 'files') })")

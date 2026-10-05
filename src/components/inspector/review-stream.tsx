@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
-import { ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, Maximize2Icon, RefreshCwIcon, WrapTextIcon } from "lucide-react"
+import { ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, Maximize2Icon, MessageSquareIcon, RefreshCwIcon, WrapTextIcon } from "lucide-react"
 import { Annotation, GutterAdd } from "@/components/inspector/review"
 import { IconAction } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -11,7 +11,7 @@ import type { GitDiff, GitFile } from "@/lib/types"
 import { git as gitActions } from "@/state/git"
 import { setPref, usePrefs } from "@/state/prefs"
 import { review, useReview } from "@/state/review"
-import { actions } from "@/state/session"
+import { actions, store } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { viewer } from "@/state/viewer"
 
@@ -138,6 +138,14 @@ function diffQueue(onLoaded: (path: string, loaded: Loaded) => void) {
       wanted = []
     },
   }
+}
+
+/** Puts `@path` in the composer, as ⌘↩ in the file palette does: relative to the workspace when the file is inside it. */
+function mention(root: string, path: string): void {
+  const cwd = store.get().meta?.cwd ?? root
+  const absolute = `${root}/${path}`
+  const named = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute
+  window.dispatchEvent(new CustomEvent("mako:insert", { detail: `@${named} ` }))
 }
 
 /** What a file shows before its diff is read: the header alone. */
@@ -501,6 +509,10 @@ function FileHeader({ file, entry, open, viewed, root, queue, onToggle, onViewed
           <MenuItem onSelect={() => void viewer.openDiff(file.path, async () => ({ diffs: [await gitActions.diff(file.path)] }))}>
             <Maximize2Icon className="size-3.5 text-faint" />
             Review in the center
+          </MenuItem>
+          <MenuItem onSelect={() => mention(root, file.path)}>
+            <MessageSquareIcon className="size-3.5 text-faint" />
+            Ask the agent about this file
           </MenuItem>
           <MenuItem onSelect={() => void navigator.clipboard.writeText(file.path)}>
             <CopyIcon className="size-3.5 text-faint" />

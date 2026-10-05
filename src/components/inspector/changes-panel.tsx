@@ -28,6 +28,8 @@ import {
   CheckCircle2Icon,
   ChevronRightIcon,
   Columns2Icon,
+  ListIcon,
+  ListTreeIcon,
   Maximize2Icon,
   MinusIcon,
   PanelBottomCloseIcon,
@@ -165,7 +167,8 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   const selected = git?.root ? selectedDiffs[git.root] : undefined
   const [diff, setDiff] = useState<GitDiff>()
 
-  const rows = useMemo(() => buildFileTree(files, collapsed), [collapsed, files])
+  const filesView = usePrefs((prefs) => prefs.filesView)
+  const rows = useMemo(() => buildFileTree(files, collapsed, filesView), [collapsed, files, filesView])
   const staged = useMemo(() => files.filter((file) => file.staged).length, [files])
 
   // With the diff pane closed the list is the whole panel, so nothing is
@@ -398,6 +401,13 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
             onClick={openWorkingTree}
           >
             <Maximize2Icon />
+          </IconAction>
+          <IconAction
+            label={filesView === "tree" ? "List by folder" : "Show as a tree"}
+            size="xs"
+            onClick={() => setPref("filesView", filesView === "tree" ? "folders" : "tree")}
+          >
+            {filesView === "tree" ? <ListIcon /> : <ListTreeIcon />}
           </IconAction>
           <IconAction
             label={staged === files.length ? "Unstage everything" : "Stage everything"}

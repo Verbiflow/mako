@@ -72,6 +72,8 @@ export interface Prefs {
   changesLayout: "review" | "files"
   diffStyle: "unified" | "split"
   wrapDiff: boolean
+  /** How Files lists changes: the folded tree, or one row per folder with its files under it. */
+  filesView: "tree" | "folders"
   /** New Threads start in their own Git worktree instead of the project folder. */
   newThreadsInWorktree: boolean
   /** How a worktree's branch last landed in each project, by its main checkout: `merge` or `pull`. */
@@ -161,6 +163,7 @@ const defaults: Prefs = {
   changesLayout: "review",
   diffStyle: "unified",
   wrapDiff: false,
+  filesView: "tree",
   newThreadsInWorktree: false,
   selectedDiffs: {},
   pinnedThreads: [],
@@ -398,6 +401,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     changesLayout: readChoice(value.changesLayout, ["review", "files"], "files"),
     diffStyle: readChoice(value.diffStyle, ["unified", "split"], defaults.diffStyle),
     wrapDiff: readBoolean(value.wrapDiff, defaults.wrapDiff),
+    filesView: readChoice(value.filesView, ["tree", "folders"], defaults.filesView),
     newThreadsInWorktree: readBoolean(value.newThreadsInWorktree, defaults.newThreadsInWorktree),
     selectedDiffs: readStringRecord(value.selectedDiffs),
     pinnedThreads: readStringList(value.pinnedThreads, defaults.pinnedThreads),
