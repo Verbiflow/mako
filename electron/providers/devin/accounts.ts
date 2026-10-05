@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
@@ -27,12 +27,11 @@ import type { JsonValue } from "../../codex-app-json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { devinExecutable } from "./executable.js"
 
+function dataHome(env: NodeJS.ProcessEnv): string {
+  return env.XDG_DATA_HOME || join(homedir(), ".local", "share")
+}
 function credentialsPath(env: NodeJS.ProcessEnv): string {
-  return join(
-    env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
-    "devin",
-    "credentials.toml"
-  )
+  return join(dataHome(env), "devin", "credentials.toml")
 }
 
 /** Top-level `key = "value"` strings; Devin writes nothing nested here. */
@@ -177,10 +176,10 @@ async function devinStatus(path: string): Promise<DevinStatus | null> {
 }
 
 /**
- * An account Mako keeps is Devin's own data folder, signed in by Devin's
- * CLI. Devin reads only one data folder per user, so sessions are pointed
- * at an account through the key variables Devin honours instead, read from
- * that folder at launch; `devin acp` and its tools see the key.
+ * An account Mako keeps is a Devin data folder, signed in by Devin's CLI.
+ * Its sessions run with that folder as `XDG_DATA_HOME` (see `linkDataHome`),
+ * never with the key in `WINDSURF_API_KEY`, which every tool the agent runs
+ * would inherit.
  */
 function accountRoot(name: string): string {
   return accountDir("devin", name)
@@ -228,14 +227,50 @@ async function accountEnv(selection: string | null, base: NodeJS.ProcessEnv): Pr
   if (!existsSync(accountRoot(selection)))
     throw new Error("The selected Devin account no longer exists. Choose another account in Settings → Agents.")
   const contents = await readFile(accountCredentials(selection), "utf8").catch(() => null)
-  const apiKey = contents === null ? undefined : devinCredential(contents, "windsurf_api_key")
-  if (contents === null || !apiKey)
+  if (contents === null || !devinCredential(contents, "windsurf_api_key"))
     throw new Error("The selected Devin account is signed out. Sign in again in Settings → Agents.")
   for (const key of AUTH_ENV) delete env[key]
-  env.WINDSURF_API_KEY = apiKey
-  const server = devinCredential(contents, "api_server_url")
-  if (server) env.WINDSURF_API_SERVER_URL = server
+  env.XDG_DATA_HOME = await linkDataHome(join(accountRoot(selection), "data"), dataHome(base))
   return env
+}
+
+/**
+ * Makes an account's data folder stand in for the user's own: Devin finds
+ * the account's login in it, and everything else (Devin's sessions, other
+ * programs' data the agent's tools reach through `XDG_DATA_HOME`) is a link
+ * to the user's entry, refreshed at each launch. Devin reads its login and
+ * sessions through these links (CLI 3000.10).
+ */
+async function linkDataHome(root: string, source: string): Promise<string> {
+  // Mako finds Devin's sessions in the user's folder, so they must never
+  // start inside an account's.
+  await mkdir(join(source, "devin", "cli"), { recursive: true })
+  await linkEntries(root, source, "devin", false)
+  await linkEntries(join(root, "devin"), join(source, "devin"), "credentials.toml", true)
+  return root
+}
+
+/**
+ * Links each of `source`'s entries but `own` into `target` and drops links
+ * whose entry is gone. A real entry in the way is something a program made
+ * here: kept, unless `replace`, where it is a sign-in's leftover (Devin's
+ * login writes its logs beside the login) and gives way to the user's.
+ */
+async function linkEntries(target: string, source: string, own: string, replace: boolean): Promise<void> {
+  await mkdir(target, { recursive: true, mode: 0o700 })
+  const wanted = new Set((await readdir(source)).filter(name => name !== own))
+  for (const name of await readdir(target)) {
+    if (name === own) continue
+    const entry = join(target, name)
+    const link = await readlink(entry).catch(() => undefined)
+    if (link === join(source, name) && wanted.has(name)) wanted.delete(name)
+    else if (link !== undefined || (replace && wanted.has(name))) await rm(entry, { recursive: true, force: true })
+    else wanted.delete(name)
+  }
+  for (const name of wanted)
+    await symlink(join(source, name), join(target, name)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error
+    })
 }
 
 /**
@@ -346,6 +381,7 @@ export const devinAccountCapability: SelectableAccountCapability = {
   removeAccount: async (name) => {
     if (name === "default") throw new Error("The default account is Devin's own login")
     await rm(accountRoot(name), { recursive: true, force: true })
+    return {}
   },
   selectedAccount: (selection) => ({ name: selection ?? "default" }),
   credentialRevision: (name, env = process.env) =>

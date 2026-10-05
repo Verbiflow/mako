@@ -15,6 +15,13 @@ import { devinEnvironment } from "./environment.js"
 export const devinProfileLoader: ProviderProfileLoader = {
   provider: "devin",
   label: "Devin",
+  defaults: {
+    work: [{ model: "swe-2", options: { effort: "high" } }],
+    light: [
+      { model: "gpt-6-luna", options: { effort: "low", fast: false } },
+      { model: "gemini-3.8-flash", options: { effort: "low" } },
+    ],
+  },
   transport: "acp",
   capabilities: [
     "start",
