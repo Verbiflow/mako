@@ -115,7 +115,6 @@ import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./tr
 import type { ProviderResidencySnapshot } from "./provider-residency.js"
 import type {
   AccountHarness,
-  AccountCaptureSource,
   AccountLogin,
   AccountLoginResult,
   AccountProvider,
@@ -431,8 +430,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:account-login-code", id, code),
     cancelAccountLogin: (id: string) =>
       invokeTrustedHost<void>("mako:account-login-cancel", id),
-    captureAccount: (harness: AccountHarness, name: string, source?: AccountCaptureSource) =>
-      invokeTrustedHost<void>("mako:account-capture", harness, name, source),
+    captureAccount: (harness: AccountHarness, name: string) =>
+      invokeTrustedHost<void>("mako:account-capture", harness, name),
     selectAccount: (harness: AccountHarness, name: string | null) =>
       invokeTrustedHost<void>("mako:account-select", harness, name),
     removeAccount: (harness: AccountHarness, name: string) =>
