@@ -156,11 +156,11 @@ export function installMockBridge() {
    * `?app=rail&since=commits|behind|pull|landed`: the tab works in the
    * billing-webhooks worktree, with commits main lacks; `behind` adds 4 from
    * origin/main whose Update stops on a conflict, `pull` has its pull request
-   * open, `landed` has its work in main. Merging lands it; opening a pull
+   * open, `failing` has it open with two checks failing, `landed` has its work in main. Merging lands it; opening a pull
    * request opens one.
    */
   const since = "location" in window ? new URLSearchParams(window.location.search).get("since") : null
-  const sinceWorktree = since === "commits" || since === "behind" || since === "pull" || since === "landed" ? RAIL_WORKTREES[0] : undefined
+  const sinceWorktree = since === "commits" || since === "behind" || since === "pull" || since === "failing" || since === "landed" ? RAIL_WORKTREES[0] : undefined
   let sinceLanded = since === "landed"
   const sincePull = (number: number): PullRequest => ({
     number, title: "Retry billing webhooks with backoff", body: "", state: "open", draft: false,
@@ -168,7 +168,9 @@ export function installMockBridge() {
     additions: 60, deletions: 9, files: 2, mergeable: "clean", reviewDecision: "required",
     checks: [{ name: "test", state: "passed" }, { name: "lint", state: "running" }], reviews: [],
   })
-  let sinceOpen: PullRequest | null = since === "pull" ? sincePull(812) : null
+  let sinceOpen: PullRequest | null = since === "pull" ? sincePull(812)
+    : since === "failing" ? { ...sincePull(812), checks: [{ name: "test", state: "failed" }, { name: "typecheck", state: "failed" }, { name: "lint", state: "passed" }] }
+    : null
   const removedWorktrees = new Set<string>()
   const listedWorktrees = () => ({
     root: SETUP_WORKTREE_ROOT,
@@ -179,6 +181,7 @@ export function installMockBridge() {
   let terminalSessions = initialTerminalSessions()
   const capabilities = createCapabilities()
   let sinceConflict = false
+  const sinceBehind = () => ({ from: "origin/main", commits: since === "behind" && !sinceConflict && !sinceLanded ? 4 : 0 })
   const gitStatus = (): GitStatus => sinceWorktree
     ? {
         ...GIT,
@@ -428,12 +431,18 @@ export function installMockBridge() {
       ]
     },
     worktreeSummaries: async (): Promise<WorktreeSummary[]> => [
-      ...madeWorktrees.map((worktree) => ({ path: worktree.path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" as const }, pull: null })),
+      ...madeWorktrees.map((worktree) => ({ path: worktree.path, into: "main", ahead: 0, changes: 0, landing: { kind: "empty" as const }, pull: null, behind: { from: "origin/main", commits: 0 } })),
       ...(scene === "rail" ? RAIL_SUMMARIES.map((summary) => summary.path !== sinceWorktree?.path ? summary : {
         ...summary,
         ahead: sinceLanded ? 0 : 3,
         landing: sinceLanded ? { kind: "merged" as const, into: "main" } : { kind: "open" as const, into: "main", commits: 3 },
-        pull: sinceOpen && summary.pull ? { ...summary.pull, number: sinceOpen.number, state: sinceOpen.state === "merged" ? "merged" as const : "open" as const } : null,
+        pull: sinceOpen && summary.pull ? {
+          ...summary.pull,
+          number: sinceOpen.number,
+          state: sinceOpen.state === "merged" ? "merged" as const : "open" as const,
+          checks: sinceOpen.checks.some((check) => check.state === "failed") ? "failed" as const : summary.pull.checks,
+        } : null,
+        behind: sinceBehind(),
       }) : []),
     ],
     worktreePulls: async () => {
@@ -457,7 +466,7 @@ export function installMockBridge() {
         commits: sinceLanded ? 0 : 3,
         files: sinceLanded ? [] : [{ path: "src/billing/webhooks.ts", insertions: 42, deletions: 7 }, { path: "src/billing/retry.ts", insertions: 18, deletions: 2 }],
         merge: sinceConflict ? { ok: false, reason: "Commit or discard this worktree's changes first." } : { ok: true, into: "main" },
-        behind: since === "behind" && !sinceConflict && !sinceLanded ? { from: "origin/main", commits: 4 } : null,
+        behind: sinceBehind(),
       }
     },
     worktreeUpdate: async (): Promise<WorktreeUpdate> => {
@@ -973,7 +982,8 @@ export function installMockBridge() {
       sinceLanded = true
       return sinceOpen
     },
-    rerunChecks: async () => {},
+    rerunChecks: async () => 0,
+    pullTemplate: async () => null,
     repoAvatar: async () => undefined,
     // A 1x1 warm-grey png; enough for the identity badge to show an image path.
     userAvatar: async () =>

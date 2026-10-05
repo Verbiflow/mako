@@ -73,6 +73,8 @@ export type HostEventBody =
   | { type: "worktree-step"; conversationId: string; step: WorktreeStep }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
+  /** An agent's tool pushed, opened or merged a pull request; windows read GitHub and the worktrees' summaries again. */
+  | { type: "github-changed" }
   /** Agents' requests to move onto their Thread's own branch, and the projects that always allow it. */
   | { type: "workspace-moves"; moves: WorkspaceMoves }
   /** The host's record of built plans changed; window-wide. */

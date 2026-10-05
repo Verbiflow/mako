@@ -2,7 +2,9 @@ import { useGitPush } from "@/state/git-push"
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { APP_SETUP_CONTEXT, appSetupRow } from "@/lib/app-setup-context"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { GitMergeIcon, BookOpenIcon, FileIcon, PlayIcon, PlugIcon, SlashIcon } from "lucide-react"
+import { ArrowDownIcon, EyeIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, PlayIcon, PlugIcon, SlashIcon, WrenchIcon } from "lucide-react"
+import { useGitCommands } from "@/state/git-actions"
+import type { GitCommandName } from "../../../electron/contracts/git-actions"
 import { harnessTitle } from "@/components/composer/harness-title"
 import { SkillSourceMark } from "@/components/composer/reference-chip"
 import { Chip, Eyebrow, Keys } from "@/components/ui/kit"
@@ -55,8 +57,24 @@ interface Row {
   /** The provider whose copy this one would be handed, named beside the badge. */
   from?: string
   blocked?: string
+  /** Can't be picked now; `blocked` says why. */
+  inert?: boolean
   icon: React.ReactNode
 }
+
+const COMMAND_WORDS = {
+  pr: "pull request open push github",
+  update: "update from main merge behind",
+  "fix-checks": "fix failing checks ci tests",
+  review: "review diff changes",
+} satisfies Record<GitCommandName, string>
+
+const COMMAND_ICONS = {
+  pr: GitPullRequestIcon,
+  update: ArrowDownIcon,
+  "fix-checks": WrenchIcon,
+  review: EyeIcon,
+} satisfies Record<GitCommandName, typeof GitPullRequestIcon>
 
 interface Group {
   label: string
@@ -197,8 +215,36 @@ export function MentionMenu({
     (state) => activeLiveAcp(state)?.session.harness ?? harness
   )
 
-  // Commands the running provider advertised lead the slash menu: they are
-  // the one thing only this session can answer.
+  const gitCommands = useGitCommands()
+  // Mako's own commands stage a message for the agent to use its `mako`
+  // tools; one that can't apply here says why instead of hiding.
+  const makoGroup = useMemo<Group[]>(() => {
+    if (kind !== "/" || gitCommands.length === 0) return []
+    const term = query.trim()
+    const matches = gitCommands
+      .map((command) => ({ command, match: fuzzy(term, command.name) ?? (fuzzy(term, COMMAND_WORDS[command.name]) && { score: 0, indices: [] }) }))
+      .filter((entry) => entry.match)
+    if (!matches.length) return []
+    return [{
+      label: "Mako",
+      rows: matches.map(({ command, match }) => {
+        const Icon = COMMAND_ICONS[command.name]
+        return {
+          value: command.prompt ?? `/${command.name}`,
+          key: `mako:${command.name}`,
+          title: command.name,
+          indices: match?.indices ?? [],
+          hint: command.blocked ?? command.hint,
+          blocked: command.blocked,
+          inert: !command.prompt,
+          icon: <Icon className="size-3.5" />,
+        }
+      }),
+    }]
+  }, [gitCommands, kind, query])
+
+  // Commands the running provider advertised come next: they are the one
+  // thing only this session can answer.
   const commandGroup = useMemo<Group[]>(() => {
     if (kind !== "/" || commands.length === 0) return []
     const matches = commands
@@ -228,8 +274,8 @@ export function MentionMenu({
   }, [commands, commandsHarness, kind, query])
 
   const groups = useMemo(
-    () => (capabilities ? [...commandGroup, ...capabilityGroups] : referenceGroups),
-    [capabilities, commandGroup, capabilityGroups, referenceGroups]
+    () => (capabilities ? [...makoGroup, ...commandGroup, ...capabilityGroups] : referenceGroups),
+    [capabilities, makoGroup, commandGroup, capabilityGroups, referenceGroups]
   )
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups])
 
@@ -285,7 +331,7 @@ export function MentionMenu({
         event.preventDefault()
         event.stopPropagation()
         const row = rows[active]
-        if (row) onPick(row.value)
+        if (row && !row.inert) onPick(row.value)
       }
     }
     window.addEventListener("keydown", onKey, true)
@@ -364,7 +410,8 @@ export function MentionMenu({
                     data-index={at}
                     title={row.blocked ?? row.hint}
                     onMouseMove={() => setCursor(at)}
-                    onClick={() => onPick(row.value)}
+                    aria-disabled={row.inert || undefined}
+                    onClick={() => row.inert || onPick(row.value)}
                     className={cn(
                       "flex min-h-7 w-full items-center gap-2.5 rounded-md px-2 py-1 text-left",
                       // Direct-child glyphs rest quiet; the fin sits one level

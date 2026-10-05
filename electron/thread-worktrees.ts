@@ -63,6 +63,8 @@ const ReceiptSchema = z.object({
 })
 type Receipt = z.infer<typeof ReceiptSchema>
 type WorktreeFrom = { kind: "newest" } | { kind: "head" } | WorktreeStart
+/** A repository's recent pull requests, newest first; null when GitHub can't answer. */
+type PullsOf = (repoRoot: string) => Promise<WorktreeBranchPull[] | null>
 
 export interface PreparedWorktree {
   /** Where the conversation runs: the worktree, or the same subfolder in it the Thread was started from. */
@@ -426,36 +428,57 @@ export class ThreadWorktreeService {
    * repository's pull requests, newest first, and is asked at most once a
    * minute per repository.
    */
-  async summaries(pullsOf?: (repoRoot: string) => Promise<WorktreeBranchPull[] | null>): Promise<WorktreeSummary[]> {
+  async summaries(pullsOf?: PullsOf): Promise<WorktreeSummary[]> {
     const { worktrees } = await this.list()
-    const pullsIn = (repoRoot: string) => {
-      const now = Date.now()
-      const cached = this.branchPulls.get(repoRoot)
-      if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
-      const pulls = (pullsOf?.(repoRoot) ?? Promise.resolve(null)).catch(() => null)
-      this.branchPulls.set(repoRoot, { at: now, pulls })
-      return pulls
+    return mapLimited(worktrees, 4, (worktree) => this.summarize(worktree, pullsOf))
+  }
+
+  /** One worktree's summary, with where its branch started; undefined for a folder that isn't one of Mako's worktrees. */
+  async summary(path: string, pullsOf?: PullsOf): Promise<(WorktreeSummary & { startedFrom: string | null }) | undefined> {
+    const worktree = (await this.list()).worktrees.find((entry) => entry.path === path)
+    return worktree && { ...await this.summarize(worktree, pullsOf), startedFrom: worktree.start?.from ?? null }
+  }
+
+  /** Where a worktree's new branch started (`origin/main`); null on a branch that existed already, or a folder that isn't one of Mako's worktrees. */
+  async startedFrom(path: string): Promise<string | null> {
+    return (await this.list()).worktrees.find((entry) => entry.path === path)?.start?.from ?? null
+  }
+
+  /** Forget the pull requests read, after something here opened or merged one, so the next summaries ask GitHub again. */
+  forgetPulls(): void {
+    this.branchPulls.clear()
+  }
+
+  private pullsIn(repoRoot: string, pullsOf: PullsOf | undefined) {
+    const now = Date.now()
+    const cached = this.branchPulls.get(repoRoot)
+    if (cached && now - cached.at < BRANCH_PULLS_EVERY_MS) return cached.pulls
+    const pulls = (pullsOf?.(repoRoot) ?? Promise.resolve(null)).catch(() => null)
+    this.branchPulls.set(repoRoot, { at: now, pulls })
+    return pulls
+  }
+
+  private async summarize(worktree: ThreadWorktree, pullsOf: PullsOf | undefined): Promise<WorktreeSummary> {
+    const [status, landing, into, tip, pulls, behind] = await Promise.all([
+      git(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => ""),
+      this.landing(worktree),
+      git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""),
+      git(worktree.repoRoot, ["rev-parse", "--verify", "--quiet", `refs/heads/${worktree.branch}`]).catch(() => ""),
+      this.pullsIn(worktree.repoRoot, pullsOf),
+      this.behind(worktree.repoRoot, worktree.path, false),
+    ])
+    const ahead = Number(await git(worktree.repoRoot, ["rev-list", "--count", into ? `${into}..${worktree.branch}` : `${worktree.base}..${worktree.branch}`]).catch(() => "0"))
+    const pull = branchPull(pulls ?? [], worktree.branch)
+    const squashedThere = landing.kind === "open" && pull?.state === "merged" && pull.head === tip
+    return {
+      path: worktree.path,
+      into: into || null,
+      ahead,
+      changes: status ? status.split("\n").length : 0,
+      landing: squashedThere ? { kind: "merged", into: landing.into } : landing,
+      pull,
+      behind: behind && { from: behind.from, commits: behind.commits },
     }
-    return mapLimited(worktrees, 4, async (worktree): Promise<WorktreeSummary> => {
-      const [status, landing, into, tip, pulls] = await Promise.all([
-        git(worktree.path, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => ""),
-        this.landing(worktree),
-        git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""),
-        git(worktree.repoRoot, ["rev-parse", "--verify", "--quiet", `refs/heads/${worktree.branch}`]).catch(() => ""),
-        pullsIn(worktree.repoRoot),
-      ])
-      const ahead = Number(await git(worktree.repoRoot, ["rev-list", "--count", into ? `${into}..${worktree.branch}` : `${worktree.base}..${worktree.branch}`]).catch(() => "0"))
-      const pull = branchPull(pulls ?? [], worktree.branch)
-      const squashedThere = landing.kind === "open" && pull?.state === "merged" && pull.head === tip
-      return {
-        path: worktree.path,
-        into: into || null,
-        ahead,
-        changes: status ? status.split("\n").length : 0,
-        landing: squashedThere ? { kind: "merged", into: landing.into } : landing,
-        pull,
-      }
-    })
   }
 
   /** Commits on a worktree's branch since the commit it started at; undefined for a folder that isn't one of Mako's worktrees. */

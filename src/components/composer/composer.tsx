@@ -403,8 +403,8 @@ export function Composer() {
   const addAttachments = attachments.add
   useEffect(() => {
     const attach = (event: ComposerAttachEvent) => {
-      const references = addAttachments(event.detail.files)
-      if (!references) return
+      const references = event.detail.files.length ? addAttachments(event.detail.files) : ""
+      if (event.detail.files.length && !references) return
       const body = event.detail.text(references)
       const current = draftRef.current.trimEnd()
       const next = current ? `${current}\n\n${body}` : body
@@ -651,8 +651,7 @@ export function Composer() {
         if (!file) { toast.info("The app is being set up already."); return }
         replacement = attachments.add([file])
         if (!replacement) return
-      }
-      const next = replaceMention(draft, mention, replacement)
+      }      const next = replaceMention(draft, mention, replacement)
       update(next.text)
       if (value.startsWith("@thread:")) {
         prefetchThreadReferences(value, threadsStore.get().threads)

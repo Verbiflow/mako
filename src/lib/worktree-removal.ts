@@ -1,8 +1,5 @@
 import type { WorktreeLanding, WorktreeSummary } from "../../electron/contracts/thread-worktrees.ts"
 
-/** How long a removal waits for Undo before it runs; quitting sooner keeps the worktree. */
-export const REMOVAL_UNDO_MS = 5_000
-
 /** Landed by any route: Git's rules, or (`summary`) a pull request merged at the branch's tip. */
 export function landedFor(landing: WorktreeLanding, summary: Pick<WorktreeSummary, "landing"> | undefined): boolean {
   return landing.kind === "merged" || landing.kind === "empty" || summary?.landing.kind === "merged"

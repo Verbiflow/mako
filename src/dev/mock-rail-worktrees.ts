@@ -41,12 +41,14 @@ export const RAIL_SUMMARIES: WorktreeSummary[] = [
   {
     path: `${ROOT}/api-billing-webhooks`, into: "main", ahead: 3, changes: 0, landing: { kind: "open", into: "main", commits: 3 },
     pull: { number: 812, title: "Retry billing webhooks with backoff", url: "https://github.com/you/api/pull/812", branch: "mako/billing-webhooks", state: "open", head: "9a1c2e4", checks: "passed" },
+    behind: { from: "origin/main", commits: 0 },
   },
-  { path: `${ROOT}/api-set-up`, into: "main", ahead: 0, changes: 2, landing: { kind: "empty" }, pull: null },
-  { path: `${ROOT}/api-payments-queue`, into: "main", ahead: 2, changes: 1, landing: { kind: "open", into: "main", commits: 2 }, pull: null },
+  { path: `${ROOT}/api-set-up`, into: "main", ahead: 0, changes: 2, landing: { kind: "empty" }, pull: null, behind: { from: "origin/main", commits: 0 } },
+  { path: `${ROOT}/api-payments-queue`, into: "main", ahead: 2, changes: 1, landing: { kind: "open", into: "main", commits: 2 }, pull: null, behind: { from: "origin/main", commits: 2 } },
   {
     path: `${ROOT}/api-retry-budget`, into: "main", ahead: 1, changes: 0, landing: { kind: "merged", into: "main" },
     pull: { number: 798, title: "Tighten the retry budget", url: "https://github.com/you/api/pull/798", branch: "fix/retry-budget", state: "merged", head: "4f1c2e9", checks: "passed" },
+    behind: { from: "origin/main", commits: 0 },
   },
 ]
 

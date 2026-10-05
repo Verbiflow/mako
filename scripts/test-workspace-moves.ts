@@ -9,13 +9,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { parse as parseYaml } from "yaml"
 import { z } from "zod"
-import type { ThreadWorktree } from "../electron/contracts/thread-worktrees.js"
+import type { ThreadWorktree, WorktreeSummary, WorktreeUpdate } from "../electron/contracts/thread-worktrees.js"
 import type { WorkspaceMoves as WorkspaceMovesState } from "../electron/contracts/workspace-moves.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/mcp-reach.js"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
 import { RECIPE_PATH } from "../electron/thread-recipe.js"
 import { moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
+import { gitActionPrompt } from "../electron/contracts/git-actions.js"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim()
@@ -38,6 +39,11 @@ try {
 
   let placed: ThreadWorktree | undefined
   const removedPaths: string[] = []
+  const updates: WorktreeUpdate[] = [
+    { kind: "conflicts", from: "origin/main", files: ["a.txt", "b.txt"] },
+    { kind: "updated", from: "origin/main", commits: 2 },
+    { kind: "current", from: "origin/main" },
+  ]
   const worktrees = {
     ofConversation: () => placed,
     ahead: async () => 0,
@@ -46,6 +52,13 @@ try {
       removedPaths.push(path)
       return { root, worktrees: [] }
     },
+    update: async () => updates.shift()!,
+    summary: async (path: string): Promise<WorktreeSummary & { startedFrom: string | null }> => ({
+      path, into: "main", ahead: 1, changes: 0, startedFrom: "origin/main",
+      landing: { kind: "open", into: "main", commits: 1 },
+      pull: { number: 7, title: "Thread work", url: "https://github.com/o/r/pull/7", branch: "mako/thread", state: "open", head: "abc", checks: "failed" },
+      behind: { from: "origin/main", commits: 2 },
+    }),
   }
 
   assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, changed: 2 }, "a new worktree takes the checkout's uncommitted files")
@@ -137,9 +150,9 @@ try {
   assert.equal(moves.state().requests.some((candidate) => candidate.conversationId === "e"), false, "a closed conversation's request goes")
 
   // The tools, over the conversation's real HTTP MCP server, act on the calling conversation only.
-  const removed: number[] = []
+  const changed: number[] = []
   const recipesRoot = join(root, "recipes")
-  const tools = workspaceTools({ recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, removed: () => removed.push(1) })
+  const tools = workspaceTools({ recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, changed: () => changed.push(1) })
   let releaseComputer = () => {}
   const computerHeld = new Promise<void>((resolve) => { releaseComputer = resolve })
   grants = await startConversationMcp(
@@ -160,7 +173,9 @@ try {
   assert.deepEqual([computer.getServerVersion()?.name, agent.getServerVersion()?.name], [MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER], "each server introduces itself by the name the agent app lists it under")
   assert.deepEqual((await computer.listTools()).tools.map((tool) => tool.name), ["js", "js_reset"], "browser and computer use have a server of their own")
   const listed = (await agent.listTools()).tools
-  assert.deepEqual(listed.map((tool) => tool.name), ["worktree_status", "worktree_bring", "worktree_move", "worktree_merge", "worktree_remove"])
+  assert.deepEqual(listed.map((tool) => tool.name), ["worktree_status", "worktree_bring", "worktree_move", "worktree_update", "worktree_merge", "worktree_remove"])
+  for (const name of ["worktree_status", "worktree_move", "worktree_update", "worktree_merge", "worktree_remove"])
+    assert.match(listed.find((tool) => tool.name === name)!.description!, /^Call (when|first|before)\b/, `${name} opens with when to call it`)
   assert.match(agent.getInstructions() ?? "", /^Mako's tools for the Thread this Session belongs to\./, "the mako server says what it's for")
   for (const word of ["main checkout", "worktree", "checkout", "app", "recipe"])
     assert.match(agent.getInstructions() ?? "", new RegExp(`^- ${word}: `, "m"), `the instructions define "${word}", the word every tool uses`)
@@ -199,7 +214,22 @@ try {
   sources.set("g", { ...sources.get("g")!, cwd: worktreePath })
   const onBranch = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} })))
   assert.equal(onBranch.editsIn, "this Thread's worktree")
-  assert.deepEqual(onBranch.threadWorktree, { folder: worktreePath, branch: "mako/thread", mainCheckout: project, commitsSinceBranching: 0 })
+  assert.deepEqual(onBranch.threadWorktree, {
+    folder: worktreePath, branch: "mako/thread", mainCheckout: project, commitsSinceBranching: 0,
+    startedFrom: "origin/main",
+    behind: { from: "origin/main", commits: 2 },
+    pullRequest: { number: 7, state: "open", url: "https://github.com/o/r/pull/7", checks: "failed" },
+  }, "the worktree says where it started, what it lacks and its pull request")
+
+  // Update from main: a conflict hands back the files and how to finish, by the same words the Git sidebar stages.
+  const conflicted = await agent.callTool({ name: "worktree_update", arguments: {} })
+  assert.equal(conflicted.isError, undefined)
+  const stopped = parseYaml(text(conflicted))
+  assert.deepEqual(stopped.conflicts, ["a.txt", "b.txt"])
+  assert.equal(stopped.next, `${gitActionPrompt({ kind: "resolve", branch: "mako/thread", from: "origin/main", files: ["a.txt", "b.txt"] })} \`git merge --abort\` puts the branch back as it was.`)
+  assert.equal(text(await agent.callTool({ name: "worktree_update", arguments: {} })), "Merged 2 commits from origin/main into mako/thread. Run the checks before going on.")
+  assert.equal(text(await agent.callTool({ name: "worktree_update", arguments: {} })), "mako/thread already has everything in origin/main.")
+  assert.deepEqual(changed, [1, 1], "windows hear of an update that changed the branch, and not of one that didn't")
   // Existing worktrees can catch up, and one-offs leave the project recipe alone.
   writeFileSync(join(project, ".git", "info", "exclude"), "local.json\n.env\n.env.local\n.env.alias\nshared.json\nconfig/\nbundle/\nassets/\n")
   writeFileSync(join(project, "local.json"), '{"main":true}')
@@ -264,7 +294,7 @@ try {
   assert.match(text(await agent.callTool({ name: "worktree_merge", arguments: {} })), /^Merged mako\/thread into main in the main checkout/)
   assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), /^Removed this Thread's worktree, .* its branch, mako\/thread, is kept/is)
   assert.deepEqual(removedPaths, [worktreePath])
-  assert.deepEqual(removed, [1], "windows are told to read the worktrees again")
+  assert.deepEqual(changed, [1, 1, 1, 1], "windows are told to read the worktrees again after a merge and a removal")
 
   grants.revoke("binding", "g")
   await assert.rejects(agent.listTools(), { code: 401 })

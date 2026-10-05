@@ -3,6 +3,9 @@ import { createHook, createStore } from "@/state/store"
 import { useSession } from "@/state/session"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { GitHubStatus, PullRequest } from "@/lib/types"
+import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import type { MergeMethod } from "../../electron/contracts/git-actions"
 
 /**
  * The pull request for the branch you are on.
@@ -117,18 +120,30 @@ export const github = {
     return pull
   },
 
-  async merge(strategy: "merge" | "squash" | "rebase") {
+  async merge(strategy: MergeMethod) {
     const root = githubStore.get().root
     const pull = await getMako().mergePull(strategy)
     if (githubStore.get().root === root) githubStore.set({ pull })
     return pull
   },
 
+  /** Re-run the failed GitHub Actions runs on the pushed commit, and say what happened. */
   async rerun() {
     const { root, branch } = githubStore.get()
     if (!root) return
-    await getMako().rerunChecks()
+    try {
+      const runs = await getMako().rerunChecks()
+      if (runs) toast.success(runs === 1 ? "Re-running the failed run" : `Re-running ${runs} failed runs`)
+      else toast.info("No GitHub Actions run failed on the pushed commit", { description: "A check from another service re-runs from its own page; Open on GitHub has its link." })
+    } catch (error) {
+      toast.error("Checks were not re-run", { duration: ACTION_TOAST_MS, description: error instanceof Error ? error.message : String(error) })
+    }
     await github.refresh(root, branch)
+  },
+
+  /** The repository's pull request template, for the form's drafter; null when it has none. */
+  template(): Promise<string | null> {
+    return getMako().pullTemplate().catch(() => null)
   },
 }
 

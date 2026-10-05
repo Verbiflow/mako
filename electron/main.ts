@@ -84,7 +84,7 @@ import { installPlanBuildsIpc } from "./ipc/plan-builds.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { installTranscriptDocumentIpc } from "./ipc/transcript-document.js"
 import { WorkspaceMoves, type MoveSource } from "./workspace-moves.js"
-import { moveablePlace, workspaceTools } from "./workspace-tools.js"
+import { moveablePlace, within, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
 import { projectRecipe } from "./thread-recipe.js"
@@ -144,19 +144,19 @@ import {
   watchWorkspace,
 } from "./automations.js"
 import {
-  createPull,
   githubStatus,
   listBranchPulls,
   listPullHeads,
   listPulls,
   listRemoteBranches,
-  mergePull,
   pullForBranch,
   repoAvatar,
-  rerunChecks,
   userAvatar,
   type CreatePullOptions,
 } from "./github.js"
+import { mergePullRequest, openPullRequest, pullTemplate, rerunFailedChecks } from "./pull-requests.js"
+import { pullRequestTools } from "./pull-request-tools.js"
+import type { MergeMethod } from "./contracts/git-actions.js"
 import type { HostPool } from "./pool.js"
 import { WorkspaceClients } from "./workspace-clients.js"
 import { hostClient, withHostClient } from "./host-client.js"
@@ -1314,12 +1314,21 @@ function bindIpc() {
     withHost((h) => listRemoteBranches(h.gitWorkspace))
   )
   handle("mako:create-pull", (_e, options: CreatePullOptions) =>
-    withHost((h) => createPull(h.gitWorkspace, options))
+    withHost(async (h) => {
+      const opened = await openPullRequest(h.gitWorkspace, options)
+      threadWorktrees?.forgetPulls()
+      return opened.pull
+    })
   )
-  handle("mako:merge-pull", (_e, strategy: "merge" | "squash" | "rebase") =>
-    withHost((h) => mergePull(h.gitWorkspace, strategy))
+  handle("mako:merge-pull", (_e, strategy: MergeMethod) =>
+    withHost(async (h) => {
+      const { pull } = await mergePullRequest(h.gitWorkspace, strategy)
+      threadWorktrees?.forgetPulls()
+      return pull
+    })
   )
-  handle("mako:rerun-checks", () => withHost((h) => rerunChecks(h.gitWorkspace)))
+  handle("mako:rerun-checks", () => withHost((h) => rerunFailedChecks(h.gitWorkspace)))
+  handle("mako:pull-template", () => withHost((h) => pullTemplate(h.gitWorkspace)))
   handle("mako:repo-avatar", (_e, repo: string) =>
     withHost((h) => repoAvatar(h.gitWorkspace, repo))
   )
@@ -2364,17 +2373,34 @@ app.whenReady().then(async () => {
     history: fileHistory,
     owner: appOwner,
   }) : undefined
+  const conversationCwd = (id: string) => liveConversations.snapshot(id)?.session.cwd
+  // An agent's tool changed a branch or its pull request: windows read both again at once.
+  const branchChanged = () => {
+    threadWorktrees?.forgetPulls()
+    emit({ type: "worktrees-changed" })
+    emit({ type: "github-changed" })
+  }
   conversationMcp = await startConversationMcp(
     liveConversations,
     (bindingId, operation, signal) => controlSessions.request(bindingId, operation, signal),
     workspaceTools({
-      cwd: (id) => liveConversations.snapshot(id)?.session.cwd,
+      cwd: conversationCwd,
       worktrees: threadWorktrees,
       moves,
-      removed: () => emit({ type: "worktrees-changed" }),
+      changed: branchChanged,
+      pullsOf: listBranchPulls,
       recipesRoot: threadRecipes,
     }),
-    appTools
+    appTools,
+    pullRequestTools({
+      cwd: conversationCwd,
+      async startedFrom(id, cwd) {
+        const worktree = threadWorktrees?.ofConversation(id)
+        if (!worktree || !(await within(worktree.path, cwd))) return null
+        return (await threadWorktrees?.startedFrom(worktree.path)) ?? null
+      },
+      changed: branchChanged,
+    })
   )
   trace("conversation tools ready")
   controlService = await startControlService(

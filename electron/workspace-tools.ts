@@ -9,15 +9,19 @@ import type { WorkspaceMoves } from "./workspace-moves.js"
 import { git } from "./worktree-git.js"
 import { checkoutOf, checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
 import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
+import { gitActionPrompt } from "./contracts/git-actions.js"
+import type { WorktreeBranchPull } from "./contracts/thread-worktrees.js"
 
-type Worktrees = Pick<ThreadWorktreeService, "ofConversation" | "ahead" | "merge" | "remove">
+type Worktrees = Pick<ThreadWorktreeService, "ofConversation" | "ahead" | "merge" | "remove" | "update" | "summary">
 
 interface Deps {
   cwd(conversationId: string): string | undefined
   worktrees: Worktrees | null
   moves: Pick<WorkspaceMoves, "ask" | "answerFor">
-  /** The Thread's worktree went away; windows refresh their list. */
-  removed(): void
+  /** The Thread's worktree or its branch changed, or the worktree went away; windows read them again. */
+  changed(): void
+  /** A repository's recent pull requests, for the worktree's own. */
+  pullsOf?: (repoRoot: string) => Promise<WorktreeBranchPull[] | null>
   recipesRoot?: string
 }
 
@@ -27,7 +31,16 @@ export interface WorkspaceStatus {
   branch?: string
   uncommittedFiles?: number
   outsideWorktree?: { folder: string; mainCheckout: string }
-  threadWorktree?: { folder: string; branch: string; mainCheckout: string; commitsSinceBranching?: number }
+  threadWorktree?: {
+    folder: string
+    branch: string
+    mainCheckout: string
+    commitsSinceBranching?: number
+    startedFrom?: string
+    behind?: { from: string; commits: number }
+    landedIn?: string
+    pullRequest?: { number: number; state: WorktreeBranchPull["state"]; url: string; checks?: NonNullable<WorktreeBranchPull["checks"]> }
+  }
   move?: "asking" | "allowed" | "declined" | "moving"
   ignoredInMain?: { folder: string; paths: string[]; omitted?: number }
 }
@@ -35,12 +48,16 @@ export interface WorkspaceStatus {
 export interface WorkspaceTools {
   status(conversationId: string): Promise<WorkspaceStatus>
   move(conversationId: string): Promise<string>
+  update(conversationId: string): Promise<string>
   merge(conversationId: string): Promise<string>
   remove(conversationId: string): Promise<string>
   bring(conversationId: string, entries?: BringEntry[]): Promise<string>
 }
 
-async function within(folder: string, path: string): Promise<boolean> {
+const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`
+
+/** Whether `path` is `folder` or inside it, symlinks resolved. */
+export async function within(folder: string, path: string): Promise<boolean> {
   const inside = relative(await realpath(folder).catch(() => folder), await realpath(path).catch(() => path))
   return !inside.startsWith("..") && !isAbsolute(inside)
 }
@@ -103,9 +120,20 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       }
       if (changed !== undefined) status.uncommittedFiles = changed
       if (worktree) {
-        status.threadWorktree = { folder: worktree.path, branch: worktree.branch, mainCheckout: worktree.repoRoot }
-        const ahead = await deps.worktrees?.ahead(worktree.path).catch(() => undefined)
-        if (ahead !== undefined) status.threadWorktree.commitsSinceBranching = ahead
+        const own: NonNullable<WorkspaceStatus["threadWorktree"]> = { folder: worktree.path, branch: worktree.branch, mainCheckout: worktree.repoRoot }
+        status.threadWorktree = own
+        const [ahead, summary] = await Promise.all([
+          deps.worktrees?.ahead(worktree.path).catch(() => undefined),
+          deps.worktrees?.summary(worktree.path, deps.pullsOf).catch(() => undefined),
+        ])
+        if (ahead !== undefined) own.commitsSinceBranching = ahead
+        if (summary?.startedFrom) own.startedFrom = summary.startedFrom
+        if (summary?.behind?.commits) own.behind = summary.behind
+        if (summary?.landing.kind === "merged") own.landedIn = summary.landing.into
+        if (summary?.pull) {
+          const { number, state, url, checks } = summary.pull
+          own.pullRequest = checks ? { number, state, url, checks } : { number, state, url }
+        }
       }
       const move = deps.moves.answerFor(conversationId)
       if (move) status.move = move
@@ -123,15 +151,28 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const result = await bringFiles(main, checkout, wanted)
       return toolText({ mainCheckout: main, worktree: checkout, ...result })
     },
+    async update(conversationId) {
+      const worktree = threadWorktree(conversationId)
+      const result = await deps.worktrees!.update(worktree.path)
+      if (result.kind === "current") return `${worktree.branch} already has everything in ${result.from}.`
+      deps.changed()
+      if (result.kind === "updated") return `Merged ${plural(result.commits, "commit")} from ${result.from} into ${worktree.branch}. Run the checks before going on.`
+      return toolText({
+        stopped: `The merge is in progress in ${worktree.path}.`,
+        conflicts: result.files,
+        next: `${gitActionPrompt({ kind: "resolve", branch: worktree.branch, from: result.from, files: result.files })} \`git merge --abort\` puts the branch back as it was.`,
+      })
+    },
     async merge(conversationId) {
       const worktree = threadWorktree(conversationId)
       const merged = await deps.worktrees!.merge(worktree.path)
+      deps.changed()
       return `Merged ${merged.branch} into ${merged.into} in the main checkout, ${worktree.repoRoot}. The branch and this Thread's worktree are still there.`
     },
     async remove(conversationId) {
       const worktree = threadWorktree(conversationId)
       await deps.worktrees!.remove(worktree.path)
-      deps.removed()
+      deps.changed()
       return `Removed this Thread's worktree, ${worktree.path}. Its branch, ${worktree.branch}, is kept with everything committed on it.`
     },
   }
@@ -157,7 +198,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_status",
     {
       description:
-        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. Returns the folder with its branch and uncommitted files, this Thread's worktree with the commits on its branch, the user's answer to a move you asked for, and ignored paths in the originating main checkout. Lists names only; ignored folders are named once.",
+        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. Returns the folder with its branch and uncommitted files; this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks; the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -181,6 +222,16 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     () => reply(() => tools.move(conversationId()))
+  )
+  server.registerTool(
+    "worktree_update",
+    {
+      description:
+        "Call when the user asks to update this branch from main, or before opening a pull request when worktree_status says the branch is behind. Fetches, then merges what the branch new Threads start from has (main, or origin/main when only it moved) into this Thread's worktree branch; the same Update the user has in the Git sidebar. Never rebases or force-pushes. Refused with uncommitted changes to tracked files, during another merge or rebase, or off the branch. When it stops on conflicts, the merge stays in progress and the result lists the files and how to finish it.",
+      inputSchema: none,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    () => reply(() => tools.update(conversationId()))
   )
   server.registerTool(
     "worktree_merge",

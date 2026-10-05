@@ -6,7 +6,7 @@ import type { GitStatus, ThreadRef } from "@/lib/types"
 import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeRemoval, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import { landedFor, REMOVAL_UNDO_MS, removedNote } from "@/lib/worktree-removal"
+import { landedFor, removedNote } from "@/lib/worktree-removal"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
 import { pathInside, plainPath, worktreeAt } from "@/lib/worktree-paths"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
@@ -374,10 +374,10 @@ function setLeaving(paths: readonly string[], leaving: boolean): void {
 function removeAfterUndo(going: readonly RemovableWorktree[], title: string, description: string, undo?: () => void): void {
   const paths = going.map((worktree) => worktree.path)
   setLeaving(paths, true)
-  const timer = window.setTimeout(() => void removeNow(), REMOVAL_UNDO_MS)
+  const timer = window.setTimeout(() => void removeNow(), ACTION_TOAST_MS)
   toast(title, {
     description,
-    duration: REMOVAL_UNDO_MS,
+    duration: ACTION_TOAST_MS,
     action: {
       label: "Undo",
       onClick: () => {

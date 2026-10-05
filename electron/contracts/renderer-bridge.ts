@@ -12,6 +12,7 @@ import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
 import type { ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
+import type { MergeMethod } from "./git-actions.js"
 import type { ChatFolders } from "./chat-folders.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
@@ -729,9 +730,11 @@ export function createMakoBridge(transport: BridgeTransport) {
       base?: string
       draft?: boolean
     }) => invokeTrustedHost<PullRequest | null>("mako:create-pull", options),
-    mergePull: (strategy: "merge" | "squash" | "rebase") =>
+    mergePull: (strategy: MergeMethod) =>
       invokeTrustedHost<PullRequest | null>("mako:merge-pull", strategy),
-    rerunChecks: () => invokeTrustedHost<void>("mako:rerun-checks"),
+    /** How many failed GitHub Actions runs were re-run. */
+    rerunChecks: () => invokeTrustedHost<number>("mako:rerun-checks"),
+    pullTemplate: () => invokeTrustedHost<string | null>("mako:pull-template"),
     repoAvatar: (repo: string) =>
       invokeTrustedHost<string | undefined>("mako:repo-avatar", repo),
     userAvatar: () => invokeTrustedHost<string | undefined>("mako:user-avatar"),

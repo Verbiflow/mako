@@ -11,6 +11,7 @@ import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationTools } from "./providers/live-driver.js"
 import { registerWorkspaceTools, type WorkspaceTools } from "./workspace-tools.js"
 import { registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
+import { registerPullRequestTools, type PullRequestTools } from "./pull-request-tools.js"
 
 type ConversationOwner = Pick<LiveConversations, "authorizeAgent">
 
@@ -31,7 +32,8 @@ const MAKO_INSTRUCTIONS = [
   "- checkout: either of these; this Session edits in one.",
   "- app: the project running from a checkout on this Thread's ports. Threads in the main checkout share its app; a worktree's app is its Thread's alone.",
   "- recipe: how every Thread of the project installs, starts and checks its app. Mako keeps one per project, for every branch.",
-  "worktree_*: which checkout this Session edits in; moving it into this Thread's worktree, bringing ignored files from the main checkout, merging the worktree's branch and removing the worktree.",
+  "worktree_*: which checkout this Session edits in; moving it into this Thread's worktree, bringing ignored files from the main checkout, updating its branch from main, merging the branch and removing the worktree.",
+  "pull_request_*: the pull request of the branch this Session edits on, through the user's GitHub login: its checks, reviews and failed logs; opening or updating it; merging it when the user asks. Each runs the same operation as the Git sidebar's button, so use them instead of `gh pr` commands. Commit, push for other reasons, diff and log stay plain Git.",
   "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
   "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save saves a draft only this Thread runs, and recipe_publish proves it and publishes it to every Thread. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
@@ -64,7 +66,7 @@ async function readMessage(request: IncomingMessage, maxBytes: number) {
 
 /**
  * Mako's servers for a running agent, over MCP: `/computer` for browser and
- * computer use, and `/mako` for the Thread's worktree, app and recipe.
+ * computer use, and `/mako` for the Thread's worktree, pull request, app and recipe.
  * Loopback only, and handed to each agent in its launch, never written to an
  * agent app's own settings. Credentials are ephemeral and scoped to a
  * currently executing provider binding; one grant opens both.
@@ -73,10 +75,11 @@ export async function startConversationMcp(
   owner: ConversationOwner,
   control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
   workspace?: WorkspaceTools,
-  environment?: EnvironmentTools
+  environment?: EnvironmentTools,
+  pulls?: PullRequestTools
 ) {
   const scopes = new Map<string, Scope>()
-  const serveMako = Boolean(workspace || environment)
+  const serveMako = Boolean(workspace || environment || pulls)
   const server = createServer((request, response) => {
     void (async () => {
       const token = request.headers.authorization?.replace(/^Bearer /, "")
@@ -127,6 +130,7 @@ export async function startConversationMcp(
         : new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
       if (route === "mako" && workspace) registerWorkspaceTools(mcp, workspace, authorized)
       if (route === "mako" && environment) registerEnvironmentTools(mcp, environment, authorized)
+      if (route === "mako" && pulls) registerPullRequestTools(mcp, pulls, authorized)
       response.once("close", () => {
         if (controlRequestId !== undefined) scope.controlRequests.delete(controlRequestId)
         if (!response.writableFinished) disconnected.abort()

@@ -8,7 +8,8 @@ import { applyThreadArchives, threadLifecycle } from "@/state/thread-lifecycle"
 import { applyThreadGroupChange, loadThreadGroups } from "@/state/thread-groups"
 import { applyThreadPurposes, loadThreadPurposes } from "@/state/thread-purposes"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
-import { refreshWorktrees } from "@/state/worktrees"
+import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
+import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
@@ -223,6 +224,12 @@ function apply(event: HostEvent) {
   }
   if (event.type === "worktrees-changed") {
     void loadWorktrees()
+    return
+  }
+  if (event.type === "github-changed") {
+    const { root, branch } = githubStore.get()
+    if (root) void github.refresh(root, branch)
+    void refreshWorktreeSummaries().catch(() => {})
     return
   }
   if (event.type === "account-usage-spent") {

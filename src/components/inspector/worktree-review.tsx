@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react"
-import { ArrowDownIcon, CheckIcon, ChevronDownIcon, ExternalLinkIcon, GitBranchIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon, Maximize2Icon, RefreshCwIcon, SparklesIcon, Trash2Icon, XIcon } from "lucide-react"
+import { ArrowDownIcon, CheckIcon, ChevronDownIcon, ExternalLinkIcon, GitBranchIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon, Maximize2Icon, MessageSquareTextIcon, RefreshCwIcon, SparklesIcon, Trash2Icon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 import { ComposePull } from "@/components/inspector/pull-request"
 import { Action } from "@/components/ui/kit"
@@ -13,6 +13,7 @@ import { landState, readLandWith, type LandWith } from "@/lib/worktree-landing"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { desktop } from "@/state/desktop"
 import { gitConflictAttachment } from "@/state/git-conflicts"
+import { stageGitAction } from "@/state/git-actions"
 import { github, useBranchPull } from "@/state/github"
 import { setPref, prefsStore, usePrefs } from "@/state/prefs"
 import { actions, useSession } from "@/state/session"
@@ -118,6 +119,7 @@ export function WorktreeReview() {
         <ComposePull
           className="border-t-0"
           base={branchPull?.status.defaultBranch ?? review.into ?? undefined}
+          startedFrom={worktree.start?.from}
           branch={worktree.branch}
           onOpened={() => {
             remember("pull")
@@ -171,15 +173,7 @@ export function WorktreeReview() {
   }
   const askAgent = () => {
     const file = gitConflictAttachment()
-    const names = conflicts.map((entry) => entry.path)
-    const listed = names.length > 3 ? `${names.slice(0, 3).join(", ")} and ${plural(names.length - 3, "more file")}` : names.join(", ")
-    window.dispatchEvent(new CustomEvent("mako:attach", {
-      detail: {
-        files: file ? [file] : [],
-        text: (references: string) =>
-          `Merging ${updatedFrom ?? from} into ${worktree.branch} stopped on conflicts in ${listed}.${references ? ` ${references} has what Git reported.` : ""} Resolve each one keeping what both sides meant, stage the files, and finish with \`git merge --continue\`.`,
-      },
-    }))
+    stageGitAction({ kind: "resolve", branch: worktree.branch, from: updatedFrom ?? from, files: conflicts.map((entry) => entry.path) }, file ? [file] : [])
     setAsked(true)
   }
 
@@ -237,7 +231,7 @@ export function WorktreeReview() {
   } else if (land.kind === "pull" && pull) {
     const PullIcon = pull.draft ? GitPullRequestDraftIcon : GitPullRequestIcon
     const pullMergeBlocked = pullMergeReason(pull)
-    const failing = summarizeChecks(pull.checks).failed > 0
+    const failing = pull.checks.filter((check) => check.state === "failed").map((check) => check.name)
     landing = (
       <SplitAction
         label={`More for #${pull.number}`}
@@ -273,12 +267,19 @@ export function WorktreeReview() {
               </MenuItem>
             ))}
           </>}
-          {failing ? (
+          {failing.length ? <>
+            <MenuItem onSelect={() => stageGitAction({ kind: "fix-checks", number: pull.number, failing })}>
+              <MessageSquareTextIcon className="size-3.5 text-faint" />
+              <span className="min-w-0 flex-1">
+                Ask {agent} to fix the checks
+                <span className="block truncate text-label text-faint">{failing.length === 1 ? `${failing[0]} is failing` : `${failing.length} are failing`}</span>
+              </span>
+            </MenuItem>
             <MenuItem onSelect={() => void github.rerun()}>
               <RefreshCwIcon className="size-3.5 text-faint" />
               Re-run failed checks
             </MenuItem>
-          ) : null}
+          </> : null}
           <MenuItem onSelect={() => void desktop.openUrl(pull.url)}>
             <ExternalLinkIcon className="size-3.5 text-faint" />
             Open on GitHub

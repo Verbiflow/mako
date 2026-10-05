@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Action, IconAction } from "@/components/ui/kit"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { harnessLabels } from "@/lib/harness-label"
+import { activeLiveAcp, useAcp } from "@/state/acp"
+import { stageGitAction } from "@/state/git-actions"
+import { pullBaseFor, pullRequestDraftPrompt, type MergeMethod } from "../../../electron/contracts/git-actions"
 import { SearchSelect } from "@/components/ui/search-select"
 import {
   Popover,
@@ -21,24 +26,13 @@ import {
   ExternalLinkIcon,
   GitMergeIcon,
   GitPullRequestIcon,
+  MessageSquareTextIcon,
   RefreshCwIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-
-const PULL_REQUEST_PROMPT = `Write a pull request title and body from this diff.
-
-The first line is a concise imperative title with no prefix and no period. Then a blank line, then:
-
-## Summary
-- Two or three bullets explaining what changed and why
-
-## Test plan
-- A short checklist of concrete verification steps
-
-Be specific. Do not invent tests or behavior not shown by the diff.`
 
 /**
  * The pull request for this branch.
@@ -191,24 +185,32 @@ function BehindBranch({ behind, upstream }: { behind: number; upstream?: string 
  * Drafting the pull request.
  *
  * Nothing is published until the button is pressed, and the button says
- * exactly what it does. The agent can draft the title and body from the diff —
- * the same model, the same idea as the commit draft — but what it writes is a
- * starting point in an editable field, not a thing that happens to you.
+ * exactly what it does. The utility model can draft the title and body from
+ * the diff, the same idea as the commit draft, into editable fields. Or the
+ * Thread's agent, which knows why the work was done, writes and opens it with
+ * its pull request tool: the same operation as the button, staged as a
+ * message to read before it's sent.
  */
 export function ComposePull({
   base,
+  startedFrom,
   branch,
   onDone,
   onOpened,
   className,
 }: {
+  /** The repository's default branch, until the branch list says better. */
   base?: string
+  /** Where this worktree's branch started (`origin/main`), which the base follows when the remote has it. */
+  startedFrom?: string | null
   branch?: string
   onDone: () => void
   onOpened?: () => void
   className?: string
 }) {
   const cwd = useSession((state) => state.git?.cwd ?? state.meta?.cwd ?? "")
+  const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
+  const agent = (harness && harnessLabels()[harness]) || "the agent"
   const [title, setTitle] = useState("")
   const [body, setBody] = useState("")
   const [draft, setDraft] = useState(false)
@@ -216,31 +218,40 @@ export function ComposePull({
   const [drafting, setDrafting] = useState(false)
   const [branches, setBranches] = useState<string[]>(base ? [base] : [])
   const [selectedBase, setSelectedBase] = useState(base)
+  // A base the person picked stays picked when the list arrives.
+  const picked = useRef(false)
 
   useEffect(() => {
     void github
       .listBranches()
       .then((next) => {
-        const ordered = base
-          ? [base, ...next.filter((branchName) => branchName !== base)]
-          : next
+        const preferred = (branch && pullBaseFor(branch, startedFrom, next, base)) ?? base
+        const ordered = preferred
+          ? [preferred, ...next.filter((branchName) => branchName !== preferred && branchName !== branch)]
+          : next.filter((branchName) => branchName !== branch)
         setBranches(ordered)
-        setSelectedBase((current) => current ?? ordered[0])
+        if (!picked.current) setSelectedBase(ordered[0])
       })
       .catch(() => {})
-  }, [base])
+  }, [base, branch, startedFrom])
+
+  const askAgent = () => {
+    if (!branch) return
+    stageGitAction({ kind: "pr", branch, base: selectedBase, draft })
+    onDone()
+  }
 
   const compose = useCallback(async function composePull() {
     if (drafting) return
     setDrafting(true)
     try {
       // The utility model reads the same bounded diff as the commit drafter,
-      // but uses a PR-specific structure with a summary and test plan.
-      const { model } = await currentCommitModel()
+      // with the writing rules the agent's tool gives and the repository's template.
+      const [{ model }, template] = await Promise.all([currentCommitModel(), github.template()])
       const result = await git.generateMessage({
         requestId: crypto.randomUUID(),
         cwd,
-        prompt: PULL_REQUEST_PROMPT,
+        prompt: pullRequestDraftPrompt(template),
         model,
       })
       const [first, ...rest] = result.message.split("\n")
@@ -297,7 +308,10 @@ export function ComposePull({
             value: branchName,
             label: branchName,
           }))}
-          onChange={setSelectedBase}
+          onChange={(next) => {
+            picked.current = true
+            setSelectedBase(next)
+          }}
         />
         <IconAction label="Draft it from the diff" size="xs" onClick={() => void compose()}>
           <SparklesIcon className={drafting ? "animate-spin" : undefined} />
@@ -322,7 +336,7 @@ export function ComposePull({
         className="w-full resize-none rounded-md bg-raised px-2 py-1.5 text-ui leading-relaxed placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
       />
 
-      <div className="mt-1.5 flex items-center gap-2">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
         <Action tone="solid" disabled={!title.trim() || busy} onClick={() => void create()}>
           {busy ? "Opening…" : draft ? "Open as draft" : "Create pull request"}
         </Action>
@@ -336,7 +350,17 @@ export function ComposePull({
         >
           Draft
         </button>
-        <span className="ml-auto text-label text-faint">pushes the branch first</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Action tone="ghost" size="xs" className="ml-auto" disabled={!branch} onClick={askAgent}>
+              <MessageSquareTextIcon />
+              Ask {agent} to open it
+            </Action>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-64">
+            Puts a message in your composer: {agent} writes the title and body from this conversation and opens it into {selectedBase ?? "the base"}{draft ? " as a draft" : ""}, pushing the branch first.
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )
@@ -345,13 +369,15 @@ export function ComposePull({
 /** An open pull request, in one line plus whatever CI has to say. */
 function PullSummary({ pull, loading }: { pull: Pull; loading: boolean }) {
   const root = useGitHub((state) => state.root)
+  const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
+  const agent = (harness && harnessLabels()[harness]) || "the agent"
   const checks = useMemo(() => summarizeChecks(pull.checks), [pull.checks])
   const [merging, setMerging] = useState(false)
   const mergeReason = pullMergeReason(pull)
   const mergeBlocked = mergeReason !== undefined
 
   const merge = useCallback(async function mergePullRequest(
-    strategy: "merge" | "squash" | "rebase"
+    strategy: MergeMethod
   ) {
     if (merging) return
     setMerging(true)
@@ -455,13 +481,23 @@ function PullSummary({ pull, loading }: { pull: Pull; loading: boolean }) {
         {pull.mergeable === "conflicting" ? <span className="text-removed">conflicts</span> : null}
 
         {checks.failed > 0 ? (
-          <button
-            type="button"
-            onClick={() => void github.rerun()}
-            className="pressable ml-auto rounded px-1 text-faint hover:text-foreground"
-          >
-            Re-run failed
-          </button>
+          <span className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              title={`Puts a message in your composer asking ${agent} to read why they fail, fix it and push`}
+              onClick={() => stageGitAction({ kind: "fix-checks", number: pull.number, failing: pull.checks.filter((check) => check.state === "failed").map((check) => check.name) })}
+              className="pressable rounded px-1 text-faint hover:text-foreground"
+            >
+              Ask {agent} to fix
+            </button>
+            <button
+              type="button"
+              onClick={() => void github.rerun()}
+              className="pressable rounded px-1 text-faint hover:text-foreground"
+            >
+              Re-run failed
+            </button>
+          </span>
         ) : null}
       </div>
     </div>

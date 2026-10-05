@@ -643,6 +643,7 @@ export const hostCallInputs = {
   "mako:pull-branches": z.tuple([]),
   "mako:pull-request": z.tuple([]),
   "mako:pull-requests": z.tuple([z.number().optional()]),
+  "mako:pull-template": z.tuple([]),
   "mako:quit-client": z.tuple([]),
   "mako:read-file": z.tuple([z.string()]),
   "mako:read-live-file": z.tuple([z.string(), z.string()]),

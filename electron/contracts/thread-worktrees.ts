@@ -85,6 +85,8 @@ export interface WorktreeSummary {
   /** Merged also when its pull request merged with the branch's current tip as its head. */
   landing: WorktreeLanding
   pull: WorktreeBranchPull | null
+  /** Commits on the branch new Threads start from that this branch lacks, by the last fetch. */
+  behind: { from: string; commits: number } | null
 }
 
 /** What removing one worktree would meet: why it can't go now, if it can't, and where its branch stands. */

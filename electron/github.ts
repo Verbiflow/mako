@@ -1,4 +1,3 @@
-import { app } from "electron"
 import { execFile } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -12,6 +11,7 @@ import type {
   ReviewSummary,
 } from "./shared.js"
 import type { WorktreeBranchPull, WorktreePull } from "./contracts/thread-worktrees.js"
+import { MERGE_METHODS, type MergeMethod } from "./contracts/git-actions.js"
 
 const run = promisify(execFile)
 
@@ -520,47 +520,111 @@ export interface CreatePullOptions {
   draft?: boolean
 }
 
-/**
- * Open a pull request.
- *
- * The branch is pushed first when it has no upstream, because `gh pr create`
- * against an unpushed branch fails in a way that reads like a GitHub problem
- * rather than a local one. Everything else is left to `gh`, including the
- * default base, which respects whatever the repository has configured.
- */
-export async function createPull(
-  cwd: string,
-  options: CreatePullOptions
-): Promise<PullRequest | null> {
-  await run("git", ["push", "--set-upstream", "origin", "HEAD"], {
-    cwd,
-    timeout: 120_000,
-  }).catch(async (cause) => {
-    // Already published is not a failure; anything else is.
-    const failure = parseProcessFailure(cause)
-    if (!/everything up-to-date|up to date/i.test(failure.message)) throw cause
-  })
-
-  const args = [
-    "pr",
-    "create",
-    "--title",
-    options.title,
-    "--body",
-    options.body,
-  ]
-  if (options.base) args.push("--base", options.base)
-  if (options.draft) args.push("--draft")
-  await gh(cwd, args)
-  return pullForBranch(cwd)
+/** A `gh` failure in its own words: what it printed on stderr, not Node's "Command failed" line. */
+function ghFailure(cause: unknown): Error {
+  const stderr = cause instanceof Error && "stderr" in cause ? String(cause.stderr ?? "").trim() : ""
+  return new Error(stderr || parseProcessFailure(cause).message, { cause })
 }
 
-export async function mergePull(
-  cwd: string,
-  strategy: "merge" | "squash" | "rebase"
-): Promise<PullRequest | null> {
-  await gh(cwd, ["pr", "merge", `--${strategy}`])
-  return pullForBranch(cwd)
+/** Open a pull request for the pushed branch; the push and the rules are `pull-requests.ts`'s. */
+export async function createPull(cwd: string, options: CreatePullOptions): Promise<void> {
+  const args = ["pr", "create", "--title", options.title, "--body", options.body]
+  if (options.base) args.push("--base", options.base)
+  if (options.draft) args.push("--draft")
+  await gh(cwd, args).catch((cause) => { throw ghFailure(cause) })
+}
+
+export async function editPull(cwd: string, number: number, edit: { title?: string; body?: string }): Promise<void> {
+  const args = ["pr", "edit", String(number)]
+  if (edit.title !== undefined) args.push("--title", edit.title)
+  if (edit.body !== undefined) args.push("--body", edit.body)
+  await gh(cwd, args).catch((cause) => { throw ghFailure(cause) })
+}
+
+export async function mergePull(cwd: string, number: number, method: MergeMethod): Promise<void> {
+  await gh(cwd, ["pr", "merge", String(number), `--${method}`]).catch((cause) => { throw ghFailure(cause) })
+}
+
+/** The ways the repository lets a pull request merge, in the order Mako offers them. */
+export async function mergeMethods(cwd: string): Promise<MergeMethod[] | null> {
+  return ghJson(cwd, ["repo", "view", "--json", "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"], (value) => {
+    if (!isJsonObject(value)) return null
+    const allowed = { squash: value.squashMergeAllowed, merge: value.mergeCommitAllowed, rebase: value.rebaseMergeAllowed }
+    return MERGE_METHODS.filter((method) => allowed[method] !== false)
+  })
+}
+
+/** A GitHub Actions run that failed on a commit. */
+export interface FailedRun {
+  id: number
+  workflow: string
+  url: string
+}
+
+/** The GitHub Actions runs on the branch whose head is `commit` and that failed, newest first. */
+export async function failedRuns(cwd: string, branch: string, commit: string): Promise<FailedRun[]> {
+  const runs = await ghJson(cwd, ["run", "list", "--branch", branch, "--limit", "30", "--json", "databaseId,headSha,conclusion,workflowName,url"], (value) => {
+    if (!Array.isArray(value)) return null
+    const failed: FailedRun[] = []
+    for (const entry of value) {
+      if (!isJsonObject(entry) || stringValue(entry.headSha) !== commit) continue
+      const conclusion = stringValue(entry.conclusion)
+      const id = numberValue(entry.databaseId)
+      if (id === undefined || !conclusion || !["failure", "timed_out", "cancelled", "startup_failure"].includes(conclusion)) continue
+      failed.push({ id, workflow: stringValue(entry.workflowName) ?? "workflow", url: stringValue(entry.url) ?? "" })
+    }
+    return failed
+  })
+  return runs ?? []
+}
+
+/** What a failed run's failed steps printed, as `job  step  line`; the last `lines` only. */
+export async function failedRunLog(cwd: string, id: number, lines: number): Promise<string> {
+  const log = await gh(cwd, ["run", "view", String(id), "--log-failed"]).catch((cause) => { throw ghFailure(cause) })
+  // Each line is "job\tstep\ttimestamp text"; the timestamp says nothing a reader needs.
+  const rows = log.split("\n").filter(Boolean).map((line) => line.replace(/\t\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z /, "\t"))
+  return rows.slice(-lines).join("\n")
+}
+
+/** A review comment thread nobody resolved, on code the branch still has. */
+export interface ReviewThread {
+  path: string
+  line: number | null
+  comments: { author: string; body: string }[]
+}
+
+const REVIEW_THREADS = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 50) {
+        nodes { isResolved isOutdated path line comments(first: 5) { nodes { author { login } body } } }
+      }
+    }
+  }
+}`
+
+export async function openReviewThreads(cwd: string, repo: string, number: number): Promise<ReviewThread[] | null> {
+  const [owner, name] = repo.split("/")
+  if (!owner || !name) return null
+  return ghJson(cwd, ["api", "graphql", "-f", `query=${REVIEW_THREADS}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`], (value) => {
+    const pull = objectValue(objectValue(objectValue(isJsonObject(value) ? value.data : undefined)?.repository)?.pullRequest)
+    const nodes = objectValue(pull?.reviewThreads)?.nodes
+    if (!Array.isArray(nodes)) return null
+    const threads: ReviewThread[] = []
+    for (const node of nodes) {
+      if (!isJsonObject(node) || node.isResolved === true || node.isOutdated === true) continue
+      const comments = objectValue(node.comments)?.nodes
+      threads.push({
+        path: stringValue(node.path) ?? "",
+        line: numberValue(node.line) ?? null,
+        comments: (Array.isArray(comments) ? comments : []).filter(isJsonObject).map((comment) => ({
+          author: stringValue(objectValue(comment.author)?.login) ?? "someone",
+          body: stringValue(comment.body) ?? "",
+        })),
+      })
+    }
+    return threads
+  })
 }
 
 /**
@@ -582,7 +646,7 @@ export async function repoAvatar(
   const owner = repo.split("/")[0]
   if (!owner) return undefined
 
-  const dir = join(app.getPath("userData"), "avatars")
+  const dir = await avatarFolder()
   const file = join(dir, `${owner.replace(/[^\w.-]/g, "-")}.png`)
   try {
     return `data:image/png;base64,${(await readFile(file)).toString("base64")}`
@@ -615,7 +679,7 @@ export async function repoAvatar(
  * and every request Mako makes to GitHub stays in this one file.
  */
 export async function userAvatar(cwd: string): Promise<string | undefined> {
-  const dir = join(app.getPath("userData"), "avatars")
+  const dir = await avatarFolder()
   try {
     const login = (await gh(cwd, ["api", "user", "--jq", ".login"])).trim()
     if (!login) return undefined
@@ -640,9 +704,12 @@ export async function userAvatar(cwd: string): Promise<string | undefined> {
   }
 }
 
-/** Ask GitHub to re-run whatever failed, rather than making the user leave. */
-export async function rerunChecks(cwd: string): Promise<void> {
-  await gh(cwd, ["run", "rerun", "--failed"]).catch(async () => {
-    // No failed run to retry is a normal outcome, not an error worth raising.
-  })
+/** Re-run a run's failed jobs. `gh run rerun` needs the run named when no terminal can ask which. */
+export async function rerunFailedJobs(cwd: string, id: number): Promise<void> {
+  await gh(cwd, ["run", "rerun", String(id), "--failed"]).catch((cause) => { throw ghFailure(cause) })
+}
+
+async function avatarFolder(): Promise<string> {
+  const { app } = await import("electron")
+  return join(app.getPath("userData"), "avatars")
 }

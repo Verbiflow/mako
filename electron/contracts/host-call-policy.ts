@@ -28,6 +28,7 @@ const reads = [
   "mako:pull-request",
   "mako:pull-requests",
   "mako:pull-branches",
+  "mako:pull-template",
   "mako:lifecycle-state",
   "mako:installation-state",
   "mako:update-state",
