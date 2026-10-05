@@ -15,9 +15,7 @@ import { spawnClaudeProcess } from "./sdk-process.js"
  */
 export const claudeUtilityRunner: ProviderUtilityRunner = {
   provider: "claude",
-  async complete(request) {
-    const { resolveAccountLaunch } = await import("../../accounts.js")
-    const { env } = await resolveAccountLaunch("claude", process.env)
+  async complete(request, env) {
     const runtime = claudeRuntime(env)
     if (!runtime) throw new UtilityModelError("request", "Claude Code is unavailable. Reinstall Mako or set CLAUDE_CODE_EXECUTABLE.")
     const { query } = await import("@anthropic-ai/claude-agent-sdk")

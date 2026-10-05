@@ -70,6 +70,8 @@ type ClaudeQuery = Pick<
 > & Partial<Pick<Query, "getContextUsage">>
 
 const CLAUDE_NATIVE_IDENTITY = { kind: "reported", via: "SDK initialization.account" } as const
+/** Past Mako's own pipe release, so the SDK's stream can still report the exit first. */
+const PROCESS_EXIT_GRACE_MS = 1_500
 interface Receipt {
   resolve(result: ProviderSteerResult): void
   reject(error: Error): void
@@ -225,6 +227,10 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         (live.state.status === "ready" || live.state.status === "failed"))
         openProviderTurn(engine, live)
       decode(engine, live, message)
+      if (message.type === "conversation_reset") {
+        live.transcript.follow(message.new_conversation_id)
+        engine.patch(live, { nativePath: live.transcript.path, nativeForkId: undefined })
+      }
       if (message.type !== "result" || live.state.status !== "running") continue
       if (live.compaction && message.user_message_uuid &&
         message.user_message_uuid !== live.compaction.runId &&
@@ -265,20 +271,25 @@ async function pump(engine: Engine, live: Live): Promise<void> {
     }
     if (!live.closed) throw new Error("Claude Code closed its SDK stream")
   } catch (error) {
-    if (live.closed) return
-    if (error instanceof Error) live.authDiagnostics.failure(error.message)
-    const nativePath = await live.transcript.locate(live.state.nativeId)
-    if (live.closed) return
-    stop(live)
-    engine.patch(live, {
-      nativePath,
-      status: "failed",
-      connection: "disconnected",
-      error: error instanceof Error ? error.message : String(error),
-      lastStop: "failed",
-      backgroundTasks: 0,
-    })
+    await disconnect(engine, live, error instanceof Error ? error.message : String(error))
   }
+}
+
+/** The session's process is gone: one failed and disconnected update, with the transcript it resumes from. */
+async function disconnect(engine: Engine, live: Live, detail: string): Promise<void> {
+  if (live.closed) return
+  live.authDiagnostics.failure(detail)
+  const nativePath = await live.transcript.locate(live.state.nativeId)
+  if (live.closed) return
+  stop(live)
+  engine.patch(live, {
+    nativePath,
+    status: "failed",
+    connection: "disconnected",
+    error: detail,
+    lastStop: "failed",
+    backgroundTasks: 0,
+  })
 }
 
 async function tune(live: Live, settings?: SessionSettings): Promise<void> {
@@ -406,6 +417,7 @@ export function createClaudeSdkDriver(
       let startupWatch: ProviderStartupWatch | undefined
       let startupStderr = () => ""
       let observeSpawn: (watch: ProviderStartupWatch) => void = () => undefined
+      let processGone: (detail: string) => void = () => undefined
       const spawned = new Promise<ProviderStartupWatch>((resolve) => {
         observeSpawn = resolve
       })
@@ -444,6 +456,10 @@ export function createClaudeSdkDriver(
                 // Durable logs carry no native output; the failure itself surfaces through startup.
                 else hostWarn("claude-sdk", "process exited", { ...fields, stderrBytes: stderr().length })
                 resolve()
+                // The SDK's stream reports the exit with Claude's own words,
+                // unless a process Claude started still holds its output open.
+                setTimeout(() => processGone(stderrDetail(stderr()) ||
+                  `Claude Code exited${signal ? ` on ${signal}` : code === null ? "" : ` with code ${code}`}`), PROCESS_EXIT_GRACE_MS).unref()
               })
               child.once("error", () => resolve())
             })
@@ -454,6 +470,7 @@ export function createClaudeSdkDriver(
           onElicitation: permissions.elicitation,
         },
       }) } catch (error) { await disposeApprovals(); throw error }
+      processGone = (detail) => void disconnect(engine, live, detail)
       const context = launchContext("claude-agent-sdk", CLAUDE_NATIVE_IDENTITY, account, config.pathToClaudeCodeExecutable)
       const live: Live = {
         account: account.name,

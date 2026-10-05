@@ -56,6 +56,12 @@ export class ClaudeTranscript {
     this.lastMessageId = undefined
   }
 
+  /** `/clear` continues under a new session ID and file; a path for the old one no longer applies. */
+  follow(sessionId: string): void {
+    if (this.path && basename(this.path) !== `${sessionId}.jsonl`) this.path = undefined
+    this.lastMessageId = undefined
+  }
+
   observe(message: SDKMessage): void {
     if (
       (message.type === "assistant" || message.type === "user") &&
