@@ -29,12 +29,15 @@ export const CURSOR_SDK_AUTH_RETRY_MS = 30_000
 
 /**
  * Where the key the SDK runs under comes from, in the order they are tried.
- * `env` is the host's own `CURSOR_API_KEY`; `mako` the key Mako minted or was
- * given, encrypted; `cli` the key `cursor-agent login` left in the keychain;
- * `sdk` the SDK's own `~/.cursor/sdk/auth.json`, which the SDK reads itself
- * and so decides only when nobody else holds a key.
+ * `account` is the key of an account added in Mako and selected for new
+ * sessions; `env` the host's own `CURSOR_API_KEY`; `mako` the key Mako minted
+ * or was given, encrypted; `cli` the key `cursor-agent login` left in the
+ * keychain; `sdk` the SDK's own `~/.cursor/sdk/auth.json`, which the SDK
+ * reads itself and so decides only when nobody else holds a key.
  */
-export const CURSOR_KEY_SOURCES = ["env", "mako", "cli", "sdk"] as const
+export const CURSOR_KEY_SOURCES = ["account", "env", "mako", "cli", "sdk"] as const
+/** Marks a launch environment whose `CURSOR_API_KEY` is a selected account's, naming it. */
+export const CURSOR_ACCOUNT_ENV = "MAKO_CURSOR_ACCOUNT"
 export type CursorKeySource = (typeof CURSOR_KEY_SOURCES)[number]
 
 export type CursorSdkAuthState =
@@ -123,8 +126,8 @@ export class CursorSdkAuth {
   }
 
   /** Environment and public source facts from the same resolution, not cached Settings state. */
-  async childLaunch(): Promise<{ env: NodeJS.ProcessEnv; credential: ExecutionCredential }> {
-    const env = await this.options.env()
+  async childLaunch(baseEnv?: NodeJS.ProcessEnv): Promise<{ env: NodeJS.ProcessEnv; credential: ExecutionCredential }> {
+    const env = baseEnv ?? await this.options.env()
     const resolved = await this.resolve(env)
     return {
       env: resolved.apiKey ? { ...env, CURSOR_API_KEY: resolved.apiKey } : env,
@@ -157,9 +160,21 @@ export class CursorSdkAuth {
    * the mint is the proof — and stores it encrypted.
    */
   async signInWithBrowser(signal?: AbortSignal): Promise<CursorSdkAuthSnapshot> {
+    const credential = await this.mintBrowserKey((url) => void this.options.openUrl(url), signal)
+    await this.options.credentials.save(credential)
+    hostLog("cursor-sdk", "signed in through the browser", { email: credential.email ?? "" })
+    return this.record(this.stateOf("mako", credential))
+  }
+
+  /**
+   * The browser sign-in alone: Cursor mints a named, expiring key for whoever
+   * signs in on the page `page` is told about, and it is handed back unsaved.
+   * Accounts added in Mako each keep their own.
+   */
+  async mintBrowserKey(page: (url: string) => void, signal?: AbortSignal): Promise<StoredCursorCredential> {
     const env = await this.options.env()
     const client = await this.spawn(env, (event) => {
-      if (event.event === "login-url") void this.options.openUrl(event.url)
+      if (event.event === "login-url") page(event.url)
     })
     try {
       await client.hello()
@@ -169,7 +184,7 @@ export class CursorSdkAuth {
         signal?.addEventListener("abort", () => reject(cancelled()), { once: true })
       })
       const result = await Promise.race([client.request("login", undefined), aborted])
-      const credential: StoredCursorCredential = {
+      return {
         version: 1,
         apiKey: result.apiKey,
         method: "browser",
@@ -178,9 +193,6 @@ export class CursorSdkAuth {
         expiresAt: new Date(result.apiKeyExpiresAtMs).toISOString(),
         savedAt: new Date(this.now()).toISOString(),
       }
-      await this.options.credentials.save(credential)
-      hostLog("cursor-sdk", "signed in through the browser", { email: result.email ?? "" })
-      return this.record(this.stateOf("mako", credential))
     } finally {
       await client.close(2_000)
     }
@@ -245,6 +257,7 @@ export class CursorSdkAuth {
   }
 
   private async resolve(env: NodeJS.ProcessEnv): Promise<ResolvedKey> {
+    if (env[CURSOR_ACCOUNT_ENV] && env.CURSOR_API_KEY) return { source: "account", apiKey: env.CURSOR_API_KEY }
     if (env.CURSOR_API_KEY) return { source: "env", apiKey: env.CURSOR_API_KEY }
     try {
       const credential = await this.options.credentials.load()
@@ -352,6 +365,8 @@ export class CursorSdkAuth {
 export function rejectionText(source: CursorKeySource, detail: string): string {
   const reason = detail.replace(/\s+/g, " ").trim().slice(0, 200)
   switch (source) {
+    case "account":
+      return `Cursor rejected the selected account's key (${reason}). It may have expired or been revoked; sign in again in Settings → Agents.`
     case "env":
       return `Cursor rejected the CURSOR_API_KEY in Mako's environment (${reason}). Fix or unset it, then restart Mako.`
     case "mako":

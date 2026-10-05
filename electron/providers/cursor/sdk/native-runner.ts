@@ -3,13 +3,13 @@ import { homedir } from "node:os"
 import { cursorLegacyIdentity, cursorSdkReportedSettings, cursorSdkSelection, cursorStoreOrigin } from "@mako/sessions"
 import type { SessionModel } from "@mako/sessions/settings"
 import { headlessNodeExecutable } from "../../../headless-node.js"
-import type { NativeCommand, NativeRunner, NativeRunOptions } from "../../native-runner.js"
+import type { NativeCommand, NativeLaunch, NativeRunner, NativeRunOptions } from "../../native-runner.js"
 import { cursorSdkChildEntry } from "./client.js"
 import { CURSOR_SDK_HEADLESS, SdkHeadlessSpecSchema, type SdkHeadlessSpec, type SdkImportSource } from "./wire.js"
 
 export interface CursorNativeRunnerDependencies {
   /** The child's environment: the account's, with Mako's own key when it holds one. */
-  childEnv(): Promise<NodeJS.ProcessEnv>
+  childLaunch(env?: NodeJS.ProcessEnv): Promise<NativeLaunch>
   stateRoot(): string
   /** The account's models and default, from the cache the live driver and profile share. */
   models(env: NodeJS.ProcessEnv): Promise<{ models: readonly SessionModel[]; defaultModel?: string }>
@@ -32,7 +32,7 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
   }
 
   async function command(spec: Omit<SdkHeadlessSpec, "stateRoot" | "model">, options: NativeRunOptions | undefined, launchEnv?: NodeJS.ProcessEnv): Promise<NativeCommand> {
-    const env = launchEnv ?? await dependencies.childEnv()
+    const env = launchEnv ?? (await dependencies.childLaunch()).env
     const full: SdkHeadlessSpec = { ...spec, stateRoot: dependencies.stateRoot(), model: (await selection(options, env)).selection }
     const childEnv: NonNullable<NativeCommand["env"]> = { ELECTRON_RUN_AS_NODE: "1", NODE_OPTIONS: "" }
     if (env.CURSOR_API_KEY) childEnv.CURSOR_API_KEY = env.CURSOR_API_KEY
@@ -53,6 +53,8 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
 
   return {
     provider: "cursor",
+    transport: "cursor-sdk-headless",
+    launchCredentials: { kind: "resolved", resolve: env => dependencies.childLaunch(env) },
     // The SDK ships inside Mako.
     available: () => true,
     fastMode: "unsupported",

@@ -1,3 +1,4 @@
+import { NO_NATIVE_PROMPT_IDENTITY } from "../../../contracts/native-prompt-identity.js"
 import { applyControlEnvironment } from "../../../control-launch.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../../../execution-context.js"
 import { NO_NATIVE_EXCLUSION } from "../../../contracts/execution-context.js"
@@ -333,7 +334,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return resolved.selection
   }
 
-  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace): Promise<void> {
+  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace, account: boolean): Promise<void> {
+    // A selected account brings its own key; Cursor answers for it on open.
+    if (account) return
     const snapshot = dependencies.auth.current ?? (await dependencies.auth.status())
     if (snapshot.state.status === "signed-in") return
     // A remembered "signed out" may be stale — the CLI may have logged in
@@ -405,6 +408,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
 
   return {
     provider: "cursor",
+    launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
     planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation" },
     observesNativeAgents: true,
@@ -422,6 +426,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     canResume: true,
     nativeIdentity: CURSOR_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     checkpoint,
     inspectNativeSession,
     // Verified 2026-09-13 (SDK 1.0.31): a steer delivered while `sleep 6 &&
@@ -436,7 +441,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false)
         throw new Error("This Cursor binding is already connected")
-      const launch = await trace.step("account", () => dependencies.auth.childLaunch())
+      const launch = await trace.step("account", () => dependencies.auth.childLaunch(options.accountLaunch?.env))
       const accountEnvironment = launch.env
       const env = { ...accountEnvironment }
       applyControlEnvironment(env, options.conversationTools?.control)
@@ -452,12 +457,18 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         },
       }
       const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn))
-      const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY)
+      const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY, options.accountLaunch?.account)
       context.credential = launch.credential
+      const account = launch.credential.kind === "configured" && launch.credential.source === "account"
+      // A selected account's refused key is that account's to sign in again,
+      // not a reason to call Cursor's own login signed out.
+      const rejected = (message: string) => {
+        if (!account) dependencies.auth.reportRejected(message)
+      }
       const live: Live = {
         client,
         emit: options.emit,
-        onRejected: (message) => dependencies.auth.reportRejected(message),
+        onRejected: rejected,
         models: [],
         turn: null,
         decoder: new CursorDecoder({ get models() { return live.models }, get state() { return live.state } }),
@@ -506,7 +517,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         } })
         if (hello.ripgrep === false)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
-        await trace.step("authentication", () => ensureSignedIn(live, trace))
+        await trace.step("authentication", () => ensureSignedIn(live, trace, account))
         const identityObservation = observeNativeIdentity(async () => {
           const identity = await live.client.request("me", undefined)
           return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)
@@ -576,7 +587,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         sessions.delete(live.state.id)
         await live.client.close(2_000).catch(() => live.client.kill())
         if (error instanceof CursorSdkError) {
-          if (error.kind === "authentication") dependencies.auth.reportRejected(error.message)
+          if (error.kind === "authentication") rejected(error.message)
           throw new Error(error.message, { cause: error })
         }
         throw error

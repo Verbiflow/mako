@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { SecretEncryption } from "../../../secure-storage.js"
@@ -129,5 +129,40 @@ export class CursorCredentialStore {
     const task = this.writing.then(() => rm(this.path, { force: true }))
     this.writing = task.catch(() => undefined)
     await task
+  }
+}
+
+/** Where accounts added in Mako keep their keys: one record each, beside the default credential. */
+export function cursorAccountKeysRoot(stateRoot: string): string {
+  return join(stateRoot, "accounts")
+}
+
+/**
+ * The keys of Cursor accounts added in Mako, one encrypted record per
+ * account, so signing in another account never replaces the first.
+ */
+export class CursorAccountKeys {
+  private readonly root: string
+  private readonly encryption: CursorKeyEncryption
+  private readonly stores = new Map<string, CursorCredentialStore>()
+
+  constructor(root: string, encryption: CursorKeyEncryption) {
+    this.root = root
+    this.encryption = encryption
+  }
+
+  store(name: string): CursorCredentialStore {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) throw new Error("Invalid account name")
+    let store = this.stores.get(name)
+    if (!store) {
+      store = new CursorCredentialStore(join(this.root, `${name}.bin`), this.encryption)
+      this.stores.set(name, store)
+    }
+    return store
+  }
+
+  async names(): Promise<string[]> {
+    const entries = await readdir(this.root).catch(() => [])
+    return entries.filter((entry) => entry.endsWith(".bin")).map((entry) => entry.slice(0, -".bin".length)).sort()
   }
 }
