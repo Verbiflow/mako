@@ -20,7 +20,7 @@ if (process.versions.electron) {
   const url = process.argv[2]
   assert.ok(
     url,
-    "Pass the dev URL of a host started with a temporary MAKO_DATA_ROOT. A MAKO_PROFILE host shares the user's model connections; this check requires none."
+    "Pass the dev URL of a host started with a temporary MAKO_DATA_ROOT, e.g. `MAKO_DATA_ROOT=$(mktemp -d) PORT=5199 MAKO_BACKEND_URL=http://127.0.0.1:9/api/mcp MAKO_BACKEND_TOKEN= node electron/start.mjs --web`. A MAKO_PROFILE host shares the user's model connections; this check requires none."
   )
   assert.ok(["127.0.0.1", "localhost"].includes(new URL(url).hostname))
   const root = await mkdtemp(join(tmpdir(), "mako-commit-ui-"))
@@ -160,11 +160,13 @@ async function check() {
     }
   }
   const click = async (selector, text = "", exact = false) => {
+    const find = `[...document.querySelectorAll(${JSON.stringify(selector)})].find(node => ${exact} ? node.textContent.trim() === ${JSON.stringify(text)} : node.textContent.startsWith(${JSON.stringify(text)}))`
+    await until(`Boolean(${find})`)
     await evaluate(
       "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))"
     )
     const point = await evaluate(
-      `(() => { const node = [...document.querySelectorAll(${JSON.stringify(selector)})].find(node => ${exact} ? node.textContent.trim() === ${JSON.stringify(text)} : node.textContent.startsWith(${JSON.stringify(text)})); if (!node) throw new Error('Missing click target'); node.scrollIntoView({block:'center'}); const r = node.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`
+      `(() => { const node = ${find}; if (!node) throw new Error('Missing click target'); node.scrollIntoView({block:'center'}); const r = node.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`
     )
     for (const type of ["mousePressed", "mouseReleased"])
       await page.debugger.sendCommand("Input.dispatchMouseEvent", {
@@ -191,11 +193,7 @@ async function check() {
       })
   }
   const setTheme = async (theme) => {
-    await click('[aria-label="Settings"]')
-    await until(
-      "[...document.querySelectorAll('[role=dialog] button')].some(node => node.textContent.trim() === 'Appearance')"
-    )
-    await click('[role="dialog"] button', "Appearance", true)
+    await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'appearance' })); void 0")
     await evaluate(
       "window.themeDiffNodes = [...document.querySelectorAll('diffs-container')]; void 0"
     )
@@ -210,7 +208,7 @@ async function check() {
       await evaluate("window.themeDiffNodes.every(node => node.isConnected)"),
       "Changing theme must not remount a diff"
     )
-    for (const type of ["mousePressed", "mouseReleased"]) await page.debugger.sendCommand("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, x: 8, y: 8 })
+    await escape()
     await until("!document.querySelector('[role=dialog]')")
   }
   const watchdog = setTimeout(() => app.exit(1), 150_000)
@@ -225,6 +223,8 @@ async function check() {
       0,
       "Use a host started with a temporary MAKO_DATA_ROOT and no connected models"
     )
+    // A fresh profile opens in Review; staging lives in the Files layout.
+    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('changesLayout', 'files'))")
     await evaluate(
       `import('/src/state/session.ts').then(({actions}) => actions.openWorkspace(${JSON.stringify(repository)}))`
     )
@@ -450,15 +450,22 @@ async function check() {
     await assertPalette("light")
     await capture("file-light.png")
     await setTheme("dark")
-    const layout = await evaluate(`(() => {
-      const field = document.querySelector('[aria-label="Commit message"]');
-      const button = [...field.parentElement.querySelectorAll('button')].find(button => /Connect.*model/.test(button.textContent));
-      return { inputBottom: field.getBoundingClientRect().bottom, controlTop: button?.getBoundingClientRect().top ?? 0 };
-    })()`)
-    assert.ok(
-      layout.controlTop >= layout.inputBottom,
-      "Model setup belongs in the input footer, not in a banner above it"
+    // A signed-in agent account drafts automatically, and a temporary
+    // MAKO_DATA_ROOT cannot hide one, so the setup prompt shows only without.
+    const automatic = await evaluate(
+      "!document.querySelector('[aria-label=\"Connect commit model\"]')"
     )
+    if (!automatic) {
+      const layout = await evaluate(`(() => {
+        const field = document.querySelector('[aria-label="Commit message"]');
+        const button = document.querySelector('[aria-label="Connect commit model"]');
+        return { inputBottom: field.getBoundingClientRect().bottom, controlTop: button.getBoundingClientRect().top };
+      })()`)
+      assert.ok(
+        layout.controlTop >= layout.inputBottom,
+        "Model setup belongs in the input footer, not in a banner above it"
+      )
+    }
     await fill(
       '[aria-label="Commit message"]',
       "A handwritten message without any model"
@@ -481,7 +488,8 @@ async function check() {
       "The commit controls must not overflow"
     )
     window.setSize(1280, 960)
-    await click('[aria-label="Connect commit model"]')
+    if (automatic) await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'models' })); void 0")
+    else await click('[aria-label="Connect commit model"]')
     await until(
       "Boolean(document.querySelector('[aria-label=\"Connect Google\"]'))"
     )
@@ -507,7 +515,7 @@ async function check() {
       ),
       0
     )
-    await click('[aria-label="Choose commit model"]')
+    await click('[aria-label="Choose model"]')
     await until(
       "[...document.querySelectorAll('[role=option]')].some(node => node.textContent.includes('Gemini 3.8 Flash'))"
     )
@@ -529,7 +537,7 @@ async function check() {
         windowsVirtualKeyCode: 13,
       })
     await until(
-      "!document.querySelector('[role=listbox]') && document.querySelector('[aria-label=\"Choose commit model\"]').textContent.includes('Gemini 3.8 Flash')"
+      "!document.querySelector('[role=listbox]') && document.querySelector('[aria-label=\"Choose model\"]').textContent.includes('Gemini 3.8 Flash')"
     )
     assert.equal(
       await evaluate(
@@ -547,7 +555,7 @@ async function check() {
     await until("document.body.textContent.includes('models.dev catalog')")
     assert.ok(
       await evaluate(
-        "document.querySelector('[aria-label=\"Choose commit model\"]').textContent.includes('Gemini 3.8 Flash')"
+        "document.querySelector('[aria-label=\"Choose model\"]').textContent.includes('Gemini 3.8 Flash')"
       )
     )
     await click('[aria-label="Close connection"]')
@@ -557,7 +565,7 @@ async function check() {
     ]) {
       await click(`[aria-label="Connect ${provider.name}"]`)
       await until("document.body.textContent.includes('models.dev catalog')")
-      await click('[aria-label="Choose commit model"]')
+      await click('[aria-label="Choose model"]')
       await fill('[aria-label="Search models or enter an ID"]', provider.id)
       await until(
         `[...document.querySelectorAll('[role=option]')].some(node => node.textContent.includes(${JSON.stringify(provider.model)}))`
@@ -575,7 +583,7 @@ async function check() {
     await until("Boolean(document.querySelector('input[type=url]'))")
     await fill("input[type=password]", "wrong-synthetic-key")
     await fill("input[type=url]", `http://127.0.0.1:${address.port}/v1`)
-    await click('[aria-label="Choose commit model"]')
+    await click('[aria-label="Choose model"]')
     await fill('[aria-label="Search models or enter an ID"]', "local-check")
     await click("[role=option]", "local-check")
     assert.equal(requests, 0, "Custom model selection must not generate text")
@@ -606,7 +614,7 @@ async function check() {
       "Fetching models must not make a generation request"
     )
     assert.ok(catalogRequests >= 1)
-    await click('[aria-label="Choose commit model"]')
+    await click('[aria-label="Choose model"]')
     assert.ok(
       await evaluate("document.querySelectorAll('[role=option]').length <= 100")
     )
@@ -637,7 +645,7 @@ async function check() {
     )
     await click("button[type=submit]")
     await until(
-      "!document.querySelector('input[type=password]') && document.body.textContent.includes('Used for commits')"
+      "!document.querySelector('input[type=password]') && document.body.textContent.includes('Writes commits and pull requests')"
     )
     connected = true
     const snapshot = await evaluate(

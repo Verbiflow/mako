@@ -20,6 +20,8 @@ export type SettingsGroup = (typeof SETTINGS_GROUPS)[number]
  */
 export interface SettingsSection {
   readonly id: string
+  /** Ids of sections merged into this one, so their deep links still land here. */
+  readonly aliases?: readonly string[]
   readonly title: string
   readonly group: SettingsGroup
   readonly icon: LucideIcon

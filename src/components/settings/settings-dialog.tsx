@@ -15,10 +15,9 @@ import { section as notifications } from "@/components/settings/sections/notific
 import { section as conversation } from "@/components/settings/sections/conversation"
 import { section as editor } from "@/components/settings/sections/editor"
 import { section as keyboard } from "@/components/settings/sections/keyboard"
-import { section as commits } from "@/components/settings/sections/commit-prompt"
 import { section as automations } from "@/components/settings/sections/automations"
 import { section as apps } from "@/components/settings/sections/apps"
-import { section as worktrees } from "@/components/settings/sections/worktrees"
+import { section as git } from "@/components/settings/sections/git"
 import { section as integrations } from "@/components/settings/sections/integrations"
 import { section as mcp } from "@/components/settings/sections/mcp"
 import { section as skills } from "@/components/settings/sections/skills"
@@ -38,10 +37,9 @@ const SECTIONS: readonly SettingsSection[] = [
   conversation,
   editor,
   keyboard,
-  commits,
+  git,
   automations,
   apps,
-  worktrees,
   integrations,
   mcp,
   skills,
@@ -92,7 +90,7 @@ export function SettingsDialog({
   const version = useUpdates((state) => state.version)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const active = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0]
+  const active = SECTIONS.find((entry) => entry.id === section || entry.aliases?.includes(section)) ?? SECTIONS[0]
   const term = query.trim().toLowerCase()
   const shown = SECTIONS.filter((entry) => matches(entry, term))
 

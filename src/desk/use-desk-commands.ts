@@ -10,7 +10,7 @@ import {
 import { installBuiltins } from "@/desk/builtins"
 import { actions, currentTurnRunning, store } from "@/state/session"
 import { git } from "@/state/git"
-import { commitDrafts } from "@/state/commit-drafts"
+import { commitDrafts, draftRepository } from "@/state/commit-drafts"
 import { currentCommitModel } from "@/state/commit-model"
 import { prefsStore, setPref, togglePref } from "@/state/prefs"
 import { updates, updatesStore } from "@/state/updates"
@@ -305,10 +305,10 @@ const DESK_COMMANDS: DeskCommand[] = [
       stage.open("changes")
       const { model, status } = await currentCommitModel()
       if (!model || status.kind === "disconnected") {
-        window.dispatchEvent(new CustomEvent("mako:settings", { detail: "commits" }))
+        window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))
         return
       }
-      const cwd = store.get().git?.cwd ?? store.get().meta?.cwd
+      const cwd = draftRepository(store.get())
       if (cwd) void commitDrafts.generate(cwd)
     },
   },

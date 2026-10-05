@@ -161,7 +161,7 @@ export class UtilityWork {
       }
       const connection = available.connections[0]
       if (connection) return this.connectionModel(connection, available)
-      return { kind: "unavailable", reason: `Nothing can write ${TASK_NAMES[task]}: no signed-in harness offers a light model, and no model is connected. Sign in to one in Settings › Agents, or connect a model in Settings › Commit messages.` }
+      return { kind: "unavailable", reason: `Nothing can write ${TASK_NAMES[task]}: no signed-in harness offers a light model, and no model is connected. Sign in to one in Settings › Agents, or connect a model in Settings › Models.` }
     }
     const agentChoice = parseAgentModelId(choice)
     if (agentChoice) {

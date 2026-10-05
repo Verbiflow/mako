@@ -68,6 +68,10 @@ export interface Prefs {
   /** Folders open in the project tree. Keys are folded paths, not path prefixes. */
   openDirs: string[]
   autoOpenDiff: boolean
+  /** Changes as one scrolling review of every file, or a staging tree with one file's diff. */
+  changesLayout: "review" | "files"
+  diffStyle: "unified" | "split"
+  wrapDiff: boolean
   /** New Threads start in their own Git worktree instead of the project folder. */
   newThreadsInWorktree: boolean
   /** How a worktree's branch last landed in each project, by its main checkout: `merge` or `pull`. */
@@ -154,6 +158,9 @@ const defaults: Prefs = {
   collapsedDirs: [],
   openDirs: [],
   autoOpenDiff: true,
+  changesLayout: "review",
+  diffStyle: "unified",
+  wrapDiff: false,
   newThreadsInWorktree: false,
   selectedDiffs: {},
   pinnedThreads: [],
@@ -386,6 +393,11 @@ function parsePrefs(value: JsonValue): Prefs | null {
     collapsedDirs: readStringList(value.collapsedDirs, defaults.collapsedDirs),
     openDirs: readStringList(value.openDirs, defaults.openDirs),
     autoOpenDiff: readBoolean(value.autoOpenDiff, defaults.autoOpenDiff),
+    // Review is the default for new installs; an install from before the
+    // choice existed keeps the staging tree it already knows.
+    changesLayout: readChoice(value.changesLayout, ["review", "files"], "files"),
+    diffStyle: readChoice(value.diffStyle, ["unified", "split"], defaults.diffStyle),
+    wrapDiff: readBoolean(value.wrapDiff, defaults.wrapDiff),
     newThreadsInWorktree: readBoolean(value.newThreadsInWorktree, defaults.newThreadsInWorktree),
     selectedDiffs: readStringRecord(value.selectedDiffs),
     pinnedThreads: readStringList(value.pinnedThreads, defaults.pinnedThreads),

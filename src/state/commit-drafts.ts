@@ -3,6 +3,11 @@ import { git } from "./git"
 import { prefsStore } from "./prefs"
 import { currentCommitModel, refreshCommitModel } from "./commit-model"
 import type { CommitAnalysisMode, CommitGenerationResult } from "@/lib/types"
+import type { SessionStore } from "./session"
+
+/** The repository a draft belongs to; the commit box and ⌘⇧G must agree on it. */
+export const draftRepository = (state: Pick<SessionStore, "git" | "meta">) =>
+  state.git?.root ?? state.git?.cwd ?? state.meta?.cwd ?? ""
 
 interface CommitDraft {
   mode: CommitAnalysisMode

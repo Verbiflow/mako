@@ -170,7 +170,7 @@ export class UtilityModelStore {
         return null
       throw new UtilityModelError(
         "auth",
-        "The saved model connection could not be opened. Unlock your system keychain or reconnect the provider in Commit messages settings."
+        "The saved model connection could not be opened. Unlock your system keychain or reconnect the provider in Settings › Models."
       )
     }
   }

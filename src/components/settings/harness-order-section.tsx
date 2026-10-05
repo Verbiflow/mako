@@ -15,6 +15,7 @@ import { utilityModels } from "@/state/model-runtime"
 import { useSetupAgent } from "@/state/project-setup"
 import { useProviders } from "@/state/providers"
 import { HarnessDefaultPicker } from "./harness-default-picker"
+import { ModelConnections } from "./model-connections"
 import { UtilityModelPicker } from "./utility-model-picker"
 
 const DRAG_TYPE = "application/x-mako-harness"
@@ -128,6 +129,7 @@ export function HarnessOrderSection() {
         Automatic runs each harness's light model at low reasoning, through the first harness above that can do it, on
         your own subscription.
       </p>
+      <ModelConnections settings={settings} refresh={refresh} choose={(choice) => choose("commit", choice)} />
     </section>
   )
 }

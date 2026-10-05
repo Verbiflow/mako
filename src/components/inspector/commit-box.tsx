@@ -14,7 +14,7 @@ import { formatChord } from "@/extend/commands"
 import { git } from "@/state/git"
 import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
-import { commitDrafts, useCommitDraft } from "@/state/commit-drafts"
+import { commitDrafts, draftRepository, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
 import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
@@ -69,7 +69,7 @@ function CommitEditor({
   staged: number
   total: number
 }) {
-  const cwd = useSession((state) => state.git?.root ?? state.git?.cwd ?? state.meta?.cwd ?? "")
+  const cwd = useSession(draftRepository)
   const draftState = useCommitDraft(cwd)
   const message = draftState.text
   const drafting = draftState.requestId !== null
@@ -111,7 +111,7 @@ function CommitEditor({
       if (drafting || busy || !cwd || !total) return
       if (!hasModel || disconnected) {
         window.dispatchEvent(
-          new CustomEvent("mako:settings", { detail: "commits" })
+          new CustomEvent("mako:settings", { detail: "models" })
         )
         return
       }
@@ -182,7 +182,7 @@ function CommitEditor({
   }, [commit])
 
   const openModelSettings = () =>
-    window.dispatchEvent(new CustomEvent("mako:settings", { detail: "commits" }))
+    window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))
 
   if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} detail={pushState.kind === "failed" ? pushState.detail : undefined} />
 

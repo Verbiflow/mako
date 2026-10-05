@@ -20,7 +20,7 @@ import {
 const inputClass =
   "h-9 w-full rounded-md bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
 
-export function ConnectCommitModel({
+export function ConnectModel({
   provider,
   connection,
   onConnected,
@@ -170,7 +170,7 @@ export function ConnectCommitModel({
                 : `Connect ${provider.name}`}
             </DialogTitle>
             <p className="mt-1 text-label text-faint">
-              For commit messages only. Your agent accounts stay unchanged.
+              For commit messages and pull request descriptions. Your agent accounts stay unchanged.
             </p>
           </div>
           <IconAction
@@ -206,12 +206,12 @@ export function ConnectCommitModel({
                     ? "Leave blank to keep the saved key"
                     : "Paste your API key"
                 }
-                aria-describedby="commit-key-note"
+                aria-describedby="model-key-note"
                 onChange={invalidateAccountModels}
                 className={inputClass}
               />
               <span
-                id="commit-key-note"
+                id="model-key-note"
                 className="text-label leading-relaxed font-normal text-faint"
               >
                 Encrypted on this device using the system key store. Never saved
@@ -265,7 +265,7 @@ export function ConnectCommitModel({
                 </div>
               </div>
               <SearchSelect
-                label="Choose commit model"
+                label="Choose model"
                 value={model}
                 disabled={busy}
                 className="h-9 w-full px-2.5"

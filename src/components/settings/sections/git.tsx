@@ -1,0 +1,40 @@
+import { GitBranchIcon } from "lucide-react"
+import { GitSection } from "@/components/settings/git-section"
+import type { SettingsSection } from "./manifest"
+
+export const section = {
+  id: "git",
+  title: "Git",
+  aliases: ["commits", "worktrees"],
+  group: "Project",
+  icon: GitBranchIcon,
+  keywords: [
+    "changes",
+    "review",
+    "files",
+    "layout",
+    "diff",
+    "split",
+    "side by side",
+    "unified",
+    "wrap",
+    "commit",
+    "commit message",
+    "instructions",
+    "prompt",
+    "draft",
+    "pull request",
+    "worktree",
+    "own branch",
+    "branch",
+    "new threads",
+    "checkout",
+    "disk",
+    "merged",
+    "clean up",
+    "remove",
+    "archive",
+    "landed",
+  ],
+  Component: GitSection,
+} as const satisfies SettingsSection

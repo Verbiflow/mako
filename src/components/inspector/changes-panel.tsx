@@ -16,6 +16,7 @@ import { GitLog } from "@/components/inspector/git-log"
 import { GitLoading } from "@/components/inspector/git-loading"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { ChangeList } from "@/components/inspector/change-list"
+import { ReviewStream } from "@/components/inspector/review-stream"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
 import { Collapse } from "@/components/ui/collapse"
@@ -37,13 +38,6 @@ import {
   XIcon,
 } from "lucide-react"
 
-/**
- * The working tree.
- *
- * A folded directory tree over the changed files, staging on the row, and a
- * commit box beneath. Contents are fetched one file at a time on selection, so
- * a repo with a thousand dirty files still opens instantly.
- */
 /**
  * The text of one line of the diff.
  *
@@ -86,6 +80,8 @@ export function ChangesPanel() {
 }
 
 function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
+  // The Review stream fills the open repository; the Files tree fits its rows.
+  const grow = usePrefs((prefs) => prefs.changesLayout) === "review" ? "flex-1" : "shrink"
   const [collapsed, setCollapsed] = useState(false)
   const [pending, setPending] = useState<string>()
   const [error, setError] = useState<string>()
@@ -110,7 +106,7 @@ function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
         {snapshot.repositories.map((repository) => {
           const expanded = activeRoot === repository.root && !collapsed
           return (
-            <section key={repository.root} className={cn("flex min-h-0 flex-col", expanded ? "shrink" : "shrink-0")}>
+            <section key={repository.root} className={cn("flex min-h-0 flex-col", expanded ? grow : "shrink-0")}>
               <button type="button" aria-label={repository.label} aria-expanded={expanded}
                 disabled={Boolean(pending)} title={repository.root}
                 className="pressable flex h-7 w-full shrink-0 items-center gap-1.5 border-b border-hairline px-2 text-left text-label hover:bg-foreground/5 disabled:cursor-wait"
@@ -123,7 +119,7 @@ function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
                 <span className="truncate text-faint">{repository.unavailable ? "Unavailable" : repository.branch ?? "Detached HEAD"}</span>
               </button>
               {expanded ? (
-                <div role="region" aria-label={`Changes in ${repository.label}`} className="flex min-h-0 shrink flex-col">
+                <div role="region" aria-label={`Changes in ${repository.label}`} className={cn("flex min-h-0 flex-col", grow)}>
                   {pending ? <GitLoading label={`Reading changes in ${repository.label}`} /> : <WorkspaceChanges key={snapshot.root} inline />}
                 </div>
               ) : null}
@@ -141,6 +137,11 @@ function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
   )
 }
 
+/**
+ * The working tree, in the layout Settings › Git picks: Review, every file's
+ * diff in one scroll, or Files, a folded tree with staging on the row and one
+ * file's diff. Both read the same status and end in the same commit box.
+ */
 function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   const git = useSession((state) => state.git)
   const workspace = git?.root ?? git?.cwd ?? ""
@@ -157,11 +158,12 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     return request === undefined ? file : { ...file, staged: request }
   }), [git, stageOverrides])
 
+  const layout = usePrefs((prefs) => prefs.changesLayout)
   const autoOpenDiff = usePrefs((prefs) => prefs.autoOpenDiff)
+  const diffStyle = usePrefs((prefs) => prefs.diffStyle)
+  const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
   const selected = git?.root ? selectedDiffs[git.root] : undefined
   const [diff, setDiff] = useState<GitDiff>()
-  const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified")
-  const [wrapDiff, setWrapDiff] = useState(false)
 
   const rows = useMemo(() => buildFileTree(files, collapsed), [collapsed, files])
   const staged = useMemo(() => files.filter((file) => file.staged).length, [files])
@@ -169,7 +171,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   // With the diff pane closed the list is the whole panel, so nothing is
   // "selected" and no file contents are fetched at all.
   const selectedFile = files.find((file) => file.path === selected)
-  const active = autoOpenDiff ? selectedFile : undefined
+  const active = layout === "files" && autoOpenDiff ? selectedFile : undefined
   const showDiff = Boolean(active)
   const path = active?.path
   const ready = diff !== undefined && diff.path === path
@@ -360,6 +362,19 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     )
   }
 
+  if (layout === "review") {
+    return (
+      <div className={cn("flex min-h-0 flex-col", inline ? "flex-1" : "h-full")}>
+        <WorktreeReview />
+        <ReviewStream files={files} workspace={workspace} staged={staged} onReviewInCenter={openWorkingTree} />
+        <CommitsSection onPickFile={pickCommitFile} onPickCommit={pickCommit} />
+        <ReviewBar workspace={workspace} />
+        {!inline ? <CommitBox staged={staged} total={files.length} /> : null}
+        {!inline ? <PullRequestCard /> : null}
+      </div>
+    )
+  }
+
   return (
     <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
       <WorktreeReview />
@@ -424,11 +439,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
               label={diffStyle === "unified" ? "Show side by side" : "Show unified diff"}
               size="xs"
               data-on={diffStyle === "split" || undefined}
-              onClick={() =>
-                setDiffStyle((current) =>
-                  current === "unified" ? "split" : "unified"
-                )
-              }
+              onClick={() => setPref("diffStyle", diffStyle === "unified" ? "split" : "unified")}
             >
               <Columns2Icon />
             </IconAction>
@@ -436,7 +447,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
               label={wrapDiff ? "Disable line wrapping" : "Wrap long lines"}
               size="xs"
               data-on={wrapDiff || undefined}
-              onClick={() => setWrapDiff((current) => !current)}
+              onClick={() => setPref("wrapDiff", !wrapDiff)}
             >
               <WrapTextIcon />
             </IconAction>

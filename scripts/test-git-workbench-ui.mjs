@@ -369,6 +369,39 @@ async function check() {
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '12'")
     assert.equal(await evaluate("import('/src/state/session.ts').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
     console.log("Repository selection: switches both ways, keeps the workspace, and shows one shared commit box")
+
+    window.setContentSize(1200, 900)
+    await fixture("m.selectProject('/fixture/review', 5000)")
+    const diffsBefore = await fixture("return m.calls.diffs")
+    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('changesLayout', 'review'))")
+    await until("document.querySelector('[data-review-stream]')?.dataset.fileCount === '5000'")
+    await until(`import('/src/dev/git-workbench-check.tsx').then(m => m.calls.diffs > ${diffsBefore}) && document.querySelectorAll('[data-review-stream] diffs-container').length > 0`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const screenDiffs = (await fixture("return m.calls.diffs")) - diffsBefore
+    assert.ok(screenDiffs < 60, `Review read ${screenDiffs} diffs for one screen of 5,000 files`)
+    assert.ok(await evaluate("document.querySelectorAll('[data-review-file]').length < 80"), "Review keeps the DOM bounded")
+    assert.equal(await evaluate("document.querySelectorAll('[data-change-list]').length"), 0, "Review has no staging tree")
+    assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)
+    await capture("review-stream.png", true)
+    const scroller = "[...document.querySelectorAll('[data-review-stream] *')].find(node => node.scrollHeight > node.clientHeight + 4 && getComputedStyle(node).overflowY !== 'visible')"
+    await evaluate("document.querySelector('[data-review-stream]').focus()")
+    for (const type of ["keyDown", "keyUp"])
+      await page.debugger.sendCommand("Input.dispatchKeyEvent", { type, key: "j", code: "KeyJ", text: type === "keyDown" ? "j" : undefined, windowsVirtualKeyCode: 74 })
+    await until(`(${scroller})?.scrollTop > 0`)
+    // Diffs arriving at the end grow it, as they would under a person's scroll.
+    await until(`(() => { const node = ${scroller}; node.scrollTop = node.scrollHeight; return Boolean(document.querySelector('[data-review-file="file-04999.ts"]')) })()`)
+    await until("!document.querySelector('[data-review-stream]').textContent.includes('Reading…')")
+    const reviewFrames = await evaluate(
+      "new Promise(resolve => { let last=performance.now(), worst=0, count=0; const tick=()=>{const now=performance.now();worst=Math.max(worst,now-last);last=now;if(++count===15)resolve(worst);else requestAnimationFrame(tick)};requestAnimationFrame(tick) })"
+    )
+    assert.ok(reviewFrames < 150, `Review stalled at the end of 5,000 files: ${reviewFrames}ms`)
+    const endDiffs = (await fixture("return m.calls.diffs")) - diffsBefore
+    assert.ok(endDiffs > screenDiffs && endDiffs < 140, `Scrolling to the end read ${endDiffs} diffs; it must read the last files and not the ones skipped over`)
+    await capture("review-stream-end.png", true)
+    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('theme', 'light'))")
+    await capture("review-stream-light.png", true)
+    await evaluate("import('/src/state/prefs.ts').then(m => { m.setPref('theme', 'dark'); m.setPref('changesLayout', 'files') })")
+    console.log(`Review: 5,000 files in one stream, ${screenDiffs} diffs read for the first screen and ${endDiffs} after jumping to the end, j moves between files, worst frame ${Math.round(reviewFrames)}ms`)
     console.log(
       "Git UI: 13,000 files with bounded DOM, last-file staging, frame responsiveness, one Push control, pending/success/failure with counts, pull/merge/conflicts, project isolation, history skeletons, commit feedback and reduced motion passed; fixture transport only, no remote pushes"
     )
