@@ -7,7 +7,7 @@ import type { AccountSwitchWait } from "../../electron/contracts/live-conversati
 export type AccountReading =
   | { kind: "differs"; principal: string; expected: string }
   | { kind: "waiting"; selected: string; waitingFor: AccountSwitchWait }
-  | { kind: "pending"; running: string; selected: string }
+  | { kind: "pending"; running: string; selected: string; removing?: true }
 
 type LiveAccountView = Pick<LiveAcpConversation, "session" | "requests">
 
@@ -45,9 +45,11 @@ export function accountReading(live: LiveAccountView, listed: readonly ProviderA
   if (ended || running?.kind !== "configured" || running.name === selected.name) return null
   const launched = listed.find((account) => account.name === running.name)
   const principal = context?.identity.kind === "reported" ? context.identity.principal : undefined
-  return {
+  const reading: AccountReading = {
     kind: "pending",
     running: principal ?? (launched ? accountIdentity(launched) : running.name),
     selected: accountIdentity(selected),
   }
+  if (launched?.removing) reading.removing = true
+  return reading
 }

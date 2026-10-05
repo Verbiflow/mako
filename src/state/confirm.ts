@@ -2,8 +2,10 @@ import { createHook, createStore } from "@/state/store"
 
 /** One thing the action touches, named exactly, with what becomes of it. */
 export interface ConfirmSubject {
-  kind: "folder" | "branch" | "app" | "file"
+  kind: "folder" | "branch" | "app" | "session" | "file"
   name: string
+  /** Tells apart subjects that share a name, such as two sessions with one title. */
+  id?: string
   /** A word or two: "Deleted", "Kept", "3 commits". */
   detail?: string
   /** The detail says it goes away. */

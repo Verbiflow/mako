@@ -29,10 +29,14 @@ import type {
   AccountLoginResult,
   AccountProvider,
   AccountRemoval,
+  AccountRemovalEvent,
+  AccountRemovalPlan,
   AccountUsage,
   AccountProviderInfo,
   HarnessAccount,
 } from "@/lib/types"
+import { accountIdentity } from "@/lib/account-identity"
+import { removalConfirmation } from "@/lib/account-removal"
 export type { AccountHarness, AccountProvider, AccountUsage } from "@/lib/types"
 export type ProviderAccount = Omit<HarnessAccount, "dir">
 
@@ -74,6 +78,8 @@ interface AccountsState {
   usage: Record<string, AccountUsage>
   /** `harness:name` of the account a switch/remove is acting on. */
   busy?: string
+  /** What `busy` is doing when it isn't switching: "Removing…". */
+  busyText?: string
   /** `harness:name` of the account spending a reset credit. */
   resetting?: string
   signIn?: AccountSignIn
@@ -418,47 +424,102 @@ export const accounts = {
     if (signIn?.phase === "waiting") void getMako().cancelAccountLogin(signIn.login.id).catch(() => {})
   },
 
+  /**
+   * Ask with every session on the account named and what happens to it,
+   * then remove. Work still running keeps the account until it ends; the
+   * host finishes the removal then and says so through `removal`.
+   */
   async remove(harness: AccountHarness, name: string) {
     const key = usageKey(harness, name)
     if (accountsStore.get().busy) return
-    const account = accountsStore.get().accounts.find(
-      (entry) => entry.harness === harness && entry.name === name
-    )
-    const label = accountsStore.get().providers.find((entry) => entry.provider === harness)?.label ?? harness
-    const confirmed = await confirmAction({
-      title: `Remove ${account?.email ?? "this account"}?`,
-      body: `Mako forgets this ${label} login and deletes its saved credentials from this Mac. Your other logins, including the one your terminal uses, stay as they are.`,
-      confirm: "Remove",
-      tone: "negative",
-    })
-    if (!confirmed) return
-    accountsStore.set({ busy: key })
+    const { label, identity, selected } = describe(harness, name)
+    let plan: AccountRemovalPlan
     try {
-      const { stillValid } = await getMako().removeAccount(harness, name)
+      plan = await getMako().accountRemovalPlan(harness, name)
+    } catch (error) {
+      removalFailed(harness, name, error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (!await confirmAction(removalConfirmation(label, identity, selected, plan))) return
+    accountsStore.set({ busy: key, busyText: "Removing…" })
+    try {
+      const outcome = await getMako().removeAccount(harness, name)
       accounts.load(true)
       await providers.refreshAccount(harness)
-      if (stillValid) {
-        const notice = removalNotice(label, stillValid)
-        toast.warning(notice.title, {
-          duration: ACTION_TOAST_MS,
-          description: notice.description,
-          action: {
-            label: "Open API keys",
-            onClick: () => void desktop.openUrl(stillValid.manageUrl),
-          },
-        })
-      }
+      if (outcome.status === "pending") removalPending(harness, name, identity)
+      else removed(label, outcome)
     } catch (error) {
-      toast.error("Account was not removed", {
-        duration: ACTION_TOAST_MS,
-        description: error instanceof Error ? error.message : String(error),
-        action: {
-          label: "Retry",
-          onClick: () => void accounts.remove(harness, name),
-        },
-      })
+      removalFailed(harness, name, error instanceof Error ? error.message : String(error))
     } finally {
-      accountsStore.set({ busy: undefined })
+      accountsStore.set({ busy: undefined, busyText: undefined })
     }
   },
+
+  /** Withdraw a removal that waits for work on the account. */
+  async keep(harness: AccountHarness, name: string) {
+    const key = usageKey(harness, name)
+    if (accountsStore.get().busy) return
+    accountsStore.set({ busy: key, busyText: "Keeping…" })
+    try {
+      if (!await getMako().keepAccount(harness, name))
+        toast("It was already removed", { duration: ACTION_TOAST_MS })
+      accounts.load(true)
+    } catch (error) {
+      toast.error("Account was not kept", {
+        duration: ACTION_TOAST_MS,
+        description: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      accountsStore.set({ busy: undefined, busyText: undefined })
+    }
+  },
+
+  /** A removal changed on the host: it began waiting, finished, failed or was withdrawn, maybe from another window. */
+  removal(harness: AccountHarness, name: string, event: AccountRemovalEvent) {
+    const { label, identity } = describe(harness, name)
+    accounts.load(true)
+    if (event.status === "removed") {
+      void providers.refreshAccount(harness)
+      toast(`Removed ${identity}`, { duration: ACTION_TOAST_MS, description: "The work using it has finished." })
+      removed(label, event)
+    } else if (event.status === "failed") removalFailed(harness, name, event.message)
+  },
+}
+
+function describe(harness: AccountHarness, name: string) {
+  const { accounts: listed, providers: known } = accountsStore.get()
+  const account = listed.find((entry) => entry.harness === harness && entry.name === name)
+  const selected = listed.find((entry) => entry.harness === harness && entry.active)
+  return {
+    label: known.find((entry) => entry.provider === harness)?.label ?? harness,
+    identity: account?.email ?? "this account",
+    selected: selected ? accountIdentity(selected) : "the selected account",
+  }
+}
+
+function removed(label: string, removal: AccountRemoval) {
+  const { stillValid } = removal
+  if (!stillValid) return
+  const notice = removalNotice(label, stillValid)
+  toast.warning(notice.title, {
+    duration: ACTION_TOAST_MS,
+    description: notice.description,
+    action: { label: "Open API keys", onClick: () => void desktop.openUrl(stillValid.manageUrl) },
+  })
+}
+
+function removalPending(harness: AccountHarness, name: string, identity: string) {
+  toast(`${identity} is removed when its work ends`, {
+    duration: ACTION_TOAST_MS,
+    description: "Sessions using it finish what they're doing first. Until then it can't be selected.",
+    action: { label: "Keep it", onClick: () => void accounts.keep(harness, name) },
+  })
+}
+
+function removalFailed(harness: AccountHarness, name: string, message: string) {
+  toast.error("Account was not removed", {
+    duration: ACTION_TOAST_MS,
+    description: message,
+    action: { label: "Retry", onClick: () => void accounts.remove(harness, name) },
+  })
 }

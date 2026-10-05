@@ -240,6 +240,12 @@ function apply(event: HostEvent) {
     accounts.observed(event.harness, event.name, event.usage)
     return
   }
+  if (event.type === "account-removal") {
+    // The window that asked already said it is waiting.
+    if (event.event.status !== "pending") accounts.removal(event.harness, event.name, event.event)
+    else accounts.load(true)
+    return
+  }
   if (event.type === "workspace-moves") {
     applyWorkspaceMoves(event.moves)
     return
