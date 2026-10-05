@@ -5,6 +5,8 @@ import type { ToolIdentity, ToolSource } from "@mako/sessions/tool-identity"
 export interface Sample {
   source: ToolSource
   expect: Partial<ToolIdentity>
+  /** A name no vocabulary declares, to check the fallback. */
+  undeclared?: true
 }
 
 const json = JSON.stringify
@@ -96,7 +98,7 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "codex", name: "exec", input: "text(await tools.write_stdin({session_id: 41, chars: ''}))" }, expect: { kind: "shell-input", target: "41" } },
 
   // A name nobody declares falls back to ACP's kind, then to a readable label.
-  { source: { harness: "grok", name: "frobnicate", acpKind: "execute", input: json({ command: "x" }) }, expect: { kind: "shell", target: "x" } },
-  { source: { harness: "grok", name: "frobnicate_widgets" }, expect: { kind: "other", label: "Frobnicate widgets" } },
+  { source: { harness: "grok", name: "frobnicate", acpKind: "execute", input: json({ command: "x" }) }, expect: { kind: "shell", target: "x" }, undeclared: true },
+  { source: { harness: "grok", name: "frobnicate_widgets" }, expect: { kind: "other", label: "Frobnicate widgets" }, undeclared: true },
   { source: { harness: "codex", title: "Run tests", acpKind: "execute" }, expect: { kind: "shell" } },
 ]
