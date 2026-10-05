@@ -1,6 +1,14 @@
 {
   "harness": "cursor",
   "source": "Cursor through @cursor/sdk 1.0.31 in Mako's SDK child, captured through Mako with MAKO_NATIVE_CAPTURE=cursor, 2026-10-01; ids renumbered and paths replaced",
+  "native": {
+    "version": "1.0.31",
+    "sdk": {
+      "name": "@cursor/sdk",
+      "version": "1.0.31"
+    },
+    "origin": "captured"
+  },
   "about": "A plan-mode turn: Cursor drafts createPlan's arguments as they stream, proposes the plan and ends; the next turn implements it with edit, says so, and ends.",
   "session": {
     "settings": {
