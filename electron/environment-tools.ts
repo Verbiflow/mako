@@ -92,6 +92,11 @@ const LINK_WRITES_WAIT_MS = 1_500
  */
 const LEAVE_MS = 20_000
 const LEAVE_POLL_MS = 500
+/** What the guide asks of each check, which recipe_save measures the last run against. */
+const CHECK_TARGETS = {
+  quick: { ms: 60_000, words: "about a minute" },
+  full: { ms: 5 * 60_000, words: "a few minutes at most" },
+} satisfies Record<CheckTier, { ms: number; words: string }>
 
 /** The recipe's carry entries named like credentials, and the one rule for them. */
 function credentialsSummary(recipe: Recipe): string | undefined {
@@ -247,6 +252,19 @@ type StartOutcome =
   | { kind: "waiting"; notes: string[]; message: string }
   | { kind: "elsewhere"; whose: string }
   | { kind: "started"; notes: string[]; lines: string[]; refused: { name: string; reason: string }[]; stillStarting: boolean; address?: string }
+
+/** recipe_save's line on whom publishing reaches: the project's other checkouts that have run its app, those running now, and the versions those run. */
+export function reachLine({ others, up, versions }: { others: number; up: number; versions: readonly number[] }): string {
+  if (!others) return "No other checkout of this project has run its app on this Mac, so once it's published the next ones start with it."
+  const them = others === 1 ? "the other checkout of this project that has run its app" : `the ${others} other checkouts of this project that have run its app`
+  const pinned = versions.length ? ` (${versions.map((version) => `version ${version}`).join(", ")})` : ""
+  const running = !up
+    ? `${others === 1 ? "It isn't running now, so it takes" : "None runs now, so each takes"} it at its next start.`
+    : up === others
+      ? `${up === 1 ? "It runs now and keeps the version it" : "All run now and keep the version they"} started with${pinned} until app_restart.`
+      : `${up === 1 ? "One running now keeps the version it" : `${up} running now keep the version they`} started with${pinned} until app_restart; the rest take it at their next start.`
+  return `Published, it reaches ${them} on this Mac. ${running}`
+}
 
 /** What every command Mako runs for an app starts from: the host's environment without Mako's own secrets, with the Thread's values when there's a Thread. */
 export function commandEnvironment(environment?: ThreadEnvironment): NodeJS.ProcessEnv {
@@ -1156,6 +1174,36 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const thread = deps.conversation?.(conversationId)
     return thread ? `the Thread "${thread.title}" (${thread.harness})` : undefined
   }
+  /**
+   * What publishing would reach: the project's other checkouts whose app has
+   * run on this Mac, those running now on the version they started with.
+   * Spares aren't counted; they take the published version when claimed.
+   */
+  const publishReach = async (app: AppKey, root: string, file: string | undefined) => {
+    const apps: AppOverview[] = []
+    for (const entry of await deps.processes.overview().catch(() => [])) {
+      if (entry.checkout && isSpareCheckout(entry.checkout)) continue
+      if (entry.project === root || (entry.checkout && (await rootOf(entry.checkout)) === root)) apps.push(entry)
+    }
+    const others = apps.filter((entry) => entry.app !== app)
+    const up = others.filter((entry) => entry.runs.some((run) => run.kind === "process" && (run.state.kind === "running" || run.state.kind === "starting")))
+    const versions = file ? (await Promise.all(up.map((entry) => runningVersion(file, entry.app)))).filter((version) => version !== undefined) : []
+    return { apps, others: others.length, up: up.length, versions: [...new Set(versions)].sort((a, b) => a - b) }
+  }
+  /** Each check's last run in any checkout of the project, against the guide's targets, and whether this save changed it since. */
+  const checkTimes = (apps: AppOverview[], before: Recipe | undefined, after: Recipe) => (["quick", "full"] as const).flatMap((tier) => {
+    if (after.checks[tier] === undefined) return []
+    const runs = apps.flatMap((entry) => entry.runs.flatMap((run) =>
+      run.kind === "check" && run.name === tier && run.state.kind === "exited" && run.startedAt !== undefined
+        ? [{ ms: run.state.at - run.startedAt, at: run.state.at, passed: run.state.code === 0 }]
+        : []))
+    const last = runs.sort((a, b) => b.at - a.at)[0]
+    if (!last) return [`The ${tier} check hasn't run on this Mac yet; the guide's target is ${CHECK_TARGETS[tier].words}.`]
+    const changed = before !== undefined && JSON.stringify(before.checks[tier]) !== JSON.stringify(after.checks[tier]) ? ", before this change to it" : ""
+    const over = last.ms > CHECK_TARGETS[tier].ms
+    const elsewhere = tier === "quick" ? "checks.full, or into an agent's own shell for the work that needs it" : "an agent's own shell for the work that needs it"
+    return [`The ${tier} check last ${last.passed ? "passed" : "failed"} in ${elapsed(last.ms)}${changed}, ${over ? `over the guide's target of ${CHECK_TARGETS[tier].words}: move what's slow out of it, into ${elsewhere}` : `within the guide's target of ${CHECK_TARGETS[tier].words}`}.`]
+  })
   const save = async (conversationId: string, recipe: Recipe, reason?: string): Promise<string> => {
     if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
     const { environment, checkout, read } = await context(conversationId)
@@ -1168,6 +1216,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
     const running = await appUp(environment.app)
     const changes = read.kind === "ready" ? recipeChanges(read.recipe, after.recipe) : []
+    const reach = await publishReach(environment.app, root, after.saved)
     const { version } = saved
     if (version.state === "published")
       return `That's version ${version.version}, the published recipe, so this Thread has no draft any more and runs version ${version.version} like every other Thread.${running ? " Its processes still run as they were started; app_restart runs them with it." : ""}`
@@ -1182,6 +1231,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
           : changes.length
             ? `Changed from what this Thread ran:\n${changes.map((change) => `  ${change}`).join("\n")}`
             : undefined,
+      reachLine(reach),
+      ...checkTimes(reach.apps, read.kind === "ready" ? read.recipe : undefined, after.recipe),
       after.ignored ? `This checkout also has a committed ${RECIPE_PATH}; once this is published, Mako's recipe comes first and that file is ignored.` : undefined,
       ...carried,
       named.length ? `${named.join(", ")} ${named.length === 1 ? "names" : "name"} something for each Thread, and the recipe has no cleanup. Whatever the app makes under ${named.length === 1 ? "that name" : "those names"}, such as a database, a Compose project's volumes or a profile folder, stays after the Thread's worktree is removed. Add a cleanup that removes the Thread's own and nothing shared; none is needed if nothing is kept under the name.` : undefined,

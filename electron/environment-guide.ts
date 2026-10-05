@@ -57,7 +57,7 @@ Note which rung each fix used.
 
 ## 4. Save the recipe
 
-Pass it to recipe_save as the recipe, with a one-line reason. Mako checks it against this Thread's ports and this checkout's folders, and refuses it with the reason if it can't run. It's saved as a draft: a new version only your Thread runs, so you can try it and save again as often as you need. Every version is kept with who saved it, why, and its proof.
+Pass it to recipe_save as the recipe, with a one-line reason. Mako checks it against this Thread's ports and this checkout's folders, and refuses it with the reason if it can't run. It's saved as a draft: a new version only your Thread runs, so you can try it and save again as often as you need. Its reply says what changed from what your Thread ran, which of the project's other checkouts publishing reaches, and how long each check took when it last ran, against the targets above. Every version is kept with who saved it, why, and its proof.
 
 \`\`\`json
 {

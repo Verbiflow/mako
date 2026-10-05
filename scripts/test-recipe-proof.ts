@@ -7,7 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { parse as parseYaml } from "yaml"
 import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
 import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
-import { environmentTools } from "../electron/environment-tools.js"
+import { environmentTools, reachLine } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, versionHistory, type Recipe } from "../electron/thread-recipe.js"
@@ -58,6 +58,7 @@ const toolsFor = (environment: ThreadEnvironment, settleMs = 10_000) => environm
   processes,
   recipesRoot,
   settleMs,
+  pressure: async () => "normal",
 })
 const tools = toolsFor(mine)
 const other = toolsFor(theirs)
@@ -242,7 +243,15 @@ try {
   assert.match(await tools.save(conversation, recipe({ values: { PORT: "{port}", DB: "app_{thread}", MORE: "1" } }), "Name a database"), unasked)
   assert.doesNotMatch(await tools.save(conversation, recipe({ values: { PORT: "{port}", DB: "app_{thread}" }, cleanup: "dropdb --if-exists \"$DB\"" }), "Drop it"), /no cleanup/)
 
-  console.log("recipe proof: a ready command decides when a process runs; targets pick processes and full checks; a failed verify keeps the draft; the agent's own check publishes once it says how it went, refused after a restart; a running app keeps its version until a whole restart; a draft from a replaced version is refused with what changed; app_status and Settings list the versions, and going back to one saves it as a new draft that's proved and published like any other, refused with why when it can't run here; cleanup runs with the Thread's values and its processes' own, and a save asks for one when a value names something for each Thread")
+  // A save says whom publishing reaches, and what those running now keep.
+  assert.equal(reachLine({ others: 0, up: 0, versions: [] }), "No other checkout of this project has run its app on this Mac, so once it's published the next ones start with it.")
+  assert.equal(reachLine({ others: 1, up: 1, versions: [4] }), "Published, it reaches the other checkout of this project that has run its app on this Mac. It runs now and keeps the version it started with (version 4) until app_restart.")
+  assert.equal(reachLine({ others: 3, up: 3, versions: [3, 4] }), "Published, it reaches the 3 other checkouts of this project that have run its app on this Mac. All run now and keep the version they started with (version 3, version 4) until app_restart.")
+  assert.equal(reachLine({ others: 3, up: 1, versions: [4] }), "Published, it reaches the 3 other checkouts of this project that have run its app on this Mac. One running now keeps the version it started with (version 4) until app_restart; the rest take it at their next start.")
+  assert.equal(reachLine({ others: 3, up: 2, versions: [] }), "Published, it reaches the 3 other checkouts of this project that have run its app on this Mac. 2 running now keep the version they started with until app_restart; the rest take it at their next start.")
+  assert.equal(reachLine({ others: 2, up: 0, versions: [] }), "Published, it reaches the 2 other checkouts of this project that have run its app on this Mac. None runs now, so each takes it at its next start.")
+
+  console.log("recipe proof: a ready command decides when a process runs; targets pick processes and full checks; a failed verify keeps the draft; the agent's own check publishes once it says how it went, refused after a restart; a running app keeps its version until a whole restart; a draft from a replaced version is refused with what changed; app_status and Settings list the versions, and going back to one saves it as a new draft that's proved and published like any other, refused with why when it can't run here; cleanup runs with the Thread's values and its processes' own, and a save asks for one when a value names something for each Thread, and says whom publishing reaches")
 } finally {
   await processes.stop(mine.app).catch(() => {})
   await processes.stop(theirs.app).catch(() => {})
