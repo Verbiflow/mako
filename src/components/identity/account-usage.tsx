@@ -163,10 +163,11 @@ function PageAccount({
     state.signIn !== undefined && state.signIn.phase !== "failed" &&
     state.signIn.harness === account.harness && state.signIn.renew === account.name
   )
+  const busyText = useAccounts((state) => state.busyText)
   const signedOut = isSignedOut(account, usage)
   const plan = signedOut ? undefined : (usage?.plan ?? account.plan)
   const detail = accountDetail(account, "page", label)
-  const choosable = switchable && !account.active
+  const choosable = switchable && !account.active && !account.removing
   const heading = (
     <span className="flex min-w-0 items-start gap-3">
       {switchable ? <ChoiceMark active={account.active} /> : null}
@@ -175,7 +176,9 @@ function PageAccount({
           <span className={cn("truncate text-ui", account.missing ? "text-muted-foreground" : "text-foreground")}>
             {accountIdentity(account)}
           </span>
-          {added || (renewed && !signedOut) ? (
+          {account.removing ? (
+            <Chip tone="negative" className="shrink-0 animate-enter">Removing</Chip>
+          ) : added || (renewed && !signedOut) ? (
             <Chip tone="positive" className="shrink-0 animate-enter">{added ? "New" : "Signed in"}</Chip>
           ) : signedOut ? (
             <Chip tone="caution" className="shrink-0">Signed out</Chip>
@@ -192,7 +195,7 @@ function PageAccount({
         )}
       >
         {busy === key ? (
-          <Shimmer text="Switching…" />
+          <Shimmer text={busyText ?? "Switching…"} />
         ) : renewing ? (
           <Shimmer text="Signing in…" />
         ) : switchable && account.active && !account.missing ? (
@@ -225,7 +228,22 @@ function PageAccount({
           {actions}
         </span>
       ) : null}
-      {account.missing || (renewing && signedOut) ? null : signedOut && renewable && account.source === "mako" ? (
+      {account.removing ? (
+        <div className={cn("mt-2.5 flex items-center gap-3", switchable && "pl-7")}>
+          <span className="min-w-0 flex-1 text-label leading-snug text-faint">
+            Mako removes it when the sessions using it finish. Until then it can't be selected.
+          </span>
+          <Action
+            size="xs"
+            tone="outline"
+            disabled={Boolean(busy)}
+            onClick={() => void accountActions.keep(account.harness, account.name)}
+            className="relative z-10"
+          >
+            Keep
+          </Action>
+        </div>
+      ) : account.missing || (renewing && signedOut) ? null : signedOut && renewable && account.source === "mako" ? (
         <div className={cn("mt-2.5 flex items-center gap-3", switchable && "pl-7")}>
           <span className="min-w-0 flex-1 text-label leading-snug text-faint">
             This {label} login expired or was signed out.
@@ -370,6 +388,7 @@ function MenuChoice({ account, label }: { account: ProviderAccount; label: strin
   const key = usageKey(account.harness, account.name)
   const usage = useAccounts((state) => state.usage[key])
   const busy = useAccounts((state) => state.busy)
+  const busyText = useAccounts((state) => state.busyText)
   const now = useMinuteClock()
   const window = usage?.status === "ok" ? bindingWindow(windowsAt(usage.windows, now)) : undefined
   return (
@@ -381,14 +400,16 @@ function MenuChoice({ account, label }: { account: ProviderAccount; label: strin
     >
       <SwitchButton account={account} label={label} disabled={Boolean(busy)} className="min-w-0 flex-1">
         <span className="block truncate text-ui text-foreground/75">
-          {busy === key ? <Shimmer text="Switching…" /> : accountIdentity(account)}
+          {busy === key ? <Shimmer text={busyText ?? "Switching…"} /> : accountIdentity(account)}
         </span>
       </SwitchButton>
       <span
         className="shrink-0 text-label text-faint tabular"
         title={usage && usage.status !== "ok" ? statusText(usage, label) : undefined}
       >
-        {window ? (
+        {account.removing ? (
+          "Removing"
+        ) : window ? (
           <>
             {usageWindowShortName(window)}{" "}
             <span className={TONE_TEXT[usageTone(window.usedPercent)]}>
@@ -424,14 +445,16 @@ function SwitchButton({
     <button
       type="button"
       aria-pressed={account.active}
-      disabled={disabled}
+      disabled={disabled || account.removing}
       title={
-        account.active
-          ? `Every ${label} session uses this account`
-          : `Switch every ${label} session to ${accountIdentity(account)}`
+        account.removing
+          ? "This account is being removed"
+          : account.active
+            ? `Every ${label} session uses this account`
+            : `Switch every ${label} session to ${accountIdentity(account)}`
       }
       onClick={() => {
-        if (!account.active) void accountActions.select(account.harness, account.name)
+        if (!account.active && !account.removing) void accountActions.select(account.harness, account.name)
       }}
       // The press covers the whole row; actions in the row sit above it.
       className={cn(
