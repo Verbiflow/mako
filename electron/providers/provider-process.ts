@@ -1,5 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process"
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
+import { basename } from "node:path"
+import { hostWarn } from "../host-log.js"
 import { trackProviderChild } from "../provider-children.js"
 
 /**
@@ -27,8 +29,9 @@ export type ProviderSpawnOptions = Omit<SpawnOptions, "stdio" | "cwd"> & { cwd?:
 /**
  * Starts a provider's process: the harness CLI, app-server, SDK child or
  * discovery probe. Every harness launches through here, so a missing folder
- * fails the same way for each of them, naming the folder, and a long-lived
- * process is recorded for reaping from the moment it exists.
+ * fails the same way for each of them, naming the folder, a long-lived
+ * process is recorded for reaping from the moment it exists, and its pipes
+ * close soon after it exits.
  */
 export function spawnProviderProcess(
   command: string,
@@ -40,5 +43,29 @@ export function spawnProviderProcess(
     throw new MissingWorkingDirectoryError(options.cwd)
   const child = spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
   if (tracked) trackProviderChild(child, tracked)
+  releasePipesAfterExit(child, tracked?.kind ?? basename(command))
   return child
 }
+
+/**
+ * A process the provider started can inherit its pipes and outlive it; then
+ * they never close, and whatever reads them (an SDK's message stream, a Close
+ * waiting for the process) waits forever. After a grace for the dead
+ * process's last output, Mako closes its own ends, which also ends any stdio
+ * server still attached to them.
+ */
+function releasePipesAfterExit(child: ChildProcess, label: string): void {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  child.once("close", () => clearTimeout(timer))
+  child.once("exit", () => {
+    timer = setTimeout(() => {
+      hostWarn("provider", "a process the provider started still held its pipes after it exited; closing them", { process: label, pid: child.pid ?? "" })
+      child.stdin?.destroy()
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+    }, PIPE_DRAIN_GRACE_MS)
+    timer.unref?.()
+  })
+}
+
+const PIPE_DRAIN_GRACE_MS = 1_000

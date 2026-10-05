@@ -6,7 +6,8 @@ import type { ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
 import { preparePrompt, preparePromptAsync } from "./prompt-dispatch.js"
 
 interface AccountAdmission {
-  resolve(provider: string): Promise<AccountLaunch>
+  /** Holds the account for `binding` until the launch's `hold` is released. */
+  resolve(provider: string, binding: string): Promise<AccountLaunch>
   assertCurrent(provider: string, launch: AccountLaunch): Promise<void>
   /** The email listed for the launch account, compared with what the native process reports. */
   principal(provider: string, launch: AccountLaunch): Promise<string | undefined>
@@ -14,7 +15,7 @@ interface AccountAdmission {
 }
 
 const accounts: AccountAdmission = {
-  resolve: async provider => (await import("../accounts.js")).resolveAccountLaunch(provider, process.env),
+  resolve: async (provider, binding) => (await import("../accounts.js")).resolveAccountLaunch(provider, process.env, { holder: { kind: "session", binding } }),
   assertCurrent: async (provider, launch) => (await import("../accounts.js")).assertAccountLaunch(provider, launch),
   principal: async (provider, launch) => launch.selection.kind === "unavailable"
     ? undefined
@@ -50,9 +51,16 @@ function confirmed(owner: Owner, session: LiveSessionState): LiveSessionState {
 /** Shared admission for every registered driver, including future adapters.
  * Account selection is global; the environment is prepared once per process.
  * This owns startup/close races and warm-input admission, not native auth or
- * external-CLI exclusion. No checks run on streamed tokens. */
+ * external-CLI exclusion. No checks run on streamed tokens. The launch
+ * account stays held while its owner exists, so removing it waits for the
+ * process; an owner whose cleanup failed may still have one and keeps it. */
 export function withExecutionAdmission(driver: ProviderLiveDriver, admission: AccountAdmission = accounts): ProviderLiveDriver {
   const owners = new Map<string, Owner>()
+  const release = (id: string, owner: Owner): void => {
+    if (owners.get(id) !== owner) return
+    owners.delete(id)
+    owner.launch?.hold?.release()
+  }
   const current = (id: string, owner: Owner): void => {
     if (owners.get(id) !== owner || owner.closing || owner.cleanupFailed)
       throw new Error("The agent execution owner changed or is closing. No input was dispatched.")
@@ -63,11 +71,12 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     const emit = options.emit && ((event: LiveDriverEvent) =>
       options.emit!(event.type === "live-session" && owners.get(id) === owner ? { ...event, session: confirmed(owner, event.session) } : event))
     const owner: Owner = { opening: Promise.resolve().then(async () => {
-      const launch = await admission.resolve(driver.provider)
+      const launch = await admission.resolve(driver.provider, id)
+      // Kept before any check can throw, so a superseded open still releases its hold.
+      owner.launch = launch
       current(id, owner)
       if (driver.launchEnvironment.kind === "unavailable" && launch.selection.kind === "selectable" && launch.selection.name !== null)
         throw new Error("This agent cannot apply the selected account environment. No native session was started.")
-      owner.launch = launch
       await admission.assertCurrent(driver.provider, launch)
       current(id, owner)
       owner.expected = admission.principal(driver.provider, launch).catch(() => undefined).then(email => {
@@ -80,7 +89,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
       let session: LiveSessionState
       try {
         session = await driver.start(cwd, { ...options, emit, accountLaunch: {
-          ...launch, env: { ...launch.env }, account: { ...launch.account }, selection: { ...launch.selection },
+          env: { ...launch.env }, account: { ...launch.account }, selection: { ...launch.selection },
           credential: launch.credential && { ...launch.credential },
         } })
       } catch (error) {
@@ -112,7 +121,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     }) }
     owners.set(id, owner)
     void owner.opening.catch(() => {
-      if (owners.get(id) === owner && !owner.closing && !owner.cleanupFailed) owners.delete(id)
+      if (!owner.closing && !owner.cleanupFailed) release(id, owner)
     })
     return owner.opening
   }
@@ -137,7 +146,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
       // Drain even when early cancellation failed. Keep the failed owner for
       // an explicit cleanup retry; never lose a process that starts afterward.
       if (earlyFailure) throw earlyFailure.error
-      if (owners.get(id) === owner) owners.delete(id)
+      release(id, owner)
     }).catch(error => { owner.cleanupFailed = true; throw error })
       .finally(() => { if (owner.closing === closing) owner.closing = undefined })
     owner.closing = closing

@@ -2,17 +2,6 @@ import type { HarnessDescriptor } from "../contracts/providers-acp.js"
 import type { ProviderHost } from "./host.js"
 import { recoveryCapabilities } from "./live-driver.js"
 
-/** An installed harness and the name Mako shows for it. */
-export interface NamedHarness {
-  id: string
-  label: string
-}
-
-/** Every installed harness with its name, in Mako's order. */
-export function namedHarnesses(host: ProviderHost): NamedHarness[] {
-  return host.harnesses.list().map(({ provider }) => ({ id: provider, label: harnessLabel(host, provider) }))
-}
-
 /** The name Mako shows for a harness: its profile's label. */
 export function harnessLabel(host: ProviderHost, provider: string): string {
   return host.profiles.get(provider)?.label ?? provider

@@ -27,7 +27,16 @@ export interface UtilityCompletion {
  * `harness-defaults.ts`'s to say.
  */
 export interface ProviderUtilityRunner extends ProviderCapability {
-  /** The reply's text; throws `UtilityModelError` with a reason a person can act on. */
+  /**
+   * The reply's text; throws `UtilityModelError` with a reason a person can
+   * act on. `env` is the selected account's, held by the caller until this
+   * settles so the account can't be removed under the request.
+   */
+  complete(request: UtilityCompletion, env: NodeJS.ProcessEnv): Promise<string>
+}
+
+/** A runner as utility work calls it, on whichever account is selected when it runs. */
+export interface UtilityRunner {
   complete(request: UtilityCompletion): Promise<string>
 }
 
