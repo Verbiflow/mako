@@ -202,6 +202,13 @@ function errorText({ error }: FailureBoundary): string {
 export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): ProviderLiveDriver {
   const engine: Engine = createLiveEngine<Live>()
   const sessions = engine.sessions
+  // A start not yet a session: Close cancels it here, including the API launch.
+  const starting = new Map<string, AbortController>()
+  function cancellable<T>(id: string, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const startup = new AbortController()
+    starting.set(id, startup)
+    return run(startup.signal).finally(() => { if (starting.get(id) === startup) starting.delete(id) })
+  }
 
   function connected(live: Live | undefined): live is ConnectedLive {
     return !!live && !live.closed && !!live.root && !!live.catalog && !!live.model && !!live.interactions
@@ -656,7 +663,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     modes: openCodeModes,
     defaultMode: OPENCODE_DEFAULT_MODE,
     available: () => openCodeExecutable() !== null,
-    start: (requestedCwd, options) => traceProviderLaunch("opencode", options.conversationId, async trace => {
+    start: (requestedCwd, options) => cancellable(options.conversationId, signal => traceProviderLaunch("opencode", options.conversationId, async trace => {
       if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false) throw new Error("This OpenCode binding is already connected")
       if (options.fork) throw new Error("OpenCode conversations cannot be forked from Mako yet")
@@ -672,7 +679,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const cwd = requestedCwd && existsSync(requestedCwd) ? requestedCwd : homedir()
       const servers = await trace.step("mcp-preparation", () => mcpServers(options))
       const approvalRoot = await dependencies.approvalRoot()
-      const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
+      const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, signal, fetch: dependencies.fetch })
       const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch?.account, installation.command)
       context.runtime = reportedRuntime(api.health.version, "launched native API health.version")
       const live: Live = {
@@ -770,7 +777,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         await api.close()
         throw error
       }
-    }),
+    })),
     async prompt(id, text, attachments, settings, dispatch) {
       const live = preparePrompt(dispatch, () => {
         const live = requireLive(id)
@@ -870,6 +877,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       }
     },
     async close(id) {
+      starting.get(id)?.abort(new Error("OpenCode was closed during startup"))
       const live = sessions.get(id)
       if (!live) return
       sessions.delete(id)
