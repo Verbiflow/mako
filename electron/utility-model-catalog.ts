@@ -2,6 +2,7 @@ import { z } from "zod"
 import type {
   UtilityCatalog,
   UtilityCatalogInput,
+  UtilityConnection,
   UtilityModel,
   UtilityProvider,
 } from "./shared.js"
@@ -64,6 +65,29 @@ const apiPage = z.object({
 const nonTextModel =
   /(?:^|[-/_.])(?:embedding|embed|image|imagen|veo|tts|transcribe|transcription|whisper|audio|realtime|live|moderation|dall-e|sora)(?:[-/_.]|$)/i
 
+/**
+ * Names keys saved before names were kept, from the catalog, with one try per
+ * key while the host runs. Each call waits up to `waitMs` and says whether a
+ * key was named by then; a slow catalog finishes in the background.
+ */
+export function savedModelNamer(
+  catalog: Pick<UtilityModelCatalog, "nameOf">,
+  models: Pick<UtilityModelStore, "nameModel">,
+  waitMs = 1_500
+): (connections: readonly UtilityConnection[]) => Promise<boolean> {
+  const tried = new Set<string>()
+  return async (connections) => {
+    const unnamed = connections.filter((connection) => !connection.name && !tried.has(`${connection.provider}/${connection.model}`))
+    if (!unnamed.length) return false
+    for (const connection of unnamed) tried.add(`${connection.provider}/${connection.model}`)
+    const naming = Promise.all(unnamed.map(async (connection) => {
+      const name = await catalog.nameOf(connection.provider, connection.model)
+      return name ? models.nameModel(connection.provider, connection.model, name).catch(() => false) : false
+    })).then((named) => named.includes(true))
+    return Promise.race([naming, new Promise<false>((resolve) => setTimeout(resolve, waitMs, false))])
+  }
+}
+
 interface CatalogCache {
   fetchedAt: number
   providers: Map<UtilityProvider, UtilityModel[]>
@@ -105,6 +129,13 @@ export class UtilityModelCatalog {
         "The model catalog could not be loaded. Retry, fetch models with your API key, or enter a custom model ID."
       )
     }
+  }
+
+  /** The catalog's name for `model`, or nothing when the catalog doesn't list it or can't be read. */
+  async nameOf(provider: UtilityProvider, model: string): Promise<string | undefined> {
+    if (provider === "openai-compatible") return undefined
+    const listed = await this.list({ source: "catalog", provider }).catch(() => undefined)
+    return listed?.models.find((entry) => entry.id === model)?.name
   }
 
   private snapshot(

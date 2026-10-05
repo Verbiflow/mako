@@ -139,6 +139,22 @@ try {
   )
   assert.equal((await reopened.load("openai-compatible"))?.model, "local-test")
   reject = false
+  // A key saved before names were kept gets its name once, and keeps its key.
+  const nameOf = async () => (await store.settings()).connections[0]?.name
+  assert.equal(await nameOf(), undefined)
+  assert.equal(await store.nameModel("openai-compatible", "other-model", "Other"), false, "A replaced key is not renamed")
+  assert.equal(await store.nameModel("openai-compatible", "local-test", "Local Test"), true)
+  assert.equal(await nameOf(), "Local Test")
+  assert.equal((await store.load("openai-compatible"))?.apiKey, apiKey)
+  assert.equal(await store.nameModel("openai-compatible", "local-test", "Renamed"), false, "A named key keeps its name")
+  // Connecting saves the name with the key; one that only repeats the id is dropped.
+  await store.connect({ ...input, name: "  Local model  " })
+  assert.equal(await nameOf(), "Local model")
+  const named = await new UtilityWork({ models: store }).settings()
+  assert.equal(named.commit.options[0]?.label, "Local model")
+  assert.equal(named.commit.resolved?.label, "Local model")
+  await store.connect({ ...input, name: "local-test" })
+  assert.equal(await nameOf(), undefined)
   const run = promisify(execFile)
   await run("git", ["init", "-q"], { cwd: root })
   await writeFile(join(root, ".gitignore"), "connections/\n")
@@ -187,7 +203,7 @@ try {
   await store.disconnect("openai-compatible")
   assert.equal((await store.settings()).connections.length, 0)
   console.log(
-    "Commit connections: real SDK HTTP, encrypted persistence, key redaction, rollback, endpoint isolation, generate/cancel, per-window isolation, locked and corrupt storage passed"
+    "Commit connections: real SDK HTTP, encrypted persistence, key redaction, rollback, endpoint isolation, generate/cancel, per-window isolation, locked and corrupt storage, saved and backfilled model names passed"
   )
 } finally {
   server.closeAllConnections()

@@ -210,22 +210,47 @@ export class UtilityModelStore {
         AbortSignal.timeout(25_000),
         1_024
       )
-      await mkdir(this.directory, { recursive: true, mode: 0o700 })
-      const path = this.path(connection.provider)
-      const temporary = `${path}.${randomUUID()}.tmp`
-      try {
-        await writeFile(
-          temporary,
-          await this.encryption.encrypt(JSON.stringify({ ...connection, apiKey })),
-          { mode: 0o600, flag: "wx" }
-        )
-        await rename(temporary, path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
+      await this.save(connection, apiKey)
       return connection
     } finally {
       this.writing.delete(connection.provider)
+    }
+  }
+
+  /**
+   * Give a connection saved before names were kept its model's name. Nothing
+   * else changes, and nothing is written when the key was replaced, removed or
+   * named meanwhile.
+   */
+  async nameModel(provider: UtilityProvider, model: string, name: string): Promise<boolean> {
+    await this.ready
+    this.lock(provider)
+    try {
+      const stored = await this.load(provider)
+      if (!stored || stored.model !== model || stored.name) return false
+      const { apiKey, ...connection } = stored
+      const named = parseConnection({ ...connection, name })
+      if (!named.name) return false
+      await this.save(named, apiKey)
+      return true
+    } finally {
+      this.writing.delete(provider)
+    }
+  }
+
+  private async save(connection: UtilityConnection, apiKey: string) {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    const path = this.path(connection.provider)
+    const temporary = `${path}.${randomUUID()}.tmp`
+    try {
+      await writeFile(
+        temporary,
+        await this.encryption.encrypt(JSON.stringify({ ...connection, apiKey })),
+        { mode: 0o600, flag: "wx" }
+      )
+      await rename(temporary, path)
+    } finally {
+      await rm(temporary, { force: true })
     }
   }
 

@@ -130,12 +130,12 @@ function find(task: UtilityTask, choice: string, connections: readonly UtilityCo
 /** A model connection's language model as a `UtilityModel`. */
 export function languageUtilityModel(
   language: UtilityLanguageModel,
-  input: { connection: Pick<UtilityConnection, "provider" | "model" | "baseUrl" | "contextTokens">; via: string; countTokens?: UtilityTokenCounter }
+  input: { connection: Pick<UtilityConnection, "provider" | "model" | "name" | "baseUrl" | "contextTokens">; via: string; countTokens?: UtilityTokenCounter }
 ): UtilityModel {
   const { connection } = input
   return {
     id: connectionId(connection),
-    label: connection.model,
+    label: connection.name ?? connection.model,
     via: input.via,
     contextTokens: connection.contextTokens,
     identity: digest([connection.provider, connection.model, connection.baseUrl, connection.contextTokens]),
@@ -153,7 +153,7 @@ export function languageUtilityModel(
 }
 
 function optionOf(connection: UtilityConnection): UtilityModelOption {
-  return { id: connectionId(connection), label: connection.model, via: providerName(connection), source: connection.provider }
+  return { id: connectionId(connection), label: connection.name ?? connection.model, via: providerName(connection), source: connection.provider }
 }
 
 function providerName(connection: Pick<UtilityConnection, "provider">): string {

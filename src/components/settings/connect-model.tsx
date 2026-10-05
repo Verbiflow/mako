@@ -119,6 +119,7 @@ export function ConnectModel({
       const saved = await utilityModels.connect({
         provider: provider.id,
         model,
+        name: catalog?.models.find((entry) => entry.id === model)?.name ?? (model === connection?.model ? connection.name : undefined),
         baseUrl: custom ? baseUrl : undefined,
         contextTokens,
         apiKey: key.current?.value || undefined,

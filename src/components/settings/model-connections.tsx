@@ -80,7 +80,7 @@ export function CommitKeys() {
                   type="button"
                   role="radio"
                   aria-checked={used}
-                  aria-label={`${connection.model}, ${provider?.name ?? connection.provider}`}
+                  aria-label={`${connection.name ?? connection.model}, ${provider?.name ?? connection.provider}`}
                   onClick={() => { if (!used) void chooseCommitModel(id) }}
                   className={cn("pressable flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-border", used && "cursor-default")}
                 >
@@ -88,9 +88,11 @@ export function CommitKeys() {
                     <ProviderIcon provider={connection.provider} tinted={false} className="size-3.5" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-ui font-medium">{connection.model}</span>
-                    <span className="block truncate text-label text-faint">
-                      {provider?.name ?? connection.provider}{connection.baseUrl ? ` · ${endpoint(connection.baseUrl)}` : ""}
+                    <span className="block truncate text-ui font-medium">{connection.name ?? connection.model}</span>
+                    <span className="block truncate text-label text-faint" title={connection.model}>
+                      {[provider?.name ?? connection.provider, connection.name ? connection.model : undefined, connection.baseUrl ? endpoint(connection.baseUrl) : undefined]
+                        .filter((part) => part !== undefined)
+                        .join(" · ")}
                     </span>
                   </span>
                   {used ? (

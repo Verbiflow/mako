@@ -770,7 +770,12 @@ variable no real host ever reached `~/.mako` and the one-time move was a
 no-op onto itself. A profile's older `<data root>/utility-models` copies
 move into the user store on its first start, newest copy per provider
 winning whichever host starts first. `test-utility-model-location.ts` covers
-the location and the move. Which model drafts commits is the host's
+the location and the move. A key keeps its model's name beside the id
+(`UtilityConnection.name`, from the catalog or provider list the dialog
+showed), so Settings and the Generate tooltip read "Gemini 3.8 Flash", not
+`gemini-3.8-flash`. A key saved before names were kept is named from the
+models.dev catalog once per run (`savedModelNamer`); a custom id no list
+names shows as the id. Which model drafts commits is the host's
 (`UtilityWork`), read by every view through one snapshot in
 `src/state/commit-model.ts`; with no key Generate becomes Connect API key,
 and a chosen key that's gone becomes Reconnect key, both opening

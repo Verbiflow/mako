@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { UtilityModelCatalog } from "../electron/utility-model-catalog.ts"
+import { savedModelNamer, UtilityModelCatalog } from "../electron/utility-model-catalog.ts"
 import { UtilityModelStore } from "../electron/utility-model-store.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-model-catalog-"))
@@ -325,6 +325,30 @@ try {
   })
   assert.equal(capped.models.length, 2_000)
   assert.ok(capped.notice)
+  // Keys saved before names were kept: catalog names, once per key, never custom ids or endpoints.
+  failPublic = false
+  repeatPage = false
+  const renamed: string[] = []
+  const name = savedModelNamer(new UtilityModelCatalog(store, request), {
+    nameModel: async (provider, model, label) => {
+      renamed.push(`${provider}/${model}=${label}`)
+      return true
+    },
+  })
+  const saved = [
+    { provider: "google", model: "gemini-3.8-flash", contextTokens: 1_048_576 },
+    { provider: "anthropic", model: "custom-id", contextTokens: 200_000 },
+    { provider: "openai-compatible", model: "local", baseUrl: "http://127.0.0.1:1/v1", contextTokens: 32_000 },
+    { provider: "openai", model: "gpt-6-astra", name: "Already named", contextTokens: 922_000 },
+  ] as const
+  assert.equal(await name(saved), true)
+  assert.deepEqual(renamed, ["google/gemini-3.8-flash=Gemini 3.8 Flash"])
+  assert.equal(await name(saved), false, "Each key is tried once per run")
+  assert.equal(renamed.length, 1)
+  const offline = savedModelNamer(new UtilityModelCatalog(store, async () => { throw new Error("offline") }), {
+    nameModel: async () => assert.fail("Nothing to name without a catalog"),
+  })
+  assert.equal(await offline(saved), false)
   if (process.argv.includes("--live")) {
     const live = new UtilityModelCatalog(store)
     const providers = ["google", "openai", "anthropic"] as const
@@ -346,7 +370,7 @@ try {
     console.log("Live public catalogs:", results)
   }
   console.log(
-    "Model catalogs: current IDs, future IDs without code changes, modality filtering, metadata, pagination, per-key isolation, caching, offline fallback, secret-safe failures passed"
+    "Model catalogs: current IDs, future IDs without code changes, modality filtering, metadata, pagination, per-key isolation, caching, offline fallback, secret-safe failures, names for keys saved without one passed"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

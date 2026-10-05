@@ -12,7 +12,7 @@ import {
   migrateUtilityModels,
   utilityModelDirectory,
 } from "../utility-model-location.js"
-import { UtilityModelCatalog } from "../utility-model-catalog.js"
+import { savedModelNamer, UtilityModelCatalog } from "../utility-model-catalog.js"
 import { hostLog, hostWarn } from "../host-log.js"
 import { z } from "zod"
 import type {
@@ -113,8 +113,11 @@ export function installGitIpc(context: GitIpcContext): void {
   })
   const drafting = new GitDrafting(work)
   const catalog = new UtilityModelCatalog(models)
+  const nameSavedModels = savedModelNamer(catalog, models)
   registerIpc("mako:utility-model-settings", async () => {
-    const [settings, tasks] = await Promise.all([models.settings(), work.settings()])
+    let [settings, tasks] = await Promise.all([models.settings(), work.settings()])
+    if (await nameSavedModels(settings.connections))
+      [settings, tasks] = await Promise.all([models.settings(), work.settings()])
     return { ...settings, work: tasks }
   })
   registerIpc("mako:utility-choice", async (_event, task: string, choice: string) => {

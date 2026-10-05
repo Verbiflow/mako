@@ -137,7 +137,7 @@ const MOCK_PROVIDERS: UtilityProviderInfo[] = [
 // The mock drafts a message, so it starts with the key it drafts with; `?mock&keys=0` starts with none.
 let mockConnections: UtilityConnection[] = new URLSearchParams(globalThis.location?.search).get("keys") === "0"
   ? []
-  : [{ provider: "google", model: "gemini-3.8-flash", contextTokens: 1_048_576 }]
+  : [{ provider: "google", model: "gemini-3.8-flash", name: "Gemini 3.8 Flash", contextTokens: 1_048_576 }]
 
 let mockHarnessOrder: string[] = []
 /** `harness:name` of fixture accounts signed in again, whose usage reads again. */
@@ -153,7 +153,7 @@ if ("addEventListener" in globalThis)
 function mockUtilityWork(): UtilityWorkSettings {
   const options: UtilityModelOption[] = mockConnections.map((connection) => ({
     id: `${connection.provider}/${connection.model}`,
-    label: connection.model,
+    label: connection.name ?? connection.model,
     via: MOCK_PROVIDERS.find((provider) => provider.id === connection.provider)?.name ?? connection.provider,
     source: connection.provider,
   }))
@@ -825,7 +825,7 @@ export function installMockBridge() {
       stale: false,
     }),
     connectUtilityModel: async (input) => {
-      const connection: UtilityConnection = { provider: input.provider, model: input.model, baseUrl: input.baseUrl, contextTokens: input.contextTokens }
+      const connection: UtilityConnection = { provider: input.provider, model: input.model, name: input.name, baseUrl: input.baseUrl, contextTokens: input.contextTokens }
       mockConnections = [...mockConnections.filter((entry) => entry.provider !== input.provider), connection]
         .sort((a, b) => MOCK_PROVIDERS.findIndex(({ id }) => id === a.provider) - MOCK_PROVIDERS.findIndex(({ id }) => id === b.provider))
       return connection

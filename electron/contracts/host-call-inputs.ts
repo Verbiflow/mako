@@ -86,15 +86,6 @@ export const hostCallInputs = {
   "mako:git-diff-all": z.tuple([]),
   "mako:git-discard": z.tuple([z.array(z.string())]),
   "mako:git-doctor": z.tuple([z.string()]),
-  "mako:git-draft-pull-request": z.tuple([
-    z.object({
-      mode: z.union([z.literal("fast"), z.literal("deep")]).optional(),
-      requestId: z.string(),
-      cwd: z.string(),
-      base: z.string(),
-      model: z.string().optional(),
-    }),
-  ]),
   "mako:git-generate-message": z.tuple([
     z.object({
       mode: z.union([z.literal("fast"), z.literal("deep")]).optional(),
@@ -978,6 +969,7 @@ export const hostCallInputs = {
         z.literal("openai-compatible"),
       ]),
       model: z.string(),
+      name: z.string().optional(),
       baseUrl: z.string().optional(),
       contextTokens: z.number(),
     }),

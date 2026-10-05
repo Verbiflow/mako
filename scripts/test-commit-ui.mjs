@@ -646,6 +646,11 @@ async function check() {
       "!document.querySelector('input[type=password]') && document.body.textContent.includes('Writes commit messages')"
     )
     connected = true
+    assert.deepEqual(
+      await evaluate(`(() => { const row = document.querySelector('[aria-label="API key that writes commit messages"] [role=radio][aria-checked=true]'); return [...row.querySelectorAll('.block')].map(node => node.textContent.trim()) })()`),
+      ["My local model", `OpenAI-compatible · local-check · 127.0.0.1:${address.port}`],
+      "A key shows its model's name, with the id and endpoint beneath"
+    )
     const snapshot = await evaluate(
       "import('/src/state/model-runtime.ts').then(({utilityModels}) => utilityModels.settings())"
     )

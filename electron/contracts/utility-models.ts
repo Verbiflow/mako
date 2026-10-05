@@ -5,7 +5,13 @@ export type UtilityProvider =
 
 export interface UtilityConnection {
   provider: UtilityProvider
+  /** The model's id, as requests send it. */
   model: string
+  /**
+   * The model's name as its catalog or provider lists it ("Gemini 3.8 Flash"),
+   * saved with the key. Missing for a custom id no list names.
+   */
+  name?: string
   baseUrl?: string
   contextTokens: number
 }
