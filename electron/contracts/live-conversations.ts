@@ -23,6 +23,7 @@ import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
 import type { LiveSessionUsage, TokenCounts } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
+import type { NativePromptReference } from "./native-prompt-identity.js"
 
 export interface LiveStartOptions {
   initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
@@ -117,6 +118,10 @@ export interface TurnContinuation {
   auto: boolean
 }
 
+/** What keeps a session on its old account while a message waits to switch it. */
+export const ACCOUNT_SWITCH_WAITS = ["background", "subagents", "children", "approval", "turn", "operation"] as const
+export type AccountSwitchWait = (typeof ACCOUNT_SWITCH_WAITS)[number]
+
 export interface LiveRequest {
   /**
    * Who sent it, assigned by the host at admission. Absent in older journals:
@@ -126,6 +131,8 @@ export interface LiveRequest {
   actor?: Actor
   /** Native send evidence, independent of execution outcome; absent in older journals. */
   nativeDelivery?: PromptDelivery
+  /** Exact request/native-message correspondence from a declared native receipt. */
+  nativePrompt?: NativePromptReference
   targetBindingId?: string
   snapshots?: RunSnapshots
   tuning?: SessionSettings
@@ -150,6 +157,12 @@ export interface LiveRequest {
     | "uncertain"
     | "interrupted"
   error?: string
+  /**
+   * A queued request the native process refused because the account changed
+   * under it. It waits, unsent, until the session can reopen under the newly
+   * selected account; `waitingFor` is what still holds the old process.
+   */
+  accountSwitch?: { reason: "selection" | "credentials"; waitingFor: AccountSwitchWait }
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**

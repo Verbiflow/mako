@@ -18,6 +18,8 @@ export const PROVIDER_FAILURE_KINDS = [
   "context-exhausted",
   /** The provider's account is signed out, the key is invalid, or a plan does not cover the model. */
   "auth",
+  /** The agent reported a different signed-in identity than the account the session runs as; nothing was sent. */
+  "wrong-account",
   /** The provider throttled or is over capacity; the same message works later. */
   "rate-limited",
   /** The provider's service failed on its side; the same message works later. */
@@ -81,9 +83,14 @@ const rules: Rule[] = [
       /context[_ ]?(?:window|length|limit)|prompt is too long|too many tokens|maximum (?:context|number of tokens)|exceeds? the (?:model|maximum|context)|input (?:length|is too long)|token limit|max_tokens.*exceed|request too large|content too large/i,
   },
   {
+    // ExecutionIdentityMismatch's own words, before "sign in again" reads as signed out.
+    kind: "wrong-account",
+    match: /is signed in as .+, not .+, the account this session started with/,
+  },
+  {
     kind: "auth",
     match:
-      /\b401\b|\b403\b|unauthori[sz]ed|authentication|failed to authenticate|oauth session (?:has )?expired|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|(?:log|sign) in (?:again|to)|login required|credentials|token (?:has )?expired|expired token|subscription|billing|payment required|insufficient (?:permissions|scope|credits)|plan does not/i,
+      /\b401\b|\b403\b|unauthori[sz]ed|authentication|failed to authenticate|oauth session (?:has )?expired|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|(?:log|sign) in (?:again|to)|login required|login (?:has )?expired|run \/login|credentials|token (?:has )?expired|expired token|subscription|billing|payment required|insufficient (?:permissions|scope|credits)|plan does not/i,
   },
   {
     kind: "rate-limited",
@@ -168,6 +175,13 @@ export function describeProviderFailure(
         retriable: false,
         title: `${providerLabel} is signed out or this account cannot use the selected model`,
         guidance: `Sign in to ${providerLabel} again, or choose a model the account covers, then send the message.`,
+      }
+    case "wrong-account":
+      return {
+        kind,
+        retriable: false,
+        title: `${providerLabel} is signed in as a different account`,
+        guidance: `Sign this session's account in to ${providerLabel} again, or choose the account ${providerLabel} is signed in as in Settings › Agents.`,
       }
     case "rate-limited":
       return {

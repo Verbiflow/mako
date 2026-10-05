@@ -9,6 +9,7 @@ import { z } from "zod"
  * store, the SDK's file, or the CLI's keychain login.
  */
 export const ProviderConnectionSourceSchema = z.enum([
+  "account",
   "env",
   "mako",
   "sdk",

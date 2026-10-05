@@ -25,6 +25,8 @@ export function describePromptRecovery(
         ? "Model temporarily unavailable"
         : request.failure === "auth"
           ? "Sign-in required"
+          : request.failure === "wrong-account"
+            ? "Signed in as a different account"
           : request.failure === "context-exhausted"
             ? "Conversation context is full"
             : request.failure === "resume-failed"

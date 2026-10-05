@@ -75,6 +75,8 @@ const reads = [
   /** Answers from the host's readings; a re-read it starts behind the answer is idempotent. */
   "mako:harness-updates",
   "mako:accounts",
+  /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
+  "mako:account-login-wait",
   "mako:native-authoring-catalog",
   "mako:native-authoring-list",
   "mako:native-authoring-read",
@@ -132,6 +134,8 @@ const replays = [
   "mako:live-cancel",
   /** Closing a closed conversation is a no-op. */
   "mako:live-close",
+  /** Cancelling a sign-in that has ended cancels nothing. */
+  "mako:account-login-cancel",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */

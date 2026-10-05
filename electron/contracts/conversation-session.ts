@@ -13,6 +13,7 @@ import type {
  */
 import type { BlockAddress } from "@mako/sessions"
 import type { MessageAnchor } from "./message-anchor.js"
+import type { ExecutionContext } from "./execution-context.js"
 
 export type {
   BlockAddress,
@@ -54,6 +55,8 @@ export interface ThreadRunState {
   harness: string
   status: "running" | "done" | "failed" | "stopped"
   error?: string
+  /** Public facts for this headless launch; absent in older events. */
+  executionContext?: ExecutionContext
 }
 
 export type ThinkingLevel =
