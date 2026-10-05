@@ -7,6 +7,13 @@ export const RelayHarnessSchema = z
   .regex(/^[a-z0-9][a-z0-9._-]*$/)
 export type RelayHarness = z.infer<typeof RelayHarnessSchema>
 
+/** A harness a worker's Mac can run, named as Mako shows it. */
+export const RelayHarnessChoiceSchema = z.object({
+  id: RelayHarnessSchema,
+  label: z.string().min(1).max(80),
+})
+export type RelayHarnessChoice = z.infer<typeof RelayHarnessChoiceSchema>
+
 const RemoteIdSchema = z
   .string()
   .min(1)
@@ -126,6 +133,8 @@ export type RelayWorkerActivity = z.infer<typeof RelayWorkerActivitySchema>
  */
 export const WorkerHeartbeatSchema = z.object({
   defaultHarness: RelayHarnessSchema,
+  /** The harnesses this Mac installs, in Mako's order, for Slack's harness picker. Absent from older workers. */
+  harnesses: z.array(RelayHarnessChoiceSchema).max(20).optional(),
   defaultModel: z.string().min(1).max(160).optional(),
   deviceId: z.uuid(),
   deviceName: z.string().min(1).max(160),
