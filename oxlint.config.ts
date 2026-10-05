@@ -26,6 +26,10 @@ export default defineConfig({
       name: "anti-slop",
       specifier: "./tools/oxlint/anti-slop/index.ts",
     },
+    {
+      name: "mako",
+      specifier: "./tools/oxlint/mako/index.ts",
+    },
   ],
   rules: {
     "anti-slop/no-chained-type-assertions": "error",
@@ -44,5 +48,6 @@ export default defineConfig({
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "mako/no-harness-names": "error",
   },
 })

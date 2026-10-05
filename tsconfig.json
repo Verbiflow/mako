@@ -11,6 +11,9 @@
       "path": "./tsconfig.electron.json"
     },
     {
+      "path": "./tsconfig.scripts.json"
+    },
+    {
       "path": "./packages/sessions"
     },
     {
