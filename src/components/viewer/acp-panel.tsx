@@ -253,7 +253,8 @@ function AcpActivity({
     // The approval notice, or the plan bar for a plan's approval, owns this
     // status; do not repeat it in the transcript.
     if (approval || live?.permission?.implementsPlan) return { kind: "idle" as const, label: "" }
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, worktreeStep, preparing, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
+    const switchingAccount = Boolean(live?.requests?.some((request) => request.status === "queued" && request.accountSwitch))
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, worktreeStep, preparing, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
@@ -759,7 +760,7 @@ function RequestRecovery({ request, expanded = false }: { request: LiveRequest; 
               void acp.recoverFresh(conversationId, request.id).then((accepted) => setResent(accepted ? "sent" : null))
             }}>Use in new thread</button>
         ) : null}
-        {request.status === "failed" && (request.failure === "auth" || request.failure === "launch-failed" || request.failure === "launch-stalled") ? (
+        {request.status === "failed" && (request.failure === "auth" || request.failure === "wrong-account" || request.failure === "launch-failed" || request.failure === "launch-stalled") ? (
           <button type="button" className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground"
             onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: request.failure === "launch-stalled" ? "mcp" : "agents" }))}>
             {request.failure === "launch-stalled" ? "MCP settings" : "Agents settings"}
