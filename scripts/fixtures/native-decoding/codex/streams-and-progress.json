@@ -1,6 +1,10 @@
 {
   "harness": "codex",
   "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "native": {
+    "version": "0.159.0",
+    "origin": "written"
+  },
   "about": "Streams that refine a row in place: a checklist plan, raw reasoning, a patch revised while it is written, MCP progress, a strict-review notice and a server request Codex closed.",
   "session": {
     "threadId": "thread-1"
@@ -218,7 +222,7 @@
           "update": {
             "kind": "tool-update",
             "id": "codex:stream-turn:edit",
-            "output": "Update /tmp/project/a.ts\n@@ -1 +1 @@\n-a\n+c\n\nSuccess. Updated the following files:\nM a.ts\n"
+            "outputAppend": "\n\nSuccess. Updated the following files:\nM a.ts\n"
           }
         }
       ]
@@ -308,7 +312,7 @@
           "update": {
             "kind": "tool-update",
             "id": "codex:stream-turn:mcp",
-            "output": "Searching 3 sources\n"
+            "outputAppend": "Searching 3 sources\n"
           }
         }
       ]

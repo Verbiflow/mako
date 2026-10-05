@@ -1,6 +1,10 @@
 {
   "harness": "codex",
   "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "native": {
+    "version": "0.159.0",
+    "origin": "written"
+  },
   "about": "A resumed thread's turns replay as the transcript it already had, without live-only side effects.",
   "session": {
     "threadId": "thread-1"

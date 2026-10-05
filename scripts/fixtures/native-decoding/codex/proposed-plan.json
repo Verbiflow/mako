@@ -1,6 +1,10 @@
 {
   "harness": "codex",
   "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "native": {
+    "version": "0.159.0",
+    "origin": "written"
+  },
   "about": "A proposed plan streams as one artifact and the completed item replaces the streamed text.",
   "session": {
     "threadId": "thread-1"

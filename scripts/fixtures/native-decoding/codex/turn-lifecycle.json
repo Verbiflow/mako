@@ -1,6 +1,10 @@
 {
   "harness": "codex",
   "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "native": {
+    "version": "0.159.0",
+    "origin": "written"
+  },
   "about": "One turn: the prompt, reasoning in two summary parts, a failing command, an edit, the streamed answer, usage and a title, then completion.",
   "session": {
     "threadId": "thread-1"
@@ -239,7 +243,7 @@
           "update": {
             "kind": "tool-update",
             "id": "codex:turn-1:cmd-1",
-            "output": "1 failing\n"
+            "outputAppend": "1 failing\n"
           }
         }
       ]
