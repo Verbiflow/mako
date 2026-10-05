@@ -14,8 +14,7 @@ import {
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { AccountCaptureSource, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
-import { NATIVE_ACCOUNT } from "../../account-types.js"
+import type { AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
 import {
   credentialFingerprint,
   loginPending,
@@ -181,23 +180,16 @@ async function listAccounts(
   selection: string | null
 ): Promise<HarnessAccount[]> {
   const accounts: HarnessAccount[] = []
-  const defaultDir = defaultHome()
+  const home = join(homedir(), HOME)
   accounts.push({
     harness: "codex",
     name: "default",
-    email: AUTH_ENV.some(key => process.env[key]) ? undefined : await accountEmail(defaultDir),
-    dir: defaultDir,
+    email: await accountEmail(home),
+    dir: home,
     active: !selection,
     source: "cli",
-    route: process.env.CODEX_HOME || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key]) ? "inherited" : "native",
+    route: "native",
   })
-  if (selection === NATIVE_ACCOUNT || process.env.CODEX_HOME || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key])) {
-    // The ordinary home is only worth a row when it is signed in or chosen.
-    const email = await accountEmail(join(homedir(), HOME))
-    if (email || selection === NATIVE_ACCOUNT)
-      accounts.push({ harness: "codex", name: NATIVE_ACCOUNT, email, dir: join(homedir(), HOME),
-        active: selection === NATIVE_ACCOUNT, source: "cli", route: "native" })
-  }
   try {
     for (const name of await readdir(join(accountsRoot(), "codex"))) {
       if (name.startsWith(".")) continue
@@ -223,12 +215,9 @@ async function listAccounts(
  * Capture the CLI's current login as a named account. Credentials are copied,
  * never invented; browser OAuth remains the CLI's job.
  */
-async function captureAccount(name: string, source: AccountCaptureSource = "inherited"): Promise<void> {
+async function captureAccount(name: string): Promise<void> {
   const clean = cleanAccountName(name)
-  const env = source === "native" ? nativeEnv(process.env) : process.env
-  if (AUTH_ENV.some(key => env[key]))
-    throw new Error("This profile uses an environment API key. Choose Ordinary CLI login to save the native login; environment credentials are not captured as a different account.")
-  const realHome = defaultHome(env)
+  const realHome = join(homedir(), HOME)
   const dir = accountDir("codex", clean)
   await mkdir(join(accountsRoot(), "codex"), { recursive: true, mode: 0o700 })
   await mkdir(dir, { mode: 0o700 })
@@ -275,7 +264,7 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
   if (renew) {
     const dir = accountDir("codex", name)
     if (!existsSync(dir)) throw new Error("That Codex account is gone. Refresh to see your accounts.")
-    await managedCodexConfig(await managedAccountHome(dir, defaultHome(), "sessions"), dir, true)
+    await managedCodexConfig(await managedAccountHome(dir, join(homedir(), HOME), "sessions"), dir, true)
     return command(dir)
   }
   const dir = accountDir("codex", cleanAccountName(name))
@@ -292,7 +281,7 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
 }
 
 async function removeAccount(name: string): Promise<void> {
-  if (name === "default" || name === NATIVE_ACCOUNT)
+  if (name === "default")
     throw new Error("The default account is the CLI's own login")
   await rm(accountDir("codex", name), { recursive: true, force: true })
 }
@@ -301,11 +290,8 @@ async function accountEnv(
   selection: string | null,
   base: NodeJS.ProcessEnv
 ): Promise<NodeJS.ProcessEnv> {
-  const env = { ...base }
+  const env = nativeEnv(base)
   if (!selection) return env
-  if (selection === NATIVE_ACCOUNT) return nativeEnv(base)
-  for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
-
   const dir = accountDir("codex", selection)
   if (!existsSync(dir))
     throw new Error(
@@ -320,7 +306,7 @@ async function accountEnv(
     throw new Error(
       "The selected Codex account's login is unreadable. Sign in again in Settings → Agents."
     )
-  const home = await managedAccountHome(dir, defaultHome(base), "sessions")
+  const home = await managedAccountHome(dir, join(homedir(), HOME), "sessions")
   await managedCodexConfig(home, dir, Boolean(parseCodexAuth(credentials).accessToken))
   await shareHome(home, dir)
   env.CODEX_HOME = dir
@@ -347,7 +333,7 @@ async function usageForDir(dir: string): Promise<AccountUsage> {
 async function accountUsage(name: string): Promise<AccountUsage> {
   const fromCodex = await codexAppServerUsage(name).catch(() => null)
   if (fromCodex?.status === "ok") return fromCodex
-  return usageForDir(name === NATIVE_ACCOUNT ? join(homedir(), HOME) : name === "default" ? defaultHome() : accountDir("codex", name))
+  return usageForDir(name === "default" ? join(homedir(), HOME) : accountDir("codex", name))
 }
 
 async function codexAppServerUsage(name: string): Promise<AccountUsage | null> {
@@ -390,17 +376,15 @@ export const codexAccountCapability: SelectableAccountCapability = {
   selectedAccount: (selection, env) =>
     ({ name: selection ?? "default", dir: defaultHome(env) }),
   accountUsage,
-  credentialRevision: async (name, base = process.env) => {
-    const native = name === NATIVE_ACCOUNT
-    const inherited = name === "default"
-    const raw = native || inherited
-      ? await readCodexCredentials(native ? join(homedir(), HOME) : defaultHome(base))
+  credentialRevision: async (name) => {
+    const home = name === "default" ? join(homedir(), HOME) : null
+    const raw = home
+      ? await readCodexCredentials(home)
       : await readFile(join(accountDir("codex", name), "auth.json"), "utf8").catch((error) => {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
         throw error
       })
-    const env = native ? nativeEnv(base) : inherited ? base : {}
-    return credentialFingerprint([native || inherited ? defaultHome(env) : null, raw, ...[...AUTH_ENV, ...ROUTING_ENV].map(key => env[key] ?? null)])
+    return credentialFingerprint([home, raw])
   },
   useResetCredit,
 }

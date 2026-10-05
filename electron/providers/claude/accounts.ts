@@ -15,12 +15,10 @@ import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import type {
   AccountUsage,
-  AccountCaptureSource,
   HarnessAccount,
   UsageBalance,
   UsageWindow,
 } from "../../account-types.js"
-import { NATIVE_ACCOUNT } from "../../account-types.js"
 import {
   childProcessEnv,
   loginPending,
@@ -58,7 +56,7 @@ const ROUTING_ENV = [
   "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_SECURESTORAGE_CONFIG_DIR",
 ]
 
-/** Ordinary native login; no shell router, token override or alternate backend. */
+/** The CLI's ordinary login, whatever the shell exported: no config-dir override, token or alternate backend. */
 function nativeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...base }
   for (const key of [...AUTH_ENV, ...ROUTING_ENV, "CLAUDE_CONFIG_DIR"]) delete env[key]
@@ -81,7 +79,7 @@ async function assertProfileSettings(home: string): Promise<void> {
   const contents = await homeSettings(home)
   const env = contents === null ? null : valueFields(jsonFields(contents).get("env"))
   if ([...AUTH_ENV, ...ROUTING_ENV, "CLAUDE_CONFIG_DIR"].some(key => stringValue(env?.get(key))))
-    throw new Error("Claude home settings override this profile's authentication or backend. Remove those overrides or use the inherited CLI profile instead.")
+    throw new Error("Claude home settings override this profile's authentication or backend. Remove those overrides or use the default account instead.")
 }
 function hasCredentials(contents: string): boolean {
   try {
@@ -563,6 +561,6 @@ export const claudeAccountCapability: SelectableAccountCapability = {
   accountUsage,
   credentialRevision: async (name, base = process.env) => {
     const env = await usageEnv(name, base)
-    return credentialFingerprint([defaultHome(env), env.USER ?? null, await readCredentials(env), await homeSettings(defaultHome(env)), ...[...AUTH_ENV, ...ROUTING_ENV].map((key) => env[key] ?? null)])
+    return credentialFingerprint([defaultHome(env), env.USER ?? null, await readCredentials(env), await homeSettings(defaultHome(env))])
   },
 }
