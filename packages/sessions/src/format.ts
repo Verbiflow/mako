@@ -20,9 +20,8 @@ export type { AttachmentContent } from "./content.js"
  * here.
  */
 
-/** Which harness a session came from. Open — new harnesses appear monthly. */
-export type Harness =
-  "codex" | "claude" | "cursor" | "grok" | "devin" | (string & {})
+/** Which harness a session came from, by its provider id. Open: the installed harnesses are whichever the host has. */
+export type Harness = string
 
 /**
  * Token counts and spend for one assistant turn, when the harness records
