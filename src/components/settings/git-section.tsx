@@ -1,15 +1,19 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { RotateCcwIcon } from "lucide-react"
 import { Action, Keys, ListCard, Segmented, SettingRow, Toggle } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
+import type { UtilityModelSettings } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import type { Prefs } from "@/state/prefs"
 import { setPref, usePrefs } from "@/state/prefs"
 import { git } from "@/state/git"
-import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
+import { refreshCommitModel } from "@/state/commit-model"
+import { utilityModels } from "@/state/model-runtime"
+import { ModelConnections } from "./model-connections"
+import { UtilityModelPicker } from "./utility-model-picker"
 import { WorktreesSection } from "./worktrees-section"
 
-/** Settings › Git: how Changes looks, what writes commit messages, and worktrees. */
+/** Settings › Git: how Changes looks, everything about drafting commits and pull requests, and worktrees. */
 export function GitSection() {
   return (
     <div className="flex flex-col gap-8">
@@ -155,36 +159,45 @@ function FilesPicture() {
   )
 }
 
-/** The person's commit rules, and which model writes with them. */
+/**
+ * Drafting, in one place: the model that writes commit messages and pull
+ * request descriptions, the rules it writes by, and the API keys it can run on
+ * instead of a harness.
+ */
 function Writing() {
   const stored = usePrefs((prefs) => prefs.commitPrompt)
   const draftKeys = usePrefs((prefs) => prefs.keybindings["workspace.generate-commit"] ?? "mod+shift+g")
-  const { model, label, status } = useResolvedCommitModel()
+  const { settings, error, refresh, choose } = useDraftingModel()
+  const commit = settings?.work?.commit
   const [fallback, setFallback] = useState("")
   const [draft, setDraft] = useState<string | null>(null)
   useEffect(() => {
     void git.defaultPrompt().then(setFallback, () => setFallback(""))
-    void refreshCommitModel()
   }, [])
   const value = draft ?? stored ?? fallback
   const customized = Boolean(stored && stored !== fallback)
-  const writer = status.kind === "disconnected" ? status.reason : model ? label ?? model : "No model can write them yet"
+  const writer = error ?? (!commit ? "Loading models…" : commit.resolved ? `${commit.resolved.label} · ${commit.resolved.via}` : commit.reason)
   return (
     <section className="flex flex-col gap-3">
       <div>
-        <h3 className="text-ui font-medium">Writing</h3>
+        <h3 className="text-ui font-medium">Commit messages and pull requests</h3>
         <p className="mt-0.5 text-label text-muted-foreground">
-          Commit messages and pull request descriptions are drafted from the exact diff, with sensitive files left
-          out and named. Pull requests follow the repository's template when it has one.
+          Drafted from the exact diff, with sensitive files left out and named. Pull requests follow the
+          repository's template when it has one.
         </p>
       </div>
       <ListCard>
-        <SettingRow title="Written by" description={writer}>
-          <Action tone="outline" size="xs" onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))}>
-            Change in Models
-          </Action>
+        <SettingRow title="Drafting model" description={writer}>
+          <UtilityModelPicker state={commit} label="Model that drafts commit messages and pull requests" className="w-56 max-w-full" onChoose={(choice) => void choose(choice)} />
         </SettingRow>
       </ListCard>
+      <p className="-mt-1 text-label text-faint">
+        Automatic runs a harness's light model at low reasoning, on your own subscription: the first one in{" "}
+        <button type="button" className="pressable underline decoration-faint/50 underline-offset-2 hover:text-foreground" onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))}>
+          Models
+        </button>{" "}
+        that can draft.
+      </p>
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <label htmlFor="commit-instructions" className="text-ui font-medium">Commit instructions</label>
@@ -222,6 +235,37 @@ function Writing() {
           </Action>
         </div>
       </div>
+      <ModelConnections settings={settings} refresh={refresh} choose={choose} />
     </section>
   )
+}
+
+/** The drafting model's settings as the host reports them, read again on focus and after a change. */
+function useDraftingModel() {
+  const [settings, setSettings] = useState<UtilityModelSettings | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const refresh = useCallback(async () => {
+    try {
+      setSettings(await utilityModels.settings())
+      setError(null)
+      void refreshCommitModel()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Models could not be loaded.")
+    }
+  }, [])
+  useEffect(() => {
+    queueMicrotask(() => void refresh())
+    const focus = () => void refresh()
+    window.addEventListener("focus", focus)
+    return () => window.removeEventListener("focus", focus)
+  }, [refresh])
+  const choose = async (choice: string) => {
+    try {
+      await utilityModels.choose("commit", choice)
+      await refresh()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The choice could not be saved. Try again.")
+    }
+  }
+  return { settings, error, refresh, choose }
 }

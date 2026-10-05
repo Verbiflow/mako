@@ -488,7 +488,7 @@ async function check() {
       "The commit controls must not overflow"
     )
     window.setSize(1280, 960)
-    if (automatic) await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'models' })); void 0")
+    if (automatic) await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'git' })); void 0")
     else await click('[aria-label="Connect commit model"]')
     await until(
       "Boolean(document.querySelector('[aria-label=\"Connect Google\"]'))"

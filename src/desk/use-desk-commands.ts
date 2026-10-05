@@ -305,7 +305,7 @@ const DESK_COMMANDS: DeskCommand[] = [
       stage.open("changes")
       const { model, status } = await currentCommitModel()
       if (!model || status.kind === "disconnected") {
-        window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))
+        window.dispatchEvent(new CustomEvent("mako:settings", { detail: "git" }))
         return
       }
       const cwd = draftRepository(store.get())

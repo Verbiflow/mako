@@ -7,10 +7,9 @@ import { utilityModels } from "@/state/model-runtime"
 import { ConnectModel } from "./connect-model"
 
 /**
- * API keys for providers Mako can run light work on directly, beside the
- * harnesses. Connecting one makes it the model for commit messages and pull
- * requests; the task row above can switch back to Automatic. The settings are
- * that row's, so the two never disagree.
+ * API keys for providers Mako can draft with directly, beside the harnesses.
+ * Connecting one makes it the drafting model; the picker above can switch
+ * back to Automatic. The settings are that picker's, so the two never disagree.
  */
 export function ModelConnections({ settings, refresh, choose }: {
   settings: UtilityModelSettings | null
@@ -34,12 +33,11 @@ export function ModelConnections({ settings, refresh, choose }: {
   const drafting = settings?.work?.commit?.resolved?.id
 
   return (
-    <section aria-label="Model connections" className="mt-4 flex flex-col gap-3">
+    <section aria-label="Model connections" className="mt-2 flex flex-col gap-3">
       <div>
-        <h3 className="text-ui font-medium">API connections</h3>
+        <h4 className="text-ui font-medium">API connections</h4>
         <p className="mt-0.5 text-label text-muted-foreground">
-          A provider's API key, for commit messages and pull request descriptions without a harness. The key stays
-          in this Mac's key store.
+          Draft with a provider's API key instead of a harness. The key stays in this Mac's key store.
         </p>
       </div>
       {error ? (

@@ -7,6 +7,6 @@ export const section = {
   title: "Models",
   group: "Providers",
   icon: CpuIcon,
-  keywords: ["model", "loadout", "effort", "reasoning", "fast", "default", "recommended", "picker", "harness", "order", "setup", "commit messages", "pull request", "light model", "Automatic", "API key", "connection", "Google", "Gemini", "OpenAI", "Anthropic", "OpenAI-compatible", "local model"],
+  keywords: ["model", "loadout", "effort", "reasoning", "fast", "default", "recommended", "picker", "harness", "order", "setup"],
   Component: ModelsSection,
 } as const satisfies SettingsSection
