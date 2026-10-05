@@ -14,7 +14,7 @@ export async function claudeSdkOptions(
   input: ProviderStartOptions,
   trace: ProviderLaunchTrace
 ): Promise<ClaudeSdkConfiguration> {
-  const { env, account } = await trace.step("account", () => resolveAccountLaunch("claude", process.env))
+  const { env, account } = await trace.step("account", () => input.accountLaunch ?? resolveAccountLaunch("claude", process.env))
   applyControlEnvironment(env, input.conversationTools?.control)
   applyThreadEnvironment(env, input.threadEnvironment)
   const runtime = trace.sync("runtime-discovery", () => claudeRuntime(env))

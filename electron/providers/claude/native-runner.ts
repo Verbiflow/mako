@@ -1,5 +1,6 @@
 import { z } from "zod"
 import {
+  CLI_OWNED_CREDENTIALS,
   argumentAfter,
   commandTuning,
   dropUncarried,
@@ -25,6 +26,8 @@ function withEnv(command: NativeCommand, env: Record<string, string> | undefined
 
 export const claudeNativeRunner: NativeRunner = {
   provider: "claude",
+  transport: "claude-cli-headless",
+  launchCredentials: CLI_OWNED_CREDENTIALS,
   available: () => claudeRuntime() !== null,
   fastMode: "supported",
   carries: CARRIES,

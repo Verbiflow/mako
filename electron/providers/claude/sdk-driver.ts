@@ -1,3 +1,4 @@
+import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
@@ -41,6 +42,7 @@ import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../../prov
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { claudeAuthDiagnostics } from "./auth-diagnostics.js"
+import type { ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
 import { claudeCommandLifecycle } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../../native-continuation.js"
@@ -120,6 +122,7 @@ export interface ClaudeSdkDependencies {
   interruptTimeoutMs?: number
   receiptTimeoutMs?: number
   prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root">) => Promise<ClaudePermissionObserver | undefined>
+  inspectCredentials?: (env: NodeJS.ProcessEnv) => Promise<ClaudeCredentialState>
 }
 
 type Engine = LiveEngineApi<Live>
@@ -317,8 +320,10 @@ export function createClaudeSdkDriver(
   }
   return {
     provider: "claude",
+    launchEnvironment: { kind: "prepared", via: "SDK configuration consumes ProviderStartOptions.accountLaunch." },
     nativeIdentity: CLAUDE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question", ...(dependencies.prepareApprovals ? ["tool-permission" as const] : [])], coverage: "Parent AskUserQuestion results in the saved branch; parent tool decisions from the bundled runtime's local native event exporter, retained before delivery. Existing telemetry configuration, custom runtimes, child tools and MCP elicitation retain submission evidence unless a matching observer is available. Missing native events never confirm an answer." },
     planning: { via: "mode", mode: "plan", proposal: "ExitPlanMode's `plan` input, built by answering its permission request" },
     approvalAnswerDigest: claudeApprovalAnswerDigest,
@@ -406,7 +411,8 @@ export function createClaudeSdkDriver(
       })
       hostLog("claude-sdk", "initializing", { conversation: conversationId })
       const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
-        hostWarn("claude-auth", "Native authentication failure", { conversation: conversationId, ...fields }))
+        hostWarn("claude-auth", "Native authentication failure", { conversation: conversationId, ...fields }),
+      dependencies.inspectCredentials)
       let query: ClaudeQuery
       try { query = dependencies.query({
         prompt: input,

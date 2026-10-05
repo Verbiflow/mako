@@ -15,12 +15,18 @@ import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import type {
   AccountUsage,
+  AccountCaptureSource,
   HarnessAccount,
   UsageBalance,
   UsageWindow,
 } from "../../account-types.js"
+import { NATIVE_ACCOUNT } from "../../account-types.js"
 import {
   childProcessEnv,
+  loginPending,
+  markLoginPending,
+  managedAccountHome,
+  recordAccountHome,
   credentialFingerprint,
   accountDir,
   accountsRoot,
@@ -28,6 +34,7 @@ import {
   deleteKeychain,
   ensureSharedLinks,
   jsonFields,
+  keychainWrittenAt,
   numberValue,
   parseUsageReset,
   readKeychain,
@@ -37,7 +44,8 @@ import {
 } from "../../accounts-common.js"
 import type { JsonValue } from "../../codex-app-json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
-import type { SelectableAccountCapability } from "../account-capability.js"
+import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
+import { claudeRuntime } from "./runtime.js"
 
 /** Env vars that would override file credentials and cross accounts. */
 const AUTH_ENV = [
@@ -45,11 +53,35 @@ const AUTH_ENV = [
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ]
+const ROUTING_ENV = [
+  "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+]
+
+/** Ordinary native login; no shell router, token override or alternate backend. */
+function nativeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base }
+  for (const key of [...AUTH_ENV, ...ROUTING_ENV, "CLAUDE_CONFIG_DIR"]) delete env[key]
+  return env
+}
 
 /** Everything except credentials stays shared across accounts. */
 const HOME = ".claude"
 function defaultHome(env: NodeJS.ProcessEnv = process.env) {
   return env.CLAUDE_CONFIG_DIR || join(homedir(), HOME)
+}
+async function homeSettings(home: string): Promise<string | null> {
+  try { return await readFile(join(home, "settings.json"), "utf8") }
+  catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
+    throw error
+  }
+}
+async function assertProfileSettings(home: string): Promise<void> {
+  const contents = await homeSettings(home)
+  const env = contents === null ? null : valueFields(jsonFields(contents).get("env"))
+  if ([...AUTH_ENV, ...ROUTING_ENV, "CLAUDE_CONFIG_DIR"].some(key => stringValue(env?.get(key))))
+    throw new Error("Claude home settings override this profile's authentication or backend. Remove those overrides or use the inherited CLI profile instead.")
 }
 function hasCredentials(contents: string): boolean {
   try {
@@ -71,25 +103,9 @@ const SHARED_LINKS = [
   "todos",
 ]
 
-interface RouterProfile {
-  email: string
-  dir: string
-}
-
 function parseClaudeConfig(contents: string): string | undefined {
   const account = valueFields(jsonFields(contents).get("oauthAccount"))
   return stringValue(account?.get("emailAddress"))
-}
-
-function parseRouterProfiles(contents: string): RouterProfile[] {
-  const profiles = valueFields(jsonFields(contents).get("profiles"))
-  if (!profiles) return []
-  const parsed: RouterProfile[] = []
-  for (const [email, value] of profiles) {
-    const dir = stringValue(valueFields(value)?.get("dir"))
-    if (dir !== undefined) parsed.push({ email, dir })
-  }
-  return parsed
 }
 
 interface ClaudeCredential {
@@ -207,44 +223,6 @@ async function accountEmail(dir: string): Promise<string | undefined> {
   }
 }
 
-/**
- * Accounts a router already manages. Subrouter keeps Claude profiles in
- * <router>/claude.json, each with its own directly usable config dir.
- */
-async function subrouterAccounts(): Promise<HarnessAccount[]> {
-  const accounts: HarnessAccount[] = []
-  const root = join(homedir(), ".subrouter")
-  let routers: string[]
-  try {
-    routers = (await readdir(root)).filter(
-      (name) => !name.startsWith(".") && !name.includes(".")
-    )
-  } catch {
-    return accounts
-  }
-  for (const router of routers) {
-    try {
-      const profiles = parseRouterProfiles(
-        await readFile(join(root, router, "claude.json"), "utf8")
-      )
-      for (const profile of profiles) {
-        const dir = join(root, router, "claude", profile.dir)
-        accounts.push({
-          harness: "claude",
-          name: profile.email,
-          email: await accountEmail(dir) ?? profile.email,
-          dir,
-          active: false,
-          source: "subrouter",
-        })
-      }
-    } catch {
-      // This router has no Claude profiles.
-    }
-  }
-  return accounts
-}
-
 async function listAccounts(
   selection: string | null
 ): Promise<HarnessAccount[]> {
@@ -253,36 +231,36 @@ async function listAccounts(
   accounts.push({
     harness: "claude",
     name: "default",
-    email: await accountEmail(identityDir(defaultDir)),
+    email: AUTH_ENV.some(key => process.env[key]) ? undefined : await accountEmail(process.env.CLAUDE_CONFIG_DIR ? defaultDir : identityDir(defaultDir)),
     dir: defaultDir,
     active: !selection,
+    source: "cli",
+    route: process.env.CLAUDE_CONFIG_DIR || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key]) ? "inherited" : "native",
   })
+  if (selection === NATIVE_ACCOUNT || process.env.CLAUDE_CONFIG_DIR || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key])) {
+    // The ordinary home is only worth a row when it is signed in or chosen.
+    const email = await accountEmail(homedir())
+    if (email || selection === NATIVE_ACCOUNT)
+      accounts.push({ harness: "claude", name: NATIVE_ACCOUNT, email, dir: join(homedir(), HOME),
+        active: selection === NATIVE_ACCOUNT, source: "cli", route: "native" })
+  }
   try {
     for (const name of await readdir(join(accountsRoot(), "claude"))) {
       if (name.startsWith(".")) continue
       const dir = accountDir("claude", name)
+      if (loginPending(dir)) continue
       accounts.push({
         harness: "claude",
         name,
         email: await accountEmail(dir),
         dir,
         active: selection === name,
+        source: "mako",
+        route: "managed",
       })
     }
   } catch {
-    // No captured Claude accounts yet.
-  }
-
-  // Router-managed logins ride along, deduped by identity against what Mako
-  // captured itself.
-  const known = new Set(
-    accounts.map((account) => account.email ?? account.name)
-  )
-  for (const account of await subrouterAccounts()) {
-    if (selection === account.name || !known.has(account.email ?? account.name)) {
-      accounts.push({ ...account, active: selection === account.name })
-      known.add(account.email ?? account.name)
-    }
+    // No Claude accounts added in Mako yet.
   }
   return accounts
 }
@@ -296,20 +274,36 @@ function scopedService(configDir: string): string {
   return `Claude Code-credentials-${suffix}`
 }
 
-/** Follow native secure-storage precedence; a stale file must not shadow Keychain. */
-async function readCredentials(env: NodeJS.ProcessEnv): Promise<string | null> {
-  const override = env.CLAUDE_SECURESTORAGE_CONFIG_DIR
-  const configured = override ?? env.CLAUDE_CONFIG_DIR
+interface CredentialScope {
+  dir: string
+  service: string
+  account: string
+  scoped: boolean
+}
+
+interface CredentialSource {
+  store: "keychain" | "file"
+  contents: string
+}
+
+function credentialScope(env: NodeJS.ProcessEnv): CredentialScope {
+  const configured = env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR
   const dir = (configured || join(homedir(), HOME)).normalize("NFC")
   const username = env.USER || userInfo().username
-  const account = /^[a-zA-Z0-9._-]+$/.test(username) ? username : "claude-code-user"
-  const keychain = await readKeychain(
-    configured ? scopedService(dir) : "Claude Code-credentials",
-    account
-  )
-  if (keychain !== null) return keychain
+  return {
+    dir,
+    service: configured ? scopedService(dir) : "Claude Code-credentials",
+    account: /^[a-zA-Z0-9._-]+$/.test(username) ? username : "claude-code-user",
+    scoped: Boolean(configured),
+  }
+}
+
+/** Follow native secure-storage precedence; a stale file must not shadow Keychain. */
+async function readCredentialSource(scope: CredentialScope): Promise<CredentialSource | null> {
+  const keychain = await readKeychain(scope.service, scope.account, "required")
+  if (keychain !== null) return { store: "keychain", contents: keychain }
   try {
-    return await readFile(join(dir, ".credentials.json"), "utf8")
+    return { store: "file", contents: await readFile(join(scope.dir, ".credentials.json"), "utf8") }
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT")
       return null
@@ -317,13 +311,78 @@ async function readCredentials(env: NodeJS.ProcessEnv): Promise<string | null> {
   }
 }
 
+async function readCredentials(env: NodeJS.ProcessEnv): Promise<string | null> {
+  return (await readCredentialSource(credentialScope(env)))?.contents ?? null
+}
+
+interface ClaudeStoreMissing {
+  store: "none"
+  scoped: boolean
+}
+
+interface ClaudeStoreUnreadable {
+  store: "unreadable"
+  scoped: boolean
+}
+
+interface ClaudeStoreHeld {
+  store: "keychain" | "file"
+  scoped: boolean
+  access: boolean
+  refresh: "present" | "empty" | "missing"
+  expiresAt?: string
+  refreshExpiresAt?: string
+  writtenAt?: string
+}
+
+/** The store native Claude reads for this environment, described without its secrets. */
+export type ClaudeCredentialState = ClaudeStoreMissing | ClaudeStoreUnreadable | ClaudeStoreHeld
+
+export async function claudeCredentialState(env: NodeJS.ProcessEnv): Promise<ClaudeCredentialState> {
+  const scope = credentialScope(env)
+  let source: CredentialSource | null
+  try {
+    source = await readCredentialSource(scope)
+  } catch {
+    return { store: "unreadable", scoped: scope.scoped }
+  }
+  if (!source) return { store: "none", scoped: scope.scoped }
+  let oauth: Map<string, JsonValue> | null = null
+  try { oauth = valueFields(jsonFields(source.contents).get("claudeAiOauth")) } catch { /* Unparseable reads as signed out. */ }
+  const refresh = stringValue(oauth?.get("refreshToken"))
+  const state: ClaudeStoreHeld = {
+    store: source.store,
+    scoped: scope.scoped,
+    access: Boolean(stringValue(oauth?.get("accessToken"))),
+    refresh: refresh === undefined ? "missing" : refresh ? "present" : "empty",
+  }
+  const instant = (key: string) => {
+    const value = numberValue(oauth?.get(key))
+    // Claude writes 0 when it clears a store.
+    return value === undefined || value <= 0 ? undefined : new Date(value).toISOString()
+  }
+  const expiresAt = instant("expiresAt")
+  const refreshExpiresAt = instant("refreshTokenExpiresAt")
+  if (expiresAt) state.expiresAt = expiresAt
+  if (refreshExpiresAt) state.refreshExpiresAt = refreshExpiresAt
+  if (source.store === "keychain") {
+    const writtenAt = await keychainWrittenAt(scope.service, scope.account)
+    if (writtenAt) state.writtenAt = writtenAt
+  }
+  return state
+}
+
 /**
  * Capture the CLI's current login as a named account. Credentials are copied,
  * never invented; browser OAuth remains the CLI's job.
  */
-async function captureAccount(name: string): Promise<void> {
+async function captureAccount(name: string, source: AccountCaptureSource = "inherited"): Promise<void> {
   const clean = cleanAccountName(name)
-  const realHome = defaultHome()
+  const env = source === "native" ? nativeEnv(process.env) : process.env
+  if (AUTH_ENV.some(key => env[key]))
+    throw new Error("This profile uses an environment token or API key. Choose Ordinary CLI login to save the native subscription login; environment credentials are not captured as a different account.")
+  const realHome = defaultHome(env)
+  await assertProfileSettings(realHome)
   const dir = accountDir("claude", clean)
   await mkdir(join(accountsRoot(), "claude"), { recursive: true, mode: 0o700 })
   await mkdir(dir, { mode: 0o700 })
@@ -332,7 +391,7 @@ async function captureAccount(name: string): Promise<void> {
   try {
     // Credentials are required — an account with no keys is nothing.
     let captured = false
-    const credentials = await readCredentials(process.env)
+    const credentials = await readCredentials(env)
     if (credentials) {
       if (!hasCredentials(credentials))
         throw new Error(
@@ -349,7 +408,7 @@ async function captureAccount(name: string): Promise<void> {
 
     // The CLI's onboarding/config state is copied, not linked: it embeds
     // account state and prevents first-time setup from running again.
-    const config = process.env.CLAUDE_CONFIG_DIR
+    const config = env.CLAUDE_CONFIG_DIR
       ? join(realHome, ".claude.json")
       : join(homedir(), ".claude.json")
     if (existsSync(config)) await copyFile(config, join(dir, ".claude.json"))
@@ -361,6 +420,7 @@ async function captureAccount(name: string): Promise<void> {
     }
 
     // Sessions and skills remain in the one watched store for every account.
+    await recordAccountHome(dir, realHome)
     await ensureSharedLinks(realHome, dir, SHARED_LINKS)
   } catch (error) {
     if (scopedLoginSaved) await deleteKeychain(scopedService(dir))
@@ -369,8 +429,46 @@ async function captureAccount(name: string): Promise<void> {
   }
 }
 
+/**
+ * The runtime's own subscription sign-in: into an empty profile, or over the
+ * expired login of one Mako keeps, which Claude replaces in place.
+ */
+async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
+  const runtime = claudeRuntime()
+  if (!runtime) throw new Error("Claude Code isn't installed. Install it, then sign in.")
+  const command = (dir: string): AccountLoginLaunch => {
+    const env = childProcessEnv(process.env)
+    for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
+    env.CLAUDE_CONFIG_DIR = dir
+    return {
+      kind: "command",
+      executable: runtime.executable,
+      args: ["auth", "login", "--claudeai"],
+      statusArgs: ["auth", "status"],
+      env,
+      paste: "code",
+    }
+  }
+  if (renew) {
+    const dir = accountDir("claude", name)
+    if (!existsSync(dir)) throw new Error("That Claude Code account is gone. Refresh to see your accounts.")
+    return command(dir)
+  }
+  const dir = accountDir("claude", cleanAccountName(name))
+  const home = join(homedir(), HOME)
+  await assertProfileSettings(home)
+  await mkdir(join(accountsRoot(), "claude"), { recursive: true, mode: 0o700 })
+  await mkdir(dir, { mode: 0o700 })
+  try {
+    await markLoginPending(dir)
+    await recordAccountHome(dir, home)
+    await ensureSharedLinks(home, dir, SHARED_LINKS)
+    return command(dir)
+  } catch (error) { await rm(dir, { recursive: true, force: true }); throw error }
+}
+
 async function removeAccount(name: string): Promise<void> {
-  if (name === "default")
+  if (name === "default" || name === NATIVE_ACCOUNT)
     throw new Error("The default account is the CLI's own login")
   const dir = accountDir("claude", name)
   await deleteKeychain(scopedService(dir))
@@ -383,19 +481,13 @@ async function accountEnv(
 ): Promise<NodeJS.ProcessEnv> {
   const env = { ...base }
   if (!selection) return env
-  for (const key of AUTH_ENV) delete env[key]
+  if (selection === NATIVE_ACCOUNT) return nativeEnv(base)
+  for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
 
-  let dir = accountDir("claude", selection)
-  if (!existsSync(dir)) {
-    // Router profiles are real config homes and route directly.
-    const routed = (await subrouterAccounts()).find(
-      (account) => account.name === selection
-    )
-    if (routed) dir = routed.dir
-  }
+  const dir = accountDir("claude", selection)
   if (!existsSync(dir))
     throw new Error(
-      "The selected Claude Code account no longer exists. Select another account or capture it again."
+      "The selected Claude Code account no longer exists. Choose another account in Settings → Agents."
     )
   // An explicit account owns its credential home, including secure storage.
   delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
@@ -403,9 +495,10 @@ async function accountEnv(
   const credentials = await readCredentials(env)
   if (!credentials || !hasCredentials(credentials))
     throw new Error(
-      "The selected Claude Code account has no valid credentials. Sign in with the CLI and capture it again."
+      "The selected Claude Code account is signed out. Sign in again in Settings → Agents."
     )
-  await ensureSharedLinks(defaultHome(base), dir, SHARED_LINKS)
+  await ensureSharedLinks(await managedAccountHome(dir, defaultHome(base), "projects"), dir, SHARED_LINKS)
+  await assertProfileSettings(dir)
   return env
 }
 
@@ -460,16 +553,11 @@ export async function claudeOAuthUsage(
   }
 }
 
-async function usageEnv(name: string): Promise<NodeJS.ProcessEnv> {
-  if (name === "default") return process.env
-  // Use the same captured-before-router precedence as native launches.
-  const routed = (await subrouterAccounts()).find(
-    (account) => account.name === name
-  )
-  const captured = accountDir("claude", name)
-  const dir = existsSync(captured) ? captured : routed?.dir ?? captured
-  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CONFIG_DIR: dir }
-  for (const key of AUTH_ENV) delete env[key]
+async function usageEnv(name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+  if (name === "default") return base
+  if (name === NATIVE_ACCOUNT) return nativeEnv(base)
+  const env: NodeJS.ProcessEnv = { ...base, CLAUDE_CONFIG_DIR: accountDir("claude", name) }
+  for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
   delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
   return env
 }
@@ -481,19 +569,19 @@ async function accountUsage(name: string): Promise<AccountUsage> {
 export const claudeAccountCapability: SelectableAccountCapability = {
   provider: "claude",
   mode: "selectable",
+  nativeLogin: true,
   label: "Claude Code",
-  loginCommand: "claude /login",
+  loginCommand: "claude auth login",
   listAccounts,
   captureAccount,
+  prepareAccountLogin,
   removeAccount,
   accountEnv,
   selectedAccount: (selection, env) =>
-    selection && env.CLAUDE_CONFIG_DIR
-      ? { name: selection, dir: env.CLAUDE_CONFIG_DIR }
-      : { name: "default" },
+    ({ name: selection ?? "default", dir: defaultHome(env) }),
   accountUsage,
-  credentialRevision: async (name) => {
-    const env = await usageEnv(name)
-    return credentialFingerprint([await readCredentials(env), ...AUTH_ENV.map((key) => env[key] ?? null)])
+  credentialRevision: async (name, base = process.env) => {
+    const env = await usageEnv(name, base)
+    return credentialFingerprint([defaultHome(env), env.USER ?? null, await readCredentials(env), await homeSettings(defaultHome(env)), ...[...AUTH_ENV, ...ROUTING_ENV].map((key) => env[key] ?? null)])
   },
 }
