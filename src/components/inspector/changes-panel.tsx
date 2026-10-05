@@ -644,7 +644,7 @@ function StageCell({
           onToggle()
         }}
         className={cn(
-          "pressable stage-hit-target absolute inset-0 flex cursor-pointer items-center justify-center rounded select-none transition-opacity duration-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
+          "pressable stage-hit-target absolute inset-0 flex cursor-pointer items-center justify-center select-none transition-opacity duration-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
           !shown && "opacity-0"
         )}
       >
@@ -764,7 +764,7 @@ function FileRow({
       <button
         type="button"
         onClick={() => onSelect(file.path)}
-        title={`${file.path} · ${mark.title}`}
+        title={file.path}
         style={indent(row.depth)}
         className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
