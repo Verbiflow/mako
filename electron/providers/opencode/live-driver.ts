@@ -618,8 +618,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   return {
     provider: "opencode",
+    launchEnvironment: { kind: "prepared", via: "Native API launch consumes ProviderStartOptions.accountLaunch." },
     nativeIdentity: OPENCODE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: { kind: "accepted-message-id", evidence: "OpenCode v2 session.prompt returns the accepted inbox ID; the native user message stores that same ID. Commands without that receipt remain uncorrelated." },
     planning: { via: "mode", mode: OPENCODE_PLAN_AGENT, proposal: "The Plan agent's reply to a step that ends its turn, built by a message to Build" },
     approvalEvidence: {
       kind: "native-decisions",
@@ -658,7 +660,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false) throw new Error("This OpenCode binding is already connected")
       if (options.fork) throw new Error("OpenCode conversations cannot be forked from Mako yet")
-      const env = await trace.step("account", () => dependencies.env())
+      const env = await trace.step("account", () => options.accountLaunch?.env ?? dependencies.env())
       delete env.CLAUDECODE
       delete env.CLAUDE_CODE_ENTRYPOINT
       const launchAccess = openCodeLaunchAccess(options.modeId)
@@ -671,7 +673,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const servers = await trace.step("mcp-preparation", () => mcpServers(options))
       const approvalRoot = await dependencies.approvalRoot()
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, fetch: dependencies.fetch })
-      const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, undefined, installation.command)
+      const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch?.account, installation.command)
       context.runtime = reportedRuntime(api.health.version, "launched native API health.version")
       const live: Live = {
         api, cwd, env, emit: options.emit, launchAccess, capture: null, catalogGeneration: 0, turn: null, queue: Promise.resolve(),

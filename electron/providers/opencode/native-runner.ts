@@ -1,5 +1,6 @@
 import { openCodeExecutable, verifyOpenCodeSession, resolveOpenCodeInstallation } from "./installation.js"
 import {
+  CLI_OWNED_CREDENTIALS,
   argumentAfter,
   commandTuning,
   dropUncarried,
@@ -16,6 +17,8 @@ function tuningArgs(tuning: CommandTuning) {
 
 export const openCodeNativeRunner: NativeRunner = {
   provider: "opencode",
+  transport: "opencode-cli-headless",
+  launchCredentials: CLI_OWNED_CREDENTIALS,
   available: () => openCodeExecutable() !== null,
   fastMode: "supported",
   carries: CARRIES,

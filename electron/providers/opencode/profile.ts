@@ -43,10 +43,10 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
       return `${configuration}:missing`
     }
   },
-  async load(env, cwd) {
+  async load(env, cwd, context) {
     const installation = await resolveOpenCodeInstallation(env)
     const directory = cwd && existsSync(cwd) ? cwd : homedir()
-    const catalog = await discoverOpenCodeCatalog(installation.command, env, directory)
+    const catalog = await discoverOpenCodeCatalog(installation.command, env, directory, context?.signal)
     if (!catalog.models.length)
       throw new Error("OpenCode reported no enabled models for this workspace")
     const profile: HarnessModelCatalog = { models: catalog.models }
@@ -76,9 +76,9 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
  * catalog change reported while loading (OpenCode refreshes models after
  * startup) is read again rather than answered from the older list.
  */
-async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string): Promise<OpenCodeCatalog> {
+async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string, signal?: AbortSignal): Promise<OpenCodeCatalog> {
   const trace = new ProviderLaunchTrace({ provider: "opencode", conversation: "model-discovery" }, { report() {} })
-  const api = await startOpenCodeApi({ command, cwd: directory, env, conversationId: "model-discovery", trace })
+  const api = await startOpenCodeApi({ command, cwd: directory, env, conversationId: "model-discovery", trace, signal })
   const stream = new AbortController()
   try {
     const events = api.client.event.subscribe({ signal: AbortSignal.any([stream.signal, api.signal]) })[Symbol.asyncIterator]()
