@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createCursorModelCache } from "../electron/providers/cursor/sdk/models.ts"
+import { createCursorModelCache, listCursorSdkModels } from "../electron/providers/cursor/sdk/models.ts"
 import { createCursorSdkDriver, type CursorSdkLiveClient } from "../electron/providers/cursor/sdk/driver.ts"
 import { CursorSdkAuth, type CursorSdkSpawnOptions } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
@@ -55,6 +55,40 @@ assert.equal((await cache(keyA, async () => catalog("wrong")))[0].id, "refreshed
 const unseen = { CURSOR_API_KEY: "uncached-failure" }
 await assert.rejects(cache(unseen, async () => { throw Error("first failure") }), /first failure/)
 assert.equal((await cache(unseen, async () => catalog("retry")))[0].id, "retry")
+
+const obsoleteOwner = new AbortController()
+const cancelledCache = createCursorModelCache()
+const oldGate = Promise.withResolvers<SdkModelListItem[]>()
+const oldDiscovery = cancelledCache(keyA, () => oldGate.promise, true, obsoleteOwner.signal)
+const cancelled = assert.rejects(oldDiscovery, /superseded/)
+await new Promise<void>(resolve => setImmediate(resolve))
+obsoleteOwner.abort(new Error("superseded fixture discovery"))
+assert.equal((await cancelledCache(keyA, async () => catalog("replacement"), true))[0].id, "replacement", "a new owner cannot join the cancelled catalog request")
+oldGate.resolve(catalog("obsolete"))
+await cancelled
+assert.equal((await cancelledCache(keyA, async () => catalog("wrong")))[0].id, "replacement", "late cleanup cannot remove the replacement catalog")
+
+const modelOwner = new AbortController()
+const helloGate = Promise.withResolvers<{ wire: 1; sdkVersion: string; node: string }>()
+const closeGate = Promise.withResolvers<void>()
+let closes = 0
+let modelRequests = 0
+const modelRequest = listCursorSdkModels({ env: keyA, signal: modelOwner.signal, client: () => ({
+  hello: () => helloGate.promise,
+  request: async () => { modelRequests++; throw new Error("No model request after cancellation") },
+  close: async () => { closes++; await closeGate.promise },
+}) })
+let finished = false
+const refusedModels = assert.rejects(modelRequest, /cancelled fixture models/).then(() => { finished = true })
+modelOwner.abort(new Error("cancelled fixture models"))
+helloGate.resolve({ wire: 1, sdkVersion: "fixture", node: process.version })
+await new Promise<void>(resolve => setImmediate(resolve))
+assert.equal(closes, 1, "cancellation closes the exact discovery client once")
+assert.equal(modelRequests, 0, "a cancelled handshake cannot advance to model discovery")
+assert.equal(finished, false, "the query retains its cleanup boundary until close settles")
+closeGate.resolve()
+await refusedModels
+await assert.rejects(listCursorSdkModels({ env: keyA, signal: modelOwner.signal, client: () => { throw new Error("Pre-aborted discovery cannot spawn") } }), /cancelled fixture models/)
 
 const root = await mkdtemp(join(tmpdir(), "mako-cursor-model-cache-"))
 let env = keyA

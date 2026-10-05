@@ -56,6 +56,8 @@ const options: ProviderStartOptions = { conversationId: "owner-a" }
 externalOwner = "external-cli"
 await assert.rejects(guarded.start("/fixture", options), /held by external/)
 assert.equal(closes, 0, "failed acquisition cannot close an external executor")
+await guarded.close("owner-a")
+assert.equal(closes, 0, "cleanup after refused startup cannot close an external executor")
 externalOwner = undefined
 await guarded.start("/fixture", options)
 await assert.rejects(guarded.start("/fixture", options), /already has an execution owner/)
@@ -75,9 +77,11 @@ await Promise.all([guarded.close("owner-a"), guarded.close("owner-a")])
 assert.equal(releases, 1, "concurrent close shares one cleanup and release")
 
 const acquiring = Promise.withResolvers<void>()
-releaseAcquisition = () => acquiring.promise
+const acquisitionStarted = Promise.withResolvers<void>()
+releaseAcquisition = () => { acquisitionStarted.resolve(); return acquiring.promise }
 const starting = guarded.start("/fixture", options)
 const startRejected = assert.rejects(starting, /closing|changed/)
+await acquisitionStarted.promise
 const closing = guarded.close("owner-a")
 acquiring.resolve()
 await Promise.all([startRejected, closing])

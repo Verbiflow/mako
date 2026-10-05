@@ -12,6 +12,7 @@ import {
   harnessProfilesNow,
   resolveHarnessLaunch,
   onHarnessProfile,
+  refreshHarnessProfiles,
 } from "../electron/harnesses.js"
 import type { HarnessProfile } from "../electron/shared.js"
 
@@ -349,6 +350,84 @@ try {
   assert.equal(blank.available, false)
   assert.match(blank.error ?? "", /ENOENT/)
   failWith = null
+  // The same revision fence protects every registered family and a future
+  // adapter. All native discovery here is replaced by controlled loaders.
+  for (const family of [...providerHost.liveDrivers.list().map(driver => driver.provider), "future-harness"]) {
+    const id = `refresh-fixture-${family}`
+    const oldGate = Promise.withResolvers<HarnessProfile>()
+    const latestGate = Promise.withResolvers<HarnessProfile>()
+    const oldSendGate = Promise.withResolvers<HarnessProfile>()
+    const latestSendGate = Promise.withResolvers<HarnessProfile>()
+    let calls = 0
+    let sendCalls = 0
+    let accountScope = "display"
+    const displaySignals: AbortSignal[] = []
+    const sendSignals: AbortSignal[] = []
+    const newest = { ...profile, id, models: [{ id: "new-runtime", label: "New", options: [] }] }
+    const obsolete = { ...newest, models: [{ id: "old-runtime", label: "Old", options: [] }] }
+    const unregister = providerHost.profiles.register({
+      provider: id, label: family, transport: "sdk", capabilities: [],
+      cacheKey: () => accountScope,
+      load: async (_env, _cwd, context) => {
+        assert.ok(context)
+        displaySignals.push(context.signal)
+        calls++
+        if (accountScope === "send") return { ...newest, available: false, models: [] }
+        return calls === 1 ? oldGate.promise : calls === 2 ? latestGate.promise : newest
+      },
+      loadForSend: async (_env, _cwd, context) => {
+        assert.ok(context)
+        sendSignals.push(context.signal)
+        return ++sendCalls === 1 ? oldSendGate.promise : latestSendGate.promise
+      },
+    })
+    const published: string[] = []
+    const unlisten = onHarnessProfile(event => { if (event.profile.id === id) published.push(event.profile.models[0]!.id) })
+    try {
+      const oldRequest = harnessProfile(id, true, workspace("one"))
+      const obsoleteRejected = assert.rejects(oldRequest, /superseded/)
+      await until(() => calls === 1)
+      const refresh = refreshHarnessProfiles(id)
+      await until(() => calls === 2)
+      assert.equal(displaySignals[0]!.aborted, true, `${family}: refresh cancels the obsolete display owner`)
+      assert.equal(displaySignals[1]!.aborted, false, `${family}: refresh cannot cancel its replacement`)
+      oldGate.resolve(obsolete)
+      await obsoleteRejected
+      // A normal consumer joins the replacement or reads its completed cache.
+      // A second forced refresh is allowed to start another query if realpath
+      // finishes after the first one, so it cannot prove single publication.
+      const joined = harnessProfile(id, false, workspace("one"))
+      await settle()
+      assert.equal(calls, 2, `${family}: stale completion cannot delete the new request`)
+      latestGate.resolve(newest)
+      await refresh
+      assert.equal((await joined).models[0]!.id, "new-runtime")
+      assert.equal(calls, 2, `${family}: a consumer joins discovery or reads its completed cache`)
+      assert.deepEqual(published, ["new-runtime"], `${family}: obsolete results cannot publish`)
+      assert.equal((await harnessProfileForSend(id, workspace("one"))).models[0]!.id, "new-runtime")
+      accountScope = "send"
+      const oldSend = harnessProfileForSend(id, workspace("one"))
+      const oldSendRejected = assert.rejects(oldSend, /superseded/)
+      await until(() => sendCalls === 1)
+      await refreshHarnessProfiles(id)
+      assert.equal(sendSignals[0]!.aborted, true, `${family}: refresh cancels obsolete send discovery`)
+      now += 31_000
+      const newSend = harnessProfileForSend(id, workspace("one"))
+      await until(() => sendCalls === 2)
+      assert.equal(sendSignals[1]!.aborted, false, `${family}: a new send receives a live owner`)
+      oldSendGate.resolve(obsolete)
+      await oldSendRejected
+      const joinedSend = harnessProfileForSend(id, workspace("one"))
+      await settle()
+      assert.equal(sendCalls, 2, `${family}: stale send discovery cannot delete its replacement`)
+      latestSendGate.resolve(newest)
+      assert.equal((await newSend).models[0]!.id, "new-runtime")
+      assert.equal((await joinedSend).models[0]!.id, "new-runtime")
+    } finally {
+      unlisten()
+      unregister()
+    }
+  }
   console.log(
     "Send discovery: native defaults and native IDs avoid discovery; a new workspace borrows the account's catalog; option validation, concurrent launches, account/workspace isolation, aliases, and full profile updates are preserved"
   )

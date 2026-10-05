@@ -50,17 +50,19 @@ if (args[0] === 'find-generic-password') {
 } else process.exit(1);
 `, { mode: 0o700 })
     process.env.PATH = `${bin}:${originalEnv.PATH ?? ""}`
-    delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR
-    const routed = join(root, ".subrouter", "fixture", "claude", "profile")
-    await mkdir(routed, { recursive: true })
-    await writeFile(join(routed, ".credentials.json"), credentials("old-file"))
-    process.env.CLAUDE_CONFIG_DIR = routed
-    await setKeychain(service(routed), "fresh-native")
+    const native = join(root, ".claude")
+    await mkdir(native, { recursive: true })
+    await writeFile(join(native, ".credentials.json"), credentials("old-file"))
+    await setKeychain("Claude Code-credentials", "fresh-native")
+    const elsewhere = join(root, "elsewhere")
+    process.env.CLAUDE_CONFIG_DIR = elsewhere
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = elsewhere
+    await setKeychain(service(elsewhere), "other-login")
     assert.equal((await claude.accountUsage("default")).status, "ok")
-    assert.equal(bearer, "Bearer fresh-native", "default follows the inherited native scope")
+    assert.equal(bearer, "Bearer fresh-native", "the default account is the terminal's ordinary login, whatever config home the shell exported")
 
     // The file may be corrupt while the native Keychain login remains healthy.
-    await writeFile(join(routed, ".credentials.json"), "broken")
+    await writeFile(join(native, ".credentials.json"), "broken")
     await claude.captureAccount("saved")
     const saved = join(root, ".mako", "accounts", "claude", "saved")
     assert.equal(await readFile(join(saved, ".credentials.json"), "utf8"), credentials("fresh-native"))
@@ -77,35 +79,20 @@ if (args[0] === 'find-generic-password') {
     assert.equal(env.CLAUDE_SECURESTORAGE_CONFIG_DIR, undefined)
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, undefined)
 
-    // Usage resolves the same named account as launch, even with a router name collision.
-    await writeFile(join(root, ".subrouter", "fixture", "claude.json"), JSON.stringify({
-      profiles: { saved: { dir: "profile" } },
-    }))
+    // Usage resolves the same named account as launch.
     await setKeychain(service(saved), "captured-current")
     await claude.accountUsage("saved")
     assert.equal(bearer, "Bearer captured-current")
 
-    // Follow native explicit secure-storage overrides for the default account only.
-    const secure = join(root, "secure")
-    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = secure
-    await setKeychain(service(secure), "secure-current")
-    await claude.accountUsage("default")
-    assert.equal(bearer, "Bearer secure-current")
-    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = ""
-    await setKeychain("Claude Code-credentials", "unscoped-current")
-    await claude.accountUsage("default")
-    assert.equal(bearer, "Bearer unscoped-current")
-
     // When Keychain has no entry, native plaintext fallback still works.
-    delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR
-    delete stores[service(routed)]
+    delete stores["Claude Code-credentials"]
     await writeFile(keychain, JSON.stringify(stores))
-    await writeFile(join(routed, ".credentials.json"), credentials("file-only"))
+    await writeFile(join(native, ".credentials.json"), credentials("file-only"))
     await claude.accountUsage("default")
     assert.equal(bearer, "Bearer file-only")
-    await rm(join(routed, ".credentials.json"))
+    await rm(join(native, ".credentials.json"))
     assert.deepEqual(await claude.accountUsage("default"), { status: "missing-credentials" })
-    console.log("Claude credential source: native Keychain precedence, scoped/default overrides, capture, account isolation, router collision, and file fallback pass")
+    console.log("Claude credential source: native Keychain precedence, the default ignores shell config homes, capture, account isolation, and file fallback pass")
   } finally {
     globalThis.fetch = originalFetch
     for (const key of ["PATH", "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"]) {

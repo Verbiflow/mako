@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { codexProfileLoader } from "../electron/providers/codex/profile.js"
+import { setTimeout as delay } from "node:timers/promises"
 
 const root = await mkdtemp(join(tmpdir(), "mako-codex-discovery-"))
 const executable = join(root, "codex")
@@ -24,6 +25,7 @@ createInterface({input:process.stdin}).on('line', line => {
   // A delayed duplicate must not satisfy the next request.
   process.stdout.write(JSON.stringify({id:m.id-1,result:{data:[{model:'stale'}]}})+'\\n');
   if (m.method === 'model/list') {
+    if (process.env.HOLD_CATALOG === '1') return;
     if (process.env.FAIL_CATALOG === '1') process.exit(3);
     reply({data:[{model:m.params.cursor ? 'second' : 'first',isDefault:!m.params.cursor}],nextCursor:m.params.cursor ? null : 'page-two'});
   } else if (m.method === 'config/read') {
@@ -72,6 +74,28 @@ try {
     codexProfileLoader.load({ ...env, FAIL_CATALOG: "1" }, root),
     /exited/
   )
+  const owner = new AbortController()
+  const slow = codexProfileLoader.load({ ...env, HOLD_CATALOG: "1" }, root, { signal: owner.signal })
+  const refused = assert.rejects(slow, /cancelled fixture catalog/)
+  let activePid: number | undefined
+  try {
+    const deadline = Date.now() + 5000
+    while (!activePid) {
+      const latest = (await readFile(calls, "utf8")).trim().split("\n").map(line => row.parse(JSON.parse(line)))
+      const newest = latest.at(-1)
+      if (newest?.method === "model/list" && !requests.some(entry => entry.pid === newest.pid)) {
+        try { process.kill(newest.pid, 0); activePid = newest.pid } catch {}
+      }
+      assert.ok(Date.now() < deadline, "Cancelled discovery did not reach its native query")
+      if (!activePid) await delay(10)
+    }
+    owner.abort(new Error("cancelled fixture catalog"))
+    await refused
+    assert.throws(() => process.kill(activePid!, 0), { code: "ESRCH" }, "cancellation awaits the owned process cleanup")
+  } finally {
+    owner.abort(new Error("cancelled fixture catalog"))
+    await refused
+  }
   console.log(
     "Codex discovery: one initialized process for pages/config, exact reply matching, native defaults, rejected configuration, catalog failure and cleanup verified"
   )

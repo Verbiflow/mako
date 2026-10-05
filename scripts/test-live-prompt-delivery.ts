@@ -29,6 +29,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   let fail = false
   let failStart = false
   const driver: ProviderLiveDriver = {
+    nativePromptIdentity: { kind: "accepted-message-id", evidence: "Injected shared-policy fixture; not native adapter acceptance" },
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     provider,
     canResume: true,
@@ -39,6 +40,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
       state = {
         id: options.conversationId,
         nativeId: "fixture-native",
+        nativePath: join(root, "native-history"),
         harness: provider,
         cwd,
         status: "ready",
@@ -106,6 +108,15 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
       referenceId: "native-first",
     })
     calls[0].report({ kind: "uncertain", reason: "late transport error" })
+    const firstReference = owner.snapshot(id)?.requests[0].nativePrompt
+    assert.equal(firstReference?.messageId, "native-first")
+    assert.equal(firstReference?.attemptId, calls[0].attemptId)
+    assert.equal(firstReference?.provider, provider)
+    assert.equal(firstReference?.path, join(root, "native-history"))
+    const receiptJournal = new LiveJournal(root, id)
+    assert.deepEqual(receiptJournal.read()?.requests[0].nativePrompt, firstReference,
+      "native correspondence is durable before completion/history takeover")
+    receiptJournal.close()
     assert.equal(
       owner.snapshot(id)?.requests[0].nativeDelivery?.evidence.kind,
       "accepted"
@@ -125,6 +136,10 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
       source: "native-response",
       referenceId: "late-old-reply",
     })
+    assert.deepEqual(owner.snapshot(id)?.requests[0].nativePrompt, firstReference,
+      "late accepted replies cannot replace the original receipt")
+    assert.equal(owner.snapshot(id)?.requests[1].nativePrompt, undefined,
+      "an older reply cannot link a new native turn")
     assert.equal(
       owner.snapshot(id)?.requests[1].nativeDelivery?.evidence.kind,
       "submitted",
@@ -205,7 +220,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
       const legacyJournal = new LiveJournal(root, id)
       const saved = legacyJournal.read()
       assert.ok(saved)
-      const legacySchema = LiveRequestSchema.omit({ nativeDelivery: true })
+      const legacySchema = LiveRequestSchema.omit({ nativeDelivery: true, nativePrompt: true })
       legacyJournal.commit({
         ...saved,
         requests: saved.requests.map((request) => legacySchema.parse(request)),

@@ -190,6 +190,14 @@ try {
       assert.equal(configured.source, "mako")
       assert.equal(configured.revision.kind, "reported")
     }
+    const admitted: NodeJS.ProcessEnv = { PATH: "/fixture/bin", MAKO_THREAD_PORT: "20020", ADMITTED_ACCOUNT: "one" }
+    const resolved = await auth.childLaunch(admitted)
+    assert.equal(resolved.env.CURSOR_API_KEY, KEY_GOOD, "an admitted base environment still resolves Mako's saved credential")
+    assert.equal(resolved.env.PATH, admitted.PATH)
+    assert.equal(resolved.env.MAKO_THREAD_PORT, admitted.MAKO_THREAD_PORT)
+    assert.equal(resolved.env.ADMITTED_ACCOUNT, admitted.ADMITTED_ACCOUNT)
+    assert.equal(admitted.CURSOR_API_KEY, undefined, "resolution does not mutate the admitted base environment")
+    assert.deepEqual(resolved.credential, configured, "the resolved environment carries the same public credential revision")
     assert.deepEqual(changes, ["mako"])
     // Sign-out forgets Mako's key and the SDK's file; the CLI's login remains and is reported as such.
     const after = await auth.signOut()

@@ -73,6 +73,11 @@ for (const { provider, absent } of harnesses) {
   matrix.push(`${provider.padEnd(9)} ${row.map((cell, index) => cell.padEnd(familyNames[index]!.length + 1)).join("")}`)
   assert.ok(readableHarnesses().includes(provider), `${provider} has a saved-history reader in @mako/sessions`)
   assert.ok(registry("live").get(provider), `${provider} has a live driver`)
+  const runner = providerHost.nativeRunners.get(provider)
+  if (runner) {
+    assert.ok(runner.transport.trim(), `${provider} declares its actual headless transport`)
+    assert.ok(runner.launchCredentials.kind === "resolved" || runner.launchCredentials.reason.trim(), `${provider} declares credential resolution or explains its absence`)
+  }
 }
 
 // Every harness decodes its native messages through a declared decoder with
@@ -118,7 +123,22 @@ assert.throws(() => installHarness(host, {
 assert.equal(host.harnesses.list().length, 0, "a missing native recovery contribution cannot install a partial harness")
 assert.equal(host.liveDrivers.list().length, 0)
 
-for (const field of ["nativeIdentity", "nativeExclusion"] as const) {
+const nativeRunner = providerHost.nativeRunners.get("codex")!
+for (const invalid of [
+  { ...nativeRunner, provider: "example", transport: "" },
+  { ...nativeRunner, provider: "example", launchCredentials: { kind: "unavailable" as const, reason: "" } },
+]) {
+  assert.throws(() => installHarness(host, {
+    ...definition,
+    live: { ...definition.live, provider: "example" },
+    profile: { ...definition.profile, provider: "example" },
+    nativeRunner: invalid,
+  }), /must declare.*headless/)
+  assert.equal(host.harnesses.list().length, 0)
+  assert.equal(host.liveDrivers.list().length, 0, "invalid headless declarations cannot leave a partially installed harness")
+}
+
+for (const field of ["launchEnvironment", "nativeIdentity", "nativeExclusion", "nativePromptIdentity"] as const) {
   assert.throws(() => installHarness(host, {
     ...definition,
     live: { ...definition.live, provider: "example", [field]: undefined },

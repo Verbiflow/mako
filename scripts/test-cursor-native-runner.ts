@@ -19,7 +19,7 @@ const catalog = normalizeCursorSdkModels([
 const fallback = catalog.defaultModel ?? catalog.models[0]!.id
 const home = "/home/user"
 const runner = cursorSdkNativeRunner({
-  childEnv: async () => ({ PATH: "/usr/bin", HOME: home, SECRET_ELSEWHERE: "x", CURSOR_API_KEY: "key" }),
+  childLaunch: async () => ({ env: { PATH: "/usr/bin", HOME: home, SECRET_ELSEWHERE: "x", CURSOR_API_KEY: "key" }, credential: { kind: "unavailable", reason: "Fixture credential" } }),
   stateRoot: () => "/state",
   models: async () => catalog,
   home,
@@ -63,7 +63,7 @@ await assert.rejects(runner.prepare!({ model: "retired" }, {}), /Cursor does not
 const admittedEnv = { CURSOR_API_KEY: "admitted-fixture-account" }
 let fallbackReads = 0
 const admitted = cursorSdkNativeRunner({
-  childEnv: async () => { fallbackReads++; return { CURSOR_API_KEY: "later-selection" } },
+  childLaunch: async () => { fallbackReads++; return { env: { CURSOR_API_KEY: "later-selection" }, credential: { kind: "unavailable", reason: "Fixture credential" } } },
   stateRoot: () => "/state",
   models: async env => { assert.equal(env.CURSOR_API_KEY, admittedEnv.CURSOR_API_KEY); return catalog },
 })

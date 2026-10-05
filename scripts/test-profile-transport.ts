@@ -148,6 +148,18 @@ const queuedBackground = withDiscoveryProcess(work, async () => {
   await held.promise
 })
 try {
+  let expiredStarted = false
+  const expiredAt = performance.now()
+  await assert.rejects(withDiscoveryProcess({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), /timed out in the queue/)
+  assert.equal(expiredStarted, false, "expired queued work must not spawn")
+  assert.ok(performance.now() - expiredAt < 2_000, "queue time consumes the same bounded discovery budget")
+  const cancelled = new AbortController()
+  let cancelledStarted = false
+  const cancelledQuery = withDiscoveryProcess({ ...work, signal: cancelled.signal }, async () => { cancelledStarted = true })
+  const refused = assert.rejects(cancelledQuery, /superseded fixture discovery/)
+  cancelled.abort(new Error("superseded fixture discovery"))
+  await refused
+  assert.equal(cancelledStarted, false)
   await Promise.race([
     withDiscoveryProcess({ ...work, priority: "launch" }, async () => {}),
     new Promise((_, reject) =>
@@ -169,6 +181,15 @@ try {
   held.resolve()
   await Promise.all([...backgroundJobs, queuedBackground])
 }
+const activeAbort = new AbortController()
+let abortedPid: number | undefined
+await assert.rejects(withDiscoveryProcess({ ...work, signal: activeAbort.signal }, async ({ child, exited }) => {
+  abortedPid = child.pid
+  activeAbort.abort(new Error("active fixture discovery cancelled"))
+  await exited
+}), /active fixture discovery cancelled/)
+assert.ok(abortedPid)
+assert.throws(() => process.kill(abortedPid, 0), { code: "ESRCH" }, "active cancellation cleans up its own process before returning")
 console.log(
-  "Profile transport: early exits, closed stdin, stderr backpressure, complete final frames, invalid responses, output limits, bounded concurrency, deadlines, and confirmed process termination verified"
+  "Profile transport: bounded output/concurrency, queue deadlines, queued and active cancellation, priority reservation, complete frames and confirmed owned process termination verified"
 )

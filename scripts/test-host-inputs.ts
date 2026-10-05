@@ -11,6 +11,16 @@ assert.deepEqual(hostCallInputs["mako:account-select"].parse(["codex", null]), [
   "codex",
   null,
 ])
+assert.deepEqual(hostCallInputs["mako:account-capture"].parse(["claude", "work", "native"]), ["claude", "work", "native"])
+assert.deepEqual(hostCallInputs["mako:account-capture"].parse(["codex", "work"]), ["codex", "work"])
+assert.throws(() => hostCallInputs["mako:account-capture"].parse(["claude", "work", "unknown"]))
+assert.deepEqual(hostCallInputs["mako:account-login-start"].parse(["claude"]), ["claude"])
+assert.throws(() => hostCallInputs["mako:account-login-start"].parse(["claude", "work"]))
+assert.throws(() => hostCallInputs["mako:account-login-code"].parse(["login"]))
+assert.equal(hostCallReplay("mako:account-login-start"), "never", "a second sign-in must not start after an uncertain disconnect")
+assert.equal(hostCallReplay("mako:account-login-code"), "never", "a sign-in code is single-use")
+assert.equal(hostCallReplay("mako:account-login-wait"), "read", "waiting on a sign-in changes nothing")
+assert.equal(hostCallReplay("mako:account-login-cancel"), "replay", "cancelling an ended sign-in cancels nothing")
 assert.throws(() =>
   hostCallInputs["mako:thread-page"].parse(["/real/session", "100"])
 )

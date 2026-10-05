@@ -34,11 +34,18 @@ for (const type of ["string", "array"] as const) {
 
 // An ACP provider contributes encoding through the same capability as a direct SDK driver.
 const nativeEncoding = () => "a".repeat(64)
+const nativePromptIdentity = { kind: "accepted-message-id", evidence: "Future ACP fixture with a proven message receipt" } as const
 assert.equal(acpLiveDriver({
+  nativePromptIdentity,
   provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   approvalAnswerDigest: nativeEncoding, canResume: false, available: () => true, launch: async () => null,
 }).approvalAnswerDigest, nativeEncoding)
+assert.equal(acpLiveDriver({
+  provider: "future", nativePromptIdentity, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
+  canResume: false, available: () => true, launch: async () => null,
+}).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-registry-"))
 const sent: Array<{ id: string; text: string }> = []

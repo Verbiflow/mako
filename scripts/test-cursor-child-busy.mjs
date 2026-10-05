@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { build } from "esbuild"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
+import { CURSOR_SDK_IMPORT_METADATA_KEY, cursorSdkStorePath } from "@mako/sessions"
 
 // Actual SDK store + production child with an injected SDK execution handle.
 // This proves one-attempt busy refusal, not native CLI exclusion.
@@ -55,17 +56,28 @@ try {
   store = undefined
 
   await build({ entryPoints: ["electron/providers/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", plugins: [{ name: "headless-sdk-handle", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-headless-sdk.mjs") })) } }] })
-  for (const phase of ["open", "send", "wait", "cancel-failure", "source"]) {
+  for (const phase of ["open", "send", "wait", "cancel-failure", "source", "old-import", "orphan-import"]) {
     const cwd = join(root, phase)
     await mkdir(cwd)
     const spec = { stateRoot: cwd, agentId, create: false, model: { id: "composer-2" }, prompt: "must dispatch at most once" }
     let origin
-    if (phase === "source") {
+    if (phase === "source" || phase === "old-import" || phase === "orphan-import") {
       const path = join(cwd, "legacy.db")
       origin = new DatabaseSync(path)
       origin.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)")
       origin.prepare("INSERT INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId, latestRootBlobId: "original-root" }))
       spec.importFrom = { path, identity: agentId }
+    }
+    if (phase === "old-import") {
+      const old = await SqliteLocalAgentStore.open({ workspaceRef: cwd, stateRoot: cwd })
+      try {
+        await old.agents.create({ agent: { agentId, cwd, status: "idle", createdAt: Date.now(), updatedAt: Date.now(), latestCheckpoint: { schemaVersion: 1, rootBlobId: "retained-sdk-history" }, sdkMetadata: { [CURSOR_SDK_IMPORT_METADATA_KEY]: { path: spec.importFrom.path, identity: agentId, agentId } } } })
+      } finally { await old.dispose() }
+    }
+    if (phase === "orphan-import") {
+      const destination = cursorSdkStorePath(cwd, agentId)
+      await mkdir(join(destination, ".."), { recursive: true })
+      await writeFile(destination, "retained interrupted import bytes")
     }
     child = spawn(process.execPath, [entry, "--headless", JSON.stringify(spec)], { cwd, env: { PATH: process.env.PATH, HOME: cwd, NODE_OPTIONS: "", MAKO_HEADLESS_FIXTURE_PHASE: phase }, stdio: ["ignore", "pipe", "pipe"] })
     child.stdout.resume()
@@ -82,6 +94,20 @@ try {
       }
     }
     try {
+      if (phase === "old-import" || phase === "orphan-import") {
+        const result = await closed
+        assert.equal(result.code, 1)
+        assert.match(stderr, phase === "old-import" ? /predates revision receipts/ : /destination already exists/)
+        assert.deepEqual(await events(), [""], "unproven imports refuse before native open or send")
+        assert.equal(JSON.parse(origin.prepare("SELECT value FROM meta WHERE key = '0'").get().value).latestRootBlobId, "original-root")
+        if (phase === "orphan-import") assert.equal(await readFile(cursorSdkStorePath(cwd, agentId), "utf8"), "retained interrupted import bytes")
+        else {
+          const retained = await SqliteLocalAgentStore.open({ workspaceRef: cwd, stateRoot: cwd })
+          try { assert.equal((await retained.agents.get({ agentId })).latestCheckpoint.rootBlobId, "retained-sdk-history") }
+          finally { await retained.dispose() }
+        }
+        continue
+      }
       await until(phase === "open" || phase === "source" ? "open" : phase === "send" ? "send" : "wait")
       if (phase === "source") {
         origin.prepare("UPDATE meta SET value = ? WHERE key = '0'").run(JSON.stringify({ agentId, latestRootBlobId: "advanced-root" }))
@@ -123,7 +149,7 @@ try {
       if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await closed }
     }
   }
-  console.log("Production headless child: Stop during open/send/wait, repeated Stop, failed cancellation and moved import refuse without replay; injected SDK execution, not native CLI acceptance")
+  console.log("Production headless child: startup/active/repeated Stop, cancellation failure, moved source, older receipts and interrupted imports preserve history without replay; injected SDK execution, not native CLI acceptance")
 } finally {
   if (child && child.exitCode === null) {
     const exited = new Promise(resolve => child.once("exit", resolve))

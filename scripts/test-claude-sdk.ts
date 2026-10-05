@@ -24,32 +24,52 @@ import { claudeInputContent, ClaudeInput } from "../electron/providers/claude/in
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { ClaudeTranscript } from "../electron/providers/claude/sdk-transcript.ts"
 import type { LiveDriverEvent } from "../electron/shared.ts"
-import { claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
+import { claudeAuthCause, claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
+import type { ClaudeCredentialState } from "../electron/providers/claude/accounts.ts"
 import { installHostLog, flushHostLog, type HostLogFields } from "../electron/host-log.ts"
 
 const authLogRoot = await mkdtemp(join(tmpdir(), "mako-claude-auth-diagnostics-"))
 installHostLog(join(authLogRoot, "host.log"))
 const authDiagnostics: HostLogFields[] = []
+// The store an account profile was left with after its refresh token expired: Claude cleared both tokens.
+const clearedStore: ClaudeCredentialState = { store: "keychain", scoped: true, access: false, refresh: "empty",
+  refreshExpiresAt: "2026-08-30T20:47:16.410Z", writtenAt: "2026-10-01T07:19:19Z" }
 const diagnostic = claudeAuthDiagnostics({
-  HOME: "/private-user-home", CLAUDE_CONFIG_DIR: "/private-router-scope",
+  HOME: "/private-user-home", CLAUDE_CONFIG_DIR: "/private-account-scope",
   CLAUDE_SECURESTORAGE_CONFIG_DIR: "", ANTHROPIC_API_KEY: "secret-api-key",
   ANTHROPIC_AUTH_TOKEN: "secret-auth-token", CLAUDE_CODE_OAUTH_TOKEN: "secret-oauth-token",
   ANTHROPIC_BASE_URL: "https://private-server/token=secret",
-}, fields => authDiagnostics.push(fields))
+}, fields => authDiagnostics.push(fields), async () => clearedStore)
 const refreshFailure = "Failed to authenticate: OAuth session expired and could not be refreshed"
 diagnostic.failure(`A user wrote: ${refreshFailure}`)
+await diagnostic.settled()
 assert.equal(authDiagnostics.length, 0, "ordinary prose must not become native auth evidence")
 diagnostic.failure(refreshFailure)
 diagnostic.failure(refreshFailure)
+await diagnostic.settled()
 assert.equal(authDiagnostics.length, 1, "repeated native errors cannot flood the log")
 assert.equal(authDiagnostics[0]?.secureStorageOverride, true, "empty native override is meaningful")
 assert.equal(authDiagnostics[0]?.apiKeyOverride, true)
 assert.equal(authDiagnostics[0]?.category, "native-refresh-unavailable")
-for (const secret of ["private-user", "private-router", "secret-api", "secret-auth", "secret-oauth", "private-server"])
+assert.equal(authDiagnostics[0]?.cause, "cleared")
+assert.equal(authDiagnostics[0]?.refreshToken, "empty")
+assert.equal(authDiagnostics[0]?.storeWrittenAt, "2026-10-01T07:19:19Z", "the store's last write dates the native give-up")
+for (const secret of ["private-user", "private-account", "secret-api", "secret-auth", "secret-oauth", "private-server"])
   assert.ok(!JSON.stringify(authDiagnostics).includes(secret), "diagnostics must not retain secrets or raw source paths")
-let inheritedScope: HostLogFields | undefined
-claudeAuthDiagnostics({ CLAUDE_CONFIG_DIR: "/private-router-scope" }, fields => { inheritedScope = fields }).failure(refreshFailure)
-assert.notEqual(inheritedScope?.secureStorageScope, authDiagnostics[0]?.secureStorageScope)
+let accountScope: HostLogFields | undefined
+const account = claudeAuthDiagnostics({ CLAUDE_CONFIG_DIR: "/private-account-scope" }, fields => { accountScope = fields }, async () => clearedStore)
+account.failure(refreshFailure)
+await account.settled()
+assert.notEqual(accountScope?.secureStorageScope, authDiagnostics[0]?.secureStorageScope)
+{
+  const now = new Date("2026-10-04T00:00:00Z")
+  const live = { store: "keychain", scoped: true, access: true, refresh: "present", refreshExpiresAt: "2026-10-31T10:19:18Z" } as const
+  assert.equal(claudeAuthCause({ store: "none", scoped: false }, now), "signed-out")
+  assert.equal(claudeAuthCause({ ...live, access: false, refresh: "empty" }, now), "cleared")
+  assert.equal(claudeAuthCause({ ...live, refresh: "missing" }, now), "no-refresh-token")
+  assert.equal(claudeAuthCause({ ...live, refreshExpiresAt: "2026-09-10T06:16:51Z" }, now), "refresh-expired")
+  assert.equal(claudeAuthCause(live, now), "unexplained", "only a live, unexpired refresh token implicates rotation or contention")
+}
 
 class Messages implements AsyncIterable<SDKMessage> {
   private readonly items: SDKMessage[] = []
@@ -94,6 +114,7 @@ const dependencies: ClaudeSdkDependencies = {
   configure: async () => ({ options: {}, account: { name: "fixture-launch" } }),
   receiptTimeoutMs: 20,
   interruptTimeoutMs: 20,
+  inspectCredentials: async () => clearedStore,
   query: (options) => {
     input = options.prompt[Symbol.asyncIterator]()
     return {
@@ -392,9 +413,10 @@ for (const confirmed of [true, false]) {
     assert.ok(failed?.type === "live-session")
     assert.equal(failed.session.status, "failed")
     assert.equal(failed.session.error, authError, "success subtype must not discard is_error result text")
+    await delay(0)
     await flushHostLog()
     const authLog = await readFile(join(authLogRoot, "host.log"), "utf8")
-    assert.match(authLog, /claude-auth Native authentication failure .*category=native-refresh-unavailable/)
+    assert.match(authLog, /claude-auth Native authentication failure .*category=native-refresh-unavailable.*cause=cleared .*refreshToken=empty/)
     assert.equal(authLog.match(/native event not handled .*kind=system\/future_notice/g)?.length, 1,
       "a message kind this SDK does not declare is logged once")
     assert.equal(receipts.at(-1)?.kind, "accepted", "API failure does not undo SDK acknowledgement")
@@ -714,11 +736,19 @@ diagnostic.observe({
 })
 diagnostic.observe({ ...assistant, error: "authentication_failed" })
 diagnostic.observe({ ...assistant, error: "authentication_failed" })
+await diagnostic.settled()
 assert.equal(authDiagnostics.length, 2)
 assert.equal(authDiagnostics.at(-1)?.nativeVersion, "2.1.263")
 assert.equal(authDiagnostics.at(-1)?.category, "authentication_failed")
 diagnostic.observe({ ...assistant, error: "rate_limit" })
 assert.equal(authDiagnostics.length, 2, "rate limits are not authentication failures")
+const revokedFields: HostLogFields[] = []
+const revoked = claudeAuthDiagnostics({}, fields => revokedFields.push(fields), async () => { throw new Error("Keychain locked") })
+revoked.observe({ ...assistant, error: "authentication_failed", message: { ...assistant.message,
+  content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked.", citations: null }] } })
+await revoked.settled()
+assert.equal(revokedFields[0]?.category, "access-revoked")
+assert.equal(revokedFields[0]?.cause, "store-unreadable", "a failed store read is evidence, not a crash")
 projection.project({
   type: "stream_event",
   uuid: randomUUID(),

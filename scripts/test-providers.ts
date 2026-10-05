@@ -472,9 +472,9 @@ assert.deepEqual(
   [
     ["claude", "selectable"],
     ["codex", "selectable"],
-    ["cursor", "observed"],
-    ["grok", "observed"],
-    ["devin", "observed"],
+    ["cursor", "selectable"],
+    ["grok", "selectable"],
+    ["devin", "selectable"],
     ["opencode", "observed"],
   ]
 )
@@ -485,7 +485,7 @@ assert.equal(
       ?.accountEnv("default", { PATH: "/bin" })
   )?.PATH,
   "/bin",
-  "an observed account leaves the harness's environment as it is"
+  "the harness's own login leaves its environment as it is"
 )
 const accountCapability: ProviderAccountCapability =
   providerHost.accountCapabilities.get("claude")!
@@ -599,6 +599,8 @@ assert.equal(providerHost.acpSources.get("opencode"), undefined)
 const registry = new ProviderRegistry<NativeRunner>()
 const runner: NativeRunner = {
   provider: "fixture",
+  transport: "fixture-headless",
+  launchCredentials: { kind: "unavailable", reason: "Fixture credentials" },
   available: () => true,
   fastMode: "supported",
   resume: () => ({ command: "fixture", args: [] }),

@@ -161,7 +161,7 @@ function claudeAliases(): void {
 
 function symlinkedRoots(): void {
   const real = join(root, "native", "claude", "projects")
-  const profile = join(root, "native", "router-profile")
+  const profile = join(root, "native", "account-home")
   mkdirSync(join(real, "repo"), { recursive: true })
   mkdirSync(profile, { recursive: true })
   symlinkSync(real, join(profile, "projects"))

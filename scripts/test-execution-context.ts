@@ -25,6 +25,8 @@ assert.equal(assessExecutionContext(context, context, false).kind, "unverified",
 context.credential = { kind: "configured", source: "fixture", revision: { kind: "reported", value: "opaque-revision", via: "fixture credential record" } }
 context.service = { kind: "reported", authority: "fixture-service", via: "native handshake" }
 assert.equal(assessExecutionContext(context, { ...context, service: { kind: "reported", authority: "other-service", via: "native handshake" } }, false).kind, "incompatible")
+assert.equal(assessExecutionContext(context, { ...context, service: undefined }, false).kind, "incompatible", "loss of previously reported service evidence cannot admit input")
+assert.equal(assessExecutionContext(context, { ...context, account: { kind: "unavailable", reason: "selection unavailable" } }, false).kind, "incompatible", "loss of configured selection is not an intentional account switch")
 assert.equal(assessExecutionContext(context, { ...context, credential: undefined }, false).kind, "unverified", "older credential evidence remains missing")
 assert.equal(assessExecutionContext(context, { ...context, credential: { kind: "configured", source: "fixture", revision: { kind: "reported", value: "new-revision", via: "fixture" } } }, false).kind, "unverified", "changed credentials require compatibility proof even with the same principal")
 assert.equal(assessExecutionContext(context, context, false).kind, "compatible")
@@ -35,6 +37,8 @@ assert.equal(assessExecutionContext(context, { ...context, runtime: reportedRunt
 assert.equal(assessExecutionContext(context, { ...context, identity: reportedIdentity(undefined, "other-backend", "account/read") }, false).kind, "incompatible", "backend evidence survives even when a named principal is unavailable")
 assert.equal(assessExecutionContext(context, { ...context, identity: {kind:"unavailable",reason:"request failed"} }, false).kind, "incompatible", "failed identity evidence cannot admit a previously identified account")
 const otherIdentity = reportedIdentity("other@example.test", "native", "account/read")
+const defaultAccount = { ...context, account: { kind: "configured", name: "default", managed: false } } satisfies typeof context
+assert.equal(assessExecutionContext(defaultAccount, { ...defaultAccount, identity: otherIdentity }, false).kind, "incompatible", "unchanged CLI-default selection cannot silently change principal either")
 assert.equal(assessExecutionContext(context, { ...context, identity: otherIdentity }, false).kind, "incompatible", "the same managed selection must not silently report a different identity")
 assert.equal(assessExecutionContext(context, { ...context, account: {kind:"configured",name:"managed-b",managed:true}, identity: otherIdentity }, false).kind, "compatible", "intentional global account switches remain allowed")
 const root = await mkdtemp(join(tmpdir(), "mako-context-retention-"))

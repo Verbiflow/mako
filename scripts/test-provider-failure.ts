@@ -53,9 +53,12 @@ const cases: [string, string][] = [
   ["spawn /usr/local/bin/devin ENOENT", "launch-failed"],
   ["Claude Code process exited with code 1: Error: Settings file is invalid", "launch-failed"],
   ["Claude exited with code 1 during SDK initialization: Invalid API key · Please run /login", "auth"],
+  ["Login expired · Please run /login", "auth"],
+  ["Failed to authenticate. API Error: 401 OAuth access token has been revoked.", "auth"],
   ["Claude exited with code 1 during SDK initialization: No conversation found with session ID: 1f2e", "resume-failed"],
   ["Claude produced no output for 20 s during SDK initialization (process still running)", "launch-stalled"],
   ["Grok did not finish session/new within 120 s (its last stderr output was 31 s ago)", "launch-stalled"],
+  ["This agent is signed in as a@example.com, not b@example.com, the account this session started with. Nothing was sent. Sign b@example.com in again in Settings › Agents, or choose the account it is signed in as.", "wrong-account"],
   ["Something entirely new went wrong", "unknown"],
   ["", "unknown"],
 ]

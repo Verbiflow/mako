@@ -64,7 +64,7 @@ assert.equal(planText("X Premium+"), "X Premium+")
 accountsStore.set({
   loadedAt: now,
   providers: [
-    { provider: "claude", label: "Claude Code", mode: "selectable", loginCommand: "claude /login" },
+    { provider: "claude", label: "Claude Code", mode: "selectable", loginCommand: "claude /login", nativeLogin: true },
     { provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login" },
     { provider: "cursor", label: "Cursor", mode: "observed", loginCommand: "cursor-agent login" },
     { provider: "devin", label: "Devin", mode: "observed", loginCommand: "devin auth login" },
@@ -73,7 +73,7 @@ accountsStore.set({
     { harness: "codex", name: "default", email: "codex@example.com", active: false },
     { harness: "claude", name: "default", email: "personal@example.com", active: true },
     { harness: "codex", name: "personal", email: "personal@work.dev", active: true },
-    { harness: "claude", name: "work", email: "work@example.com", active: false, source: "subrouter" },
+    { harness: "claude", name: "work", email: "work@example.com", active: false, source: "mako" },
     { harness: "cursor", name: "default", email: "cursor@example.com", active: true, source: "cli" },
   ],
   usage: {
@@ -167,5 +167,19 @@ const loading = renderToStaticMarkup(<AccountLimits density="page" />)
 assert.match(loading, /aria-label="Loading usage"/)
 
 assert.doesNotMatch(renderToStaticMarkup(<IdentityRow />), /% used|at its limit/, "limits live in the menu, not beside the name")
+
+accountsStore.set((state) => ({
+  accounts: [
+    ...state.accounts.map((account) => account.name === "work" ? { ...account, signedOut: true as const } : account),
+    { harness: "codex", name: "gone", active: true, source: "mako", missing: true },
+  ],
+}))
+const lapsed = renderToStaticMarkup(<AccountLimits density="page" />)
+assert.match(lapsed, />Signed out</, "an expired login says so on its row")
+assert.match(lapsed, /This Claude Code login expired or was signed out\./)
+assert.equal((lapsed.match(/>Sign in again</g) ?? []).length, 1, "only the expired account Mako keeps offers signing in again")
+assert.doesNotMatch(lapsed, /Usage returns after this account’s next Claude Code run/, "an expired login shows no stale usage")
+assert.match(lapsed, />Account no longer available</, "a selected account that disappeared stays visible")
+assert.match(lapsed, /New Codex sessions won’t start until you choose another account|New Codex sessions won&#x27;t start until you choose another account/)
 
 console.log("Account limits render grouped by harness with named windows, resets, balances, and nothing beside the name")

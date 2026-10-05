@@ -10,6 +10,7 @@ import { resolveHarnessTuning } from "../electron/harness-models.js"
 const root = await mkdtemp(join(tmpdir(), "mako-claude-discovery-"))
 const calls = join(root, "calls.jsonl")
 const gate = join(root, "release")
+const restartGate = join(root, "restart")
 const executable = join(root, "claude")
 await writeFile(calls, "")
 await writeFile(
@@ -27,6 +28,7 @@ createInterface({input:process.stdin}).on('line', line => {
   appendFileSync(${JSON.stringify(calls)}, JSON.stringify({request, strict, pid:process.pid, hookless: args[args.indexOf('--settings') + 1] === '{"disableAllHooks":true}'}) + '\\n');
   process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:'stale',response:{applied:{effort:'stale'},effective:{}}}})+'\\n');
   const respond = response => process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:message.request_id,response}}) + '\\n');
+  if (request === 'list_models' && process.env.HOLD_CATALOG === '1' && !existsSync(${JSON.stringify(restartGate)})) return;
   if (request === 'list_models') respond({models:[
     {value:'default',resolvedModel:'fixture-model'},
     {value:'fixture-model',supportsEffort:true,supportedEffortLevels:['low','high'],supportsFastMode:true},
@@ -194,6 +196,31 @@ try {
     new Set((await requests()).map((entry) => entry.pid)).size,
     beforeConcurrent + 3
   )
+  const owner = new AbortController()
+  const heldEnv = { ...env, HOLD_CATALOG: "1" }
+  const beforeCancel = (await requests()).length
+  const cancelledDiscovery = claudeProfileLoader.load(heldEnv, root, { signal: owner.signal })
+  const refused = assert.rejects(cancelledDiscovery, /cancelled fixture catalog/)
+  const replacementOwner = new AbortController()
+  try {
+    const deadline = Date.now() + 5000
+    while ((await requests()).length <= beforeCancel) {
+      assert.ok(Date.now() < deadline, "Claude cancellation fixture did not reach discovery")
+      await delay(10)
+    }
+    const oldPid = (await requests()).at(-1)!.pid
+    owner.abort(new Error("cancelled fixture catalog"))
+    await writeFile(restartGate, "ready")
+    const replaced = claudeProfileLoader.load(heldEnv, root, { signal: replacementOwner.signal })
+    await refused
+    assert.throws(() => process.kill(oldPid, 0), { code: "ESRCH" })
+    assert.equal((await replaced).models.length, 2, "a replacement cannot join the aborted native catalog")
+    assert.notEqual((await requests()).at(-1)!.pid, oldPid)
+  } finally {
+    owner.abort(new Error("cancelled fixture catalog"))
+    replacementOwner.abort(new Error("cancelled replacement fixture catalog"))
+    await refused
+  }
   console.log(
     "Claude discovery: launch validates the catalogue without waiting for defaults, background defaults remain exact, MCP startup is excluded, and private settings stay redacted"
   )

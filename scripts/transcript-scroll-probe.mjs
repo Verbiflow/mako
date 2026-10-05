@@ -263,6 +263,84 @@ async function turnFinishesAtBottom() {
   console.log(`   distance from the end while streaming ${Math.round(streamed)}px, after finishing ${Math.round(finished)}px`)
 }
 
+/**
+ * Where the reader is, by the position of the turn at the middle of the
+ * scrollport in the list. A checkpoint renames every turn, so a marked
+ * element would not survive it; the order does.
+ */
+function readerByPosition() {
+  const scroller = document.querySelector(".scroll-fade-scroller")
+  const box = scroller.getBoundingClientRect()
+  const turns = [...document.querySelectorAll("[data-exchange]")]
+  const middle = box.top + box.height / 2
+  const index = turns.findIndex((turn) => turn.getBoundingClientRect().bottom > middle)
+  const turn = turns[index]
+  if (turn) turn.__reader = true
+  return {
+    fromEnd: index < 0 ? null : turns.length - index,
+    question: turn?.textContent.match(/Question \d+:|Stream a long answer/)?.[0] ?? null,
+    top: turn ? turn.getBoundingClientRect().top - box.top : null,
+    distance: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+    scrollTop: scroller.scrollTop,
+  }
+}
+
+/** The reader's turn afterwards: the same element if it stayed mounted, else the one with its question, else the one as far from the end. */
+function readerAfter({ fromEnd, question }) {
+  const scroller = document.querySelector(".scroll-fade-scroller")
+  const turns = [...document.querySelectorAll("[data-exchange]")]
+  const kept = turns.find((turn) => turn.__reader)
+  const turn = kept ?? (question && turns.find((turn) => turn.textContent.includes(question))) ?? turns[turns.length - fromEnd]
+  return {
+    kept: Boolean(kept),
+    top: turn ? turn.getBoundingClientRect().top - scroller.getBoundingClientRect().top : null,
+    distance: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+    scrollTop: scroller.scrollTop,
+  }
+}
+
+/** A turn finishes and the host's checkpoint hands it to native history: every turn returns under a new id. */
+async function checkpointAfterTurn() {
+  const stream = async () => {
+    await evaluate(() => window.probe.startTurn())
+    for (let chunk = 0; chunk < 30; chunk += 1) {
+      await evaluate((chunk) => window.probe.appendToTurn(`Streaming paragraph ${chunk}. ${"The answer keeps arriving. ".repeat(20)}\n\n`), chunk)
+      await sleep(40)
+    }
+    await sleep(300)
+  }
+  const settle = async (variant) => {
+    await evaluate(() => window.probe.finishTurn())
+    await sleep(600)
+    await evaluate((variant) => window.probe.checkpoint(variant), variant)
+    await sleep(1200)
+    await frames()
+  }
+  const variants = (process.env.CHECKPOINT ?? "renamed,retold,reworded,uneven").split(",")
+  console.log(`\nThe host checkpoints a finished turn (${turns} turns):`)
+  for (const variant of variants) {
+    await open()
+    await stream()
+    await settle(variant)
+    const following = await evaluate(readerByPosition)
+    console.log(`   ${variant}, following the end: ${Math.round(following.distance)}px from the end afterwards`)
+    for (const [label, steps] of [["reading the answer that just finished", 6], ["reading an earlier turn", 80]]) {
+      await open()
+      await stream()
+      for (let step = 0; step < steps; step += 1) {
+        await wheel(-120)
+        await sleep(50)
+      }
+      await sleep(900)
+      const before = await evaluate(readerByPosition)
+      await settle(variant)
+      const after = await evaluate(readerAfter, before)
+      if (process.env.TRACE_CHECKPOINT) for (const entry of await evaluate(() => (window.__log ?? []).slice(-12))) console.log("      ", JSON.stringify(entry))
+      console.log(`   ${variant}, ${label} (${before.question}, ${before.fromEnd} from the end): moved ${Math.round(after.top - before.top)}px, ${after.kept ? "stayed mounted" : "remounted"} (scrollTop ${Math.round(before.scrollTop)} → ${Math.round(after.scrollTop)})`)
+    }
+  }
+}
+
 /** Where each turn's top sits after clicking its tick; it belongs at the scroll margin (24px). */
 async function navigatorJumps(targets) {
   await open()
@@ -355,6 +433,7 @@ try {
   if (want("finish")) await turnFinishesWhileReading()
   if (want("bottom")) await turnFinishesAtBottom()
   if (want("inturn")) await turnFinishesWhileReadingIt()
+  if (want("checkpoint")) await checkpointAfterTurn()
   if (want("navigator")) await navigatorJumps(turns > 100 ? [250, 230, 200, 150, 90, 20, 180, 255, 259, 120] : [80, 72, 64, 50, 40, 25, 8, 70, 88, 89, 30])
 } finally {
   socket.close()

@@ -102,19 +102,19 @@ try {
   )
   await assert.rejects(
     codexAccountCapability.accountEnv("saved", {}),
-    /no credentials/
+    /signed out\. Sign in again/
   )
   await writeFile(join(codexDir, "auth.json"), "{}")
   await assert.rejects(
     codexAccountCapability.accountEnv("ready", {}),
-    /invalid credentials/
+    /login is unreadable\. Sign in again/
   )
   const claudeDir = accountDir("claude", "ready")
   await mkdir(claudeDir, { recursive: true })
   await writeFile(join(claudeDir, ".credentials.json"), "{}")
   await assert.rejects(
     claudeAccountCapability.accountEnv("ready", {}),
-    /no valid credentials/
+    /signed out\. Sign in again/
   )
   await writeFile(
     join(claudeDir, ".credentials.json"),
