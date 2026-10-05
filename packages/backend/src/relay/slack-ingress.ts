@@ -28,7 +28,6 @@ import {
   activeWorker,
   workerById,
   workerIsOnline,
-  workerHarnesses,
   workerRecord,
   type RelayWorkerEntity,
 } from "./storage-presence"
@@ -229,7 +228,7 @@ async function processCommand({
         text: SlackRelayHelp,
         threadTs,
       }),
-      postSlackControls({ channel, threadTs, idempotencyKey: `${eventId}:controls`, harnesses: workerHarnesses(await activeWorker(teamId)) }),
+      postSlackControls({ channel, threadTs, idempotencyKey: `${eventId}:controls` }),
     ])
     return
   }
@@ -387,7 +386,7 @@ async function processNormalized(payload: SlackWebhookPayload): Promise<void> {
     const text = commandText(payload.text)
     const attachments = normalizedAttachments(payload.files)
     if (!text && attachments.length === 0) {
-      await postSlackControls({ channel: payload.channelId, threadTs: payload.threadTs, harnesses: workerHarnesses(await activeWorker(payload.teamId)) })
+      await postSlackControls({ channel: payload.channelId, threadTs: payload.threadTs })
       return
     }
     await processCommand({
@@ -405,7 +404,7 @@ async function processNormalized(payload: SlackWebhookPayload): Promise<void> {
     if (!payload.teamId || !eventAuthorized(payload.teamId, payload.userId)) return
     const text = payload.text.trim()
     if (!text) {
-      await postSlackControls({ channel: payload.channelId, harnesses: workerHarnesses(await activeWorker(payload.teamId)) })
+      await postSlackControls({ channel: payload.channelId })
       return
     }
     const root = await sendSlackMessage({

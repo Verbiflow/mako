@@ -3,11 +3,9 @@ import {
   cardToSlackBlocks,
   type SlackCardElement,
 } from "@chat-adapter/slack/blocks"
-import type { RelayHarnessChoice } from "@mako/relay"
 import { sendSlackBlocks } from "../integrations/slack/client"
 
-/** The controls card; the harness picker lists the Mac's own harnesses, and is left out until a Mac reports them. */
-const card = (harnesses: readonly RelayHarnessChoice[]): SlackCardElement => ({
+const card: SlackCardElement = {
   type: "card",
   title: "Mako",
   subtitle: "Control the harnesses running on your Mac",
@@ -25,15 +23,20 @@ const card = (harnesses: readonly RelayHarnessChoice[]): SlackCardElement => ({
     {
       type: "actions",
       children: [
-        ...(harnesses.length
-          ? [{
-              type: "select" as const,
-              id: "mako-harness",
-              label: "Harness",
-              placeholder: "Choose harness",
-              options: harnesses.map(({ id, label }) => ({ label, value: id })),
-            }]
-          : []),
+        {
+          type: "select",
+          id: "mako-harness",
+          label: "Harness",
+          placeholder: "Choose harness",
+          options: [
+            { label: "Codex", value: "codex" },
+            { label: "Claude Code", value: "claude" },
+            { label: "Cursor", value: "cursor" },
+            { label: "Grok", value: "grok" },
+            { label: "Devin", value: "devin" },
+            { label: "OpenCode", value: "opencode" },
+          ],
+        },
         {
           type: "select",
           id: "mako-reasoning",
@@ -61,21 +64,18 @@ const card = (harnesses: readonly RelayHarnessChoice[]): SlackCardElement => ({
       ],
     },
   ],
-})
+}
 
-export function slackControlBlocks(harnesses: readonly RelayHarnessChoice[] = []) {
-  return cardToSlackBlocks(card(harnesses))
+export function slackControlBlocks() {
+  return cardToSlackBlocks(card)
 }
 
 export async function postSlackControls({
   channel,
-  harnesses,
   idempotencyKey,
   threadTs,
 }: {
   channel: string
-  /** The active Mac's harnesses, from its heartbeat. */
-  harnesses?: readonly RelayHarnessChoice[]
   idempotencyKey?: string
   threadTs?: string
 }): Promise<string> {
@@ -83,7 +83,7 @@ export async function postSlackControls({
   const value = createHash("sha256").update(seed).digest("hex").slice(0, 32)
   const messageId = `${value.slice(0, 8)}-${value.slice(8, 12)}-5${value.slice(13, 16)}-a${value.slice(17, 20)}-${value.slice(20)}`
   const posted = await sendSlackBlocks({
-    blocks: slackControlBlocks(harnesses),
+    blocks: slackControlBlocks(),
     channel,
     idempotencyKey: messageId,
     text: "Mako local harness controls",

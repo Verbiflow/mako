@@ -244,7 +244,7 @@ export function parseSlackRelayCommand({
 
 export const SlackRelayHelp = [
   "*Mako commands*",
-  "`new [harness] <message>` — start a local thread",
+  "`new [claude|codex|cursor|grok|devin|opencode] <message>` — start a local thread",
   "`projects [search]` — list the projects Mako has worked in recently",
   "`project <name-or-path>` — run this Slack thread’s next session in that project",
   "`threads [search]` — find local threads and their resume IDs",
@@ -252,7 +252,7 @@ export const SlackRelayHelp = [
   "`queue <message>` — send after the current turn finishes",
   "`steer <message>` — stop the current turn and send this next",
   "`stop` — stop the active local turn",
-  "`harness <harness>` — switch this Slack thread’s harness; the controls list your Mac’s",
+  "`harness <claude|codex|cursor|grok|devin|opencode>` — switch this Slack thread’s harness",
   "`models [harness]` — list live models and controls",
   "`model <model-id>` — choose the model for this Slack thread",
   "`reasoning <level>` — set provider-native reasoning effort",
