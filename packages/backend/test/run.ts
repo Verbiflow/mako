@@ -43,6 +43,7 @@ import {
   postSlackControls,
   slackControlBlocks,
 } from "../src/relay/slack-ui"
+import { workerHarnesses } from "../src/relay/storage-presence"
 import { listSkills, readSkill } from "../src/skills/catalog"
 import { backendStatus } from "../src/status"
 
@@ -775,6 +776,10 @@ if (action.kind === "block_actions") {
     version: "1.0.0",
   }
   assert.equal(describeWorker(null), "Mako is offline.")
+  const harnesses = [{ id: "claude", label: "Claude Code" }, { id: "example", label: "Example" }]
+  assert.deepEqual(workerHarnesses({ ...base, harnesses: JSON.stringify(harnesses) }), harnesses, "the heartbeat's harnesses survive the table column")
+  assert.deepEqual(workerHarnesses(base), [], "a worker too old to report harnesses reports none")
+  assert.deepEqual(workerHarnesses({ ...base, harnesses: "{not json" }), [])
   assert.equal(describeWorker(base), "Mako is online on *Studio*.")
   assert.equal(
     describeWorker({ ...base, activity: "idle", workspace: "pi-ui" }),
@@ -787,7 +792,9 @@ if (action.kind === "block_actions") {
   assert.match(describeWorker({ ...base, activity: "failing" }), /last attempts failed/)
   assert.match(describeWorker({ ...base, kind: "cloud" }), /in the cloud on \*Studio\*/)
 }
-const controls = JSON.stringify(slackControlBlocks())
+const controls = JSON.stringify(slackControlBlocks([{ id: "claude", label: "Claude Code" }, { id: "example", label: "Example" }]))
+assert.match(controls, /"Example"/, "the harness picker lists the Mac's own harnesses")
+assert.doesNotMatch(JSON.stringify(slackControlBlocks()), /mako-harness/, "no harness picker before a Mac reports its harnesses")
 for (const actionId of [
   "mako-harness",
   "mako-reasoning",
