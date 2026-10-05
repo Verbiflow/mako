@@ -27,6 +27,7 @@ type Connection = Pick<
 >
 function fixture(failStop = false, gate?: Promise<void>, frames = true) {
   const calls: string[] = []
+  let eventSequence = 0
   let event: Parameters<Connection["onEvent"]>[0] = () => {}
   const connection: Connection = {
     onEvent(fn) {
@@ -45,6 +46,7 @@ function fixture(failStop = false, gate?: Promise<void>, frames = true) {
       calls.push(method)
       if (method === "Page.startScreencast" && frames) {
         event({
+          cursor: ++eventSequence,
           method: "Page.screencastFrame",
           sessionId: "session",
           params: {
@@ -64,7 +66,7 @@ function fixture(failStop = false, gate?: Promise<void>, frames = true) {
       if (method === "Page.stopScreencast" && failStop)
         throw new Error("Injected stop failure")
       if (method === "Target.detachFromTarget")
-        event({ method, params: { sessionId: "session" } })
+        event({ cursor: ++eventSequence, method, params: { sessionId: "session" } })
       return {}
     },
   }

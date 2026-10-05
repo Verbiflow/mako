@@ -18,8 +18,11 @@ import { LiveConversations } from "../electron/live-conversations.ts"
 import { agentTitleFrom, userTextFrom, withContext, withoutMakoFraming } from "@mako/sessions"
 import { SessionMemory } from "../electron/session-memory.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type {
   LiveSessionState,
+  LiveSnapshot,
   HostEvent,
   TransferInput,
 } from "../electron/shared.ts"
@@ -62,6 +65,13 @@ let releaseBlockedClose: (() => void) | undefined
 function driver(provider: string): ProviderLiveDriver {
   return {
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
     canResume: true,
     available: () => true,
@@ -454,7 +464,7 @@ try {
   const failedWrite = mock.method(
     LiveJournal.prototype,
     "commit",
-    function (next, previous) {
+    function (this: LiveJournal, next: LiveSnapshot, previous?: LiveSnapshot) {
       if (
         next.control?.transfers.some(
           (transfer) =>

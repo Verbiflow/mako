@@ -11,6 +11,8 @@ import {
   type PromptDeliveryEvidence,
 } from "../electron/contracts/prompt-delivery.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import {
   preparePrompt,
   type PromptDispatch,
@@ -29,8 +31,14 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   let fail = false
   let failStart = false
   const driver: ProviderLiveDriver = {
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "accepted-message-id", evidence: "Injected shared-policy fixture; not native adapter acceptance" },
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
     canResume: true,
     available: () => true,
@@ -205,7 +213,7 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
     // dispatches it must carry its user turn.
     const dispatched = new Set<string>()
     for (const batch of batches) {
-      for (const request of batch.requests ?? []) {
+      for (const request of batch.requests ?? batch.requestChanges ?? []) {
         if (request.status !== "dispatching" || dispatched.has(request.id)) continue
         dispatched.add(request.id)
         assert.ok(
@@ -258,7 +266,14 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   const calls: PromptDispatch[] = []
   let behaviour: "throw-running" | "refuse-running" | "accept" = "throw-running"
   const driver: ProviderLiveDriver = {
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider: "cursor",
     canResume: true,
     available: () => true,

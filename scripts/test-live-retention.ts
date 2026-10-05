@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations"
 import { LiveJournal } from "../electron/live-journal"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -74,6 +76,13 @@ const root = await mkdtemp(join(tmpdir(), "mako-closed-cache-"))
 const closed = mock.method(LiveJournal.prototype, "close")
 const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",
   canResume: true,
   available: () => true,

@@ -29,9 +29,9 @@ import {
   type ProtocolContext,
 } from "../electron/codex-app-protocol.ts"
 import type {
+  LiveDriverEvent,
   LiveSessionState,
   LiveUpdate,
-  HostEvent,
 } from "../electron/shared.ts"
 import type { TranscriptEvent } from "@mako/sessions/events"
 import type { UsageWindow } from "../electron/account-types.ts"
@@ -74,7 +74,7 @@ const permissionContext: PermissionContext = {
   id: "permission-test",
   serverRequests: new Map(),
 }
-const permissionEvents: HostEvent[] = []
+const permissionEvents: LiveDriverEvent[] = []
 const permissionResults: unknown[] = []
 const permissionErrors: string[] = []
 const permissionCallbacks = {
@@ -237,6 +237,7 @@ const state: LiveSessionState = {
   harness: "codex",
   cwd: "/tmp/project",
   status: "ready",
+  connection: "connected",
   modes: [],
   currentMode: null,
   configOptions: [],
@@ -345,7 +346,7 @@ assert.deepEqual(permissionResults.at(-1), {
   content: {},
   _meta: null,
 })
-for (const patch of [
+const unsupportedConfirmations: JsonObject[] = [
   { mode: "url" },
   { meta: {} },
   {
@@ -355,7 +356,8 @@ for (const patch of [
       required: ["secret"],
     },
   },
-]) {
+]
+for (const patch of unsupportedConfirmations) {
   handleServerRequest(
     permissionContext,
     permissionCallbacks,

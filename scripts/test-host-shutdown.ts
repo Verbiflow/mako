@@ -9,6 +9,8 @@ import { HostCallLifetime } from "../electron/host-call-lifetime.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { SessionMemory } from "../electron/session-memory.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 
 function deferred() {
   let resolve!: () => void
@@ -55,9 +57,16 @@ for (const provider of [...registeredHarnessIds(), "future"]) {
   let closes = 0, finished = false
   const driver: ProviderLiveDriver = {
     provider, approvalEvidence: { kind: "submission-only", reason: "shutdown fixture" },
+    launchEnvironment: { kind: "unavailable", reason: "shutdown fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "shutdown fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+    planning: { via: "setting", option: "plan", proposal: "shutdown fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "shutdown fixture" },
+    turnRecovery: { kind: "manual", reason: "shutdown fixture" },
     canResume: true, available: () => true,
     start: async (cwd, options) => ({ id: options.conversationId, harness: provider, cwd, nativeId, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }),
-    prompt: async () => {}, cancel: async () => {},
+    prompt: async () => {}, permission: async () => {}, cancel: async () => {},
     close: async () => { closes++; await close.promise },
     setMode: async () => {},
   }

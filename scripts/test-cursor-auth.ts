@@ -37,7 +37,7 @@ const KEY_MINTED = "key_minted_0123456789abcdef"
 
 const xor: CursorKeyEncryption = {
   available: async () => true,
-  encrypt: async (value) => Buffer.from(value, "utf8").map((byte) => byte ^ 0x5a),
+  encrypt: async (value) => Buffer.from(Buffer.from(value, "utf8").map((byte) => byte ^ 0x5a)),
   decrypt: async (value) => Buffer.from(value.map((byte) => byte ^ 0x5a)).toString("utf8"),
 }
 const locked: CursorKeyEncryption = {

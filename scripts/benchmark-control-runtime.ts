@@ -532,7 +532,7 @@ async function benchmarkFocusPolicy(policy: BrowserFocusPolicy) {
     focusPolicy: policy,
   })
   const signal = new AbortController().signal
-  const run = (command: BrowserCommand) =>
+  const run = (command: z.input<typeof BrowserCommandSchema>) =>
     service.execute(
       "focus-benchmark",
       BrowserCommandSchema.parse(command),
@@ -575,6 +575,8 @@ async function benchmarkFocusPolicy(policy: BrowserFocusPolicy) {
  */
 async function liveComputerCatalog() {
   if (process.env.MAKO_CONTROL_LIVE_DRIVER !== "1") return undefined
+  const driver = resolveExecutable("cua-driver")
+  if (!driver) return undefined
   // A Unix socket path is bounded (SUN_LEN), so the state directory stays short.
   const socket = await ensureCuaEmbedded(
     await mkdtemp(join(tmpdir(), "mako-cb-")),
@@ -584,7 +586,7 @@ async function liveComputerCatalog() {
   const surface = await connectEngine(
     controlSessionProbe(
       {
-        command: resolveExecutable("cua-driver"),
+        command: driver,
         args: ["mcp", "--embedded", "--socket", socket],
       },
       "benchmark-live",

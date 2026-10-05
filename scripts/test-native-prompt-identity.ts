@@ -11,6 +11,7 @@ const capability = { kind: "accepted-message-id", evidence: "Injected message re
 assert.equal(acpLiveDriver({
   provider: "future-acp-fixture", nativePromptIdentity: capability,
   approvalEvidence: { kind: "submission-only", reason: "Fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   canResume: false, available: () => true, launch: async () => null,
 }).nativePromptIdentity, capability, "ACP forwards the provider contribution instead of fixing its availability in transport")

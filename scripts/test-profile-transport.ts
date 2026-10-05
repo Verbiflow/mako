@@ -188,8 +188,9 @@ await assert.rejects(withDiscoveryProcess({ ...work, signal: activeAbort.signal 
   activeAbort.abort(new Error("active fixture discovery cancelled"))
   await exited
 }), /active fixture discovery cancelled/)
-assert.ok(abortedPid)
-assert.throws(() => process.kill(abortedPid, 0), { code: "ESRCH" }, "active cancellation cleans up its own process before returning")
+const cancelledPid = abortedPid
+assert.ok(cancelledPid)
+assert.throws(() => process.kill(cancelledPid, 0), { code: "ESRCH" }, "active cancellation cleans up its own process before returning")
 console.log(
   "Profile transport: bounded output/concurrency, queue deadlines, queued and active cancellation, priority reservation, complete frames and confirmed owned process termination verified"
 )

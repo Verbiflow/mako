@@ -23,9 +23,15 @@ try {
     const base = {
       OPENAI_API_KEY: "fixture",
       ANTHROPIC_API_KEY: "fixture",
+      CLAUDE_CONFIG_DIR: "/elsewhere",
+      CODEX_HOME: "/elsewhere",
       PATH: "/fixture",
     }
-    assert.deepEqual(await capability.accountEnv(null, base), base)
+    const overrides = capability.provider === "codex"
+      ? ["OPENAI_API_KEY", "CODEX_HOME"]
+      : ["ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR"]
+    const ordinary = Object.fromEntries(Object.entries(base).filter(([key]) => !overrides.includes(key)))
+    assert.deepEqual(await capability.accountEnv(null, base), ordinary, "the default is the CLI's ordinary login, whatever the shell exported")
     await assert.rejects(
       capability.accountEnv("missing", base),
       /selected.*account/i
@@ -39,6 +45,7 @@ try {
     await mkdir(directory, { recursive: true })
     const marker = join(directory, "existing-identity")
     await writeFile(marker, "preserve")
+    assert.ok(capability.captureAccount, `${capability.provider} captures accounts`)
     await assert.rejects(capability.captureAccount("saved"), /EEXIST/)
     assert.equal(await readFile(marker, "utf8"), "preserve")
   }
@@ -48,7 +55,7 @@ try {
     join(codexDir, "auth.json"),
     JSON.stringify({ OPENAI_API_KEY: "fixture" })
   )
-  const realCodex = join(sandbox, "real-codex")
+  const realCodex = join(sandbox, ".codex")
   await mkdir(join(realCodex, "sessions"), { recursive: true })
   for (const name of ["state_5.sqlite", "models_cache.json", "auth.json.bak"])
     await writeFile(join(realCodex, name), "")
@@ -70,7 +77,7 @@ try {
   await writeFile(join(ownArchive, "rollout-own.jsonl"), "{}\n")
   const codexEnv = await codexAccountCapability.accountEnv("ready", {
     OPENAI_API_KEY: "other",
-    CODEX_HOME: realCodex,
+    CODEX_HOME: join(sandbox, "elsewhere"),
   })
   assert.deepEqual(codexEnv, { CODEX_HOME: codexDir })
   for (const name of [
@@ -94,7 +101,7 @@ try {
     await readFile(join(realCodex, "session_index.jsonl"), "utf8"),
     `${[...sharedLog, ownLog[0], ownLog[1]].join("\n")}\n`
   )
-  await codexAccountCapability.accountEnv("ready", { CODEX_HOME: realCodex })
+  await codexAccountCapability.accountEnv("ready", {})
   assert.equal(
     (await readFile(join(realCodex, "session_index.jsonl"), "utf8")).split("\n").length,
     5,
@@ -156,13 +163,15 @@ try {
       (await codexAccountCapability.listAccounts(null)).find(
         (account) => account.name === "default"
       )?.dir,
-      codexDir
+      realCodex,
+      "an exported CODEX_HOME does not move the default account"
     )
     assert.equal(
       (await claudeAccountCapability.listAccounts(null)).find(
         (account) => account.name === "default"
       )?.dir,
-      claudeDir
+      join(sandbox, ".claude"),
+      "an exported CLAUDE_CONFIG_DIR does not move the default account"
     )
     assert.equal(
       (await openCodeAccountCapability.listAccounts(null))[0]?.providerId,
@@ -183,7 +192,7 @@ try {
     }
   }
   console.log(
-    "Account routing rejects missing identities and traversal, preserves default authentication and existing captures, and shares a Codex account's archive, names and state with the real home"
+    "Account routing rejects missing identities and traversal, keeps the default on the CLI's ordinary login, preserves existing captures, and shares a Codex account's archive, names and state with the real home"
   )
 } finally {
   mock.restoreAll()

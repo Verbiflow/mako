@@ -45,6 +45,7 @@ try {
         if (name === "fails") throw new Error("Native removal failed")
         names.delete(name)
         deleted.push(name)
+        return name === "other" ? { stillValid: { reason: "the provider couldn't be reached", manageUrl: "https://provider.example.invalid/keys" } } : {}
       },
     }
     const dispose = providerHost.accountCapabilities.register(capability)
@@ -76,7 +77,7 @@ try {
       assert.deepEqual(deleted, ["selected"])
       // An explicit default selection is an identity change the user requested.
       await selectAccount(provider, null)
-      await removeAccount(provider, "other")
+      assert.deepEqual(await removeAccount(provider, "other"), { stillValid: { reason: "the provider couldn't be reached", manageUrl: "https://provider.example.invalid/keys" } }, "a key the provider still accepts reaches the window")
       assert.equal(await readSelection(provider), null)
     } finally {
       dispose()

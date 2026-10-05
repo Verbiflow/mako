@@ -6,9 +6,11 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { performance } from "node:perf_hooks"
 import { readOpenCodeAgents } from "../electron/providers/opencode/agent-store.ts"
-// Exercise the same compiled worker entry used by Electron, not a fake reader.
-import { OpenCodeAgents } from "../dist-electron/providers/opencode/agents.js"
+import type * as Agents from "../electron/providers/opencode/agents.ts"
 import type { NativeAgentObservation } from "../electron/contracts/native-agents.ts"
+
+// Exercise the same compiled worker entry used by Electron, not a fake reader.
+const { OpenCodeAgents }: typeof Agents = await import(new URL("../dist-electron/providers/opencode/agents.js", import.meta.url).href)
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-children-"))
 await mkdir(join(root, "opencode"))

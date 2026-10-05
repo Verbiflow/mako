@@ -20,6 +20,8 @@ import { claudeProfileLoader } from "../electron/providers/claude/profile.ts"
 import { devinProfileLoader } from "../electron/providers/devin/profile.ts"
 import { availableProviderProfile } from "../electron/providers/profile-loader.ts"
 import type { HarnessModel, HarnessProfile } from "../electron/shared.ts"
+import type * as Harnesses from "../electron/harnesses.ts"
+import type * as Providers from "../electron/providers/index.ts"
 
 const claudeFixture = [
   {
@@ -262,11 +264,12 @@ function assertFixtureProfiles(): void {
     ["grok-4.6", "grok-4.5"]
   )
   assert.deepEqual(
-    grok.models.map((model) =>
-      option(model, "effort")?.kind === "select"
-        ? option(model, "effort")!.values.map((entry) => entry.value)
+    grok.models.map((model) => {
+      const effort = option(model, "effort")
+      return effort?.kind === "select"
+        ? effort.values.map((entry) => entry.value)
         : []
-    ),
+    }),
     [["low", "high"], ["medium"]]
   )
 
@@ -429,8 +432,9 @@ assertFixtureProfiles()
 if (process.argv.includes("--live")) {
   // Native SDK children execute JavaScript directly; tsx's import remapping
   // does not apply to their separate processes. Use the built host for live checks.
-  const { harnessProfile } = await import("../dist-electron/harnesses.js")
-  const { providerHost } = await import("../dist-electron/providers/index.js")
+  const built = (path: string) => new URL(`../dist-electron/${path}`, import.meta.url).href
+  const { harnessProfile }: typeof Harnesses = await import(built("harnesses.js"))
+  const { providerHost }: typeof Providers = await import(built("providers/index.js"))
   const loaders = providerHost.profiles.list()
   assert.ok(loaders.length > 0, "No providers registered")
   const failures: string[] = []

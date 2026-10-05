@@ -11,6 +11,7 @@ import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js
 import { describeApprovalResponse, type NativeApprovalDecision } from "../electron/contracts/approval-response.js"
 import type { LivePermissionRequest } from "../electron/shared.js"
 import type { SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 
 const root = await mkdtemp(join(tmpdir(), "mako-question-evidence-"))
 try {
@@ -20,8 +21,9 @@ try {
   const request: LivePermissionRequest = { id: "host", sessionId: "host", title: "Question", native: identity, options: [], questions: [{ id: "0", header: "Choice", question: "Which?", required: true, isSecret: false, allowOther: true, valueType: "string-array", options: [] }] }
   const answer = { kind: "answers" as const, answers: { "0": ["alpha, beta", "gamma"] } }
   const digest = claudeApprovalAnswerDigest(request, answer)!
-  const message = { type: "user", session_id: "session", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "tool-1" }] }, tool_use_result: { questions: [{ question: "Which?" }], answers: { "Which?": "alpha, beta, gamma" } } }
-  for (const bad of [ { ...message, session_id: "other" }, { ...message, parent_tool_use_id: "child" }, { ...message, tool_use_result: undefined }, { ...message, message: { content: [{ type: "tool_result", tool_use_id: "newer" }] } } ]) claude.observe(bad)
+  const message: SDKUserMessage = { type: "user", session_id: "session", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1" }] }, tool_use_result: { questions: [{ question: "Which?" }], answers: { "Which?": "alpha, beta, gamma" } } }
+  const bad: SDKUserMessage[] = [ { ...message, session_id: "other" }, { ...message, parent_tool_use_id: "child" }, { ...message, tool_use_result: undefined }, { ...message, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "newer" }] } } ]
+  for (const each of bad) claude.observe(each)
   assert.equal(decisions.length, 0)
   claude.observe(message)
   assert.equal(decisions[0].answerDigest, digest)
@@ -54,7 +56,8 @@ try {
   decisions.length = 0
   const devin = new DevinApprovalObserver(d => decisions.push(d), [])
   const question = { question: "Pick", header: "Choice", options: ["Alpha", "Beta"] }
-  const notification: SessionNotification = { sessionId: "session", update: { sessionUpdate: "tool_call", toolCallId: "call-1", title: "Question", _meta: { "cognition.ai/inferenceToolName": "ask_user_question", "cognition.ai/questions": [question] } } }
+  const questionCall = (toolCallId: string): SessionNotification => ({ sessionId: "session", update: { sessionUpdate: "tool_call", toolCallId, title: "Question", _meta: { "cognition.ai/inferenceToolName": "ask_user_question", "cognition.ai/questions": [question] } } })
+  const notification = questionCall("call-1")
   const elicitation: CreateElicitationRequest = { mode: "form", sessionId: "session", message: "Pick", requestedSchema: { type: "object", properties: { q0: { type: "string", title: "Choice", description: "Pick", enum: ["Alpha", "Beta"] } }, required: ["q0"] } }
   devin.observe(notification)
   assert.equal(devin.identifyElicitation({ ...elicitation, sessionId: "other" }), undefined)
@@ -81,7 +84,7 @@ try {
   reused.observe(update)
   assert.equal(decisions.length, beforeAmbiguousResult, "ambiguous saved occurrences cannot confirm either receipt")
   const fresh = new DevinApprovalObserver(d => decisions.push(d), [native])
-  fresh.observe({ ...notification, update: { ...notification.update, toolCallId: "newer-call" } })
+  fresh.observe(questionCall("newer-call"))
   const freshIdentity = fresh.identifyElicitation(elicitation)
   assert.ok(freshIdentity)
   assert.notEqual(freshIdentity.scope, native.scope, "same question text with a new native tool ID is a new question")
@@ -97,8 +100,8 @@ try {
   prepared.observe!(notification)
   assert.deepEqual(prepared.identifyElicitation!(elicitation), native, "production ACP preparation forwards saved identities to its live observer")
   await prepared.dispose()
-  devin.observe({ ...notification, update: { ...notification.update, toolCallId: "call-2" } })
-  devin.observe({ ...notification, update: { ...notification.update, toolCallId: "call-3" } })
+  devin.observe(questionCall("call-2"))
+  devin.observe(questionCall("call-3"))
   assert.equal(devin.identifyElicitation(elicitation), undefined, "parallel identical forms cannot be guessed")
 
   const databasePath = join(root, "sessions.db"), db = new DatabaseSync(databasePath)

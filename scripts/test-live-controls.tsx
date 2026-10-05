@@ -40,6 +40,7 @@ import { ContextMeter, UsageDetails } from "../src/components/composer/context-m
 import { TooltipProvider } from "../src/components/ui/tooltip"
 import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 import { threadsStore } from "../src/state/threads"
+import { viewedThread } from "../src/state/thread-viewing"
 import { TransferStatus } from "../src/components/viewer/transfer-status"
 import { ConversationRelations } from "../src/components/viewer/conversation-relations"
 import { savedMessageDraft } from "../src/lib/saved-message-draft"
@@ -205,10 +206,10 @@ assert.doesNotMatch(defaultedMarkup, /aria-label="Access: Ask before acting"/)
 assert.match(defaultedMarkup, /native configuration/)
 // The thread's own remembered level still outranks the provider default.
 threadsStore.set({
-  viewing: {
+  viewing: viewedThread({
     ref: { harness: "grok", nativeId: "ses", path: "/tmp/ses.jsonl", accessMode: "access:full" },
     entries: [],
-  },
+  }),
 })
 const rememberedMarkup = renderToStaticMarkup(<NextSessionModePicker />)
 assert.match(rememberedMarkup, /aria-label="Access: Full access"/)
@@ -624,9 +625,9 @@ const pendingTool = {type:"tool" as const,id:"build",toolKind:"execute",title:"n
 assert.equal(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:59_999}).label,"npm run build","a minute of quiet is ordinary")
 assert.deepEqual(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:3*60_000+10_000}),{kind:"executing",label:"No output for 3m · npm run build"})
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"thinking",text:"Weighing"}],quietForMs:65*60_000}),{kind:"reasoning",label:"No output for 1h 5m"})
-assert.deepEqual(agentActivity({...activityBase,connecting:true,makingWorktree:true}),{kind:"connecting",label:"Checking out files"},"a checkout made on the spot is named until the provider starts")
-assert.equal(agentActivity({...activityBase,connecting:true,makingWorktree:true,worktreeStep:"carry"}).label,"Copying files from your folder","each step the host reports is named")
-assert.equal(agentActivity({...activityBase,connecting:true}).label,"Connecting")
+assert.deepEqual(agentActivity({...activityBase,blocks:[],connecting:true,makingWorktree:true}),{kind:"connecting",label:"Checking out files"},"a checkout made on the spot is named until the provider starts")
+assert.equal(agentActivity({...activityBase,blocks:[],connecting:true,makingWorktree:true,worktreeStep:"carry"}).label,"Copying files from your folder","each step the host reports is named")
+assert.equal(agentActivity({...activityBase,blocks:[],connecting:true}).label,"Connecting")
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"text",text:"Half an ans"}],quietForMs:2*60_000}),{kind:"working",label:"No output for 2m"},
   "a reply that stopped mid-stream stops reading as responding")
 assert.equal(agentActivity({...activityBase,blocks:[],quietForMs:120*60_000}).label,"No output for 2h")
@@ -653,7 +654,7 @@ const setupMarkup = markerExchange(mcpServerFailedEvent("linear", "could not con
 assert.match(setupMarkup, /2 MCP servers didn&#x27;t start<\/span><span class="[^"]*">linear, drive</, "setup notices that arrive together read as one line naming the servers")
 assert.equal(setupMarkup.match(/aria-expanded/g)?.length, 1, "the setup line opens onto each server; the turn marker beside it stays its own line")
 assert.doesNotMatch(setupMarkup, /could not connect/, "each server's reason stays unmounted until the line is opened")
-const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[],current:false,pinned:false,latest:"",order:"",priority:1,running:0,active:1,needsInput:0,failed:0,unread:0}
+const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[],current:false,pinned:false,pinRank:-1,latest:"",order:"",priority:1,running:0,active:1,needsInput:0,failed:0,unread:0}
 const folderMarkup = renderToStaticMarkup(<FolderActivity folder={activeFolder} />)
 assert.match(folderMarkup, /1 running/)
 assert.match(folderMarkup, /running outside this Mako/)

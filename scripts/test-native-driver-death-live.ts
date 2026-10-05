@@ -6,12 +6,14 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { connectMcpComputerDriver } from "../packages/control-runtime/src/computer-driver-client.js"
-import {
+import type * as CuaEmbedded from "../electron/cua-embedded.ts"
+
+const {
   cuaEmbeddedPid,
   cuaEmbeddedSocket,
   ensureCuaEmbedded,
   stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
+}: typeof CuaEmbedded = await import(new URL("../dist-electron/cua-embedded.js", import.meta.url).href)
 
 // The real native driver is killed while it types into a real Cocoa view in
 // the background: first its stdio process, then the embedded daemon doing

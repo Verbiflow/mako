@@ -63,6 +63,7 @@ if (args[0] === 'find-generic-password') {
 
     // The file may be corrupt while the native Keychain login remains healthy.
     await writeFile(join(native, ".credentials.json"), "broken")
+    assert.ok(claude.captureAccount, "Claude captures accounts")
     await claude.captureAccount("saved")
     const saved = join(root, ".mako", "accounts", "claude", "saved")
     assert.equal(await readFile(join(saved, ".credentials.json"), "utf8"), credentials("fresh-native"))

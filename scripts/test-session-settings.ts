@@ -286,7 +286,7 @@ assert.deepEqual(observedChanges, [{ model: "a", options: { effort: "high" } }])
 const unforwarded: string[] = []
 forward(
   { id: "live" },
-  { sessionId: "session", update: { sessionUpdate: "plan_removed" } },
+  { sessionId: "session", update: { sessionUpdate: "plan_removed", planId: "plan-1" } },
   () => assert.fail("an update Mako does not render emits nothing"),
   () => assert.fail("nor changes state"),
   undefined,

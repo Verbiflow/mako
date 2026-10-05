@@ -25,6 +25,8 @@ import type { ThreadPlacement } from "../electron/contracts/thread-identity.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { LiveSnapshot } from "../electron/shared.js"
 import { type JournalFacts, ThreadStore, threadStorePath } from "../electron/thread-store.js"
 
@@ -389,7 +391,14 @@ async function migrationAcrossRestart(): Promise<void> {
 
 function fixtureDriver(): ProviderLiveDriver {
   return {
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     canResume: true,
     provider: "codex",
     available: () => true,

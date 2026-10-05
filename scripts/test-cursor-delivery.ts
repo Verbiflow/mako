@@ -313,9 +313,14 @@ try {
   const planClient: CursorSdkLiveClient = {
     ...client,
     request: async (method, params) => {
-      if (method !== "send") return client.request(method, params)
-      sent.push(JSON.stringify(params))
-      return { runId: `plan-run-${sent.length}` }
+      const answers: FixtureAnswers = {
+        send: () => {
+          sent.push(JSON.stringify(params))
+          return { runId: `plan-run-${sent.length}` }
+        },
+      }
+      const respond = answers[method]
+      return respond ? respond() : client.request(method, params)
     },
   }
   const planStates: LiveSessionState[] = []

@@ -23,7 +23,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
   clear: () => stored.clear(),
 } satisfies Storage })
 const errors: unknown[] = []
-const errorToast = mock.method(toast, "error", (message) => { errors.push(message); return "test-error" })
+const errorToast = mock.method(toast, "error", (message: Parameters<typeof toast.error>[0]) => { errors.push(message); return "test-error" })
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")

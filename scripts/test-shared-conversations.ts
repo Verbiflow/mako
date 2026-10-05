@@ -17,6 +17,7 @@ import { reserveHostReplacement } from "../electron/local-update-installer.js"
 import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { HostEvent, LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
 
 const root = mkdtempSync("/tmp/mako-peers-")
@@ -39,6 +40,11 @@ const drivers = new Map(providers.map((provider) => [provider, {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider, canResume: true, available: () => true,
   start: async (cwd, options) => {
     starts.push(provider)
@@ -62,10 +68,10 @@ const drivers = new Map(providers.map((provider) => [provider, {
   setMode: async () => {},
   checkpoint: async () => "checkpoint",
 } satisfies ProviderLiveDriver]))
-let ownerHost: Awaited<ReturnType<typeof startWebHost>>
+let ownerHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 const owner = new LiveConversations({ appPath: root, root: join(root, "owner"), memory: ownerMemory, driver: (provider) => drivers.get(provider), history: async () => null, nativePath: (session) => join(root, `${session.harness}.jsonl`), checkpoint: async () => "checkpoint", resumeVerdict: async () => ({ kind: "resumable", record: "same" }), emit: (event: HostEvent) => ownerHost?.event(event), providerWarmLimit: 10 })
 const router = new SharedConversations(desktopMemory, (event) => { events.push(event); desktopHost?.conversationEvent(event) })
-let desktopHost: Awaited<ReturnType<typeof startWebHost>>
+let desktopHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 const info = (pid: number) => ({ protocol: 1 as const, instanceId: randomUUID(), pid, version: "fixture", methods: Object.keys(hostCallInputs) })
 const absentFile = async () => new Response(null, { status: 404 })
 let snapshotIdentityCase: "normal" | "missing" | "conflicting" | "inactive" | "transient" = "normal"

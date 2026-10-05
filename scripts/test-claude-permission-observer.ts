@@ -20,7 +20,7 @@ const observer = await listenClaudePermissionDecisions({ root, sessionId, publis
   decisions.push(decision)
 } })
 const endpoint = observer.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT!
-const batch = (tool: string, source = "user_temporary", session = sessionId) => ({ resourceLogs: [{ resource: { attributes: [{ key: "private", value: { stringValue: "must-not-retain" } }] }, scopeLogs: [{ logRecords: [{ attributes: Object.entries({
+const batch = (tool: string, source = "user_temporary", session: string = sessionId) => ({ resourceLogs: [{ resource: { attributes: [{ key: "private", value: { stringValue: "must-not-retain" } }] }, scopeLogs: [{ logRecords: [{ attributes: Object.entries({
   "event.name": "tool_decision", "session.id": session, tool_use_id: tool,
   source, decision: source === "user_reject" ? "reject" : "accept", "event.sequence": "3",
   tool_parameters: "secret-tool-arguments",
@@ -39,7 +39,9 @@ try {
     const event = events.at(-1)
     assert.ok(event?.type === "live-permission" && event.request.native)
     permissions.respond(requestId, { kind: "choice", optionId })
-    assert.equal((await native).decisionClassification, classification)
+    const result = await native
+    assert.ok(result, "an in-band answer is returned to the SDK")
+    assert.equal(result.decisionClassification, classification)
     assert.equal(decisions.length, events.filter(event => event.type === "live-permission").length - 1, "callback return cannot confirm native consumption")
     assert.equal((await send(batch(toolUseID, classification, "other-session"))).status, 200)
     assert.equal((await send(batch(toolUseID, classification))).status, 200)

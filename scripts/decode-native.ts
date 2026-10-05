@@ -6,9 +6,11 @@ import {
   decoderFor,
   decodeSession,
   FIXTURE_ROOT,
+  FixtureNativeSchema,
   readRecording,
   serializeFixture,
   summarize,
+  type FixtureNative,
 } from "./native-decoding.ts"
 
 /**
@@ -19,11 +21,14 @@ import {
  *   npm run decode -- --harness codex messages.jsonl --session '{"threadId":"t1"}'
  *   npm run decode -- capture.jsonl --kind item/completed     only matching messages
  *   npm run decode -- capture.jsonl --json                    decoded events as JSON lines
- *   npm run decode -- capture.jsonl --fixture compaction --about "…" --source "codex-cli 0.159.0"
+ *   npm run decode -- capture.jsonl --fixture compaction --about "…" --source "codex-cli 0.159.0 app-server" --version 0.159.0
+ *   npm run decode -- shapes.jsonl --harness cursor --fixture … --version 1.0.31 --sdk @cursor/sdk@1.0.31 --origin written
  *
  * Captures come from running Mako with `MAKO_NATIVE_CAPTURE=codex`; they sit
  * in `native-captures/` beside the host log. A capture holds conversation
- * content: read the fixture it becomes before committing it.
+ * content: read the fixture it becomes before committing it. A fixture's
+ * `native` comes from the flags, else from the recording: a capture is
+ * `captured`, and its header's version is used when it has one.
  */
 
 const { values: options, positionals } = parseArgs({
@@ -36,13 +41,17 @@ const { values: options, positionals } = parseArgs({
     fixture: { type: "string" },
     about: { type: "string" },
     source: { type: "string" },
+    version: { type: "string" },
+    sdk: { type: "string" },
+    origin: { type: "string" },
     force: { type: "boolean", default: false },
   },
 })
 
 const path = positionals[0]
 if (!path) {
-  console.error("Usage: npm run decode -- <capture.jsonl | fixture.json | messages.jsonl> [--harness codex] [--session JSON] [--kind KIND] [--json] [--fixture NAME --about TEXT --source TEXT]")
+  console.error("Usage: npm run decode -- <capture.jsonl | fixture.json | messages.jsonl> [--harness codex] [--session JSON] [--kind KIND] [--json] " +
+    "[--fixture NAME --about TEXT --source TEXT --version VERSION --sdk NAME@VERSION --origin captured|written]")
   process.exit(2)
 }
 
@@ -68,10 +77,12 @@ if (options.fixture) {
     console.error(`${target} exists; pass --force to replace it`)
     process.exit(2)
   }
+  const native = fixtureNative()
   await mkdir(folder, { recursive: true })
   await writeFile(target, serializeFixture({
     harness,
     source: options.source ?? "recorded with MAKO_NATIVE_CAPTURE",
+    native,
     about: options.about,
     session,
     steps: steps.map((step) => ({ message: step.message, decoded: step.decoded })),
@@ -103,4 +114,16 @@ if (!options.json) {
   for (const [kind, seen] of [...tally].sort((a, b) => b[1].count - a[1].count))
     console.log(`  ${String(seen.count).padStart(5)}  ${kind}${seen.events ? "" : "  → nothing"}`)
   if (unknown.size) console.log(`\nNot yet decoded: ${[...unknown].join(", ")}`)
+}
+
+/** `--version none` is for a fixture written from a protocol schema alone, which then names its `--sdk`. */
+function fixtureNative(): FixtureNative {
+  const at = options.sdk?.lastIndexOf("@") ?? -1
+  const sdk = options.sdk ? { name: options.sdk.slice(0, at), version: options.sdk.slice(at + 1) } : recording.native?.sdk
+  const version = options.version === "none" ? null : options.version ?? recording.native?.version
+  const parsed = FixtureNativeSchema.safeParse({ version, sdk, origin: options.origin ?? recording.native?.origin })
+  if (parsed.success) return parsed.data
+  console.error("A fixture names the native version it records: pass --version VERSION (or none), --sdk NAME@VERSION and --origin captured|written as needed.\n" +
+    z.prettifyError(parsed.error))
+  process.exit(2)
 }

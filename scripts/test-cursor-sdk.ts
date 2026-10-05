@@ -4,7 +4,6 @@ import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "..
 import {
   SdkChildLineSchema,
   SdkRequestSchema,
-  sdkMessageForWire,
   type JsonValue,
   type SdkDelta,
   type SdkEvent,
@@ -13,7 +12,7 @@ import {
   type SdkResult,
   type SdkRunResult,
 } from "../electron/providers/cursor/sdk/wire.ts"
-import type { LiveUpdate } from "../electron/contracts/live-content.ts"
+import { MAX_STREAMED_TOOL_OUTPUT, reduceLiveUpdates, type LiveUpdate } from "../electron/contracts/live-content.ts"
 import { RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.ts"
 
 const run = { agent_id: "agent-1", run_id: "run-1" } as const
@@ -32,6 +31,7 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
   const blocks = new Map<string, string>()
   for (const update of updates) {
     if (update.kind !== "text" && update.kind !== "thinking") continue
+    assert.ok(update.id, "the SDK projection names every text and thinking block")
     blocks.set(update.id, (blocks.get(update.id) ?? "") + update.text)
   }
   return blocks
@@ -233,16 +233,18 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
     if (status === "completed") message.result = { status: "success", value: { exitCode: 0, stdout: "all passed\n", stderr: "" } }
     return message
   }
-  projection.message(shell("one", "running"))
-  assert.deepEqual(projection.delta({ type: "shell-output", text: "building\n" }), [{ kind: "tool-update", id: "one", output: "building\n" }])
-  assert.deepEqual(projection.delta({ type: "shell-output", text: "testing\n" }), [{ kind: "tool-update", id: "one", output: "building\ntesting\n" }])
-  const long = projection.delta({ type: "shell-output", text: "x".repeat(40_000) })[0]
-  assert.ok(long?.kind === "tool-update" && long.output?.length === 16 * 1024 && long.output.endsWith("x"), "the row keeps the tail")
+  let blocks = reduceLiveUpdates([], projection.message(shell("one", "running")))
+  const output = () => blocks.find((block) => block.type === "tool" && block.id === "one")
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "building\n" }), [{ kind: "tool-update", id: "one", outputAppend: "building\n" }])
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "testing\n" }), [{ kind: "tool-update", id: "one", outputAppend: "testing\n" }])
+  blocks = reduceLiveUpdates(blocks, [{ kind: "tool-update", id: "one", outputAppend: "building\ntesting\n" }, ...projection.delta({ type: "shell-output", text: "x".repeat(40_000) })])
+  const long = output()
+  assert.ok(long?.type === "tool" && long.output?.length === MAX_STREAMED_TOOL_OUTPUT && long.output.endsWith("x"), "the row keeps the tail")
   projection.message(shell("two", "running"))
   assert.deepEqual(projection.delta({ type: "shell-output", text: "whose?" }), [], "with two commands running the output names neither")
   const done = projection.message(shell("one", "completed")).find((update) => update.kind === "tool-update")
   assert.ok(done?.kind === "tool-update" && done.output === "all passed\n", "the result replaces the streamed tail")
-  assert.deepEqual(projection.delta({ type: "shell-output", text: "two's\n" }), [{ kind: "tool-update", id: "two", output: "two's\n" }])
+  assert.deepEqual(projection.delta({ type: "shell-output", text: "two's\n" }), [{ kind: "tool-update", id: "two", outputAppend: "two's\n" }])
   projection.message(shell("two", "completed"))
   assert.deepEqual(projection.delta({ type: "shell-output", text: "late" }), [], "output after the call completed reopens nothing")
 }
@@ -496,7 +498,7 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
   })
   assert.equal(noTurn.success, false)
 
-  // The child validates what the wire carries, not the SDK's live object: a
+  // The host validates what the wire carries, not the SDK's live object: a
   // grep result's `line: undefined` (SDK 1.0.31) is not JSON, but the line the
   // child writes has no such field. Refusing it dropped the completed message
   // and left the grep row running for good.
@@ -510,11 +512,12 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
     args: { pattern: "Agent" },
     result: { status: "success", value: { workspaceResults: { "/w": { output: { matches: [grepHit] } } } } },
   }
-  const completedGrep = sdkMessageForWire(liveGrep)
-  assert.ok("message" in completedGrep, "a result with an undefined field is carried once serialized")
-  assert.equal(completedGrep.message.type === "tool_call" && completedGrep.message.status, "completed")
-  const novel = sdkMessageForWire({ ...run, type: "novel" })
-  assert.ok("refused" in novel && novel.refused.length > 0, "an unknown message type is still refused, by name")
+  const written = (message: typeof run & { type: string }) => SdkChildLineSchema.safeParse(JSON.parse(JSON.stringify({ event: "message", turn: "t", seq: 0, message })))
+  const completedGrep = written(liveGrep)
+  assert.ok(completedGrep.success && "event" in completedGrep.data && completedGrep.data.event === "message",
+    "a result with an undefined field is carried once serialized")
+  assert.equal(completedGrep.data.message.type === "tool_call" && completedGrep.data.message.status, "completed")
+  assert.equal(written({ ...run, type: "novel" }).success, false, "an unknown message type is still refused")
 }
 
 console.log("cursor sdk projection, modes and wire ok")

@@ -69,7 +69,7 @@ leaseLost = false
 await guarded.setMode("owner-a", "fixture")
 assert.equal(dispatched, 1)
 cleanupFailure = true
-await assert.rejects(guarded.close("owner-a"), /cleanup failed/)
+await assert.rejects(async () => guarded.close("owner-a"), /cleanup failed/)
 assert.equal(releases, 0, "uncertain cleanup must retain the native exclusion lease")
 await assert.rejects(guarded.start("/fixture", options), /execution owner/)
 cleanupFailure = false

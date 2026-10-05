@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ResumeVerdict } from "../electron/contracts/conversation-control.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
 
 // A record its harness keeps closed (a Codex archive, a Cursor desktop chat)
@@ -15,7 +17,14 @@ import type { LiveSessionState } from "../electron/shared.ts"
 const root = mkdtempSync(join(tmpdir(), "mako-closed-handoff-"))
 const starts: Array<string | undefined> = []
 const driver: ProviderLiveDriver = {
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "codex",
   canResume: true,
   available: () => true,
@@ -63,7 +72,7 @@ async function settled(id: string, transferId: string) {
   const deadline = Date.now() + 5_000
   for (;;) {
     const transfer = owner.snapshot(id)?.control?.transfers.find((item) => item.input.id === transferId)
-    if (transfer && transfer.state.kind !== "pending" && transfer.state.kind !== "preparing") return transfer.state
+    if (transfer && transfer.state.kind !== "queued" && transfer.state.kind !== "preparing") return transfer.state
     if (Date.now() > deadline) throw new Error("Timed out waiting for the transfer")
     await new Promise((resolve) => setTimeout(resolve, 5))
   }

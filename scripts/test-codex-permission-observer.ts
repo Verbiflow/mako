@@ -74,7 +74,8 @@ try {
   const ignored = request(13, "ignored")
   assert.ok(ignored.native)
   resolvePermission(context, callbacks, "13", { kind: "choice", optionId: "decision:0" })
-  for (const extra of [{ source: "Config" }, { "conversation.id": "another-session" }, { "event.timestamp": "2000-01-01T00:00:00.000Z" }, { decision: "approved_with_amendment" }])
+  const mismatches: Record<string, string>[] = [{ source: "Config" }, { "conversation.id": "another-session" }, { "event.timestamp": "2000-01-01T00:00:00.000Z" }, { decision: "approved_with_amendment" }]
+  for (const extra of mismatches)
     observer.stderr(event("ignored", "approved", extra))
   assert.equal(observer.stderr(Buffer.from('{"target":"other","level":"ERROR","fields":{"message":"native failure"}}\n')), "native failure\n")
   assert.equal(observer.stderr(Buffer.from('{"target":"codex_otel.log_only","fields":{"message":"PRIVATE_ACCOUNT"}\n')), "")

@@ -73,6 +73,11 @@ async function check() {
   await app.whenReady()
   const { providerHost } = await import(join(process.env.MAKO_LAUNCH_DIST, "providers/index.js"))
   const { createCursorSdkDriver } = await import(join(process.env.MAKO_LAUNCH_DIST, "providers/cursor/sdk/driver.js"))
+  assert.deepEqual(
+    providerHost.harnesses.list().filter((harness) => !harness.diagnostics.runsInSdk).map((harness) => harness.provider).sort(),
+    [...NAMES].sort(),
+    "every harness that launches its own executable is recorded here; one that runs inside an SDK is checked through that SDK's child below",
+  )
   const cwd = join(root, "work")
   await mkdir(cwd)
   const environment = { thread: randomUUID(), host: "fix-login.thread.localhost", port: 20_110, ports: 10, dataDir: join(root, "thread-data"), values: { PORT: "20110", API_URL: "http://fix-login.thread.localhost:20111" } }
@@ -113,7 +118,7 @@ async function check() {
 
   let cursorEnv
   const cursor = createCursorSdkDriver({
-    auth: { childEnv: async () => ({ ...process.env }), reportRejected() {}, status: async () => ({}), signInWithBrowser: async () => ({}) },
+    auth: { childLaunch: async (env) => ({ env: { ...(env ?? process.env) }, credential: { kind: "unavailable", reason: "recorder" } }), reportRejected() {}, status: async () => ({}), signInWithBrowser: async () => ({}) },
     stateRoot: () => join(root, "cursor"),
     home: join(root, "home"),
     client: (spawnOptions) => {

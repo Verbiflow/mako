@@ -9,6 +9,8 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-approval-reconciliation-"))
 try {
@@ -18,7 +20,14 @@ try {
     let dispatches = 0
     let settle = Promise.withResolvers<void>()
     const driver: ProviderLiveDriver = {
+      launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION,
+      nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
       approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+      turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider,
       canResume: false,
       available: () => true,

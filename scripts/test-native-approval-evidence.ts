@@ -12,6 +12,7 @@ import { ApprovalResponseSchema, describeApprovalResponse, type NativeApprovalId
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-native-approval-evidence-"))
 try {
@@ -26,8 +27,13 @@ try {
     const driver: ProviderLiveDriver = {
       approvalAnswerDigest: () => "a".repeat(64),
       approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission", "structured-question"], coverage: "Injected native evidence fixture" },
+      launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
       nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
       nativeExclusion: NO_NATIVE_EXCLUSION,
+      nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+      turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider, canResume: true, available: () => true,
       async start(cwd, options) {
         emit = options.emit!

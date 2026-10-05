@@ -57,7 +57,7 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
 {
   const root = await mkdtemp(join(tmpdir(), "mako-anchor-"))
   const path = "/store/session.jsonl"
-  const ref: ThreadRef = { harness: "claude", nativeId: "native-1", path, revision: "r1", bytes: 100, updatedAt: 1 }
+  const ref: ThreadRef = { harness: "claude", nativeId: "native-1", path, revision: "r1", bytes: 100, updatedAt: "2026-01-01T00:00:01.000Z" }
   const said = (id: string, text: string): ThreadEntry => ({ kind: "user", id, text })
   const answered = (id: string, text: string): ThreadEntry => ({ kind: "assistant", id, blocks: [{ type: "text", text }] })
   const entries: ThreadEntry[] = [said("u1", "first"), answered("a1", "one"), said("u2", "second"), answered("a2", "two")]
@@ -107,7 +107,7 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
   const r1 = randomUUID()
   const r2 = randomUUID()
   const path = "/store/live.jsonl"
-  const ref: ThreadRef = { harness: "claude", nativeId: "native-live", path, revision: "r2", bytes: 200, updatedAt: 2 }
+  const ref: ThreadRef = { harness: "claude", nativeId: "native-live", path, revision: "r2", bytes: 200, updatedAt: "2026-01-01T00:00:02.000Z" }
   const entries: ThreadEntry[] = [
     { kind: "user", id: "u1", text: "first" }, { kind: "assistant", id: "a1", blocks: [{ type: "text", text: "one" }] },
     { kind: "user", id: "u2", text: "second" }, { kind: "assistant", id: "a2", blocks: [{ type: "text", text: "two" }] },

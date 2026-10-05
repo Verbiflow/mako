@@ -1,0 +1,14 @@
+{
+  "host queues a streamed answer x20": 0.262,
+  "host delivers streamed output": 1.013,
+  "host delivers resent output": 0.333,
+  "renderer reduces a streamed answer": 0.436,
+  "usage folds 20,000 observations x10": 0.469,
+  "tool identity resolves every declared name": 4.258,
+  "claude decodes claude/plan-turn x50": 8.375,
+  "codex decodes codex/notices-and-waits x50": 3.499,
+  "cursor decodes cursor/plan-and-build x50": 3.186,
+  "grok decodes grok/plan-mode x50": 2.418,
+  "devin decodes devin/plan-approved x50": 9.622,
+  "opencode decodes opencode/plan-and-build x50": 7.289
+}

@@ -274,6 +274,11 @@ interface Target {
   window_id: number
 }
 
+interface Verdict {
+  success: boolean
+  evidence: JsonValue
+}
+
 /** One attempt's task, with the target already resolved. */
 interface Attempt {
   id: string
@@ -283,7 +288,7 @@ interface Attempt {
   /** Runs before the model's first turn; may throw to abort the attempt. */
   reset(): Promise<void>
   /** Judges the reply against independent application state. */
-  check(reply: string): Promise<{ success: boolean; evidence: JsonValue }>
+  check(reply: string): Promise<Verdict>
 }
 
 // ── the model ────────────────────────────────────────────────────────────
@@ -473,13 +478,16 @@ async function openSurface(
   )
   if (!socket)
     throw new Error("the native driver is not installed or did not start")
+  const driver = resolveExecutable("cua-driver")
+  if (!driver) throw new Error("the native driver executable is not installed")
   if (surface === "legacy") {
     // Internal fixture administration only. Agents use the CLI below.
-    const session = controlSessionProbe({command:resolveExecutable("cua-driver"),args:["mcp","--embedded","--socket",socket]},"benchmark-fixture",undefined,{surface:"driver"})
+    const session = controlSessionProbe({command:driver,args:["mcp","--embedded","--socket",socket]},"benchmark-fixture",undefined,{surface:"driver"})
     return {instructions:session.instructions,tools:[],call:async()=>{throw Error("Driver test helpers are not an agent API")},exec:source=>session.request({method:"exec",arguments:{source}}),close:()=>session.close()}
   }
   const client = new ControlCliProbe({name:`agent-benchmark-${randomUUID()}`})
-  await client.start({native:{driver:resolveExecutable("cua-driver"),socket}})
+  await client.start({native:{driver,socket}})
+  if (!client.session) throw new Error("the control CLI started without a task session")
   const launch = client.session.launch
   return {
     instructions: "Use mako-control for browser and computer use. Your task session is attached. Run mako-control --help for commands; api --topic examples explains multi-step JavaScript. Read exact targets, verify intended results, and never replay uncertain actions. Files and stdin compose with shell tools.",
@@ -941,7 +949,7 @@ async function applicationTasks(
     )
   const target = { pid, window_id: document.window_id }
   const behind = file.behind ?? null
-  return file.tasks.map((task) => ({
+  return file.tasks.map((task): Attempt => ({
     id: task.id,
     target,
     prompt: () =>
@@ -967,7 +975,7 @@ async function applicationTasks(
           )
       }
     },
-    check: async (reply) => {
+    check: async (reply): Promise<Verdict> => {
       let expectation = task.expect
       let state = true
       let evidence: JsonValue = { source: "static expectation" }
@@ -1075,10 +1083,7 @@ if (!options.live) {
   await writeFile(out, "")
   if(options.surface !== "unified") throw Error("The legacy agent API was removed; use --surface unified (CLI)")
   const surface = await openSurface(root, options.surface)
-  const administration =
-    options.surface === "legacy"
-      ? surface
-      : await openSurface(root, "legacy")
+  const administration = await openSurface(root, "legacy")
   await administration.exec(
     "await computer.start_session({capture_scope: 'window'}); return 1"
   )

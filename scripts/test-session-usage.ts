@@ -110,9 +110,9 @@ assert.deepEqual(devinUsageUpdate(undefined), [])
     ],
     agents: [],
     isAutoCompactEnabled: true,
-  } satisfies Partial<SDKControlGetContextUsageResponse>
-  // SAFETY: the fields `claudeContextBreakdown` reads are all present above; the rest of the response is display data it ignores.
-  const breakdown = claudeContextBreakdown(response as SDKControlGetContextUsageResponse)
+    apiUsage: null,
+  } satisfies SDKControlGetContextUsageResponse
+  const breakdown = claudeContextBreakdown(response)
   assert.deepEqual(breakdown.categories.map((category) => category.name), ["System prompt", "MCP tools", "MCP tools (deferred)", "Free space", "Autocompact buffer"])
   assert.deepEqual(breakdown.items, [
     { group: "mcp", name: "a", tokens: 6_000 },

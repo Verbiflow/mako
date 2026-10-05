@@ -38,7 +38,7 @@ const refs: ThreadRef[] = sessions.map((sessionId, index) => ({
 }))
 const group: ThreadGroup = {
   id: ThreadIdSchema.parse(thread),
-  sessions: sessions.map((id) => ({ id: SessionIdSchema.parse(id), origin: "native", started: true })),
+  sessions: sessions.map((id) => ({ id: SessionIdSchema.parse(id), origin: "imported", started: true })),
 }
 threadGroupsStore.set({ groups: { [thread]: group }, threadOf: Object.fromEntries(sessions.map((id) => [id, thread])) })
 threadsStore.set({ threads: refs })
@@ -126,11 +126,8 @@ assert.deepEqual(layout(), [{ id: secondary, shows: "active", focused: true }], 
 const lone = randomUUID()
 const loneThread = randomUUID()
 refs.push({ harness: "grok", nativeId: "lone", path: "/native/lone.jsonl", threadId: loneThread, sessionId: lone })
-threadGroupsStore.set({
-  groups: { ...threadGroupsStore.get().groups, [loneThread]: { id: ThreadIdSchema.parse(loneThread), sessions: [{ id: SessionIdSchema.parse(lone), origin: "native", started: true }] } },
-  threadOf: { ...threadGroupsStore.get().threadOf, [lone]: loneThread },
-})
 threadsStore.set({ threads: [...refs] })
+assert.equal(threadGroupsStore.get().groups[loneThread], undefined, "a Thread of one Session has no group")
 lands(lone)
 const loneTab = currentThreadTabs(loneThread).find((candidate) => candidate.id === lone)
 assert.ok(loneTab)

@@ -251,7 +251,9 @@ try {
     prune: async () => { prunedUnverified = true },
   }), /different build/)
   assert.deepEqual(receipts[0], { ok: true, backup: "/retained/old.app", startup: "pending" })
-  assert.equal(receipts.at(-1)?.ok && receipts.at(-1)?.startup, "failed")
+  const unverified = receipts.at(-1)
+  assert.ok(unverified?.ok)
+  assert.equal(unverified.startup, "failed")
   assert.equal(prunedUnverified, false)
   receipts.length = 0
   const order: string[] = []
@@ -434,28 +436,22 @@ try {
   calls.length = 0
   assert.equal(await reconcileGrantIdentity("/target", "/unsigned", run), true)
   assert.equal(calls.filter(([command]) => command === "tccutil").length, 2)
-  const grantReceipts: LocalInstallReceipt[] = []
-  await completeLocalInstall({
-    replace: async () => "/adhoc",
-    save: async (receipt) => {
-      grantReceipts.push(receipt)
-    },
-    grants: async () => true,
-    launch: async () => {},
-  })
-  assert.deepEqual(grantReceipts, [
+  const grantInstall = async (backup: string, grantsReset: boolean) => {
+    const grantReceipts: LocalInstallReceipt[] = []
+    await completeLocalInstall({
+      replace: async () => backup,
+      save: async (receipt) => {
+        grantReceipts.push(receipt)
+      },
+      grants: async () => grantsReset,
+      launch: async () => {},
+    })
+    return grantReceipts
+  }
+  assert.deepEqual(await grantInstall("/adhoc", true), [
     { ok: true, backup: "/adhoc", message: GRANTS_RESET_MESSAGE },
   ])
-  grantReceipts.length = 0
-  await completeLocalInstall({
-    replace: async () => "/same",
-    save: async (receipt) => {
-      grantReceipts.push(receipt)
-    },
-    grants: async () => false,
-    launch: async () => {},
-  })
-  assert.deepEqual(grantReceipts, [{ ok: true, backup: "/same" }])
+  assert.deepEqual(await grantInstall("/same", false), [{ ok: true, backup: "/same" }])
 
   console.log(
     "Local installation: rollback, retained failures, changed-target refusal, exclusive install lock, final running-process check, daemon exclusion, retained-copy pruning, fresh install, clean desktop environment and grant identity reconciliation passed"

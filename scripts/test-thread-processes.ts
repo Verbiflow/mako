@@ -218,6 +218,8 @@ try {
   assert.deepEqual(first, { started: ["web"], refused: [] })
   const [web] = await processes.settle(thread, ["process-web"], settle)
   assert.equal(web?.state.kind, "running", "running once its port answers")
+  const webPid = web.pid
+  assert.ok(webPid, "a running process reports its pid")
   assert.equal((await fetchJson(base)).port, base)
   const grandchild = Number(readFileSync(grandchildFile, "utf8"))
   assert.ok(alive(grandchild))
@@ -250,7 +252,7 @@ try {
   // Stopped whole, from the other host: the server, the api, and the grandchild that left the group.
   const stopped = await second.stop(thread)
   assert.deepEqual(stopped.sort(), ["api", "web"])
-  assert.equal(alive(web!.pid), false)
+  assert.equal(alive(webPid), false)
   assert.equal(alive(grandchild), false, "a descendant in its own group is stopped too")
   assert.equal(await portListening(base), false)
   assert.deepEqual(await processes.status(thread), [])
@@ -642,14 +644,16 @@ setInterval(() => {}, 1000)
   const dying = await appStepsDuring(deskTools.start(setupConversation))
   assert.match(dying.said, /web: crashed \(exit 3\)/)
   assert.ok(dying.seen.includes("running") && !dying.seen.includes("done"), `a server that answers its port and dies a moment later never ticks the app step (saw ${dying.seen.join(", ")})`)
-  assert.equal((await desk.view(bare)).kind === "setting-up" && (await desk.view(bare)).progress?.app, "failed")
+  const crashedSetup = await desk.view(bare)
+  assert.equal(crashedSetup.kind === "setting-up" && crashedSetup.progress?.app, "failed")
   await deskTools.save(setupConversation, setupRecipe("node -e \"process.exit(1)\""))
   const coming = await appStepsDuring(deskTools.start(setupConversation))
   assert.match(coming.said, /web: running/)
   assert.ok(coming.seen.includes("running") && !coming.seen.includes("done"), `the app step ticks when app_start says the app is up, not when its port first answers (saw ${coming.seen.join(", ")})`)
   assert.deepEqual(await desk.view(bare), settingUp({ recipe: "done", app: "done", checks: "waiting" }), "its app coming up ticks the second")
   await deskTools.stop(setupConversation)
-  assert.equal((await desk.view(bare)).kind === "setting-up" && (await desk.view(bare)).progress?.app, "done", "stopping the app again leaves that step ticked")
+  const stoppedSetupApp = await desk.view(bare)
+  assert.equal(stoppedSetupApp.kind === "setting-up" && stoppedSetupApp.progress?.app, "done", "stopping the app again leaves that step ticked")
   await deskTools.check(setupConversation, "quick")
   assert.deepEqual(await desk.view(bare), settingUp({ recipe: "done", app: "done", checks: "failed" }), "a failing check shows as failed")
   await deskTools.save(setupConversation, setupRecipe("node -e \"process.exit(0)\""))
@@ -665,7 +669,8 @@ setInterval(() => {}, 1000)
   const installsBefore = count()
   assert.deepEqual(await desk.start(project), { problems: [] })
   assert.equal(count(), installsBefore + 1)
-  assert.equal((await desk.view(project)).kind === "ready" && (await desk.view(project)).phase, "running")
+  const reinstalled = await desk.view(project)
+  assert.equal(reinstalled.kind === "ready" && reinstalled.phase, "running")
   await desk.stop(project)
   // An install that outlasts the wait: the start goes ahead by itself once it's done, unless the app is stopped first.
   const slowInstall = `sleep 1.5 && echo installed >> ${installs}`
@@ -673,7 +678,8 @@ setInterval(() => {}, 1000)
   const brief = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, settleMs: 300 })
   const beforeSlow = count()
   assert.deepEqual(await brief.desk.start(project), { problems: [] })
-  assert.equal((await brief.desk.view(project)).kind === "ready" && (await brief.desk.view(project)).phase, "preparing")
+  const slowPreparing = await brief.desk.view(project)
+  assert.equal(slowPreparing.kind === "ready" && slowPreparing.phase, "preparing")
   const slowDeadline = Date.now() + settle
   while (!(await portListening(toolBase)) && Date.now() < slowDeadline) await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal(await portListening(toolBase), true, "Run app during a long install starts the app once the install is done")
@@ -718,7 +724,8 @@ setInterval(() => {}, 1000)
   assert.match(await lineTools.start(conversation), /^Waiting in line for memory/)
   await new Promise((resolve) => setTimeout(resolve, 400))
   assert.equal(await portListening(toolBase), false, "nothing starts while memory stays critical")
-  assert.equal((await lineTools.desk.view(project)).kind === "ready" && (await lineTools.desk.view(project)).phase, "waiting")
+  const lineWaiting = await lineTools.desk.view(project)
+  assert.equal(lineWaiting.kind === "ready" && lineWaiting.phase, "waiting")
   assert.deepEqual(await markHere(lineTools.desk), { state: "waiting", port: undefined }, "a start waiting in line is marked waiting")
   short = false
   const deadline = Date.now() + settle
@@ -736,7 +743,8 @@ setInterval(() => {}, 1000)
   assert.ok(waitingView.kind === "ready" && (waitingView.room?.bytes ?? 0) > 0)
   assert.deepEqual(await criticalDesk.makeRoom(project), { problems: [] })
   assert.equal((await processes.active()).some((entry) => entry.app === quietThread), false, "making room stops the other apps")
-  assert.equal((await criticalDesk.view(project)).kind === "ready" && (await criticalDesk.view(project)).phase, "running", "and starts this one whatever the memory")
+  const roomMade = await criticalDesk.view(project)
+  assert.equal(roomMade.kind === "ready" && roomMade.phase, "running", "and starts this one whatever the memory")
   await criticalDesk.stop(project)
   await processes.start(quietThread, [{ kind: "process", name: "busy", command: "sleep 300", cwd: root, env: process.env }])
 
@@ -748,11 +756,12 @@ setInterval(() => {}, 1000)
   // Removing the Thread's worktree stops its app first and deletes its data after.
   let cleanedWhile: boolean | undefined
   const worktrees = new ThreadWorktreeService(join(root, "worktrees"), store, async () => [], async () => [], {
-    stop: async (id) => { await processes.stop(id) },
-    cleanup: async (_id, path) => { cleanedWhile = existsSync(join(path, "server.mjs")) && !(await processes.status(AppKeySchema.parse(_id))).some((run) => run.state.kind === "running") },
+    stop: async (id) => { await processes.stop(AppKeySchema.parse(id)) },
+    cleanup: async (id, path) => { cleanedWhile = existsSync(join(path, "server.mjs")) && !(await processes.status(AppKeySchema.parse(id))).some((run) => run.state.kind === "running") },
     discard: async (id) => {
-      await processes.discard(id)
-      rmSync(environments.dataDir(id), { recursive: true, force: true })
+      const app = AppKeySchema.parse(id)
+      await processes.discard(app)
+      rmSync(environments.dataDir(app), { recursive: true, force: true })
     },
   })
   const prepared = await worktrees.prepare(conversation, project, "Fix login")

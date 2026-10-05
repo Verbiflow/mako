@@ -19,7 +19,13 @@ import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess }
 import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
 import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
 import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
-import { validateLiveDriver } from "../electron/providers/live-driver.ts"
+import type { SandboxPolicy } from "../electron/providers/codex/generated/v2/SandboxPolicy.ts"
+import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+
+function codexWithout(declaration: keyof ProviderLiveDriver): ProviderLiveDriver {
+  // SAFETY: deliberately malformed input: a declaration the type requires is removed, to prove registration rejects it at runtime.
+  return { ...codexLiveDriver, [declaration]: undefined } as ProviderLiveDriver
+}
 
 // Cursor runs through its SDK, which has no permission prompt: the ladder is
 // one provider-enforced mode, Agent on the full tier, and no tier that would
@@ -246,7 +252,7 @@ assert.throws(() => codexAccessTier(accessModeId("plan")), /does not offer/)
 assert.throws(() => codexAccessTier("agent"), /does not offer/)
 // The thread response's own approval/sandbox pair is the level the session
 // opened with; missing or custom policies must remain unclassified.
-const workspaceWrite = { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false } as const
+const workspaceWrite: SandboxPolicy = { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
 assert.equal(codexObservedTier({ approvalPolicy: "on-request", sandbox: { type: "readOnly", networkAccess: false }, approvalsReviewer: "user" }), "ask")
 assert.equal(codexObservedTier({ approvalPolicy: "on-request", sandbox: workspaceWrite, approvalsReviewer: "user" }), "edits")
 assert.equal(codexObservedTier({ approvalPolicy: "on-request", sandbox: workspaceWrite, approvalsReviewer: "auto_review" }), "auto")
@@ -285,7 +291,7 @@ assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider
 assert.throws(() => ApprovalEvidenceCapabilitySchema.parse({
   kind: "native-decisions", recovery: "retained-observer", coverage: "Unscoped native evidence",
 }), /Invalid/, "the registration schema requires native evidence to name its request families")
-assert.throws(() => validateLiveDriver({ ...codexLiveDriver, approvalEvidence: undefined }), /Invalid/,
+assert.throws(() => validateLiveDriver(codexWithout("approvalEvidence")), /Invalid/,
   "registration rejects a new adapter without an approval evidence declaration")
 assert.throws(() => validateLiveDriver({ ...cursorDriver, modes: [{ id: "ask", name: "Ask", access: "ask", enforcement: "provider" }] }),
   /requires native interactive requests/, "an adapter without interactive requests cannot advertise Ask")
@@ -306,19 +312,19 @@ assert.equal(cursorDriver.defaultMode, "full-access")
 
 // Invariants the interface cannot type fail at install, not at a call site.
 assert.throws(
-  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, steer: async () => ({ kind: "accepted" as const }) }),
+  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", steering: undefined }),
   /steer and steering/
 )
 assert.throws(
-  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, steering: "interrupt" }),
+  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", steer: undefined, steering: "interrupt" }),
   /steer and steering/
 )
 assert.throws(
-  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, modes: [{ id: "a", name: "A", access: "full" }] }),
+  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", modes: [{ id: "a", name: "A", access: "full" }] }),
   /no enforcer/
 )
 assert.throws(
-  () => validateLiveDriver({ provider: "x", approvalEvidence: codexLiveDriver.approvalEvidence, canResume: false, modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
+  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
   /not one of its declared modes/
 )
 
@@ -329,7 +335,7 @@ assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider
 assert.throws(() => validateLiveDriver({ ...claudeLiveDriver, planning: { via: "mode", mode: "acceptEdits", proposal: "x" } }), /doesn't offer as Plan/,
   "a harness can't plan through a mode its ladder doesn't offer as Plan")
 assert.throws(() => validateLiveDriver({ ...claudeLiveDriver, defaultMode: "plan" }), /can't start in Plan unasked/)
-assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: undefined }), /how it plans/,
+assert.throws(() => validateLiveDriver(codexWithout("planning")), /how it plans/,
   "registration rejects a new adapter that doesn't say how it plans")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: { via: "setting", option: "plan", proposal: " " } }), /how its plan reaches Mako/)
 
@@ -337,7 +343,7 @@ assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: { via: "s
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.backgroundStop.kind])), {
   cursor: "ends-with-turn", devin: "ends-on-stop", grok: "ends-on-stop", opencode: "ends-on-stop", codex: "ends-on-stop", claude: "ends-on-stop",
 }, "every adapter says how Stop ends its background work, or why none outlives its turn")
-assert.throws(() => validateLiveDriver({ ...codexLiveDriver, backgroundStop: undefined }), /how Stop ends its background work/,
+assert.throws(() => validateLiveDriver(codexWithout("backgroundStop")), /how Stop ends its background work/,
   "registration rejects a new adapter that does not say how Stop ends its background work")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, backgroundStop: { kind: "ends-on-stop", how: " " } }), /how Stop ends its background work/)
 assert.throws(() => acpLiveDriver({ ...devinAcpSource, observeBackground: undefined }), /background observer/,

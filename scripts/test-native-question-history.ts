@@ -6,6 +6,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { NativeQuestionHistory } from "../electron/contracts/live-questions.js"
 import { latestPendingQuestion } from "../electron/contracts/live-questions.js"
 import { codexAsyncQuestion, codexQuestionAnswer } from "../electron/providers/codex/questions.js"
@@ -82,7 +84,11 @@ try {
     let evidence:NativeQuestionHistory=[{question:first,answered:[]}]
     let unavailable=false, writes=0
     let gate:Promise<void>|undefined
-    const driver:ProviderLiveDriver={provider,available:()=>true,canResume:true,approvalEvidence:{kind:"submission-only",reason:"Fixture"},sessionQuestions:{encodeAnswer:codexQuestionAnswer,history:async()=>{if(gate)await gate;if(unavailable)throw Error("Unavailable source");return evidence}},start:async()=>{throw Error("Unexpected launch")},prompt:async()=>{writes++},permission:async()=>{writes++},cancel:async()=>{},close(){},setMode:async()=>{}}
+    const driver:ProviderLiveDriver={provider,available:()=>true,canResume:true,
+      launchEnvironment:{kind:"unavailable",reason:"Fixture"},nativeIdentity:{kind:"unavailable",reason:"Fixture"},
+      nativeExclusion:NO_NATIVE_EXCLUSION,nativePromptIdentity:NO_NATIVE_PROMPT_IDENTITY,
+      planning:{via:"setting",option:"plan",proposal:"Fixture"},backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
+      turnRecovery:{kind:"manual",reason:"Fixture"},approvalEvidence:{kind:"submission-only",reason:"Fixture"},sessionQuestions:{encodeAnswer:codexQuestionAnswer,history:async()=>{if(gate)await gate;if(unavailable)throw Error("Unavailable source");return evidence}},start:async()=>{throw Error("Unexpected launch")},prompt:async()=>{writes++},permission:async()=>{writes++},cancel:async()=>{},close(){},setMode:async()=>{}}
     const deps={root:journals,appPath:root,driver:()=>driver,emit(){},history:async()=>({ref:{harness:provider,nativeId:native,path},entries:[],start:0,total:0,hasEarlier:false,checkpoint:1})}
     let owner=new LiveConversations(deps)
     try {

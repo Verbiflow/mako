@@ -11,6 +11,8 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import type { LivePermissionResponse, LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-approval-receipts-"))
 try {
@@ -24,6 +26,13 @@ try {
     let state: LiveSessionState = { id, harness: provider, cwd: root, status: "running", connection: "connected", nativeRunId: "run-1", modes: [], currentMode: null, configOptions: [] }
     const driver: ProviderLiveDriver = {
       approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION,
+      nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+      turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider, canResume: true, available: () => true,
       start: async () => state,
       prompt: async () => {}, close() {}, cancel: async () => {}, setMode: async () => {},
@@ -180,7 +189,7 @@ try {
         const after = owner.snapshot(id)?.permissions.at(-1)
         if (result?.kind === "not-submitted" && result.pending) {
           assert.ok(after && after.id !== target, "refusal preserves question with a fresh explicit answer occurrence")
-          const callsBefore = calls
+          const callsBefore: number = calls
           await owner.permission(id, target, response)
           assert.equal(calls, callsBefore, "retry of the refused occurrence cannot silently dispatch a new answer")
           submission = { kind: "submitted", source: "callback" }

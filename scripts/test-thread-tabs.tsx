@@ -47,7 +47,7 @@ function presence(key: string, harness: string, sessionId: string, status: AcpPr
 const group: ThreadGroup = {
   id: ThreadIdSchema.parse(thread),
   sessions: [
-    { id: SessionIdSchema.parse(first), origin: "native", started: true },
+    { id: SessionIdSchema.parse(first), origin: "imported", started: true },
     { id: SessionIdSchema.parse(second), origin: "fork", started: true },
     { id: SessionIdSchema.parse(third), origin: "new", started: false },
   ],
@@ -104,7 +104,7 @@ for (let index = 0; index < 2_000; index++) {
   const owner = sharedOwners[Math.floor(index / 3)] ?? randomUUID()
   if (index < 300) {
     const current = manyGroups[owner] ?? { id: ThreadIdSchema.parse(owner), sessions: [] }
-    current.sessions.push({ id: SessionIdSchema.parse(session), origin: "native", started: true })
+    current.sessions.push({ id: SessionIdSchema.parse(session), origin: "imported", started: true })
     manyGroups[owner] = current
     manyThreadOf[session] = owner
   }

@@ -14,7 +14,7 @@ import "../src/index.css"
 const wall = () => performance.timeOrigin + performance.now()
 interface StageTrace {
   notified: number[]
-  stored: { at: number; id: string; capturedAt: number; publishedAt: number }[]
+  stored: { at: number; id: string; capturedAt: number; publishedAt?: number }[]
   decoded: { at: number; ms: number }[]
   drawn: number[]
   lagged: { at: number; ms: number }[]
@@ -34,10 +34,14 @@ if ("ImageDecoder" in globalThis) {
 const drawImage = CanvasRenderingContext2D.prototype.drawImage
 CanvasRenderingContext2D.prototype.drawImage = function (
   this: CanvasRenderingContext2D,
-  ...args: Parameters<typeof drawImage>
+  image: CanvasImageSource,
+  ...place: [number, number] | [number, number, number, number] | [number, number, number, number, number, number, number, number]
 ) {
   if (this.canvas.isConnected) stages.drawn.push(wall())
-  return drawImage.apply(this, args)
+  const draw = drawImage.bind(this)
+  if (place.length === 2) return draw(image, ...place)
+  if (place.length === 4) return draw(image, ...place)
+  return draw(image, ...place)
 }
 let tick = performance.now()
 setInterval(() => {

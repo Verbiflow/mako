@@ -17,6 +17,16 @@ interface FixtureTarget {
   type?: string
   browserContextId?: string
 }
+function targetInfo(targetId: string, info: FixtureTarget): JsonObject {
+  const reported: JsonObject = {
+    targetId,
+    type: info.type ?? "page",
+    title: info.title,
+    url: info.url,
+  }
+  if (info.browserContextId !== undefined) reported.browserContextId = info.browserContextId
+  return reported
+}
 type HeldInputType = "mouseMoved" | "mousePressed" | "mouseReleased" | "keyDown" | "rawKeyDown" | "keyUp"
 export async function browserFixture() {
   const server = new WebSocketServer({ port: 0, host: "127.0.0.1" })
@@ -162,13 +172,7 @@ export async function browserFixture() {
         }
         case "Target.getTargets":
           reply({
-            targetInfos: Array.from(targets, ([targetId, info]) => ({
-              targetId,
-              type: info.type ?? "page",
-              title: info.title,
-              url: info.url,
-              browserContextId: info.browserContextId,
-            })),
+            targetInfos: Array.from(targets, ([targetId, info]) => targetInfo(targetId, info)),
           })
           break
         case "Target.getTargetInfo": {
@@ -176,15 +180,7 @@ export async function browserFixture() {
           const info = targets.get(id)
           if (!info) fail("No target with given id")
           else
-            reply({
-              targetInfo: {
-                targetId: id,
-                type: info.type ?? "page",
-                title: info.title,
-                url: info.url,
-                browserContextId: info.browserContextId,
-              },
-            })
+            reply({ targetInfo: targetInfo(id, info) })
           break
         }
         case "Target.attachToTarget": {
@@ -231,7 +227,7 @@ export async function browserFixture() {
                   : { tag: "div", length: -1 },
               },
             })
-          else reply({ result: { value: tab } })
+          else reply({ result: tab === undefined ? {} : { value: tab } })
           break
         }
         case "DOM.resolveNode":

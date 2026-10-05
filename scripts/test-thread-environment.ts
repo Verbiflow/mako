@@ -99,8 +99,8 @@ async function reclaimed(): Promise<void> {
   await environments.forLaunch(owners[0]!.conversationId)
   const taken = await environments.forLaunch(extra.conversationId)
   assert.equal(taken?.port, owners[1]!.port, "a new Thread takes the ports of the Thread unused longest")
-  assert.equal(store.heldEnvironments().some((values) => values.app === owners[1]!.thread), false, "that Thread no longer holds them")
-  assert.ok(store.heldEnvironments().some((values) => values.app === owners[0]!.thread), "a Thread used since keeps its ports")
+  assert.equal(store.heldEnvironments().some((values) => values.app === app(owners[1]!.thread)), false, "that Thread no longer holds them")
+  assert.ok(store.heldEnvironments().some((values) => values.app === app(owners[0]!.thread)), "a Thread used since keeps its ports")
   store.close()
 }
 
@@ -114,7 +114,7 @@ async function claimRace(): Promise<void> {
   assert.ok(store.claimEnvironment({ app: app(stale.thread), host: "stale.thread.localhost", port: THREAD_PORT_FIRST + 10 }))
   assert.equal(store.claimEnvironment({ app: app(second.thread), host: "race.thread.localhost", port: THREAD_PORT_FIRST + 20 }), undefined, "a host another Thread holds is refused")
   assert.equal(store.claimEnvironment({ app: app(second.thread), host: "race-2.thread.localhost", port: THREAD_PORT_FIRST, reclaim: app(stale.thread) }), undefined, "a port another Thread holds is refused")
-  assert.ok(store.heldEnvironments().some((values) => values.app === stale.thread), "a refused claim gives nothing up, even what it meant to reclaim")
+  assert.ok(store.heldEnvironments().some((values) => values.app === app(stale.thread)), "a refused claim gives nothing up, even what it meant to reclaim")
   assert.equal(store.claimEnvironment({ app: app(second.thread), host: "race-2.thread.localhost", port: THREAD_PORT_FIRST + 10, reclaim: app(stale.thread) })?.port, THREAD_PORT_FIRST + 10, "a reclaimed Thread's ports go to the claimant")
   assert.deepEqual(store.claimEnvironment({ app: app(first.thread), host: "else.thread.localhost", port: THREAD_PORT_FIRST + 20 }), claimed, "a Thread that has values keeps them")
   store.close()

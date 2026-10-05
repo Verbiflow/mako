@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { probeRuntime } from "../dist-electron/runtime-connection.js"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
+import { providerHost } from "../dist-electron/providers/index.js"
 
 // The standard installed check until successive hosts land: the packaged
 // lifecycle for every harness against /Applications/Mako.app itself, each in
@@ -13,7 +14,7 @@ import { runtimeLocation } from "../dist-electron/runtime-service.js"
 // It never restarts, signals or writes to the live host or its profile.
 // /Applications has no node_modules above it, so nothing from the checkout
 // can stand in for a file the bundle lacks.
-const HARNESSES = ["claude", "codex", "cursor", "grok", "devin", "opencode"]
+const HARNESSES = providerHost.harnesses.list().map(({ provider }) => provider)
 const app = "/Applications/Mako.app"
 const dataRoot = join(homedir(), "Library/Application Support/mako")
 const outFlag = process.argv.find((arg) => arg.startsWith("--out="))

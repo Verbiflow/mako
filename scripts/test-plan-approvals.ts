@@ -9,6 +9,8 @@ import type { PlanBuild } from "../electron/contracts/plan-builds.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import type { LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 
 // Two people answer one plan approval. The host keeps the first answer, and
 // records the plan built only when that answer approved it and reached the agent.
@@ -22,7 +24,14 @@ try {
     const submission: ApprovalSubmission | undefined = scenario === "unconfirmed" ? undefined : { kind: "submitted", source: "callback" }
     const state: LiveSessionState = { id, harness: "claude", cwd: root, status: "running", connection: "connected", nativeRunId: "run", modes: [], currentMode: null, configOptions: [] }
     const driver: ProviderLiveDriver = {
+      launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION,
+      nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
       approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+      turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider: "claude", canResume: true, available: () => true,
       start: async () => state,
       prompt: async () => {}, close() {}, cancel: async () => {}, setMode: async () => {},

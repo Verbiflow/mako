@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import WebSocket from 'ws'
 import { extractFile } from '@electron/asar'
 import { LiveJournal } from '../dist-electron/live-journal.js'
+import { providerHost } from '../dist-electron/providers/index.js'
 import { auditId, auditSnapshot } from './performance-audit-fixtures.ts'
 
 // Actual packaged host/preload/UI with disposable retained journals; no provider
@@ -19,7 +20,7 @@ const root = await mkdtemp(join(tmpdir(), 'mako-packaged-history-'))
 const profile = join(root, 'profile')
 const evidence = resolve(process.env.MAKO_HISTORY_EVIDENCE_DIR ?? 'docs/audits/2026-09-23/live-history-performance')
 await mkdir(evidence, { recursive: true })
-const providers = ['claude', 'codex', 'cursor', 'grok', 'devin', 'opencode']
+const providers = providerHost.harnesses.list().map(({ provider }) => provider)
 const cases = []
 for (const [index, provider] of providers.entries()) {
   let source = auditSnapshot(300, provider, 150, 120 * 1024)

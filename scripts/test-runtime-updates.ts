@@ -319,7 +319,7 @@ try {
   assert.equal(second.snapshot().codex.latest, "0.155.0")
   await second.refresh()
   assert.deepEqual(next.spawned, [], "the persisted signature spares the spawn")
-  assert.deepEqual(next.changed, [])
+  assert.equal(next.changed.length, 0)
 
   next.runResult = { code: 0, output: "success without replacing the selected installation" }
   const wrongCopy = await second.update("codex")
@@ -362,7 +362,7 @@ try {
   assert.match(failed.result?.message ?? "", /EACCES: permission denied/)
   assert.equal(failed.installed, "0.155.0", "the reading stands")
   assert.equal(failed.phase, undefined)
-  assert.deepEqual(next.changed, [], "nothing changed")
+  assert.equal(next.changed.length, 0, "nothing changed")
 
   // An unchanged outcome is named as such; a runtime without a plan is refused with its owner.
   next.runResult = { code: 0, output: "up to date" }

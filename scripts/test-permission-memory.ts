@@ -5,6 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import { createMakoBridge } from "../electron/shared.ts"
 import { acp, acpStore } from "../src/state/acp.ts"
 import { applyLiveSnapshot } from "../src/state/live-recovery.ts"
@@ -30,6 +32,13 @@ const prompts: string[] = []
 const gate = Promise.withResolvers<void>()
 const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",
   canResume: true,
   available: () => true,
@@ -72,19 +81,30 @@ try {
   assert.equal(owner.snapshot(id)?.session.currentMode, "accept-edits")
   const snapshot = owner.snapshot(id)
   assert.ok(snapshot)
+  const bridge = createMakoBridge({
+    invoke: async (channel) => {
+      throw new Error(`The fixture host does not serve ${channel}`)
+    },
+    onEvent: () => () => {},
+    onTerminalEvent: () => () => {},
+    pathForFile: () => null,
+    resolveFileUrl: (url) => url,
+  })
+  const modeChanges: Array<[string, string]> = []
   Object.assign(globalThis, {
     window: {
-      mako: createMakoBridge({
-        invoke: async () => undefined,
-        onEvent: () => () => {},
-        onTerminalEvent: () => () => {},
-        pathForFile: () => null,
-      }),
+      mako: {
+        ...bridge,
+        liveSetMode: async (key: string, mode: string) => {
+          modeChanges.push([key, mode])
+        },
+      },
     },
   })
   applyLiveSnapshot(snapshot)
   acpStore.set({ activeKey: id })
   await acp.setMode("ask")
+  assert.deepEqual(modeChanges, [[id, "ask"]])
   assert.equal(prefsStore.get().providerModes.fixture, "ask")
   assert.equal(
     prefsStore.get().providerModes.claude,

@@ -19,7 +19,20 @@ import type {
   HostEvent,
 } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import { projectLive } from "../src/state/live-projection.js"
+
+const fixtureCapabilities = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
+} satisfies Partial<ProviderLiveDriver>
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 const waitFor = async (predicate: () => boolean, message: string) => {
@@ -60,7 +73,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   const events: HostEvent[] = []
   let closed = 0
   const driver: ProviderLiveDriver = {
-    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    ...fixtureCapabilities,
     canResume: true,
     provider: "test-provider",
     available: () => true,
@@ -153,7 +166,7 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
     configOptions: [],
   })
   const driver: ProviderLiveDriver = {
-    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    ...fixtureCapabilities,
     canResume: true,
     provider: "test-provider",
     available: () => true,
@@ -396,7 +409,7 @@ async function boundsWarmProviders() {
   const closed: string[] = []
   let owner: LiveConversations
   const driver: ProviderLiveDriver = {
-    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    ...fixtureCapabilities,
     canResume: true,
     provider: "test-provider",
     available: () => true,
@@ -490,7 +503,7 @@ async function backgroundWorkKeepsProviderResident() {
     owner.observe({ type: "live-session", session: { ...current, backgroundTasks } })
   }
   const driver: ProviderLiveDriver = {
-    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    ...fixtureCapabilities,
     canResume: true,
     provider: "test-provider",
     available: () => true,
@@ -575,7 +588,7 @@ async function failedCloseKeepsOwnership() {
   let closes = 0
   let revocations = 0
   const driver: ProviderLiveDriver = {
-    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    ...fixtureCapabilities,
     provider: "test-provider",
     canResume: true,
     available: () => true,
@@ -1409,7 +1422,13 @@ async function providerExitContinued() {
       ...patch,
     })
     const driver: ProviderLiveDriver = {
-      approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+      ...fixtureCapabilities,
+      turnRecovery: {
+        kind: "continues",
+        accepted: "prompt reports accepted when the fixture echoes it",
+        exit: "the fixture session reports failed and disconnected",
+        tests: ["scripts/test-live-conversations.ts"],
+      },
       canResume: true,
       provider: "test-provider",
       available: () => true,

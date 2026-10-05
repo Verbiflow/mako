@@ -1,4 +1,5 @@
 import { providerHost } from "../electron/providers/index.js"
+import type { McpJsonFormat } from "../electron/providers/mcp-source.js"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { access, chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
@@ -220,7 +221,7 @@ function testAxiomPreview(): void {
         z.object({ type: z.string(), url: z.string() })
       ),
     })
-    .parse(JSON.parse(mergeJsonMcpConfig("", definition, "claude")))
+    .parse(JSON.parse(mergeJsonMcpConfig("", definition, writtenFormat("claude"))))
   assert.deepEqual(claude.mcpServers.axiom, {
     type: "http",
     url: "https://mcp.axiom.co/mcp",
@@ -232,12 +233,22 @@ function testAxiomPreview(): void {
         z.object({ type: z.string(), url: z.string() })
       ),
     })
-    .parse(JSON.parse(mergeJsonMcpConfig("", definition, "opencode")))
+    .parse(JSON.parse(mergeJsonMcpConfig("", definition, ARRAY_FORMAT)))
   assert.deepEqual(opencode.mcp.axiom, {
     type: "remote",
     url: "https://mcp.axiom.co/mcp",
   })
 }
+
+/** The JSON format a harness declares it writes MCP servers in. */
+function writtenFormat(harness: string): McpJsonFormat {
+  const write = providerHost.mcpSources.get(harness)?.write
+  assert.ok(write?.kind === "file", `${harness} writes an MCP file`)
+  return write.format
+}
+
+/** One command array and `type: "remote"`, as OpenCode's config holds servers; no harness writes it yet. */
+const ARRAY_FORMAT: McpJsonFormat = { root: "mcp", command: "array", remote: "remote" }
 
 function testDisabledNativeSources(): void {
   const disabled = discovered("cursor", "disabled", { command: "node", args: ["server.js"], disabled: true })
@@ -256,8 +267,8 @@ function testDisabledNativeSources(): void {
   const [openCode] = parseProviderJson("command-array-map", JSON.stringify({ mcp: { disabled: { type: "local", command: ["node", "server.js"], enabled: false } } }))
   assert.equal(openCode?.enabled, false)
   const definition = { name: "disabled", transport: "stdio" as const, command: "new-server", args: [], envNames: [], headerNames: [], portable: true }
-  for (const format of ["claude", "cursor", "opencode"] as const) {
-    const root = format === "opencode" ? "mcp" : "mcpServers"
+  for (const format of [writtenFormat("claude"), writtenFormat("cursor"), ARRAY_FORMAT]) {
+    const root = format.root
     const previous = { enabled: false, disabled: true, command: "old-server", args: ["old"], timeout: 10_000, environment: { KEEP: "original" }, oauth: false }
     const merged = JSON.parse(mergeJsonMcpConfig(JSON.stringify({ extra: true, [root]: { disabled: previous } }), definition, format))
     assert.equal(merged.extra, true)
@@ -414,8 +425,8 @@ async function testSerializedGuardedMerge(): Promise<void> {
   try {
     await writeFile(file, original)
     const settled = await Promise.allSettled([
-      atomicJsonMcpMerge(file, expected, definition("alpha")),
-      atomicJsonMcpMerge(file, expected, definition("beta")),
+      atomicJsonMcpMerge(file, expected, definition("alpha"), writtenFormat("cursor")),
+      atomicJsonMcpMerge(file, expected, definition("beta"), writtenFormat("cursor")),
     ])
     assert.deepEqual(settled.map((result) => result.status).sort(), [
       "fulfilled",
@@ -446,16 +457,16 @@ async function testGuardedAtomicMerge(): Promise<void> {
   try {
     await writeFile(file, original, { mode: 0o644 })
     const expected = createHash("sha256").update(original).digest("hex")
-    await atomicJsonMcpMerge(file, expected, definition)
+    await atomicJsonMcpMerge(file, expected, definition, writtenFormat("cursor"))
     assert.equal((await stat(file)).mode & 0o777, 0o600)
     const current = await readFile(file, "utf8")
     const stale = createHash("sha256").update(current).digest("hex")
     await writeFile(
       file,
-      mergeJsonMcpConfig(current, { ...definition, name: "gamma" })
+      mergeJsonMcpConfig(current, { ...definition, name: "gamma" }, writtenFormat("cursor"))
     )
     await assert.rejects(
-      atomicJsonMcpMerge(file, stale, { ...definition, name: "delta" }),
+      atomicJsonMcpMerge(file, stale, { ...definition, name: "delta" }, writtenFormat("cursor")),
       /changed after preview/
     )
   } finally {

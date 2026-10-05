@@ -5,12 +5,12 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
+import { BrowserService } from "@mako/control-runtime/browser"
 import {
   BrowserCommandSchema,
   BrowserFault,
   BrowserTargetSchema,
-} from "../packages/control-runtime/src/contracts/browser-control.js"
+} from "@mako/control-runtime/contracts"
 import { browserFixture } from "./browser-control-fixture.js"
 import { BrowserPreferences } from "../packages/control-runtime/src/browser-preference.js"
 import { tabInterruption } from "../packages/control-runtime/src/browser-compatibility.js"

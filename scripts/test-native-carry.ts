@@ -8,6 +8,8 @@ import { LiveConversations } from "../electron/live-conversations.ts"
 import { nativeSessionPath } from "../electron/native-source.ts"
 import type { TransferInput } from "../electron/contracts/conversation-control.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
 
 // Moving a conversation to a harness that opens a new session can carry the
@@ -21,7 +23,14 @@ let wrongSession = false
 let reportThroughAccount = false
 const catalog: ThreadRef[] = []
 const driver: ProviderLiveDriver = {
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "grok",
   canResume: true,
   available: () => true,

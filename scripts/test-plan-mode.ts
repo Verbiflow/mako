@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import type { LiveSessionMode } from "../src/lib/types.ts"
+import type { LivePermissionRequest, LiveSessionMode, LiveSessionState } from "../src/lib/types.ts"
+import type { LiveAcpConversation } from "../src/state/acp-state.ts"
 import type { ModelOption } from "@mako/sessions/settings"
 import type { ProposedPlan } from "@mako/sessions/content"
 import { PlanBuildTargetSchema, type PlanBuild, type PlanBuildClaim } from "../electron/contracts/plan-builds.ts"
@@ -56,8 +57,9 @@ const base = { options: noOptions, settings: {}, modes: noModes, currentMode: nu
 // One control, two native shapes, or none.
 assert.deepEqual(planControl({ ...base, phase: "live", options: codexOptions, settings: { options: { plan: true } } }),
   { kind: "setting", option: "plan", active: true, locked: undefined }, "Codex plans through a per-session setting")
-assert.equal(planControl({ ...base, phase: "live", options: codexOptions }).kind === "setting" &&
-  planControl({ ...base, phase: "live", options: codexOptions }).active, false)
+const codexOff = planControl({ ...base, phase: "live", options: codexOptions })
+assert.equal(codexOff.kind, "setting")
+assert.equal(codexOff.active, false)
 const claude = planControl({ ...base, phase: "live", modes: claudeModes, currentMode: "plan" })
 assert.ok(claude.kind === "mode" && claude.active && claude.mode.id === "plan" && !claude.locked, "Claude plans in its plan mode")
 assert.deepEqual(planControl({ ...base, phase: "live", modes: agentOnlyModes, currentMode: "agent" }), { kind: "none" },
@@ -134,20 +136,24 @@ assert.deepEqual(prefsStore.get().providerModes, before.modes, "plan mode is the
 // Build answers the native approval for this plan, and only for this plan.
 const plan: ProposedPlan = { type: "proposed-plan", id: "tool-2", text: "# Ship it\n\n1. Do it", status: "proposed" }
 const older: ProposedPlan = { ...plan, id: "tool-1", text: "# Older\n\n1. Earlier" }
-const permission = {
+const permission: LivePermissionRequest = {
   id: "request", sessionId: "s", title: "Start implementing the proposed plan?", kind: "ExitPlanMode",
   options: [{ optionId: "allow_once", name: "Approve plan" }, { optionId: "reject_once", name: "Keep planning" }],
   implementsPlan: { plan: "tool-2", approve: "allow_once" },
 }
-// SAFETY: a partial conversation; plan mode reads only the fields set here.
+const liveConversation = (
+  key: string,
+  harness: string,
+  blocks: ProposedPlan[],
+  session: Pick<LiveSessionState, "status" | "modes" | "currentMode" | "settings">,
+  waiting: LivePermissionRequest | null
+): LiveAcpConversation => ({
+  kind: "live", key, draftKey: key, harness, cwd: "/work", blocks, queued: [], hiddenUserPrompt: null,
+  createdAt: 0, updatedAt: 0, permission: waiting, sending: false, canceling: false,
+  session: { id: key, harness, cwd: "/work", connection: "connected", configOptions: [], ...session },
+})
 acpStore.set({
-  conversations: {
-    live: {
-      kind: "live", key: "live", draftKey: "live", harness: "claude", cwd: "/work", blocks: [older, plan], queued: [],
-      createdAt: 0, updatedAt: 0, permission, sending: false, canceling: false,
-      session: { id: "live", status: "waiting", modes: claudeModes, currentMode: "plan" },
-    },
-  } as never,
+  conversations: { live: liveConversation("live", "claude", [older, plan], { status: "running", modes: claudeModes, currentMode: "plan" }, permission) },
   activeKey: "live",
 })
 bridge.length = 0
@@ -158,19 +164,14 @@ assert.equal(planBuildsStore.get().builds["tool-2"], undefined,
   "the host records the build once the agent takes the approval; a window whose answer lost records nothing")
 bridge.length = 0
 await assert.rejects(buildPlan({ liveId: "live" }, older), /earlier revision/)
-assert.deepEqual(bridge, [], "an earlier plan neither answers the current approval nor sends beside it")
+assert.equal(bridge.length, 0, "an earlier plan neither answers the current approval nor sends beside it")
 await assert.rejects(buildPlan({ liveId: "live" }, { ...plan, status: "drafting" }), /complete plan/)
 
 // Without a native approval, Build leaves plan mode and sends the implementation with the whole plan.
-// SAFETY: a partial conversation; plan mode reads only the fields set here.
 acpStore.set({
   conversations: {
-    codex: {
-      kind: "live", key: "codex", draftKey: "codex", harness: "codex", cwd: "/work", blocks: [plan], queued: [],
-      createdAt: 0, updatedAt: 0, permission: null, sending: false, canceling: false,
-      session: { id: "codex", status: "idle", modes: [], currentMode: null, settings: { model: "m", options: { plan: true } } },
-    },
-  } as never,
+    codex: liveConversation("codex", "codex", [plan], { status: "ready", modes: [], currentMode: null, settings: { model: "m", options: { plan: true } } }, null),
+  },
   activeKey: "codex",
 })
 providerStore.set({

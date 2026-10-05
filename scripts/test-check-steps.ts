@@ -11,6 +11,7 @@ import { environmentTools } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { readVersion, recipePath, RecipeSchema, recipeVersions, type Recipe } from "../electron/thread-recipe.js"
+import type { JsonValue } from "../electron/codex-app-json.js"
 
 /**
  * A check of named steps on real runs: each step timed and reported on its
@@ -42,15 +43,14 @@ const toolsFor = (settleMs = 10_000) => environmentTools({
 const tools = toolsFor()
 const conversation = "conversation"
 /** Recipes as an agent writes them: JSON, parsed here as recipe_save does. */
-type Written = string | number | Written[] | { [key: string]: Written }
-const recipe = (checks: Written, extra: Partial<Recipe> = {}) => RecipeSchema.parse({ values: {}, processes: {}, checks, ...extra })
+const recipe = (checks: JsonValue, extra: Partial<Recipe> = {}) => RecipeSchema.parse({ values: {}, processes: {}, checks, ...extra })
 const seconds = "[\\d.]+ s"
 
 try {
   // The schema: a plain command stays one; steps need their own names; a wrong shape says what fits.
   assert.equal(recipe({ quick: "npm test" }).checks.quick, "npm test")
   assert.deepEqual(recipe({ quick: [{ name: "lint", command: "npm run lint" }] }).checks.quick, [{ name: "lint", command: "npm run lint" }])
-  const refusal = (checks: Written) => {
+  const refusal = (checks: JsonValue) => {
     const parsed = RecipeSchema.safeParse({ values: {}, processes: {}, checks })
     assert.ok(!parsed.success)
     return parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")

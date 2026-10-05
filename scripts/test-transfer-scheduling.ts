@@ -12,6 +12,8 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveTransfers } from "../electron/live-transfers.js"
 import type { LiveSessionState, LiveDriverEvent } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { Resident } from "../electron/live-runtime.js"
 
 // A microtask spin prevents in-process timeouts from firing. The parent owns
@@ -65,7 +67,14 @@ if (!process.argv.includes("--fixture")) {
     )
     function driver(name: string): ProviderLiveDriver {
       return {
+        launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+        nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+        nativeExclusion: NO_NATIVE_EXCLUSION,
+        nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
         approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+        planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+        backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+        turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
         provider: name,
         canResume: false,
         available: () => true,

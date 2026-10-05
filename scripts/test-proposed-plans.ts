@@ -156,8 +156,8 @@ async function approvePlan(planReturn?: "acceptEdits" | "plan") {
   const pending = approving.tool("ExitPlanMode", { plan: text }, { signal, requestId: "approve", toolUseID: plan.id })
   approving.respond("approve", { kind: "choice", optionId: "allow_once" })
   const result = await pending
-  assert.equal(result.behavior, "allow")
-  return result.behavior === "allow" ? result.updatedPermissions : undefined
+  assert.ok(result?.behavior === "allow")
+  return result.updatedPermissions
 }
 assert.deepEqual(
   await approvePlan("acceptEdits"),

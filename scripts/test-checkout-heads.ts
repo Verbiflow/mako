@@ -88,7 +88,8 @@ try {
     assert.equal((await locateCheckout(worktree.slice("/private".length)))?.linked?.repoRoot, repo.slice("/private".length),
       "asked through /var or /tmp, the repository is named that way too, not the /private way Git records it")
   const refusal = await moveablePlace(noWorktrees, "conversation", join(worktree, "web"))
-  assert.match("refused" in refusal ? refusal.refused : "", /made outside Mako/, "a Session already in a worktree made outside Mako isn't moved into another")
+  assert.ok(refusal.refused, "a Session already in a worktree made outside Mako isn't moved into another")
+  assert.match(refusal.refused, /made outside Mako/)
   await expectEvent(worktree, () => git(worktree, "checkout", "-q", "--detach"),
     (head) => head?.kind === "detached", "detaching a linked worktree")
   assert.deepEqual((await heads.read([repo]))[repo], { kind: "branch", name: "feature/login" }, "the main checkout is unaffected")

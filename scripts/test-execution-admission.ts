@@ -40,7 +40,7 @@ try {
     },
     selectedAccount: name => ({ name: name ?? "default", dir: join(root, name ?? "default") }),
     credentialRevision: async () => revision, accountUsage: async () => ({ status: "unavailable" }),
-    captureAccount: async () => {}, removeAccount: async () => {},
+    captureAccount: async () => {}, removeAccount: async () => ({}),
   })
   const prototype = providerHost.liveDrivers.list()[0]!
   const identities: string[] = []
@@ -77,7 +77,7 @@ try {
   assert.deepEqual(identities, ["one", "prompt"], "a warm process cannot spend after the selection changes")
   assert.equal(evidence.at(-1), "not-accepted", "this is definite preflight refusal, not uncertain native delivery")
   assert.equal(running, true, "switching accounts never cancels admitted work")
-  await guarded.permission("binding", "existing", { optionId: "allow" }, { assertCurrent: () => {}, report: () => {} })
+  await guarded.permission("binding", "existing", { kind: "choice", optionId: "allow" }, { assertCurrent: () => {}, report: () => {} })
   await guarded.cancel("binding")
   assert.equal(approvals, 1)
   assert.equal(stops, 1)
@@ -202,7 +202,7 @@ try {
   check = Promise.resolve()
   await race.start(root, { conversationId: "race" })
   cleanupFails = true
-  await assert.rejects(race.close("race"), /cleanup unavailable/)
+  await assert.rejects(async () => race.close("race"), /cleanup unavailable/)
   await assert.rejects(race.start(root, { conversationId: "race" }), /execution owner/)
   await assert.rejects(race.prompt("race", "unsafe retry", [], undefined, dispatch()), /closing/)
   cleanupFails = false
@@ -221,7 +221,7 @@ try {
   const lateOpening = late.start(root, { conversationId: "late" })
   const lateRejected = assert.rejects(lateOpening, /closing/)
   await lateStarted.promise
-  const lateClosing = late.close("late")
+  const lateClosing = Promise.resolve(late.close("late"))
   const cleanupRejected = assert.rejects(lateClosing, /early cancellation failed/)
   await delay(5)
   assert.equal(lateCloses, 1)
@@ -316,7 +316,7 @@ try {
   const prepared = launch("isolated")
   const configured = await traceProviderLaunch("claude", "fixture-config", trace => claudeSdkOptions(root, {
     conversationId: randomUUID(), accountLaunch: prepared,
-    mcpSnapshot: async () => ({ servers: [], issues: [], sources: [] }),
+    mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
   }, trace))
   assert.equal(configured.account.name, "isolated")
   assert.equal(configured.options.env?.FIXTURE_IDENTITY, "isolated")

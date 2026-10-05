@@ -261,8 +261,10 @@ console.log("composer settings: starting conversations keep their send target")
   assert.equal(switched.resolved.options.fast?.kind, "unknown", "an option without a default is chosen by the user, never invented")
 
   const { optionLabel } = await import("../src/components/composer/settings-source.ts")
-  const speed = switched.options.find((option) => option.id === "fast")!
-  const effort = switched.options.find((option) => option.id === "effort")!
+  const speed = switched.options.find((option) => option.id === "fast")
+  const effort = switched.options.find((option) => option.id === "effort")
+  assert.ok(speed)
+  assert.ok(effort?.kind === "select", "effort is offered as a choice of levels")
   assert.equal(optionLabel(speed, { kind: "unknown" }), "Speed not reported", "the control is offered; the provider has simply not said")
   assert.equal(optionLabel(effort, { kind: "known", value: "xhigh", source: "override" }), "Extra High reasoning")
   assert.equal(
@@ -398,7 +400,7 @@ console.log("composer settings: choosing the recommended default keeps following
   const { registeredHarnessIds } = await import("./registered-harnesses.ts")
   for (const harness of registeredHarnessIds()) {
     const entry = { harness, model: "native-variant" }
-    const ready: HarnessProfile = { ...profile, id: harness, models: [{ id: "current", label: "Current model", options: [], variants: [{ id: "native-variant", options: {} }] }] }
+    const ready: HarnessProfile = { ...profile, id: harness, models: [{ id: "current", label: "Current model", options: [], variants: [{ id: "native-variant", label: "Native variant", values: {} }] }] }
     assert.equal(loadoutAvailability(entry, ready).kind, "ready")
     assert.equal(loadoutAvailability(entry, { ...ready, pending: true }).kind, "loading")
     assert.equal(loadoutAvailability(entry, { ...ready, available: false }).kind, "unavailable")

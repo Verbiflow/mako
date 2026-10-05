@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { build } from 'esbuild'
-import { connectDaemon } from '../packages/sessions/dist/index.js'
+import { connectDaemon, readableHarnesses } from '../packages/sessions/dist/index.js'
 
 if (process.argv[2] === 'client') {
   const client = process.argv[4]
@@ -107,7 +107,7 @@ if (process.argv[2] === 'client') {
     assert.deepEqual(a,b)
     const before = await observer.refresh()
     assert.equal(before.fullScans,1)
-    const expected = native ? ['claude','codex','cursor','grok','devin','opencode'] : ['codex']
+    const expected = native ? readableHarnesses() : ['codex']
     for (const harness of expected) {
       const candidates=a.filter(ref=>ref.harness===harness&&!ref.archived&&ref.bytes>0).sort((x,y)=>x.bytes-y.bytes)
       let page

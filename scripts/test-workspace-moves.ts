@@ -1,6 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { existsSync, lstatSync, symlinkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -9,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { parse as parseYaml } from "yaml"
 import { z } from "zod"
+import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
 import type { ThreadWorktree } from "../electron/contracts/thread-worktrees.js"
 import type { WorkspaceMoves as WorkspaceMovesState } from "../electron/contracts/workspace-moves.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/mcp-reach.js"
@@ -34,7 +36,7 @@ try {
   writeFileSync(join(project, "b.txt"), "new")
   const worktreePath = join(root, "worktree")
   git(project, "worktree", "add", "-q", "-b", "mako/thread", worktreePath)
-  const worktree: ThreadWorktree = { path: worktreePath, thread: "t", repoRoot: project, project, branch: "mako/thread", base: git(project, "rev-parse", "HEAD") }
+  const worktree: ThreadWorktree = { path: worktreePath, thread: ThreadIdSchema.parse(randomUUID()), repoRoot: project, project, branch: "mako/thread", base: git(project, "rev-parse", "HEAD"), createdAt: Date.now() }
 
   let placed: ThreadWorktree | undefined
   const removedPaths: string[] = []
@@ -54,7 +56,7 @@ try {
   placed = worktree
   assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, joins: "mako/thread", changed: 0 }, "a Thread with a worktree is joined and nothing moves")
   const inside = await moveablePlace(worktrees, "c", worktreePath)
-  assert.ok("refused" in inside)
+  assert.ok(inside.refused)
   assert.match(inside.refused, /already edits in this Thread's worktree, .*, on mako\/thread\.$/)
   placed = undefined
 

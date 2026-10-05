@@ -3,6 +3,7 @@ import { mkdtemp, open, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
+import type { JsonObject } from "../electron/codex-app-json.ts"
 import { installHostLog } from "../electron/host-log.ts"
 import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "../electron/native-capture.ts"
 import { flushUnknown, nativeUnknownPath, retainUnknown, unknownKinds } from "../electron/native-unknown.ts"
@@ -59,7 +60,7 @@ const log = installHostLog(join(root, "host.log"))
   assert.ok(capture)
   assert.match(capture.path, /native-captures\/codex-conversation_1-.+\.jsonl$/, "one file per conversation, beside the host log")
   threadId = "thread-1"
-  const messages = [
+  const messages: JsonObject[] = [
     { method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-1" } } },
     { method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "a", delta: "token=abc123 stays private" } },
     { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, items: [] } } },

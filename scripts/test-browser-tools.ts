@@ -4,7 +4,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import {
+  CallToolResultSchema,
+  type CallToolRequest,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { createBrowserToolsServer } from "../electron/browser-tools-main.js"
 import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
@@ -24,6 +28,8 @@ const textBlocks = z.array(
 )
 const firstText = (content: CallToolResult["content"] | undefined) =>
   z.string().parse(textBlocks.parse(content)[0]?.text)
+const call = async (params: CallToolRequest["params"]) =>
+  CallToolResultSchema.parse(await client.callTool(params))
 try {
   const [ct, st] = InMemoryTransport.createLinkedPair()
   await server.connect(st)
@@ -76,7 +82,7 @@ try {
     .parse(
       JSON.parse(
         firstText(
-          (await client.callTool({ name: "mako_browser_help", arguments: {} }))
+          (await call({ name: "mako_browser_help", arguments: {} }))
             .content
         )
       )
@@ -99,7 +105,7 @@ try {
       JSON.parse(
         firstText(
           (
-            await client.callTool({
+            await call({
               name: "mako_browser_help",
               arguments: { action: "open" },
             })
@@ -126,7 +132,7 @@ try {
       JSON.parse(
         firstText(
           (
-            await client.callTool({
+            await call({
               name: "mako_browser_help",
               arguments: { action: "cdp" },
             })
@@ -141,13 +147,13 @@ try {
       cdpHelp.inputSchema.$defs?.[reference[1]],
       `cdp $ref ${reference[1]} resolves`
     )
-  const unknownAction = await client.callTool({
+  const unknownAction = await call({
     name: "mako_browser_help",
     arguments: { action: "teleport" },
   })
   assert.equal(unknownAction.isError, true)
   assert.match(String(unknownAction.structuredContent?.message), /Actions:/)
-  const protocolHelp = await client.callTool({
+  const protocolHelp = await call({
     name: "mako_browser_help",
     arguments: { domain: "Input", method: "insertText" },
   })
@@ -155,7 +161,7 @@ try {
   assert.match(JSON.stringify(protocolHelp), /insertText/)
 
   // A removed per-action tool is refused by name with the way in.
-  const legacy = await client.callTool({
+  const legacy = await call({
     name: "mako_browser_click",
     arguments: {},
   })
@@ -163,7 +169,7 @@ try {
   assert.match(String(legacy.structuredContent?.message), /mako_browser_exec/)
 
   // Status is a direct read.
-  const status = await client.callTool({
+  const status = await call({
     name: "mako_browser_status",
     arguments: {},
   })
@@ -172,7 +178,7 @@ try {
 
   // Invalid arguments inside a program dispatch nothing and name the action
   // and the field.
-  const invalid = await client.callTool({
+  const invalid = await call({
     name: "mako_browser_exec",
     arguments: {
       source:
@@ -194,7 +200,7 @@ try {
   assert.equal(fixture.calls.length, 0)
 
   // A whole workflow in one call: connect, open, observe, screenshot.
-  const result = await client.callTool({
+  const result = await call({
     name: "mako_browser_exec",
     arguments: {
       source:
@@ -211,7 +217,7 @@ try {
         block.text.includes('"view"')
     )
   )
-  const persisted = await client.callTool({
+  const persisted = await call({
     name: "mako_browser_exec",
     arguments: {
       source:
@@ -221,7 +227,7 @@ try {
   assert.ok(!persisted.isError, JSON.stringify(persisted))
 
   // A later failure keeps what earlier statements emitted, before the fault.
-  const failedLate = await client.callTool({
+  const failedLate = await call({
     name: "mako_browser_exec",
     arguments: {
       source:
@@ -232,12 +238,14 @@ try {
   const lateBlocks = z.array(z.object({ type: z.string(), text: z.string().optional() })).parse(failedLate.content)
   assert.deepEqual(lateBlocks[0], { type: "text", text: '"before"' })
   assert.ok(lateBlocks.some((block) => block.type === "image"), "Earlier images survive a later failure")
-  assert.match(String(lateBlocks.at(-1)!.text), /browser\.click/)
+  const lastBlock = lateBlocks.at(-1)
+  assert.ok(lastBlock)
+  assert.match(String(lastBlock.text), /browser\.click/)
   assert.match(String(failedLate.structuredContent?.message), /browser\.click/)
   assert.equal(failedLate.structuredContent?.outcome, "not-dispatched")
 
   // Oversized output is written whole to a file and described, never cut.
-  const oversized = await client.callTool({
+  const oversized = await call({
     name: "mako_browser_exec",
     arguments: {
       source:
@@ -274,7 +282,7 @@ try {
     )
   )
   // A program can keep the big value out of its result and save it itself.
-  const chosen = await client.callTool({
+  const chosen = await call({
     name: "mako_browser_exec",
     arguments: {
       source:

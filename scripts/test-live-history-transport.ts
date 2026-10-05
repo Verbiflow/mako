@@ -7,8 +7,7 @@ import { spawn } from "node:child_process"
 import { z } from "zod"
 import { createServer } from "vite"
 import { LiveHistoryReader } from "../electron/live-history-reader"
-import { LiveHistoryReadSchema } from "../electron/contracts/live-history"
-import type { LiveSnapshot } from "../electron/contracts/live-conversations"
+import { LiveHistoryCursorSchema, LiveHistoryReadSchema } from "../electron/contracts/live-history"
 import { startWebHost } from "../electron/web-host"
 import { invokeRuntime, subscribeRuntime } from "../electron/runtime-connection"
 import { SharedConversations } from "../electron/shared-conversations"
@@ -17,6 +16,16 @@ import { withHostClient } from "../electron/host-client"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { auditSnapshot } from "./performance-audit-fixtures"
 
+/** The retained-history window a history-aware client reads from a snapshot or an earlier page. */
+const HistoryViewSchema = z.object({
+  history: z.object({
+    token: z.string().uuid(),
+    blockStart: z.number().int().nonnegative(),
+    blockEnd: z.number().int().nonnegative(),
+    before: LiveHistoryCursorSchema.nullable(),
+  }),
+  requests: z.array(z.unknown()).optional(),
+})
 const root = await mkdtemp(join(tmpdir(), "mako-history-wire-"))
 const socket = join(root, "owner.sock")
 const peerSocket = join(root, "peer.sock")
@@ -60,15 +69,13 @@ try {
   await assert.rejects(invokeRuntime(socket, client, "mako:live-snapshot", [id]), /too large to load/)
   for (const target of [socket, peerSocket]) {
     const value = await invokeRuntime(target, client, "mako:live-snapshot", [id], 1, { history: true })
-    // SAFETY: the fixture host only returns its typed source or reader projection.
-    const snapshot = value as LiveSnapshot
-    assert.ok(snapshot.history?.before)
-    assert.ok(JSON.stringify(snapshot).length < 512 * 1024)
+    const snapshot = HistoryViewSchema.parse(value)
+    assert.ok(snapshot.history.before)
+    assert.ok(JSON.stringify(value).length < 512 * 1024)
     const chunk = await invokeRuntime(target, client, "mako:live-read", [id, { kind: "earlier", token: snapshot.history.token, before: snapshot.history.before }], 1, { history: true })
     const frame = z.object({ data: z.string() }).parse(chunk)
-    // SAFETY: the typed fixture reader above encoded this exact page.
-    const page = JSON.parse(frame.data) as LiveSnapshot
-    assert.equal(page.history!.blockEnd, snapshot.history.blockStart)
+    const page = HistoryViewSchema.parse(JSON.parse(frame.data))
+    assert.equal(page.history.blockEnd, snapshot.history.blockStart)
     assert.equal(page.requests, undefined, "Earlier content does not resend stale controls")
   }
   const events: unknown[] = []
@@ -88,7 +95,9 @@ try {
     vite = await createServer({ cacheDir: join(root, "vite"), plugins: [webHostProxy(peerSocket)], server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })
     await vite.listen()
     await writeFile(join(root, "package.json"), JSON.stringify({ main: resolve("scripts/test-live-history-ui.mjs") }))
-    const env = { ...process.env, MAKO_HISTORY_URL: vite.resolvedUrls!.local[0], MAKO_HISTORY_ROOT: root, MAKO_HISTORY_ID: id }
+    const url = vite.resolvedUrls?.local[0]
+    assert.ok(url, "Vite reports the local URL it listens on")
+    const env: NodeJS.ProcessEnv = { ...process.env, MAKO_HISTORY_URL: url, MAKO_HISTORY_ROOT: root, MAKO_HISTORY_ID: id }
     delete env.ELECTRON_RUN_AS_NODE
     const child = spawn(resolve("node_modules/.bin/electron"), [root], { env, stdio: "inherit" })
     const exit = await new Promise((resolve, reject) => { child.once("exit", resolve); child.once("error", reject) })

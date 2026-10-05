@@ -15,9 +15,10 @@ import { mock } from "node:test"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
-import type { LiveSessionState } from "../electron/shared.js"
+import type { LiveSessionState, LiveSnapshot } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-snapshots-"))
 const cwd = join(root, "workspace")
@@ -38,6 +39,11 @@ const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "test",
   canResume: true,
   available: () => true,
@@ -161,7 +167,7 @@ try {
   const failure = mock.method(
     LiveJournal.prototype,
     "commit",
-    function (next, previous) {
+    function (this: LiveJournal, next: LiveSnapshot, previous?: LiveSnapshot) {
       if (next.session.id === failureId)
         throw new Error("simulated fork journal failure")
       return originalCommit.call(this, next, previous)
