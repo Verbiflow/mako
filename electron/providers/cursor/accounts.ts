@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { readFile } from "node:fs/promises"
 import type {
   AccountUsage,
   HarnessAccount,
@@ -16,8 +17,9 @@ import {
   valueFields,
 } from "../../accounts-common.js"
 import type { JsonValue } from "../../codex-app-json.js"
-import type { ObservedAccountCapability } from "../account-capability.js"
-import type { CursorSdkAuth } from "./sdk/auth.js"
+import type { SelectableAccountCapability } from "../account-capability.js"
+import { CURSOR_ACCOUNT_ENV, type CursorSdkAuth } from "./sdk/auth.js"
+import type { CursorAccountKeys, StoredCursorCredential } from "./sdk/credentials.js"
 
 const API = "https://api2.cursor.sh"
 
@@ -136,7 +138,6 @@ async function sessionToken(apiKey: string): Promise<string> {
     )
   )
   if (!token) throw new CursorUsageError(401)
-  sessions.clear()
   sessions.set(id, {
     token,
     expiresAt: jwtClaims(token).expiresAt ?? Date.now() + 10 * 60_000,
@@ -169,11 +170,11 @@ async function usageForKey(apiKey: string): Promise<AccountUsage> {
     if (balances.length > 0) usage.balances = balances
     return usage
   } catch (error) {
-    if (error instanceof CursorUsageError && error.status === 401) {
-      sessions.clear()
+    if (error instanceof CursorUsageError && (error.status === 401 || error.status === 403)) {
+      sessions.delete(createHash("sha256").update(apiKey).digest("hex"))
       return {
         status: "stale-token",
-        detail: "Sign in to Cursor again in Settings → Agents",
+        detail: "Cursor refused this login. Sign in again.",
       }
     }
     return {
@@ -183,36 +184,106 @@ async function usageForKey(apiKey: string): Promise<AccountUsage> {
   }
 }
 
+function expired(credential: StoredCursorCredential, now = Date.now()): boolean {
+  return credential.expiresAt !== undefined && Date.parse(credential.expiresAt) <= now
+}
+
 /**
- * Cursor's single login, read through the same auth the SDK runs under.
- * Mako cannot switch Cursor accounts; it shows who is signed in and what
- * the plan has left.
+ * Cursor's own login, read through the same auth the SDK runs under, and
+ * the accounts added in Mako: each a key Cursor minted for whoever signed
+ * in on its page, kept in its own encrypted record. Selecting one hands its
+ * key to new sessions; the own login stays as it is.
  */
 export function cursorAccountCapability(
-  auth: CursorSdkAuth
-): ObservedAccountCapability {
+  auth: CursorSdkAuth,
+  keys: CursorAccountKeys
+): SelectableAccountCapability {
+  const saved = async (name: string): Promise<StoredCursorCredential> => {
+    const credential = await keys.store(name).load()
+    if (!credential) throw new Error("The selected Cursor account no longer exists. Choose another account in Settings → Agents.")
+    return credential
+  }
   return {
     provider: "cursor",
-    mode: "observed",
+    mode: "selectable",
+    nativeLogin: true,
     label: "Cursor",
     loginCommand: "cursor-agent login",
-    async listAccounts() {
+    async listAccounts(selection) {
+      const accounts: HarnessAccount[] = []
       const { state } = await auth.status()
-      if (state.status !== "signed-in") return []
-      const account: HarnessAccount = {
-        harness: "cursor",
-        name: "default",
-        dir: join(homedir(), ".cursor"),
-        active: true,
-        source: "cli",
+      if (state.status === "signed-in") {
+        const account: HarnessAccount = {
+          harness: "cursor",
+          name: "default",
+          dir: join(homedir(), ".cursor"),
+          active: !selection,
+          source: "cli",
+        }
+        if (state.email !== undefined) account.email = state.email
+        accounts.push(account)
       }
-      if (state.email !== undefined) account.email = state.email
-      return [account]
+      for (const name of await keys.names()) {
+        const credential = await keys.store(name).load().catch(() => null)
+        const account: HarnessAccount = {
+          harness: "cursor",
+          name,
+          dir: "",
+          active: selection === name,
+          source: "mako",
+          route: "managed",
+        }
+        if (credential?.email !== undefined) account.email = credential.email
+        if (!credential || expired(credential)) account.signedOut = true
+        accounts.push(account)
+      }
+      return accounts
     },
-    accountEnv: async (_selection, base) => ({ ...base }),
-    selectedAccount: () => ({ name: "default" }),
-    credentialRevision: async () => credentialFingerprint([(await auth.childEnv()).CURSOR_API_KEY ?? null]),
-    async accountUsage() {
+    async accountEnv(selection, base) {
+      const env = { ...base }
+      if (!selection || selection === "default") return env
+      const credential = await saved(selection)
+      if (expired(credential))
+        throw new Error("The selected Cursor account's login expired. Sign in again in Settings → Agents.")
+      env.CURSOR_API_KEY = credential.apiKey
+      env[CURSOR_ACCOUNT_ENV] = selection
+      return env
+    },
+    async prepareAccountLogin({ name }) {
+      const store = keys.store(name)
+      return {
+        kind: "task",
+        async run(events, signal) {
+          await store.save(await auth.mintBrowserKey(events.page, signal))
+        },
+      }
+    },
+    removeAccount: async (name) => {
+      if (name === "default") throw new Error("The default account is Cursor's own login")
+      await keys.store(name).clear()
+    },
+    selectedAccount: (selection) => ({ name: selection ?? "default" }),
+    credentialRevision: async (name, env) => {
+      if (name !== "default") {
+        const credential = await keys.store(name).load()
+        return credentialFingerprint([credential?.revision ?? null, credential?.apiKey ?? null])
+      }
+      const launch = await auth.childLaunch(env)
+      const key = launch.env.CURSOR_API_KEY
+      if (key) return credentialFingerprint([key])
+      const path = join(launch.env.HOME ?? homedir(), ".cursor", "sdk", "auth.json")
+      const raw = await readFile(path, "utf8").catch(error => {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
+        throw error
+      })
+      return credentialFingerprint([path, raw])
+    },
+    async accountUsage(name) {
+      if (name !== "default") {
+        const credential = await keys.store(name).load().catch(() => null)
+        if (!credential || expired(credential)) return { status: "missing-credentials" }
+        return usageForKey(credential.apiKey)
+      }
       const apiKey = (await auth.childEnv()).CURSOR_API_KEY
       if (!apiKey)
         return {

@@ -3,11 +3,12 @@ import type { SdkModelListItem } from "./sdk/wire.js"
 import {
   availableProviderProfile,
   type ProviderProfileLoader,
+  type ProfileLoadContext,
 } from "../profile-loader.js"
 
 export interface CursorProfileOptions {
   /** The SDK's model list for the account the host is signed in as. */
-  sdkModels(env: NodeJS.ProcessEnv, cwd?: string): Promise<SdkModelListItem[]>
+  sdkModels(env: NodeJS.ProcessEnv, cwd?: string, context?: ProfileLoadContext): Promise<SdkModelListItem[]>
   /** Names the account, so a sign-in change invalidates the catalog. */
   accountKey(): string
 }
@@ -37,8 +38,8 @@ export function createCursorProfileLoader(options: CursorProfileOptions): Provid
     transport: "sdk",
     capabilities: CAPABILITIES,
     cacheKey: () => options.accountKey(),
-    async load(env, cwd) {
-      const catalog = normalizeCursorSdkModels(await options.sdkModels(env, cwd))
+    async load(env, cwd, context) {
+      const catalog = normalizeCursorSdkModels(await options.sdkModels(env, cwd, context))
       return availableProviderProfile(loader, catalog)
     },
   }

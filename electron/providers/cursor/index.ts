@@ -1,6 +1,6 @@
 import { cursorCanvasPreview } from "./canvas-preview.js"
 import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from "@mako/sessions"
-import { accountEnv } from "../../accounts.js"
+import { childProcessEnv } from "../../accounts-common.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { cursorAccountCapability } from "./accounts.js"
@@ -9,7 +9,7 @@ import { cursorMcpSource } from "./mcp.js"
 import { cursorProcessProbe } from "./process-probe.js"
 import { createCursorProfileLoader } from "./profile.js"
 import { CursorSdkAuth } from "./sdk/auth.js"
-import { CursorCredentialStore, cursorCredentialPath } from "./sdk/credentials.js"
+import { CursorAccountKeys, CursorCredentialStore, cursorAccountKeysRoot, cursorCredentialPath } from "./sdk/credentials.js"
 import { cursorDecoderSource } from "./sdk/decoder-source.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
@@ -33,9 +33,13 @@ async function openExternal(url: string): Promise<void> {
  * its sign-in, which the SDK runs under when Mako holds no key of its own.
  */
 export const installCursor: ProviderModule = (host) => {
-  const env = () => accountEnv("cursor", process.env)
+  // Cursor's own login, whichever account new sessions use; a selected
+  // account's key arrives in each launch's prepared environment instead.
+  const env = async () => childProcessEnv(process.env)
   const stateRoot = () => cursorSdkStateRoot()
-  const credentials = new CursorCredentialStore(cursorCredentialPath(stateRoot()), electronSecretEncryption())
+  const encryption = electronSecretEncryption()
+  const credentials = new CursorCredentialStore(cursorCredentialPath(stateRoot()), encryption)
+  const keys = new CursorAccountKeys(cursorAccountKeysRoot(stateRoot()), encryption)
   const auth = new CursorSdkAuth({ env, openUrl: openExternal, credentials })
   const modelCache = createCursorModelCache()
   installHarness(host, {
@@ -49,9 +53,9 @@ export const installCursor: ProviderModule = (host) => {
     live: createCursorSdkDriver({ auth, stateRoot, modelCache }),
     decoder: cursorDecoderSource,
     profile: createCursorProfileLoader({
-      sdkModels: async (_env, cwd) => {
-        const env = await auth.childEnv()
-        return modelCache(env, () => listCursorSdkModels({ env, cwd }), true)
+      sdkModels: async (base, cwd, context) => {
+        const { env } = await auth.childLaunch(base)
+        return modelCache(env, () => listCursorSdkModels({ env, cwd, signal: context?.signal }), true, context?.signal)
       },
       accountKey: () => {
         const state = auth.current?.state
@@ -60,10 +64,10 @@ export const installCursor: ProviderModule = (host) => {
           : "signed-out"
       },
     }),
-    accounts: cursorAccountCapability(auth),
+    accounts: cursorAccountCapability(auth, keys),
     acp: lacks("Runs on the Cursor SDK"),
     nativeRunner: cursorSdkNativeRunner({
-      childEnv: () => auth.childEnv(),
+      childLaunch: env => auth.childLaunch(env),
       stateRoot,
       models: async (env) => normalizeCursorSdkModels(await modelCache(env, () => listCursorSdkModels({ env }))),
     }),
