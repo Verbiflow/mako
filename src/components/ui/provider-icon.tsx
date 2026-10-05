@@ -1,7 +1,6 @@
 import { useThreads } from "@/state/thread-store"
-import type { HarnessIconId } from "../../../electron/contracts/harness-presentation"
+import type { HarnessMark } from "../../../electron/contracts/harness-presentation"
 import { useId, type SVGProps } from "react"
-import { SiOpencode } from "react-icons/si"
 import { cn } from "@/lib/utils"
 
 /**
@@ -41,42 +40,6 @@ const XAI: Mark = (props) => (
   </svg>
 )
 
-const Grok: Mark = (props) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" {...props}>
-    <path d="m9.27 15.29 7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 0 0-1.829-1A8.975 8.975 0 0 0 5.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" />
-  </svg>
-)
-
-/** Codex's own mark: the prompt inside OpenAI's cloud, in its violet-to-blue fill. */
-const Codex: Mark = (props) => {
-  const fill = useId()
-  return (
-    <svg viewBox="0 0 24 24" {...props}>
-      <defs>
-        <linearGradient id={fill} gradientUnits="userSpaceOnUse" x1="12" x2="12" y1="0" y2="24">
-          <stop stopColor="#B1A7FF" />
-          <stop offset=".5" stopColor="#7A9DFF" />
-          <stop offset="1" stopColor="#3941FF" />
-        </linearGradient>
-      </defs>
-      <path
-        fill={`url(#${fill})`}
-        fillRule="evenodd"
-        d="M8.086.457a6.105 6.105 0 0 1 3.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 0 0 .107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 0 1-.18 1.631.167.167 0 0 0 .04.155 5.982 5.982 0 0 1 1.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 0 1-2.934 1.851.162.162 0 0 0-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 0 0-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 0 1-2.595-.622 6.058 6.058 0 0 1-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 0 1-.495-1.283 6.11 6.11 0 0 1-.017-3.064.166.166 0 0 0 .008-.074.115.115 0 0 0-.037-.064 5.958 5.958 0 0 1-1.38-2.202 5.196 5.196 0 0 1-.333-1.589 6.915 6.915 0 0 1 .188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 0 0 .087-.087A6.016 6.016 0 0 1 5.635 2.31C6.315 1.464 7.132.846 8.086.457Zm-.804 7.85a.848.848 0 0 0-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 0 0 1.46.864l1.94-3.272a.849.849 0 0 0 .007-.854l-1.94-3.393Zm5.446 6.24a.849.849 0 0 0 0 1.695h4.848a.849.849 0 0 0 0-1.696h-4.848Z"
-      />
-    </svg>
-  )
-}
-
-const ClaudeCode: Mark = (props) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
-    <path
-      fillRule="evenodd"
-      d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949ZM6 10.949h1.488V8.102H6v2.847Zm10.51 0H18V8.102h-1.49v2.847Z"
-    />
-  </svg>
-)
-
 const DeepSeek: Mark = (props) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
     <path d="M22.5 5.3c-.3-.15-.43.07-.6.2-.06.05-.11.1-.16.16-.44.47-.95.78-1.63.74-1-.06-1.85.25-2.6.99-.16-.9-.68-1.44-1.47-1.79-.41-.18-.83-.36-1.12-.75-.2-.28-.25-.59-.35-.9-.06-.19-.13-.38-.35-.41-.24-.04-.33.16-.43.33-.38.7-.53 1.47-.51 2.24.04 1.74.79 3.12 2.27 4.11.17.11.21.23.16.4-.1.33-.21.65-.31.98-.06.21-.16.26-.39.16a5.3 5.3 0 0 1-1.7-1.29c-.86-.9-1.64-1.9-2.61-2.69a12.4 12.4 0 0 0-.74-.55c-1.05-1.02.14-1.86.41-1.96.29-.1.1-.46-.83-.46-.93.01-1.78.32-2.86.74-.16.06-.33.11-.5.15a9.6 9.6 0 0 0-2.83-.1c-1.9.2-3.42 1.1-4.52 2.63C.1 9.34-.23 11.4.18 13.55c.43 2.26 1.58 4.13 3.35 5.6 1.84 1.5 3.95 2.24 6.37 2.1 1.47-.09 3.11-.28 4.96-1.85.47.23.96.32 1.77.4.63.05 1.23-.04 1.7-.14.73-.16.68-.84.42-.96-2.14-1-1.67-.59-2.1-.92 1.1-1.3 2.75-2.65 3.4-7.02.05-.35 0-.57 0-.85 0-.17.03-.24.23-.26.55-.06 1.08-.21 1.57-.48 1.42-.78 2-2.07 2.13-3.6.02-.23 0-.47-.24-.6ZM11.62 19.4c-2.08-1.63-3.08-2.17-3.5-2.14-.38.02-.31.46-.23.75.1.28.22.48.39.73.12.17.2.42-.11.61-.68.42-1.87-.15-1.92-.18-1.39-.82-2.55-1.9-3.37-3.38-.79-1.43-1.25-2.96-1.33-4.59-.02-.4.1-.54.49-.61.52-.1 1.05-.12 1.57-.04 2.19.32 4.05 1.3 5.62 2.85.89.89 1.56 1.94 2.25 2.97.74 1.1 1.53 2.14 2.54 3 .35.3.63.53.9.7-.81.09-2.17.11-3.3-.67Zm1-6.44a.24.24 0 0 1 .25-.24c.06 0 .12.02.16.06l.05.06.28.64c.05.14-.03.28-.17.3a.24.24 0 0 1-.28-.17l-.29-.65Zm2.03 1.04a1 1 0 0 1-.45.34.87.87 0 0 1-.53.04c-.34-.08-.6-.28-.8-.55a.9.9 0 0 1-.18-.5.75.75 0 0 1 .1-.4c.2-.31.5-.4.87-.25.3.12.5.36.66.64.11.2.2.4.2.55a.9.9 0 0 1 .13.13Zm3.36-.9c-.22.09-.44.16-.65.17a1.44 1.44 0 0 1-.9-.25c-.31-.2-.53-.4-.64-.7a.63.63 0 0 1 0-.44c.1-.2.28-.3.53-.3.35 0 .65.13.9.36.19.16.32.36.48.55.1.11.2.23.36.28.06.02.08.06.05.11-.03.11-.09.16-.13.22Z" />
@@ -94,22 +57,6 @@ const Mistral: Mark = (props) => (
     <path d="M3 3h3.6v3.6H3V3Zm13.8 0H21v3.6h-4.2V3ZM3 6.6h3.6v3.6H3V6.6Zm10.2 0h3.6v3.6h-3.6V6.6Zm3.6 0H21v3.6h-4.2V6.6ZM3 10.2h3.6v3.6H3v-3.6Zm6.6 0h3.6v3.6H9.6v-3.6Zm3.6 0h3.6v3.6h-3.6v-3.6Zm3.6 0H21v3.6h-4.2v-3.6ZM3 13.8h3.6v3.6H3v-3.6Zm13.8 0H21v3.6h-4.2v-3.6ZM3 17.4h3.6V21H3v-3.6Zm13.8 0H21V21h-4.2v-3.6Z" />
   </svg>
 )
-
-const Cursor: Mark = (props) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" {...props}>
-    <path d="M22.106 5.68 12.5.135a.998.998 0 0 0-.998 0L1.893 5.68a.84.84 0 0 0-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 0 0 .998 0l9.608-5.547a.84.84 0 0 0 .42-.727V6.407a.84.84 0 0 0-.42-.726Zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 0 0-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514Z" />
-  </svg>
-)
-
-const Devin: Mark = (props) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" {...props}>
-    <path d="M2.033 9.867l2.554 1.483a.589.589 0 00.592 0l2.554-1.483.01-.008a.608.608 0 00.11-.084l.013-.015a.631.631 0 00.076-.1c.003-.005.008-.01.01-.016a.558.558 0 00.052-.125l.007-.028a.611.611 0 00.019-.14V7.868c0-.572.307-1.105.8-1.392a1.595 1.595 0 011.598 0l1.277.742a.54.54 0 00.129.053l.028.01c.044.01.088.015.133.016h.006l.013-.002a.587.587 0 00.27-.074l.011-.004 2.554-1.483a.596.596 0 00.297-.516V2.253a.595.595 0 00-.297-.516L12.293.257a.587.587 0 00-.591 0L9.148 1.737l-.01.01a.609.609 0 00-.109.083l-.014.015a.632.632 0 00-.076.1c-.003.005-.008.01-.01.016a.57.57 0 00-.052.124l-.007.028a.612.612 0 00-.018.14v1.483c0 .572-.307 1.105-.8 1.393a1.597 1.597 0 01-1.599 0l-1.276-.742a.603.603 0 00-.13-.053l-.028-.008a.658.658 0 00-.133-.018h-.02a.57.57 0 00-.269.074c-.003.002-.008.002-.012.005L2.033 5.872a.596.596 0 00-.297.515v2.966c0 .213.113.41.297.515z" />
-    <path d="M15.943 10.607a1.596 1.596 0 011.599 0l1.276.74c.041.025.085.04.13.055l.028.008c.043.01.088.016.133.018h.005c.005 0 .01-.002.014-.003a.474.474 0 00.122-.016l.021-.005a.616.616 0 00.126-.052c.004-.002.009-.002.013-.005l2.554-1.482a.597.597 0 00.297-.516V6.383a.596.596 0 00-.297-.515l-2.552-1.483a.587.587 0 00-.592 0l-2.553 1.482-.011.008a.61.61 0 00-.108.084l-.014.016a.637.637 0 00-.076.1c-.003.005-.008.01-.01.016a.57.57 0 00-.052.124l-.007.029a.612.612 0 00-.018.14v1.482c0 .572-.307 1.105-.8 1.393a1.597 1.597 0 01-1.599 0l-1.276-.742a.584.584 0 00-.13-.053l-.028-.008a.62.62 0 00-.133-.018h-.02a.587.587 0 00-.269.074l-.012.004L9.15 10a.596.596 0 00-.296.516v2.966c0 .212.112.409.296.515l2.554 1.483s.008.002.012.005c.04.022.082.04.126.052l.02.004a.57.57 0 00.123.017l.014.002h.006c.054 0 .108-.01.16-.025a.587.587 0 00.13-.054l1.277-.741a1.597 1.597 0 012.398 1.392v1.482c0 .049.007.095.019.14l.007.028a.619.619 0 00.051.125c.004.006.008.01.01.016a.6.6 0 00.076.1l.014.015c.033.032.069.06.108.084.004.002.006.006.011.008l2.554 1.483a.59.59 0 00.593 0l2.554-1.483a.597.597 0 00.296-.516v-2.965a.595.595 0 00-.296-.516l-2.554-1.483s-.008-.002-.012-.005a.54.54 0 00-.126-.051c-.007-.003-.013-.003-.02-.005a.635.635 0 00-.125-.017h-.018a.557.557 0 00-.16.026.588.588 0 00-.13.053l-1.276.742a1.595 1.595 0 01-1.598 0 1.615 1.615 0 010-2.785l-.005-.001z" />
-    <path d="M14.848 18.265l-2.554-1.482-.012-.005a.526.526 0 00-.126-.052c-.007-.002-.014-.002-.02-.005a.64.64 0 00-.124-.017h-.02a.56.56 0 00-.16.026.588.588 0 00-.13.053l-1.276.742a1.594 1.594 0 01-1.598 0c-.493-.286-.8-.82-.8-1.393V14.65a.563.563 0 00-.018-.14l-.008-.028a.604.604 0 00-.051-.124l-.01-.017a.603.603 0 00-.076-.1l-.014-.015a.596.596 0 00-.109-.084c-.003-.002-.005-.006-.01-.008L5.178 12.65a.587.587 0 00-.591 0l-2.554 1.483a.596.596 0 00-.297.516v2.965c0 .213.113.41.297.516l2.554 1.483.012.004a.618.618 0 00.267.074l.016.002h.007a.55.55 0 00.16-.026.584.584 0 00.129-.053l1.277-.742a1.597 1.597 0 012.398 1.393v1.482c0 .05.007.095.019.14l.007.028c.013.044.03.085.051.125l.01.016c.022.036.047.07.076.1l.014.015c.032.032.069.06.109.084l.01.008 2.554 1.483a.587.587 0 00.593 0l2.554-1.483a.596.596 0 00.296-.515v-2.966a.596.596 0 00-.296-.516h-.002z" />
-  </svg>
-)
-
-const OpenCode: Mark = (props) => <SiOpencode {...props} />
 
 const GitHub: Mark = (props) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
@@ -130,31 +77,11 @@ const MARKS = {
   meta: { mark: Meta, tint: "#0866FF" },
   mistral: { mark: Mistral, tint: "#FA520F" },
   openrouter: { mark: Mistral, tint: "currentColor" },
-  cursor: { mark: Cursor, tint: "currentColor" },
-  devin: { mark: Devin, tint: "#4E8DF6" },
-  opencode: { mark: OpenCode, tint: "currentColor" },
   github: { mark: GitHub, tint: "currentColor" },
   copilot: { mark: GitHub, tint: "currentColor" },
-  grok: { mark: Grok, tint: "currentColor" },
-  imported: { mark: Devin, tint: "#4E8DF6" },
 }
 
-/**
- * Marks by *harness* — the tool a session belongs to, as distinct from the
- * model provider a message was priced by. Each harness wears its own mark:
- * Codex's prompt-in-a-cloud, Claude Code's glyph, Cursor's cube, Grok's
- * slashed ring.
- */
-const HARNESS_ASSETS = {
-  "codex-cloud": Codex,
-  "claude-code": ClaudeCode,
-  "cursor-cube": Cursor,
-  "grok-ring": Grok,
-  "devin-mark": Devin,
-  "opencode-mark": OpenCode,
-} satisfies Record<HarnessIconId, Mark>
-
-/** A harness's mark, sized by the caller. Falls back to initials. */
+/** A harness's declared mark, or initials when the host has described none. */
 export function HarnessIcon({
   harness,
   className,
@@ -164,29 +91,47 @@ export function HarnessIcon({
   className?: string
   tinted?: boolean
 }) {
-  const presentation = useThreads((state) => state.descriptors.find((entry) => entry.provider === harness)?.presentation)
-  const found = presentation ? HARNESS_ASSETS[presentation.icon.id] : undefined
-  if (!found) {
-    return (
-      <span
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center rounded-[3px] bg-foreground/10",
-          "text-[7px] font-bold tracking-tight text-muted-foreground uppercase",
-          className
-        )}
-        aria-hidden
-      >
-        {harness.slice(0, 2)}
-      </span>
-    )
-  }
-  const Mark = found
+  const mark = useThreads((state) => state.descriptors.find((entry) => entry.provider === harness)?.presentation?.mark)
+  return mark ? <DeclaredMark mark={mark} tinted={tinted} className={className} /> : <Initials name={harness} className={className} />
+}
+
+/** Draws a mark from its data; a gradient spans the viewBox top to bottom. */
+function DeclaredMark({ mark, tinted, className }: { mark: HarnessMark; tinted: boolean; className?: string }) {
+  const gradient = useId()
+  const [x = 0, y = 0, width = 0, height = 0] = mark.viewBox.split(" ").map(Number)
+  const fill = mark.gradient ? `url(#${gradient})` : undefined
   return (
-    <Mark
+    <svg
+      viewBox={mark.viewBox}
+      fill="currentColor"
       className={cn("shrink-0", className)}
-      style={tinted && presentation?.icon.tint !== "currentColor" ? { color: presentation?.icon.tint } : undefined}
+      style={tinted && !mark.gradient && mark.tint !== "currentColor" ? { color: mark.tint } : undefined}
       aria-hidden
-    />
+    >
+      {mark.gradient ? (
+        <defs>
+          <linearGradient id={gradient} gradientUnits="userSpaceOnUse" x1={x + width / 2} x2={x + width / 2} y1={y} y2={y + height}>
+            {mark.gradient.map((stop) => <stop key={stop.offset} offset={stop.offset} stopColor={stop.color} />)}
+          </linearGradient>
+        </defs>
+      ) : null}
+      {mark.paths.map((path, index) => <path key={index} d={path.d} fillRule={path.fillRule} fill={fill} />)}
+    </svg>
+  )
+}
+
+function Initials({ name, className }: { name: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-[3px] bg-foreground/10",
+        "text-[7px] font-bold tracking-tight text-muted-foreground uppercase",
+        className
+      )}
+      aria-hidden
+    >
+      {name.slice(0, 2)}
+    </span>
   )
 }
 
@@ -208,21 +153,10 @@ export function ProviderIcon({
   const fallbackKey = key.split(/[-/]/)[0]
   const found = Object.entries(MARKS).find(([id]) => id === key)?.[1]
     ?? Object.entries(MARKS).find(([id]) => id === fallbackKey)?.[1]
+  // A model a harness serves itself, such as Cursor's Composer, wears the harness's mark.
+  const harnessMark = useThreads((state) => found ? undefined : state.descriptors.find((entry) => entry.provider === key || entry.provider === fallbackKey)?.presentation?.mark)
 
-  if (!found) {
-    return (
-      <span
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center rounded-[3px] bg-foreground/10",
-          "text-[7px] font-bold tracking-tight text-muted-foreground uppercase",
-          className
-        )}
-        aria-hidden
-      >
-        {provider.slice(0, 2)}
-      </span>
-    )
-  }
+  if (!found) return harnessMark ? <DeclaredMark mark={harnessMark} tinted={tinted} className={className} /> : <Initials name={provider} className={className} />
 
   const Mark = found.mark
   return (

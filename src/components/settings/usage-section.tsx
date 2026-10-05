@@ -133,9 +133,7 @@ function LocalUsage() {
       <Breakdown
         title="By source"
         rows={(data.sources ?? []).map((source) => ({
-          label: source.source === "Cursor" || source.source === "Devin"
-            ? `${source.source} · runs in Mako`
-            : source.source,
+          label: source.recordedByMako ? `${source.source} · runs in Mako` : source.source,
           totals: source,
         }))}
         total={data.total.cost}
