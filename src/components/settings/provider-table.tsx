@@ -18,6 +18,7 @@ import {
 import { ProviderAccounts } from "./provider-accounts"
 import { InstallRow, RuntimeRow, InstallationDetails } from "./harness-updates"
 import { runtimeBusy, runtimeRows } from "@/lib/runtime-updates"
+import { accountIdentity } from "@/lib/account-identity"
 import { cn } from "@/lib/utils"
 
 interface Agent {
@@ -120,7 +121,9 @@ function ProviderRow({
   const [keyOpen, setKeyOpen] = useState(false)
   const selected = providerAccounts.find((account) => account.active)
   const summary = selected
-    ? (selected.email ?? selected.accountId ?? selected.name)
+    ? selected.missing
+      ? "Selected account no longer available"
+      : (selected.email ?? selected.accountId ?? accountIdentity(selected))
     : providerAccounts.length > 0
       ? `${providerAccounts.length} connected accounts`
       : accountsLoaded
@@ -148,7 +151,7 @@ function ProviderRow({
               {connection ? (
                 <ConnectionStatus connection={connection} />
               ) : (
-                <span className="block break-words">
+                <span className={cn("block break-words", accountProvider && selected?.missing && "text-caution")}>
                   {accountProvider
                     ? summary
                     : installed === false
