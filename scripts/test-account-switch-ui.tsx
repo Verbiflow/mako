@@ -93,9 +93,28 @@ assert.match(render(live(session(onDefault, { status: "running" }))), /This turn
 const held = render(live(session(onDefault, { backgroundTasks: 1 }), [waiting]))
 assert.match(held, /Switches to personal@work\.dev when its background work finishes\. Your message is waiting\./)
 assert.match(held, />Stop and switch</)
+assert.match(render(live(session(onDefault, { backgroundTasks: 1 }))),
+  /Background work runs as codex@example\.com\. A new message waits for it, then switches to personal@work\.dev\./,
+  "background work holds the old account until it finishes, so the line doesn't promise the next message switches")
+
+// The session's account is being removed: the line says when it goes.
+accountsStore.set({
+  providers: [{ provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login" }],
+  accounts: [
+    { harness: "codex", name: "default", email: "codex@example.com", active: true },
+    { harness: "codex", name: "personal", email: "personal@work.dev", active: false, source: "mako", removing: true },
+  ],
+  loadedAt: Date.now(),
+})
+assert.match(render(live(session(onPersonal, { status: "running" }))),
+  /This turn runs as personal@work\.dev, which Mako removes when the turn ends\. The next message uses codex@example\.com\./)
+assert.match(render(live(session(onPersonal, { backgroundTasks: 2 }))),
+  /Background work runs as personal@work\.dev, which Mako removes when it finishes\. A new message waits for it, then uses codex@example\.com\./)
+assert.match(render(live(session(onPersonal))), /This session runs as personal@work\.dev\. Your next message switches it to codex@example\.com\./)
+
 const mismatch = render(live(session(wrong)))
 assert.match(mismatch, /Codex is signed in as someone@example\.com, not personal@work\.dev\./)
 assert.match(mismatch, />Settings</)
 assert.match(mismatch, /text-caution/)
 
-console.log("Account switching: silent when matched; pending, waiting (Stop only where it frees the session) and wrong-identity lines render; retired sessions stop warning")
+console.log("Account switching: silent when matched; pending, background-held, being-removed, waiting (Stop only where it frees the session) and wrong-identity lines render; retired sessions stop warning")

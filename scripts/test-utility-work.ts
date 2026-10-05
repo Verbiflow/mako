@@ -91,7 +91,6 @@ const agent = (harness: string, label: string, models: SessionModel[]): UtilityA
   models,
   defaults: defaults(harness),
   runner: {
-    provider: harness,
     complete: async (request) => {
       calls.push({ ...request, harness })
       return request.schema ? JSON.stringify({ title: "Named" }) : "Named"

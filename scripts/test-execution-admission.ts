@@ -250,6 +250,47 @@ try {
   await orphan.close("orphan")
   assert.equal(orphanAlive, false)
 
+  // The launch account stays held exactly while its owner exists: through a
+  // ready session, released on close or a failed open, and kept while a
+  // failed cleanup may have left a process running.
+  const releases = new Map<string, number>()
+  const resolved: string[] = []
+  const holding = { ...identityChecks, assertCurrent: async () => {}, resolve: async (_provider: string, binding: string): Promise<AccountLaunch> => {
+    resolved.push(binding)
+    return { ...launch("one"), hold: { provider: "hold-fixture", name: "one", release: () => releases.set(binding, (releases.get(binding) ?? 0) + 1) } }
+  } }
+  let holdCleanupFails = false
+  const held = withExecutionAdmission({ ...prototype, provider: "hold-fixture",
+    start: async (_cwd, options) => {
+      assert.equal(options.accountLaunch?.hold, undefined, "the adapter never receives the hold it could release")
+      if (options.conversationId.startsWith("refused")) throw new Error("native handshake failed")
+      return state("hold-fixture", options.conversationId)
+    },
+    close: async () => { if (holdCleanupFails) throw new Error("child still alive") },
+  }, holding)
+  await held.start(root, { conversationId: "ready" })
+  assert.deepEqual(resolved, ["ready"], "the hold names the binding that owns the process")
+  assert.equal(releases.get("ready"), undefined, "a ready session keeps its account")
+  await held.close("ready")
+  assert.equal(releases.get("ready"), 1)
+  await assert.rejects(held.start(root, { conversationId: "refused-open" }), /handshake failed/)
+  await delay(0)
+  assert.equal(releases.get("refused-open"), 1, "a failed open lets go once its cleanup succeeded")
+  holdCleanupFails = true
+  await assert.rejects(held.start(root, { conversationId: "refused-orphan" }), /process could not close/)
+  await delay(0)
+  assert.equal(releases.get("refused-orphan"), undefined, "a process cleanup could not close keeps the account")
+  holdCleanupFails = false
+  await held.close("refused-orphan")
+  assert.equal(releases.get("refused-orphan"), 1)
+  const refusedEnvironment = withExecutionAdmission({ ...prototype, provider: "hold-unavailable-fixture",
+    launchEnvironment: { kind: "unavailable", reason: "Fixture cannot apply managed credentials" },
+    start: async (_cwd, options) => state("hold-unavailable-fixture", options.conversationId),
+  }, holding)
+  await assert.rejects(refusedEnvironment.start(root, { conversationId: "unapplied" }), /cannot apply/)
+  await delay(0)
+  assert.equal(releases.get("unapplied"), 1, "a launch refused after resolving still lets go")
+
   let observedRevision = "observed-one"
   const removeObserved = providerHost.accountCapabilities.register({
     provider: "observed-admission-fixture", mode: "observed", label: "fixture", loginCommand: "fixture",

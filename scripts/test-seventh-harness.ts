@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { harnessOrder, workDefault } from "../electron/contracts/harness-defaults.ts"
 import { installClaude } from "../electron/providers/claude/index.ts"
 import { installHarness, lacks, type HarnessDefinition } from "../electron/providers/harness-definition.ts"
-import { describeHarnesses, namedHarnesses } from "../electron/providers/harness-descriptors.ts"
+import { describeHarnesses, harnessLabel } from "../electron/providers/harness-descriptors.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { usageHarnesses, usageSummary } from "../electron/usage.ts"
@@ -21,7 +21,7 @@ import { renderHarnessDescriptors } from "./harness-descriptors.ts"
  * A new harness is one definition. This installs a seventh through
  * `installHarness` alone, editing nothing else, and checks it reaches every
  * place a harness appears: its name, mark, defaults and order, Settings
- * search, the usage table, Slack's picker and the dev snapshot.
+ * search, the usage table and the dev snapshot.
  */
 
 const codexLive = providerHost.liveDrivers.get("codex")
@@ -64,8 +64,8 @@ const host = createProviderHost()
 installClaude(host)
 installHarness(host, seventh)
 
-// Its name, wherever Mako shows one: transcripts, Slack's picker, the usage table.
-assert.deepEqual(namedHarnesses(host), [{ id: "claude", label: "Claude Code" }, { id: "seventh", label: "Seventh Agent" }])
+// Its name, wherever Mako shows one: transcripts and the usage table.
+assert.deepEqual(host.harnesses.list().map(({ provider }) => [provider, harnessLabel(host, provider)]), [["claude", "Claude Code"], ["seventh", "Seventh Agent"]])
 assert.equal(host.harnesses.get("seventh")?.absent.usageHistory?.reason, "Its store keeps no token counts")
 
 // Mako's order is the order harnesses install in; a new one follows the rest.
@@ -111,4 +111,4 @@ const snapshot = renderHarnessDescriptors(host)
 assert.match(snapshot, /"provider": "seventh"/)
 assert.match(snapshot, /"displayName": "Seventh Agent"/)
 
-console.log("Seventh harness: one definition reaches its name, mark, defaults, order, Settings search, usage, Slack's picker and the dev snapshot")
+console.log("Seventh harness: one definition reaches its name, mark, defaults, order, Settings search, usage and the dev snapshot")

@@ -364,6 +364,77 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   console.log("Prompt delivery: a lost reply during a running turn settles with it; a refusal behind a running turn waits and is shown once")
 }
 
+// A provider whose process goes away after it was handed a prompt but before
+// its turn showed as running: the message must not stay "Sending". It
+// settles from the delivery evidence, and is never sent again.
+for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
+  const root = mkdtempSync(join(tmpdir(), "mako-delivery-gone-"))
+  const emits = new Map<string, (event: LiveDriverEvent) => void>()
+  const states = new Map<string, LiveSessionState>()
+  const calls: PromptDispatch[] = []
+  let evidence: Exclude<PromptDeliveryEvidence, { kind: "prepared" }> = { kind: "submitted", source: "transport-call" }
+  const driver: ProviderLiveDriver = {
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
+    provider,
+    canResume: true,
+    available: () => true,
+    async start(cwd, options) {
+      emits.set(options.conversationId, options.emit ?? (() => {}))
+      const state: LiveSessionState = { id: options.conversationId, nativeId: `native-${options.conversationId}`, harness: provider, cwd,
+        status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
+      states.set(options.conversationId, state)
+      return state
+    },
+    async prompt(_id, _text, _attachments, _settings, dispatch) {
+      calls.push(dispatch)
+      dispatch.report(evidence)
+    },
+    async permission() {},
+    async cancel() {},
+    close() {},
+    async setMode() {},
+  }
+  const owner = new LiveConversations({ root, appPath: root, driver: () => driver, history: async () => null, emit() {} })
+  const handOff = async (given: typeof evidence, exit: Partial<LiveSessionState>) => {
+    evidence = given
+    const id = randomUUID()
+    await owner.start(provider, root, { conversationId: id })
+    await tick()
+    const requestId = randomUUID()
+    owner.submit(id, requestId, "handed over")
+    await tick()
+    assert.equal(owner.snapshot(id)?.requests[0]?.status, "dispatching")
+    emits.get(id)!({ type: "live-session", session: { ...states.get(id)!, ...exit } })
+    await tick()
+    owner.submit(id, requestId, "handed over")
+    await tick()
+    return owner.snapshot(id)!.requests[0]!
+  }
+  try {
+    const died = await handOff({ kind: "submitted", source: "transport-call" }, { status: "failed", connection: "disconnected", error: "exited with code 1" })
+    assert.equal(died.status, "failed", `${provider}: a submitted prompt whose process died fails`)
+    assert.equal(died.nativeDelivery?.evidence.kind, "uncertain", `${provider}: and its delivery is unknown`)
+    const quiet = await handOff({ kind: "submitted", source: "transport-call" }, { status: "ready", connection: "disconnected" })
+    assert.equal(quiet.status, "failed", `${provider}: an exit reported as ready is not a completed message`)
+    assert.match(quiet.error ?? "", /before the turn started/)
+    const accepted = await handOff({ kind: "accepted", source: "native-response" }, { status: "failed", connection: "disconnected", error: "exited with code 1" })
+    assert.equal(accepted.status, "interrupted", `${provider}: an accepted prompt whose process died is continuable`)
+    assert.equal(accepted.interruption?.reason, "provider-exited")
+    assert.equal(calls.length, 3, `${provider}: no handed-over prompt is sent again`)
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+console.log("Prompt delivery: a process gone before its turn ran settles the message (failed, unknown or continuable) for six providers plus a seventh, never resent")
+
 const preflight: PromptDeliveryEvidence[] = []
 assert.throws(
   () =>

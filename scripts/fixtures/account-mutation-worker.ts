@@ -3,7 +3,7 @@ import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { access, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { removeAccount, selectAccount } from "../../electron/accounts.ts"
+import { onAccountRemoval, removeAccount, resolveAccountLaunch, selectAccount } from "../../electron/accounts.ts"
 import { providerHost } from "../../electron/providers/index.ts"
 const root = process.argv[2]!,
   action = process.argv[3]!
@@ -36,7 +36,17 @@ providerHost.accountCapabilities.register({
 try {
   if (action === "remove")
     await removeAccount("cross-profile-fixture", "victim")
-  else {
+  else if (action === "hold") {
+    // Another Mako with a session running on the selected account: it lets
+    // go when told and, finding the removal another host asked for, finishes it.
+    const launch = await resolveAccountLaunch("cross-profile-fixture", {}, { holder: { kind: "session", binding: "worker-session" } })
+    const removed = Promise.withResolvers<string>()
+    onAccountRemoval((_harness, _name, event) => removed.resolve(event.status))
+    process.send?.("holding")
+    await release.promise
+    launch.hold?.release()
+    process.send?.(await removed.promise)
+  } else {
     process.send?.("selecting")
     await selectAccount("cross-profile-fixture", "victim")
   }

@@ -890,6 +890,19 @@ console.log(
   "PASS: single-block SDK completion retains its stream index after thinking"
 )
 
+{
+  const cleared = new ClaudeTranscript()
+  const started = (session_id: string, source: "startup" | "clear") => cleared.hook(
+    { hook_event_name: "SessionStart", source, session_id, transcript_path: `/disposable/${session_id}.jsonl`, cwd: "/disposable" },
+    undefined, { signal: new AbortController().signal })
+  await started("before-clear", "startup")
+  cleared.follow("after-clear")
+  assert.equal(cleared.path, undefined, "after /clear the old session's transcript is not reported for the new ID")
+  await started("after-clear", "clear")
+  cleared.follow("after-clear")
+  assert.equal(cleared.path, "/disposable/after-clear.jsonl", "the new session's transcript is kept whichever arrives first")
+}
+
 const transcriptRoot = await mkdtemp(join(tmpdir(), "mako-sdk-flush-"))
 try {
   const sessionId = randomUUID()
