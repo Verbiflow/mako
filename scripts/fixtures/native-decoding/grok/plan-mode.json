@@ -1,6 +1,10 @@
 {
   "harness": "grok",
   "source": "grok 1.0.44 `agent stdio --permission-mode plan`, against a scripted model (no real usage), 2026-09-30",
+  "native": {
+    "version": "1.0.44",
+    "origin": "captured"
+  },
   "about": "Plan mode: the agent writes plan.md after asking, calls exit_plan_mode with its own copy, asks the client to approve the file's content, and completes with the approved plan.",
   "session": {},
   "steps": [
