@@ -11,6 +11,7 @@ import {
   RulerIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
+  UserRoundIcon,
   ZapIcon,
 } from "lucide-react"
 import type { ModelOption, ResolvedSessionSettings, ResolvedSetting, SettingValue } from "@mako/sessions/settings"
@@ -42,6 +43,10 @@ import {
   removeFromLoadout,
   type LoadoutEntry,
 } from "@/state/model-loadout"
+import { accounts, usageKey, useAccounts } from "@/state/accounts"
+import { activeLiveAcp, useAcp } from "@/state/acp"
+import { accountIdentity } from "@/lib/account-identity"
+import type { AccountConfirmation } from "../../../electron/contracts/execution-context"
 import { modelKey, usePrefs } from "@/state/prefs"
 import { providerProfileKey, providers, useProviders } from "@/state/providers"
 import { shallowEqual } from "@/state/store"
@@ -110,6 +115,7 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
         <HarnessRows view={view} />
         <ModelOptionRows choice={composerChoice(view)} />
         <PlanModeRow view={view} />
+        <AccountRow harness={harness} />
         <MenuSeparator />
         <MenuItem
           onSelect={() =>
@@ -682,6 +688,87 @@ function PlanModeRow({ view }: { view: ComposerSettingsView }) {
       </MenuItem>
     </>
   )
+}
+
+/**
+ * The account this harness runs as, switchable here. Selection is global:
+ * every session of the harness follows it, an idle one with its next message
+ * and a busy one once its work ends. Shown only when there's a choice.
+ */
+function AccountRow({ harness }: { harness: string }) {
+  useHarnessIdentity()
+  const listed = useAccounts(
+    (state) => state.accounts.filter((account) => account.harness === harness && !account.missing),
+    shallowEqual
+  )
+  const selectable = useAccounts((state) =>
+    state.providers.some((provider) => provider.provider === harness && provider.mode === "selectable")
+  )
+  const busy = useAccounts((state) => state.busy)
+  const confirmation = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return live?.harness === harness ? live.session.executionContext?.confirmation : undefined
+  })
+  useEffect(() => { accounts.load() }, [])
+  if (!selectable || listed.length < 2) return null
+  const selected = listed.find((account) => account.active)
+  const label = harnessLabel(harness)
+  return (
+    <>
+      <MenuSeparator />
+      <MenuSub>
+        <MenuSubTrigger data-account-picker>
+          <UserRoundIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="flex-1 truncate">Account</span>
+          <span className="min-w-0 truncate text-label text-faint">
+            {selected ? accountIdentity(selected) : "Not chosen"}
+          </span>
+        </MenuSubTrigger>
+        <MenuSubContent className="w-[18rem]">
+          <MenuLabel>{label} accounts</MenuLabel>
+          <MenuRadioGroup
+            value={selected?.name ?? ""}
+            onValueChange={(name) => void accounts.select(harness, name)}
+          >
+            {listed.map((account) => {
+              const switching = busy === usageKey(account.harness, account.name)
+              return (
+                <MenuRadioItem
+                  key={account.name}
+                  value={account.name}
+                  disabled={Boolean(busy) || account.signedOut}
+                  title={account.signedOut ? "Signed out. Sign it in again in Settings › Agents." : undefined}
+                  className="py-1.5"
+                >
+                  <span className="min-w-0 flex-1 truncate">{accountIdentity(account)}</span>
+                  {switching ? <Shimmer text="Switching…" className="text-label" />
+                    : account.signedOut ? <span className="text-label text-faint">Signed out</span> : null}
+                </MenuRadioItem>
+              )
+            })}
+          </MenuRadioGroup>
+          <p className="px-2 pt-1 pb-1.5 text-label text-faint">
+            {confirmationText(label, confirmation) ?? `Every ${label} session switches: idle ones with their next message, busy ones when their work ends.`}
+          </p>
+          <MenuItem
+            onSelect={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" }))}
+            className="text-muted-foreground"
+          >
+            <Settings2Icon className="size-3.5 shrink-0" />
+            <span className="flex-1">Manage accounts</span>
+          </MenuItem>
+        </MenuSubContent>
+      </MenuSub>
+    </>
+  )
+}
+
+function confirmationText(label: string, confirmation: AccountConfirmation | undefined): string | undefined {
+  if (confirmation?.kind === "matches") return `${label} confirmed this session runs as ${confirmation.principal}.`
+  if (confirmation?.kind === "differs") return `${label} reports ${confirmation.principal}, not ${confirmation.expected}.`
+  if (confirmation?.kind === "unavailable")
+    return `${label} doesn’t say which account it runs as, so Mako can’t confirm it. Every session still uses the one chosen here.`
+  return undefined
 }
 
 function SelectOption({ picker, option }: { picker: ModelChoice; option: ModelOption }) {
