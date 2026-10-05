@@ -16,7 +16,7 @@ import {
   rerunFailedJobs,
   type ReviewThread,
 } from "./github.js"
-import { git, succeeds } from "./worktree-git.js"
+import { git, succeeds } from "@mako/git"
 
 /*
  * A branch's pull request as the Git sidebar's buttons and the agent's

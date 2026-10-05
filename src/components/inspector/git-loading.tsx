@@ -22,7 +22,7 @@ export function GitLoading({
   kind?: "changes" | "history" | "diff"
 }) {
   return (
-    <div role="status" className="min-w-0 px-3 py-4">
+    <div role="status" data-git-loading={kind} className="min-w-0 px-3 py-4">
       <p className="mb-4 text-label">
         <Shimmer text={label} />
       </p>

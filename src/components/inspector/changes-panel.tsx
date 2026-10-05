@@ -68,7 +68,6 @@ const MARK = {
   untracked: { glyph: "U", tone: "text-added", title: "Untracked" },
   modified: { glyph: "M", tone: "text-caution", title: "Modified" },
   deleted: { glyph: "D", tone: "text-removed", title: "Deleted" },
-  renamed: { glyph: "R", tone: "text-foreground/70", title: "Renamed" },
 } satisfies Record<GitFile["status"], StatusMark>
 
 /** Pixels per tree level. The staging checkboxes stay in one column. */
@@ -329,9 +328,6 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     const current = new Map(files.map((file) => [file.path, requestedStages.current.get(file.path) ?? file.staged]))
     const targets = new Set(paths.filter((path) => current.get(path) !== stage))
     if (targets.size === 0) return
-    for (const file of files) {
-      if (!stage && targets.has(file.path) && file.status === "renamed" && file.oldName) targets.add(file.oldName)
-    }
     // One call for the whole folder: `git add -- a b c` is atomic where a loop
     // would emit a status refresh per file and flicker the list.
     await updateStaging([...targets], stage)

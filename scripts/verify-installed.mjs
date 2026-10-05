@@ -72,7 +72,7 @@ async function readings() {
   const child = (pattern) => children.find(([, , , command]) => pattern.test(command))?.[1]
   const terminal = lines("lsof", ["-t", "--", join(dataRoot, "terminal", "daemon.sock")])[0]
   const daemons = {}
-  for (const [name, pid] of [["catalog", child(/^mako-syncd\b/)], ["kiri", child(/kiri-engine/)], ["terminal", terminal]])
+  for (const [name, pid] of [["catalog", child(/^mako-syncd\b/)], ["terminal", terminal]])
     daemons[name] = pid ? await reading(Number(pid)) : { running: false }
   return {
     at: new Date().toISOString(),

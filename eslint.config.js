@@ -15,6 +15,7 @@ export default defineConfig([
     "dist",
     "dist-electron",
     "dist-browser-extension",
+    "packages/*/dist",
     "ignore",
     "node_modules",
   ]),
@@ -36,7 +37,7 @@ export default defineConfig([
     languageOptions: { globals: { ...globals.browser, chrome: "readonly" } },
   },
   {
-    files: ["packages/backend/**/*.{ts,tsx}", "packages/control-runtime/src/**/*.ts"],
+    files: ["packages/backend/**/*.{ts,tsx}", "packages/control-runtime/src/**/*.ts", "packages/git/src/**/*.ts"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },

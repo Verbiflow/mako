@@ -18,7 +18,7 @@ import {
   UtilityModelStore,
   type UtilityKeyEncryption,
 } from "../electron/utility-model-store.ts"
-import { CommitGeneration } from "../electron/commit-generation.ts"
+import { GitDrafting } from "../electron/git-drafting.ts"
 import { UtilityWork } from "../electron/utility-work.ts"
 
 const secret = randomBytes(32)
@@ -143,33 +143,33 @@ try {
   await run("git", ["init", "-q"], { cwd: root })
   await writeFile(join(root, ".gitignore"), "connections/\n")
   await writeFile(join(root, "feature.ts"), "New feature for the commit\n")
-  const service = new CommitGeneration(new UtilityWork({ models: store, agents: async () => [] }))
+  const service = new GitDrafting(new UtilityWork({ models: store, agents: async () => [] }))
   const generation = {
     requestId: randomUUID(),
     cwd: root,
     model: "openai-compatible/local-test",
   }
-  const generated = await service.generate("first-window", generation)
+  const generated = await service.commitMessage("first-window", generation)
   assert.equal(generated.message, "fix: keep drafts intact")
   assert.ok(requests.at(-1)?.includes("New feature for the commit"))
   assert.ok(!requests.at(-1)?.includes(apiKey))
   delay = 150
-  const pending = service.generate("first-window", {
+  const pending = service.commitMessage("first-window", {
     ...generation,
     requestId: randomUUID(),
   })
   await assert.rejects(
-    service.generate("first-window", generation),
-    /already being generated/
+    service.commitMessage("first-window", generation),
+    /already being written/
   )
   await pending
-  const cancelled = service.generate("first-window", generation)
+  const cancelled = service.commitMessage("first-window", generation)
   service.cancel("second-window", generation.requestId)
   service.cancel("first-window", generation.requestId)
   delay = 0
   await Promise.all([
     assert.rejects(cancelled, /cancelled/),
-    service.generate("first-window", {
+    service.commitMessage("first-window", {
       ...generation,
       requestId: randomUUID(),
     }),

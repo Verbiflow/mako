@@ -69,7 +69,7 @@ const DEFAULT_CONTEXT_TOKENS = 128_000
 /** Discovering agents can start processes; Settings and every draft share one answer this long. */
 const AGENTS_TTL_MS = 30_000
 
-const TASK_NAMES = { commit: "commit messages" } satisfies Record<UtilityTask, string>
+const TASK_NAMES = { commit: "commit messages and pull requests" } satisfies Record<UtilityTask, string>
 
 /**
  * Which model does each small task, decided in one place. `auto` takes the

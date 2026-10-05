@@ -22,7 +22,7 @@ const DRAG_TYPE = "application/x-mako-harness"
 /**
  * One place for the work Mako hands a harness itself: which harness sets a
  * project up and drafts commit messages, in an order the person drags, and
- * the model commit messages run on.
+ * the model commit messages and pull request descriptions run on.
  */
 export function HarnessOrderSection() {
   useHarnessIdentity()
@@ -118,10 +118,10 @@ export function HarnessOrderSection() {
       </ListCard>
       <ListCard>
         <TaskRow
-          title="Commit messages"
+          title="Commit messages and pull requests"
           state={work?.commit}
           error={error}
-          picker={<UtilityModelPicker state={work?.commit} label="Model that drafts commit messages" className="w-56 max-w-full" onChoose={(choice) => void choose("commit", choice)} />}
+          picker={<UtilityModelPicker state={work?.commit} label="Model that drafts commit messages and pull requests" className="w-56 max-w-full" onChoose={(choice) => void choose("commit", choice)} />}
         />
       </ListCard>
       <p className="text-label text-faint">

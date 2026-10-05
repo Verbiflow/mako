@@ -745,9 +745,13 @@ test. Existing debt is never a reason to add new debt.
 
 ## Git
 
-Kiri is the normal Git backend, not an opt-in. `kiri-engine.ts` owns the process-lifetime sidecar and leased repository handles; `host-git.ts` and `git-preview.ts` adapt its typed data to Mako's existing host contract. `kiri-commit.ts` binds Mako's model connections, retains reviewed drafts per client/workspace, and exposes typed commit-plan generation and application for exact staged or working-tree path selections. Every engine model call goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. Structured failures name the offending field in the error and in `host.log` under `commit-model`, never the model's text. Do not restore a second Git or analysis implementation as a fallback. Engine/client mismatches are explicit errors checked against the protocol version and canonical schema digest.
+Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `run` is the one spawner: it strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of six read slots. `background: true` runs below agents through the hook `main.ts` passes to `configureGit`. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) stays in `electron/` as Mako's product logic, on the package's runner.
 
-`npm run prepare:kiri` builds the sidecar from the sibling Kiri checkout (or `KIRI_SOURCE_DIR`) when available and installs it under `vendor/kiri/<platform>-<arch>/`. `build:electron` runs this step. The macOS packaging configuration includes the engine under Resources and lists it for signing; development resolves the prepared vendor binary automatically. `MAKO_KIRI_BINARY` is a test/development executable override, not a feature flag. `@kiri/client` comes from a pinned, generated SDK tarball in `vendor/`. Update the SDK and engine together. Vendor an engine built from a committed Kiri revision, most simply a detached worktree passed as `KIRI_SOURCE_DIR`, and pack a new `@kiri/client` whenever the engine's schema hash moves; `prepare:kiri` refuses the mismatch, and `vendor/kiri/<platform>-<arch>/manifest.json` must record the vendored engine's own checksum. `npm run test:kiri-engine` exercises the sidecar through Mako's AI SDK against a local model endpoint in a disposable repository.
+`openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `host-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds, and a 32 MB preview cache; worktree previews are cached only while watched.
+
+Debug Git through host.log: with `MAKO_GIT_TRACE=1` every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
+
+Drafting lives in the package too: `draftCommit`, `draftPullRequest` and `commitDraft` take a `DraftingModel`. `git-drafting.ts` supplies that model from `UtilityWork.resolve("commit")`, the same harness order and connections project setup uses, so there is no second model path for Git. A pull request is drafted from what the branch's commits change since `merge-base` with `origin/<base>`, never from uncommitted files. The commit prompt is the fixed `COMMIT_RULES` plus the person's style, or `COMMIT_STYLE` when they haven't written one; Settings shows `COMMIT_STYLE` as the default, so what is shown is what is sent. A pull request's style is `pullRequestDraftPrompt(template)` from `contracts/git-actions.ts`, the same text the agent commands use. Structured output goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. A failed draft is logged under `git-drafting`, never with the model's text. `npm run test:git` checks the package against real temporary repositories and a fake model, including 120 random edits compared against full status reads.
 
 `ChangesPanel` stages, commits, and pushes. Commit drafting uses the host-only
 AI SDK connections in `utility-models.ts`, configured in Settings > Commit
@@ -782,8 +786,8 @@ not a lost connection.
 Changing a custom endpoint requires re-entering its key. Non-sensitive text diffs,
 including lockfiles and generated files, are captured completely. Working-tree
 captures use private Git objects and a private index without modifying the real
-index or object database. Reviewed worktree commits verify file fingerprints,
-HEAD, branch, and index state before staging. Model request size bounds do not
+index or object database. Reviewed worktree commits capture the files again and
+compare tree ids, and check HEAD, branch, and index state before staging. Model request size bounds do not
 truncate captured evidence. Small captures use one synthesis call; larger captures
 use parallel chunks and recursive reduction with original-source inspection.
 Provider token counters validate candidate requests where available. A typed
@@ -803,8 +807,8 @@ root capture, literal filenames, failed writes, and commits queued after staging
 Commit generation has explicit Fast/Deep modes in the shared input contract and per-workspace draft state. Fast uses complete evidence with direct synthesis and low requested reasoning; Deep adds bounded inspections and higher requested reasoning. Changing this policy must not truncate source or alter Git safeguards. Commit errors must not offer automatic mutation replay; refresh the observed Git state instead.
 
 `commit-drafts.ts` keeps per-workspace edits and offers late results as suggestions
-rather than overwriting a message. `npm run test:commit-generation` exercises real
-Git repositories, AI SDK calls, context recovery, cancellation, and encrypted storage.
+rather than overwriting a message. `npm run test:commit-generation` exercises model resolution, AI SDK calls,
+cancellation, and encrypted storage on top of the package's drafting.
 `node scripts/test-commit-ui.mjs <isolated-dev-url>` runs the real-host connection
 and drafting flow with trusted UI input and a local model endpoint. It requires
 a host started with a temporary `MAKO_DATA_ROOT` (a `MAKO_PROFILE` host shares
@@ -814,13 +818,11 @@ diffs, center diffs, and source files across light, dark, and system-theme chang
 Pierre's `diffs-container` inherits Mako's color scheme and token bindings from
 `src/index.css`; component-level dark/light overrides are unnecessary.
 
-Git browsing is metadata-first. Status attempts rename enrichment only when a
-small inventory contains staged addition/deletion candidates, with a one-second
-budget. Line totals are deferred; unknown totals are `null`, never fabricated zeros. Concurrent readers share
+Git browsing is metadata-first. Line totals are deferred; unknown totals are `null`, never fabricated zeros. Concurrent readers share
 status work, and index-only events do not reload open file contents. History lists
 read commit metadata without `--shortstat`; per-commit files are paged in the UI.
 `ChangeList` windows fixed 24px rows instead of mounting an entire changeset.
-`git-preview.ts` limits interactive full-text comparison to 64 KiB/2,000 lines;
+`@mako/git`'s previews limit interactive full-text comparison to 64 KiB/2,000 lines;
 larger files use Git-generated previews capped at 128 KiB/1,000 lines, with a clear
 notice. Files above the 32 MiB interactive source budget stay available for staging
 and external-editor review. None of these display limits alter staged content or
@@ -846,7 +848,7 @@ IDs, keyboard navigation, and ignoring responses after credentials change.
 
 Two things to preserve: a repository with **no commits has no HEAD**, so
 `diff HEAD` fails in exactly the state where a first commit message is most
-wanted — `gitPatch` falls back to the index and then to a file listing. And
+wanted — the package compares against the empty tree there. And
 push publishes work off the machine, so it stays a separately-labelled
 deliberate action and never rides along with a commit.
 

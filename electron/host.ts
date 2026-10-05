@@ -436,12 +436,6 @@ export class AgentHost {
   }
 }
 
-export const COMMIT_PROMPT = `You are an expert at writing Git commits. Your job is to write a short clear commit message that summarizes the changes.
-
-If you can accurately express the change in just the subject line, don't include anything in the message body. Only use the body when it is providing useful information.
-
-Only return the commit message in your response.`
-
 /**
  * Where the first tab opens: the folder Mako was started from, when that's a
  * folder someone chose. An app opened from the Dock or Finder is started in

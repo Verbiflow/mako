@@ -369,7 +369,6 @@ export function desktopLaunchEnvironment(
     "MAKO_WEB_ONLY",
     "MAKO_CLIENT_ID",
     "MAKO_PROD",
-    "MAKO_KIRI_BINARY",
     "VITE_DEV_SERVER_URL",
   ])
     delete clean[key]

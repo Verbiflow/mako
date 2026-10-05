@@ -122,6 +122,8 @@ import {
   record,
 } from "./crash.js"
 import { flushHostLog, hostLog, hostLogPath, hostWarn, installHostLog } from "./host-log.js"
+import { closeRepositories, configureGit } from "@mako/git"
+import { belowAgents } from "./background-priority.js"
 import { watchRendererHealth } from "./renderer-health.js"
 import { installProviderChildren } from "./provider-children.js"
 import { installAutomation } from "./automation.js"
@@ -154,7 +156,7 @@ import {
   userAvatar,
   type CreatePullOptions,
 } from "./github.js"
-import { mergePullRequest, openPullRequest, pullTemplate, rerunFailedChecks } from "./pull-requests.js"
+import { mergePullRequest, openPullRequest, rerunFailedChecks } from "./pull-requests.js"
 import { pullRequestTools } from "./pull-request-tools.js"
 import type { MergeMethod } from "./contracts/git-actions.js"
 import type { HostPool } from "./pool.js"
@@ -341,6 +343,23 @@ if (fixtureDesk) {
   }
 }
 installHostLog(join(app.getPath("userData"), "logs", "host.log"))
+/** A Git process slower than this is logged. */
+const GIT_SLOW_MS = 2_000
+configureGit({
+  background: belowAgents,
+  // Every Git process with MAKO_GIT_TRACE=1; otherwise the slow ones and those stopped for time, to explain a stall.
+  // Failures alone are routine: probes such as `rev-parse --verify` fail by design.
+  trace: (run) => {
+    const traced = process.env.MAKO_GIT_TRACE === "1"
+    if (!traced && run.ms < GIT_SLOW_MS && run.outcome !== "timeout") return
+    // A remote URL in Git's error output can carry a token.
+    const stderr = traced && run.stderr ? { stderr: run.stderr.replace(/\/\/[^/@\s]+@/g, "//***@") } : {}
+    hostLog("git", `${run.command} ${run.outcome}`, { args: run.args.slice(0, 6).join(" ").slice(0, 200), cwd: run.cwd, ms: Math.round(run.ms), queuedMs: Math.round(run.queuedMs), code: run.code ?? -1, bytes: run.bytes, ...stderr })
+  },
+})
+// Earlier builds drafted with Kiri and cached its analyses here; nothing reads them now.
+void rm(join(app.getPath("userData"), "kiri-analysis-cache"), { recursive: true, force: true })
+  .catch((error: Error) => hostWarn("git", "retired Kiri cache not removed", { error: error.message }))
 const providerChildren = installProviderChildren(app.getPath("userData"))
 /** How another host's refusal names this one. */
 function sessionMemoryLabel(): string {
@@ -1328,7 +1347,6 @@ function bindIpc() {
     })
   )
   handle("mako:rerun-checks", () => withHost((h) => rerunFailedChecks(h.gitWorkspace)))
-  handle("mako:pull-template", () => withHost((h) => pullTemplate(h.gitWorkspace)))
   handle("mako:repo-avatar", (_e, repo: string) =>
     withHost((h) => repoAvatar(h.gitWorkspace, repo))
   )
@@ -2609,6 +2627,7 @@ const quitLifecycle = backgroundLifecycle({
       const providersDrained = Promise.all([stopDrivers(), stopHarnessProfiles()])
       void providersDrained.catch(() => {})
       desktopNotifier.dispose()
+      closeRepositories()
       application?.dispose()
       sharedConversations?.dispose()
       webHost?.close()

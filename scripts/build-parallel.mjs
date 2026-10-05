@@ -13,7 +13,7 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm"
  * electron host and the browser extension can otherwise be checked before
  * the package dist directories exist (TS2307 on a clean tree). Once that gate lands, the
  * remaining tsgo -b covers electron plus both noEmit projects, and vite, the
- * extension, kiri and the preload bundle run alongside it. Each lane prefixes
+ * extension and the preload bundle run alongside it. Each lane prefixes
  * its output so interleaved logs stay attributable; every lane runs to
  * completion so one failure does not hide another's diagnostics.
  */
@@ -34,15 +34,13 @@ function lane(name, command, args) {
 
 await lane("prune", process.execPath, ["scripts/prune-host-output.mjs"])
 
-await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/relay", "packages/control"])
+await lane("packages", process.execPath, [tsgo, "-b", "packages/sessions", "packages/git", "packages/relay", "packages/control"])
 
 await lane("control-runtime", process.execPath, [tsgo, "-b", "packages/control-runtime"])
 
 const lanes = await Promise.allSettled([
   lane("tsgo", process.execPath, [tsgo, "-b"]),
-  lane("kiri+preload", process.execPath, ["scripts/prepare-kiri.mjs"]).then(() =>
-    lane("preload", process.execPath, ["scripts/build-preload.mjs"])
-  ),
+  lane("preload", process.execPath, ["scripts/build-preload.mjs"]),
   lane("browser-ext", npm, ["run", "build:browser-extension"]),
   lane("vite", process.execPath, [vite, "build"]),
 ])

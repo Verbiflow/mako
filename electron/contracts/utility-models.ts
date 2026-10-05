@@ -75,3 +75,25 @@ export interface CommitGenerationResult {
   warnings: string[]
   requests: number
 }
+
+/** A title and description for the commits this branch has beyond `base`. */
+export interface PullRequestDraftInput {
+  mode?: CommitAnalysisMode
+  requestId: string
+  cwd: string
+  /** The branch the pull request merges into, as GitHub names it. */
+  base: string
+  /** `auto`, or a model id from `UtilityWorkSettings`; without one, the saved choice. */
+  model?: string
+}
+
+export interface PullRequestDraftResult {
+  title: string
+  body: string
+  model: string
+  modelLabel: string
+  commits: number
+  files: number
+  warnings: string[]
+  requests: number
+}

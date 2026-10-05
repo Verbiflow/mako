@@ -8,7 +8,7 @@ import { discoverRepositories } from "../electron/repository-discovery.ts"
 import { AgentHost } from "../electron/host.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
 import { WorkspaceGit } from "../electron/host-git.ts"
-import { closeKiriEngine } from "../electron/kiri-engine.ts"
+import { closeRepositories } from "@mako/git"
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-repositories-")))
 try {
@@ -87,7 +87,9 @@ try {
   assert.equal(tracked.noteChange("mako/second.txt"), true)
   assert.deepEqual(changes(await tracked.status()), { "group/backend": 1, mako: 2 }, "A change inside a child re-reads that child")
   await writeFile(join(second, "selected.txt"), "fixture")
-  assert.deepEqual(changes(await tracked.status()), { "group/backend": 2, mako: 2 }, "The selected repository's summary follows its fresh status")
+  assert.deepEqual(changes(await tracked.status()), { "group/backend": 1, mako: 2 }, "The selected repository's status is kept while the watcher is live")
+  assert.equal(tracked.noteChange("group/backend/selected.txt"), true)
+  assert.deepEqual(changes(await tracked.status()), { "group/backend": 2, mako: 2 }, "The selected repository's summary follows what the watcher reports")
   const added = join(root, "added")
   await mkdir(added)
   execFileSync("git", ["init", "-q", added])
@@ -130,6 +132,6 @@ try {
   assert.equal((await discoverRepositories(root, { maxEntries: 1 })).limited, true)
   console.log("Repository discovery: nested roots, Git status, single-repo behavior, worktree markers, excluded trees, symlink cycles and limits passed")
 } finally {
-  await closeKiriEngine()
+  closeRepositories()
   await rm(root, { recursive: true, force: true })
 }

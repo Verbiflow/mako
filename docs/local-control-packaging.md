@@ -38,7 +38,7 @@ and resources for the retired SDK, wrong-platform native packages, Python caches
 and source maps, verifies target-specific recording executables exist, and writes
 `package-size.json` with total file bytes and the largest contributors.
 
-The Mac packager stages only the selected Kiri and media architecture. It still
+The Mac packager stages only the selected media architecture. It still
 performs input hashing, signature verification, import checks and cold startup
 tests. Generated Python bytecode, FFmpeg builds and source archives are ignored;
 source manifests and build recipes remain tracked. Media source/license artifacts

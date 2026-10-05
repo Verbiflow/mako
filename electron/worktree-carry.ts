@@ -8,7 +8,7 @@ import { belowAgents } from "./background-priority.js"
 import type { Prepared } from "./thread-processes.js"
 import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
-import { git } from "./worktree-git.js"
+import { git } from "@mako/git"
 
 const execute = promisify(execFile)
 

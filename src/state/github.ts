@@ -140,11 +140,6 @@ export const github = {
     }
     await github.refresh(root, branch)
   },
-
-  /** The repository's pull request template, for the form's drafter; null when it has none. */
-  template(): Promise<string | null> {
-    return getMako().pullTemplate().catch(() => null)
-  },
 }
 
 export interface BranchPull {

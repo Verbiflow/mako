@@ -89,6 +89,15 @@ export const hostCallInputs = {
       model: z.string().optional(),
     }),
   ]),
+  "mako:git-draft-pull-request": z.tuple([
+    z.object({
+      mode: z.union([z.literal("fast"), z.literal("deep")]).optional(),
+      requestId: z.string(),
+      cwd: z.string(),
+      base: z.string(),
+      model: z.string().optional(),
+    }),
+  ]),
   "mako:git-log": z.tuple([z.number().optional()]),
   "mako:git-push": z.tuple([z.object({ cwd: z.string(), branch: z.string() })]),
   "mako:git-remote": z.tuple([
@@ -643,7 +652,6 @@ export const hostCallInputs = {
   "mako:pull-branches": z.tuple([]),
   "mako:pull-request": z.tuple([]),
   "mako:pull-requests": z.tuple([z.number().optional()]),
-  "mako:pull-template": z.tuple([]),
   "mako:quit-client": z.tuple([]),
   "mako:read-file": z.tuple([z.string()]),
   "mako:read-live-file": z.tuple([z.string(), z.string()]),

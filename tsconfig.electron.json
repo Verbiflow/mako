@@ -27,6 +27,9 @@
       "path": "./packages/sessions"
     },
     {
+      "path": "./packages/git"
+    },
+    {
       "path": "./packages/relay"
     },
     {

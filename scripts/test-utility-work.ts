@@ -190,7 +190,7 @@ await assert.rejects(fresh().choose("commit", "agent:claude/claude-haiku-4-5-202
 await assert.rejects(fresh().choose("commit", "off"), /isn't available now/, "commit messages can't be off")
 choices.commit = "auto"
 
-// Schema replies are checked to be JSON before Kiri reads them.
+// Schema replies are checked to be JSON before drafting reads them.
 const broken = agent("claude", "Claude Code", claudeModels)
 broken.runner.complete = async () => "not json"
 agents = [broken]

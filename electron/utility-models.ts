@@ -191,7 +191,7 @@ export async function completeUtilityText(
         recordOutputs: false,
       },
       // Non-strict json_schema keeps OpenAI and OpenAI-compatible endpoints from rejecting
-      // Kiri's length and range keywords. The compatible provider reads its options under
+      // drafting's length and range keywords. The compatible provider reads its options under
       // the name given to createOpenAICompatible ("custom").
       providerOptions: {
         openai: { store: false, strictJsonSchema: false },

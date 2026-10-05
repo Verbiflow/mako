@@ -175,7 +175,7 @@ async function check() {
       "document.querySelector('[data-history-panel]')?.textContent.includes('Commit from /fixture/large')"
     )
     await fixture("m.startSwitch('/fixture/second')")
-    await until("document.querySelectorAll('.git-loading').length >= 2")
+    await until("document.querySelectorAll('[data-git-loading]').length >= 2")
     assert.equal(
       await evaluate(
         "document.querySelector('[data-history-panel]').textContent.includes('Commit from /fixture/large')"

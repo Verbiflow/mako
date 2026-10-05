@@ -6,7 +6,22 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { WorkspaceGit } from "../electron/host-git.ts"
-import { collectCommitPatch } from "../electron/commit-patch.ts"
+import { draftCommit, openRepository, type JsonSchema } from "@mako/git"
+
+/** What drafting a commit would send a model, from a model that only records it. */
+async function drafted(root: string, signal: AbortSignal) {
+  const prompts: string[] = []
+  const model = {
+    identity: "test-recorder",
+    contextTokens: 1_000_000,
+    complete: async (request: { prompt: string; schema?: JsonSchema }) => {
+      prompts.push(request.prompt)
+      return JSON.stringify(JSON.stringify(request.schema).includes('"summary"') ? { summary: "Part of the change." } : { action: "finish", result: { message: "Test" }, requests: [], notes: "" })
+    },
+  }
+  const draft = await draftCommit((await openRepository(root))!, { model, signal })
+  return { scope: draft.snapshot.scope, files: draft.files, text: prompts.join("\n") }
+}
 
 const run = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-large-git-"))
@@ -46,7 +61,7 @@ try {
   }
   await git.stage(["large.ts"])
   assert.ok(
-    (await collectCommitPatch(root, AbortSignal.timeout(15_000))).text.includes(
+    (await drafted(root, AbortSignal.timeout(15_000))).text.includes(
       "COMPLETE_TAIL"
     ),
     "Display preview limits must not truncate generation or staging"

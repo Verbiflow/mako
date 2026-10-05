@@ -22,6 +22,7 @@ import {
 } from "./contracts/app-lifecycle.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
+import { text } from "@mako/git"
 
 const execute = promisify(execFile)
 const localPackage = z.object({
@@ -253,12 +254,8 @@ export class LocalUpdates {
     const output = join(job, "output")
     try {
       const [revision, dirty, fingerprint] = await Promise.all([
-        execute("git", ["-C", source, "rev-parse", "HEAD"], {
-          timeout: 10_000,
-        }).then(({ stdout }) => stdout.trim()),
-        execute("git", ["-C", source, "status", "--porcelain"], {
-          timeout: 10_000,
-        }).then(({ stdout }) => Boolean(stdout.trim())),
+        text({ cwd: source, args: ["rev-parse", "HEAD"], timeoutMs: 10_000 }),
+        text({ cwd: source, args: ["status", "--porcelain"], read: true, timeoutMs: 10_000 }).then(Boolean),
         syncBuildCheckout(source, checkout),
       ])
       const stamp = `${fingerprint}:${revision}:${dirty ? 1 : 0}:${this.identity}`

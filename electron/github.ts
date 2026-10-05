@@ -12,6 +12,7 @@ import type {
 } from "./shared.js"
 import type { WorktreeBranchPull, WorktreePull } from "./contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "./contracts/git-actions.js"
+import { text } from "@mako/git"
 
 const run = promisify(execFile)
 
@@ -459,11 +460,7 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
 }
 
 export async function listRemoteBranches(cwd: string): Promise<string[]> {
-  const { stdout } = await run(
-    "git",
-    ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"],
-    { cwd, timeout: TIMEOUT, maxBuffer: MAX_BUFFER }
-  )
+  const stdout = await text({ cwd, args: ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"], read: true, timeoutMs: TIMEOUT, maxBytes: MAX_BUFFER })
   return stdout
     .split("\n")
     .map((branch) => branch.trim().replace(/^origin\//, ""))

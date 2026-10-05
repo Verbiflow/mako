@@ -1,13 +1,9 @@
-import { execFile } from "node:child_process"
 import { createReadStream } from "node:fs"
 import { lstat, readFile, readdir, rm } from "node:fs/promises"
 import { delimiter, join } from "node:path"
-import { pipeline } from "node:stream/promises"
-import { promisify } from "node:util"
 import { z } from "zod"
-import { forgetStartingRepository } from "./git-environment.js"
+import { run } from "@mako/git"
 
-const execute = promisify(execFile)
 export interface SnapshotObjects {
   write?: string
   read?: string[]
@@ -59,25 +55,32 @@ export async function reclaimSnapshotOrphans(
   }
   return retainedBytes
 }
+/** Snapshot commits are Mako's; a private index and object store keep them out of the repository's own. */
+type SnapshotEnvironment = {
+  GIT_AUTHOR_NAME: string
+  GIT_AUTHOR_EMAIL: string
+  GIT_COMMITTER_NAME: string
+  GIT_COMMITTER_EMAIL: string
+  GIT_INDEX_FILE?: string
+  GIT_OBJECT_DIRECTORY?: string
+  GIT_ALTERNATE_OBJECT_DIRECTORIES?: string
+}
+
 function environment(
   index?: string,
   objects?: SnapshotObjects
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+): SnapshotEnvironment {
+  return {
     GIT_AUTHOR_NAME: "Mako",
     GIT_AUTHOR_EMAIL: "mako@localhost",
     GIT_COMMITTER_NAME: "Mako",
     GIT_COMMITTER_EMAIL: "mako@localhost",
+    GIT_INDEX_FILE: index || undefined,
+    GIT_OBJECT_DIRECTORY: objects?.write || undefined,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: objects?.read?.length
+      ? objects.read.map((path) => JSON.stringify(path)).join(delimiter)
+      : undefined,
   }
-  forgetStartingRepository(env)
-  if (index) env.GIT_INDEX_FILE = index
-  if (objects?.write) env.GIT_OBJECT_DIRECTORY = objects.write
-  if (objects?.read?.length)
-    env.GIT_ALTERNATE_OBJECT_DIRECTORIES = objects.read
-      .map((path) => JSON.stringify(path))
-      .join(delimiter)
-  return env
 }
 export async function snapshotGit(
   cwd: string,
@@ -86,18 +89,17 @@ export async function snapshotGit(
   input?: string,
   objects?: SnapshotObjects
 ): Promise<string> {
-  const result = execute(
-    "git",
-    ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args],
-    {
-      cwd,
-      env: environment(index, objects),
-      maxBuffer: 16 * 1024 * 1024,
-      timeout: 30_000,
-    }
-  )
-  if (input !== undefined) result.child.stdin?.end(input)
-  return (await result).stdout
+  const result = await run({
+    cwd,
+    args: ["-c", "core.fsmonitor=false", ...args],
+    read: true,
+    env: environment(index, objects),
+    input,
+    maxBytes: 16 * 1024 * 1024,
+    timeoutMs: 30_000,
+  })
+  if (result.truncated) throw new Error(`git ${args[0] ?? ""} wrote more than 16 MB for a checkpoint`)
+  return result.stdout.toString("utf8")
 }
 export async function privateSnapshotObjects(
   cwd: string,
@@ -208,19 +210,12 @@ export async function importSnapshotObjects(
   )
   if (packs.length !== 1)
     throw new Error("The private checkpoint pack is missing or damaged")
-  const result = execute("git", ["unpack-objects", "-r"], {
+  await run({
     cwd,
+    args: ["unpack-objects", "-r"],
     env: environment(),
-    maxBuffer: 4096,
-    timeout: 30_000,
+    input: createReadStream(join(directory, "git/objects/pack", packs[0]!)),
+    maxBytes: 4096,
+    timeoutMs: 30_000,
   })
-  const input = result.child.stdin
-  if (!input) throw new Error("Git checkpoint import has no input pipe")
-  await Promise.all([
-    result,
-    pipeline(
-      createReadStream(join(directory, "git/objects/pack", packs[0])),
-      input
-    ),
-  ])
 }

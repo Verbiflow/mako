@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WorkspaceGit } from "../electron/host-git.ts"
-import { closeKiriEngine } from "../electron/kiri-engine.ts"
+import { closeRepositories } from "@mako/git"
 import type { GitRemoteAction } from "../electron/shared.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-remote-"))
@@ -101,4 +101,4 @@ try {
   assert.equal(result.status.behind, 0)
   assert.equal(git(local, "show", "stash@{0}:shared.txt"), "keep my edits")
   console.log("Git remote workflow passed: fetch, pull, rejected push, divergence, merge, conflicts, abort, resolution, continue, push, and dirty-edit preservation")
-} finally { await closeKiriEngine(); await rm(root, { recursive: true, force: true }) }
+} finally { closeRepositories(); await rm(root, { recursive: true, force: true }) }

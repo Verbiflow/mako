@@ -385,7 +385,6 @@ try {
     MAKO_WEB_SOCKET: "/test.sock",
     MAKO_WEB_ONLY: "1",
     MAKO_PROD: "1",
-    MAKO_KIRI_BINARY: "/test-engine",
     VITE_DEV_SERVER_URL: "http://localhost:1",
   }
   assert.deepEqual(desktopLaunchEnvironment(polluted), {

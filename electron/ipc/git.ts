@@ -1,9 +1,10 @@
 import { app } from "electron"
-import { join } from "node:path"
 import { electronSecretEncryption } from "../secure-storage.js"
-import { COMMIT_PROMPT, type AgentHost } from "../host.js"
+import { COMMIT_STYLE } from "@mako/git"
+import type { AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
-import { CommitGeneration } from "../commit-generation.js"
+import { GitDrafting } from "../git-drafting.js"
+import { pullTemplate } from "../pull-requests.js"
 import { UtilityModelStore } from "../utility-model-store.js"
 import type { UtilityWork } from "../utility-work.js"
 import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "../contracts/utility-work.js"
@@ -18,13 +19,13 @@ import { z } from "zod"
 import type {
   CommitGenerationInput,
   GitPushInput,
+  PullRequestDraftInput,
   GitRemoteInput,
   UtilityCatalogInput,
   UtilityConnectionInput,
   UtilityProvider,
 } from "../shared.js"
 import { registerIpc } from "./register.js"
-import { configureKiriCache } from "../kiri-engine.js"
 
 export interface GitIpcContext {
   withHost<TResult>(
@@ -39,7 +40,6 @@ const HarnessOrderSchema = z.array(z.string().min(1).max(40)).max(HARNESS_ORDER_
 
 export function installGitIpc(context: GitIpcContext): void {
   const { withHost, models, work } = context
-  configureKiriCache(join(app.getPath("userData"), "kiri-analysis-cache"))
   registerIpc("mako:git-select-repository", (_event, cwd: string, root: string) => withHost((host) => host.selectGitRepository(cwd, root)))
   registerIpc("mako:git-status", () => withHost((host) => host.gitStatus()))
   registerIpc("mako:git-diff", (_event, path: string) =>
@@ -64,7 +64,7 @@ export function installGitIpc(context: GitIpcContext): void {
       withHost(async (host) => {
         if (options?.amend) await host.gitCommit(message, options)
         else {
-          await generation.commit(hostClient(), host.gitWorkspace, message)
+          await drafting.commit(hostClient(), host.gitWorkspace, message)
           await host.pushGit()
         }
       })
@@ -91,7 +91,7 @@ export function installGitIpc(context: GitIpcContext): void {
   registerIpc("mako:git-commit-diff-all", (_event, hash: string) =>
     withHost((host) => host.gitCommitDiffAll(hash))
   )
-  const generation = new CommitGeneration(work)
+  const drafting = new GitDrafting(work)
   const catalog = new UtilityModelCatalog(models)
   registerIpc("mako:utility-model-settings", async () => {
     const [settings, tasks] = await Promise.all([models.settings(), work.settings()])
@@ -118,7 +118,7 @@ export function installGitIpc(context: GitIpcContext): void {
     (_event, provider: UtilityProvider) => models.disconnect(provider)
   )
   registerIpc("mako:git-cancel-generation", (_event, requestId: string) =>
-    generation.cancel(hostClient(), requestId)
+    drafting.cancel(hostClient(), requestId)
   )
   registerIpc(
     "mako:git-generate-message",
@@ -128,10 +128,16 @@ export function installGitIpc(context: GitIpcContext): void {
           throw new Error(
             "The workspace changed. Refresh Changes before drafting a message."
           )
-        return generation.generate(hostClient(), input)
+        return drafting.commitMessage(hostClient(), input)
       })
   )
-  registerIpc("mako:default-commit-prompt", () => COMMIT_PROMPT)
+  registerIpc("mako:git-draft-pull-request", (_event, input: PullRequestDraftInput) =>
+    withHost(async (host) => {
+      if (host.gitWorkspace !== input.cwd) throw new Error("The workspace changed. Refresh Changes before drafting a pull request.")
+      return drafting.pullRequest(hostClient(), input, await pullTemplate(input.cwd))
+    })
+  )
+  registerIpc("mako:default-commit-prompt", () => COMMIT_STYLE)
 }
 
 /** This user's model connections, after moving a profile's older copies into them. */

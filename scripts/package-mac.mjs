@@ -43,6 +43,8 @@ const inputs = [
   "package.json",
   "packages/sessions/package.json",
   "packages/sessions/dist",
+  "packages/git/package.json",
+  "packages/git/dist",
   "packages/relay/package.json",
   "packages/relay/dist",
   "packages/control/package.json",
@@ -57,7 +59,6 @@ const inputs = [
   "build/Mako.icns",
   "build/entitlements.mac.plist",
   "build/mako-notification-status",
-  "vendor/kiri/darwin-arm64",
   "vendor/control-media/darwin-arm64",
 ]
 async function digest(path) {
@@ -194,13 +195,12 @@ try {
             filter: [...(entry.filter ?? []), "!**/*.map"],
           })),
       ],
-      extraResources: [...(buildConfig.extraResources ?? []), { from: join(stage, "vendor/kiri"), to: "kiri" }, { from: join(stage, "vendor/control-media"), to: "control-media" }],
+      extraResources: [...(buildConfig.extraResources ?? []), { from: join(stage, "vendor/control-media"), to: "control-media" }],
       extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }],
       mac: {
         ...buildConfig.mac,
         binaries: [
           ...(buildConfig.mac?.binaries ?? []),
-          "Contents/Resources/kiri/darwin-arm64/kiri-engine",
           "Contents/Resources/control-media/darwin-arm64/ffmpeg",
           "Contents/Resources/control-media/darwin-arm64/ffprobe",
           "Contents/MacOS/mako-notification-status",
@@ -237,20 +237,6 @@ try {
         for (const line of dependencies.split("\n").slice(1).filter((line) => line.trim()))
           assert.match(line.trim(), /^(\/usr\/lib\/|\/System\/Library\/)/)
       } else assert.equal(await digest(target), file.sha256, `Packaged recording resource differs: ${file.path}`)
-      verified.push({ path: target, sha256: await digest(target) })
-      continue
-    }
-    if (file.path.startsWith("vendor/kiri/")) {
-      const target = join(app, "Contents/Resources", file.path.slice("vendor/".length))
-      if (file.path.endsWith("/kiri-engine")) {
-        const schema = JSON.parse(execFileSync(target, ["--schema"], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }))
-        const expected = JSON.parse(await readFile(join(stage, "vendor/kiri/darwin-arm64/manifest.json"), "utf8"))
-        assert.equal(schema.version, expected.protocol, "Packaged Kiri protocol differs from the client build")
-        assert.equal(schema.schema_hash, expected.schema, "Packaged Kiri schema differs from the prepared engine")
-        const clientSchema = JSON.parse(extractFile(archive, "node_modules/@kiri/client/dist/schema.json").toString("utf8"))
-        assert.equal(schema.version, clientSchema.version, "Packaged Kiri protocol differs from the packaged SDK")
-        assert.equal(schema.schema_hash, clientSchema.schema_hash, "Packaged Kiri schema differs from the packaged SDK")
-      } else assert.equal(await digest(target), file.sha256, `Packaged Kiri resource differs: ${file.path}`)
       verified.push({ path: target, sha256: await digest(target) })
       continue
     }

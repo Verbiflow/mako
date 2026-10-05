@@ -1,13 +1,13 @@
 import type { ChatRole } from "./conversation-session.js"
 
+/** A rename reads as a deletion and an addition. */
 export type GitFileStatus =
-  "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted"
+  "added" | "modified" | "deleted" | "untracked" | "conflicted"
 
 /** Cheap per-file entry. Contents are fetched on demand via `git:diff`. */
 export interface GitFile {
   path: string
   status: GitFileStatus
-  oldName?: string
   insertions: number | null
   deletions: number | null
   binary: boolean

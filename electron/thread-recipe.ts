@@ -5,7 +5,7 @@ import { z } from "zod"
 import { STEPS_FOLDER_VARIABLE, type CheckStep } from "./check-steps.js"
 import type { RecipeVersionView } from "./contracts/project-app.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironment } from "./contracts/thread-environments.js"
-import { git } from "./worktree-git.js"
+import { git } from "@mako/git"
 
 /**
  * A recipe committed with the project, for a team that shares one through

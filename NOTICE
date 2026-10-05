@@ -19,9 +19,6 @@ Third-party components
 
 Mako ships or depends on the following, each under its own terms.
 
-Kiri (https://github.com/Verbiflow/kiri)
-  The Git engine shipped as a sidecar under Resources. MIT License.
-
 @pierre/diffs, @pierre/theme, @pierre/theming
   Diff rendering. Apache License 2.0.
 

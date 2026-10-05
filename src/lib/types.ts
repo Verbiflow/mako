@@ -7,6 +7,8 @@ export type {
   CommitAnalysisMode,
   CommitGenerationInput,
   CommitGenerationResult,
+  PullRequestDraftInput,
+  PullRequestDraftResult,
   UtilityConnection,
   UtilityConnectionInput,
   UtilityCatalog,

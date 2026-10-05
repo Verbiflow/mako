@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, matchesGlob, relative } from "node:path"
-import { promisify } from "node:util"
 import { z } from "zod"
 import type { ThreadStore } from "./thread-store.js"
 import type { ThreadId } from "./contracts/thread-identity.js"
@@ -12,11 +10,10 @@ import type { GitDiff } from "./contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
-import { git, GitError, gitExecutable, mergesWithoutCheckout, PARALLEL_CHECKOUT, succeeds } from "./worktree-git.js"
+import { git, GitError, mergesWithoutCheckout, PARALLEL_CHECKOUT, run, succeeds } from "@mako/git"
 import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 
-const execute = promisify(execFile)
 /** Git's own markers for work under way, which a removal would throw away. */
 const UNDER_WAY: readonly (readonly [string, string])[] = [
   ["rebase-merge", "rebase"], ["rebase-apply", "rebase"], ["MERGE_HEAD", "merge"],
@@ -114,7 +111,7 @@ async function textLines(path: string): Promise<number | null> {
 
 /** A file as Git has it at `revision`, byte for byte, or null when it isn't there. */
 async function shown(cwd: string, revision: string, path: string): Promise<string | null> {
-  return execute(gitExecutable(), ["show", `${revision}:${path}`], { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).then(({ stdout }) => stdout, () => null)
+  return run({ cwd, args: ["show", `${revision}:${path}`], maxBytes: 16 * 1024 * 1024, read: true }).then(({ stdout, truncated }) => truncated ? null : stdout.toString("utf8"), () => null)
 }
 
 /** `map` with at most `limit` running at once, results in order. */

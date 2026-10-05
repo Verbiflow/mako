@@ -6,9 +6,24 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { WorkspaceGit, waitForIndexWrites } from "../electron/host-git.ts"
-import { collectCommitPatch } from "../electron/commit-patch.ts"
+import { draftCommit, openRepository, type JsonSchema } from "@mako/git"
 import { AgentHost } from "../electron/host.ts"
 import type { GitStatus, HostEvent } from "../electron/shared.ts"
+
+/** What drafting a commit would send a model, from a model that only records it. */
+async function drafted(root: string, signal: AbortSignal) {
+  const prompts: string[] = []
+  const model = {
+    identity: "test-recorder",
+    contextTokens: 1_000_000,
+    complete: async (request: { prompt: string; schema?: JsonSchema }) => {
+      prompts.push(request.prompt)
+      return JSON.stringify(JSON.stringify(request.schema).includes('"summary"') ? { summary: "Part of the change." } : { action: "finish", result: { message: "Test" }, requests: [], notes: "" })
+    },
+  }
+  const draft = await draftCommit((await openRepository(root))!, { model, signal })
+  return { scope: draft.snapshot.scope, files: draft.files, text: prompts.join("\n") }
+}
 
 class DelayedGitHost extends AgentHost {
   readonly reads: Array<(git: GitStatus) => void> = []
@@ -72,7 +87,7 @@ try {
   )
   await first.unstageAll()
   const queued = paths.map((path) => first.stage([path]))
-  const patch = await collectCommitPatch(root, AbortSignal.timeout(20_000))
+  const patch = await drafted(root, AbortSignal.timeout(20_000))
   await Promise.all(queued)
   assert.equal(patch.scope, "staged")
   assert.equal(
@@ -148,7 +163,7 @@ try {
     2,
     "Selected filenames must not expand as globs"
   )
-  const literal = await collectCommitPatch(root, AbortSignal.timeout(10_000))
+  const literal = await drafted(root, AbortSignal.timeout(10_000))
   assert.ok(literal.text.includes("The literal star file"))
   assert.ok(
     !literal.text.includes("never-in-model-input"),

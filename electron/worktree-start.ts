@@ -1,9 +1,6 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
 import type { WorktreeStanding, WorktreeStartPoint } from "./contracts/thread-worktrees.js"
-import { git, gitExecutable, succeeds } from "./worktree-git.js"
+import { git, run, succeeds } from "@mako/git"
 
-const execute = promisify(execFile)
 /** A fetch younger than this answers for the next one. */
 const FETCH_EVERY_MS = 60_000
 /** A remote that hasn't answered by now is treated as unreachable; the start uses what was fetched before. */
@@ -11,11 +8,7 @@ const FETCH_TIMEOUT_MS = 15_000
 
 /** `git fetch` that never asks for credentials and gives up after the timeout. */
 export async function fetchQuietly(repoRoot: string, args: string[]): Promise<void> {
-  await execute(gitExecutable(), ["fetch", "--quiet", "--no-tags", ...args], {
-    cwd: repoRoot,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    timeout: FETCH_TIMEOUT_MS,
-  })
+  await run({ cwd: repoRoot, args: ["fetch", "--quiet", "--no-tags", ...args], timeoutMs: FETCH_TIMEOUT_MS })
 }
 
 interface Fetch {

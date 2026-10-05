@@ -40,18 +40,17 @@
     "backend:test": "npm test --workspace @mako/backend",
     "backend:typecheck": "npm run typecheck --workspace @mako/backend",
     "build:browser-extension": "tsgo -p browser-extension/tsconfig.json && node scripts/build-browser-extension.mjs",
-    "prepare:kiri": "node scripts/prepare-kiri.mjs",
-    "build:electron": "npm run prepare:kiri && npm run build:control-runtime && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs",
+    "build:electron": "npm run build:control-runtime && tsgo -b tsconfig.electron.json && node scripts/build-preload.mjs",
     "build": "node scripts/build-parallel.mjs",
     "build:all": "npm run relay:build && npm run build && npm run backend:build",
     "icons": "swiftc -O -o build/make-icns scripts/make-icns.swift && build/make-icns mako-icons/_masters/desktop-gradient.png build/Mako.iconset && iconutil -c icns build/Mako.iconset -o build/Mako.icns && cp build/Mako.iconset/icon_512x512@2x.png public/icons/app-icon.png",
     "icons:browser": "node scripts/build-favicons.mjs",
     "lint": "eslint . && npm run lint:anti-slop && node scripts/check-actionable-toasts.mjs",
-    "lint:anti-slop": "oxlint --config oxlint.config.ts src electron browser-extension packages/sessions/src packages/relay/src packages/relay/test packages/control/src packages/control/test packages/control-runtime/src packages/control-runtime/test packages/backend/app packages/backend/agent packages/backend/scripts packages/backend/src packages/backend/test scripts",
+    "lint:anti-slop": "oxlint --config oxlint.config.ts src electron browser-extension packages/sessions/src packages/git/src packages/git/test packages/relay/src packages/relay/test packages/control/src packages/control/test packages/control-runtime/src packages/control-runtime/test packages/backend/app packages/backend/agent packages/backend/scripts packages/backend/src packages/backend/test scripts",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "node scripts/typecheck-bounded.mjs",
     "typecheck:all": "npm run typecheck && npm run backend:typecheck",
-    "test:kiri-engine": "node scripts/test-prepare-kiri.mjs && tsx scripts/test-kiri-engine.ts",
+    "test:git": "npm run -s build --workspace @mako/git && node packages/git/test/run.mjs",
     "test:commit-generation": "tsx scripts/test-utility-work.ts && tsx scripts/test-commit-generation.ts && tsx scripts/test-commit-models.ts && tsx scripts/test-utility-token-count.ts && tsx scripts/test-commit-connections.ts && tsx scripts/test-utility-model-location.ts && tsx scripts/test-utility-model-catalog.ts",
     "test:accounts": "tsx scripts/test-account-usage.ts && tsx scripts/test-account-routing.ts && tsx scripts/test-account-removal.ts && tsx scripts/test-account-keychain.ts && tsx scripts/test-claude-credential-source.ts && tsx scripts/test-claude-router-identity.ts && esbuild scripts/test-account-limits-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-account-limits-ui.mjs --log-level=warning && node node_modules/.tmp/test-account-limits-ui.mjs",
     "test:acp-registry": "tsx scripts/test-acp-registry.ts && tsx scripts/test-access-modes.ts && tsx scripts/test-turn-recovery-contract.ts && tsx scripts/test-acp-stream.ts && tsx scripts/test-acp-prompt-turn.ts && tsx scripts/test-devin-permissions.ts && tsx scripts/test-devin-session-mcp.ts && tsx scripts/test-devin-resume.ts && tsx scripts/test-opencode-resume.ts && tsx scripts/test-opencode-installation.ts && tsx scripts/test-opencode-projection.ts && tsx scripts/test-native-source.ts && tsx scripts/test-cursor-resume.ts && tsx scripts/test-cursor-sdk.ts && tsx scripts/test-cursor-native-runner.ts && tsx scripts/test-cursor-auth.ts && npm run test:cursor-recovery",
@@ -185,7 +184,6 @@
     "@file-viewer/renderer-pptx": "^3.1.2",
     "@file-viewer/renderer-spreadsheet": "^3.1.2",
     "@file-viewer/renderer-word": "^3.1.2",
-    "@kiri/client": "file:vendor/kiri-client-0.2.12.tgz",
     "@lydell/node-pty": "1.2.0-beta.15",
     "@mako/control": "^0.1.0",
     "@mako/control-runtime": "0.1.0",
@@ -295,6 +293,14 @@
       {
         "from": "packages/sessions",
         "to": "node_modules/@mako/sessions",
+        "filter": [
+          "package.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "packages/git",
+        "to": "node_modules/@mako/git",
         "filter": [
           "package.json",
           "dist/**"

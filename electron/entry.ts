@@ -1,5 +1,5 @@
 import { enableMainCompileCache } from "./compile-cache.js"
-import { forgetStartingRepository } from "./git-environment.js"
+import { forgetStartingRepository } from "@mako/git/environment"
 
 forgetStartingRepository()
 if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-entry]", process.env.MAKO_HOST_ONLY === "1" ? "host" : "client")

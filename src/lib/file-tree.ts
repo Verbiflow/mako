@@ -47,7 +47,7 @@ export function buildFileTree(files: GitFile[], collapsed: string[]): TreeRow[] 
 
   for (const file of files) {
     const parts = file.path.split("/")
-    const name = parts.pop() ?? file.path
+    parts.pop()
     let node = root
     for (const part of parts) {
       let next = node.children.get(part)
@@ -57,7 +57,7 @@ export function buildFileTree(files: GitFile[], collapsed: string[]): TreeRow[] 
       }
       node = next
     }
-    node.files.push({ ...file, path: file.path, oldName: file.oldName ?? name })
+    node.files.push(file)
   }
 
   const rows: TreeRow[] = []

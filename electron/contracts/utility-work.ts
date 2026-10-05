@@ -1,7 +1,7 @@
 /**
  * Small jobs Mako gives a model outside every conversation. Each runs on a
  * harness's light model at low reasoning (`harness-defaults.ts`): drafting a
- * commit message needs speed, not depth. Setting a project up is a whole
+ * commit message or a pull request description needs speed, not depth. Setting a project up is a whole
  * Session on the harness's model for new conversations instead. Both take
  * the first signed-in harness in the person's harness order.
  */

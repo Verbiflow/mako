@@ -221,7 +221,7 @@ Every shortcut can be rebound in Settings > Keyboard shortcuts.
 Claude Code · Codex · Cursor · Grok · Devin · OpenCode
                         │
                         ▼
-        Electron host + @mako/sessions + Kiri
+      Electron host + @mako/sessions + @mako/git
    provider processes · session stores · git · control tools
                         │
                         ▼
@@ -229,8 +229,9 @@ Claude Code · Codex · Cursor · Grok · Devin · OpenCode
 ```
 
 The host owns provider processes, native session formats, credentials, and
-Git. Git itself runs through Kiri, a sidecar engine shipped with the app. The
-renderer speaks one wire contract. Streaming sends only the message in flight,
+Git. Every Git process runs through `@mako/git`, which keeps each repository's
+status in memory and rereads only the paths that changed. The renderer speaks
+one wire contract. Streaming sends only the message in flight,
 long lists are virtualized, and unchanged sessions are never reread. Every
 provider is installed from one module and no provider gets a privileged path.
 

@@ -73,10 +73,9 @@ export function clipTemplate(template: string): string {
   return template.length > PULL_TEMPLATE_LIMIT ? `${template.slice(0, PULL_TEMPLATE_LIMIT)}\n…` : template
 }
 
-/** What the form's drafter is asked, given the repository's template when it has one. */
+/** How the form's drafter writes, given the repository's template when it has one. */
 export function pullRequestDraftPrompt(template: string | null): string {
   return [
-    "Write a pull request title and body from this diff. The first line is the title; then a blank line; then the body.",
     PULL_REQUEST_WRITING,
     template ? `The repository's pull request template:\n\n${clipTemplate(template.trim())}` : "",
   ].filter(Boolean).join("\n\n")

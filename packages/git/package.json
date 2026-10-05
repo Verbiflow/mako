@@ -1,0 +1,22 @@
+{
+  "name": "@mako/git",
+  "version": "0.1.0",
+  "license": "Elastic-2.0",
+  "description": "Every Git process Mako runs: live status, previews, staging, commits, remotes, history, and drafting commit messages and pull requests from exact Git evidence.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./environment": "./dist/environment.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsgo -b"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}

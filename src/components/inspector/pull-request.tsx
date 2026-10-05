@@ -4,7 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { harnessLabels } from "@/lib/harness-label"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { stageGitAction } from "@/state/git-actions"
-import { pullBaseFor, pullRequestDraftPrompt, type MergeMethod } from "../../../electron/contracts/git-actions"
+import { pullBaseFor, type MergeMethod } from "../../../electron/contracts/git-actions"
 import { SearchSelect } from "@/components/ui/search-select"
 import {
   Popover,
@@ -242,21 +242,15 @@ export function ComposePull({
   }
 
   const compose = useCallback(async function composePull() {
-    if (drafting) return
+    if (drafting || !selectedBase) return
     setDrafting(true)
     try {
-      // The utility model reads the same bounded diff as the commit drafter,
+      // The commit drafter's model reads the branch's commits since the base,
       // with the writing rules the agent's tool gives and the repository's template.
-      const [{ model }, template] = await Promise.all([currentCommitModel(), github.template()])
-      const result = await git.generateMessage({
-        requestId: crypto.randomUUID(),
-        cwd,
-        prompt: pullRequestDraftPrompt(template),
-        model,
-      })
-      const [first, ...rest] = result.message.split("\n")
-      setTitle((current) => current || (first ?? "").trim())
-      setBody((current) => current || rest.join("\n").trim())
+      const { model } = await currentCommitModel()
+      const result = await git.draftPullRequest({ requestId: crypto.randomUUID(), cwd, base: selectedBase, model })
+      setTitle((current) => current || result.title)
+      setBody((current) => current || result.body)
     } catch (error) {
       toast.error("Pull request draft was not generated", {
         duration: ACTION_TOAST_MS,
@@ -266,7 +260,7 @@ export function ComposePull({
     } finally {
       setDrafting(false)
     }
-  }, [drafting, cwd])
+  }, [drafting, cwd, selectedBase])
 
   const create = useCallback(async function createPullRequest() {
     if (!title.trim() || busy) return

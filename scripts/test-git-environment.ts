@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { REPOSITORY_VARIABLES, forgetStartingRepository } from "../electron/git-environment.js"
+import { REPOSITORY_VARIABLES, forgetStartingRepository } from "@mako/git/environment"
 
 const scripts = import.meta.dirname
 const root = mkdtempSync(join(tmpdir(), "mako-git-environment-"))

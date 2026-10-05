@@ -136,10 +136,11 @@ try {
   await git(firstRepo, "mv", "tracked.txt", "renamed.txt")
   await writeFile(join(firstRepo, "notes.txt"), "untracked needle\n")
   const status = await workspaceGit.status()
-  const renamed = status.files.find((file) => file.status === "renamed")
-  assert.ok(renamed)
-  assert.equal(renamed.oldName, "tracked.txt")
-  assert.equal(renamed.path, "renamed.txt")
+  assert.deepEqual(
+    status.files.filter((file) => file.staged).map((file) => [file.path, file.status]),
+    [["renamed.txt", "added"], ["tracked.txt", "deleted"]],
+    "A rename reads as a deletion and an addition"
+  )
   assert.equal(
     status.files.find((file) => file.path === "notes.txt")?.status,
     "untracked"

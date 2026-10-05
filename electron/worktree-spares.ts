@@ -7,7 +7,7 @@ import { z } from "zod"
 import { AppKeySchema } from "./contracts/thread-environments.js"
 import { folderApp } from "./thread-environment.js"
 import { CARRYING, CARRYING_STALE_MS, carryOutputs, isSpareCheckout, removeBelowAgents, SPARE_PREFIX, type CheckoutSetup } from "./worktree-carry.js"
-import { git, PARALLEL_CHECKOUT } from "./worktree-git.js"
+import { git, PARALLEL_CHECKOUT } from "@mako/git"
 
 /** Enough for two new Threads in a row without waiting; the one after that waits for a refill. */
 export const SPARES_PER_PROJECT = 2

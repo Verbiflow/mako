@@ -1,11 +1,6 @@
-import { execFile } from "node:child_process"
 import { readdir, realpath, stat } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
-import { promisify } from "node:util"
-import { belowAgents } from "./background-priority.js"
-import { gitExecutable } from "./worktree-git.js"
-
-const execute = promisify(execFile)
+import { run } from "@mako/git"
 
 /** Polling spends at most one part in this many of the time between polls. */
 const DUTY = 20
@@ -133,11 +128,7 @@ async function stamp(path: string): Promise<string> {
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string> {
-  const [command, argv] = belowAgents(gitExecutable(), args)
-  const { stdout } = await execute(command, argv, {
-    cwd,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
-    maxBuffer: 64 * 1024 * 1024,
-  })
-  return stdout.replace(/\n$/, "")
+  const result = await run({ cwd, args, background: true, read: true, maxBytes: 64 * 1024 * 1024 })
+  if (result.truncated) throw new Error(`git ${args[0] ?? ""} wrote more than 64 MB`)
+  return result.stdout.toString("utf8").replace(/\n$/, "")
 }
