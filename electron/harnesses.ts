@@ -12,7 +12,8 @@ import {
 } from "./providers/profile-loader.js"
 import type { HarnessProfile } from "./shared.js"
 import { providerProfileCache } from "./provider-profile-cache.js"
-import { hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "./host-log.js"
+import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"
 
 export { resolveHarnessTuning }
 export { normalizeAcpOptions } from "@mako/sessions/model-catalog"
@@ -42,10 +43,17 @@ const cache = new Map<
 >()
 const loading = new Map<string, Promise<HarnessProfile>>()
 const launching = new Map<string, Promise<HarnessProfile>>()
+const discoveryOwners = new Map<AbortController, { provider: string; settled: Promise<void> }>()
+let closing = false
+let stopping: Promise<void> | undefined
+function assertDiscoveryAdmission(): void {
+  if (closing) throw new Error("Mako's profile discovery is shutting down. No new query was started.")
+}
 /** Runtime refresh invalidates in-flight discovery, not only cached results. */
 const revisions = new Map<string, number>()
 function profileRevision(harness: string): number { return revisions.get(harness) ?? 0 }
 function assertProfileRevision(harness: string, revision: number): void {
+  assertDiscoveryAdmission()
   if (profileRevision(harness) !== revision)
     throw new Error("Provider discovery was superseded by a runtime refresh. Retry with the current runtime.")
 }
@@ -86,8 +94,11 @@ export function harnessProfile(
  * list for the rest of the host's life.
  */
 export async function refreshHarnessProfiles(harness: string): Promise<void> {
+  assertDiscoveryAdmission()
   const prefix = `${harness}:`
   revisions.set(harness, profileRevision(harness) + 1)
+  for (const [owner, entry] of discoveryOwners)
+    if (entry.provider === harness) owner.abort(new Error("Provider discovery was superseded by a runtime refresh."))
   for (const key of loading.keys()) if (key.startsWith(prefix)) loading.delete(key)
   for (const key of launching.keys()) if (key.startsWith(prefix)) launching.delete(key)
   const workspaces = new Set<string | undefined>()
@@ -100,6 +111,26 @@ export async function refreshHarnessProfiles(harness: string): Promise<void> {
       loadProfile(harness, cwd, "refresh").catch(() => undefined)
     )
   )
+}
+
+/** Join even superseded queries removed from the display/send maps. Their
+ * native cleanup must finish before the host disposes its backing stores. */
+export function stopHarnessProfiles(timeoutMs = 30_000): Promise<void> {
+  closing = true
+  if (stopping) return stopping
+  const owned = [...discoveryOwners.entries()]
+  const startedAt = performance.now()
+  hostLog("discovery", "shutdown drain started", { queries: owned.length, providers: new Set(owned.map(([, entry]) => entry.provider)).size })
+  for (const [owner] of owned) owner.abort(new Error("Mako's profile discovery is shutting down."))
+  const drain = drainOwnedWork(owned.map(([, entry]) => entry.settled), timeoutMs, "Profile discovery shutdown did not complete.")
+    .then(() => { hostLog("discovery", "shutdown drain completed", { elapsedMs: performance.now() - startedAt, queries: owned.length }) })
+    .catch(error => {
+      hostWarn("discovery", "shutdown drain refused", { elapsedMs: performance.now() - startedAt, queries: discoveryOwners.size })
+      throw error
+    })
+    .finally(() => { if (stopping === drain) stopping = undefined })
+  stopping = drain
+  return drain
 }
 
 /** Sending validates the selection already shown; discovery is not a per-turn tax. */
@@ -161,10 +192,12 @@ async function loadProfile(
   cwd: string | undefined,
   mode: Mode
 ): Promise<HarnessProfile> {
+  assertDiscoveryAdmission()
   const loader = providerHost.profiles.get(harness)
   if (!loader) return unknownProviderProfile(harness, "Unknown provider")
   const revision = profileRevision(harness)
   const env = await accountEnv(harness, process.env)
+  assertProfileRevision(harness, revision)
   const accountKey = loader.cacheKey(env)
   let scope = cwd
   if (cwd) {
@@ -203,10 +236,13 @@ async function loadProfile(
   if (mode === "send" && loader.loadForSend) {
     const pending = launching.get(key)
     if (pending) return pending
-    const request = loader
-      .loadForSend(env, scope)
+    const owner = new AbortController()
+    const settled = ownedWorkCompletion()
+    discoveryOwners.set(owner, { provider: harness, settled: settled.promise })
+    const request = Promise.resolve()
+      .then(() => { assertProfileRevision(harness, revision); return loader.loadForSend!(env, scope, { signal: owner.signal }) })
       .then(profile => { assertProfileRevision(harness, revision); return profile })
-      .finally(() => { if (launching.get(key) === request) launching.delete(key) })
+      .finally(() => { discoveryOwners.delete(owner); settled.resolve(); if (launching.get(key) === request) launching.delete(key) })
     launching.set(key, request)
     return request
   }
@@ -215,11 +251,13 @@ async function loadProfile(
   if (mode === "display" || mode === "now") {
     // Stale beats blank: the refresh lands as an event moments later.
     const snapshot = held?.profile ?? (await providerProfileCache.get(key))
+    assertProfileRevision(harness, revision)
     if (snapshot) return snapshot
     // A workspace this account has not been seen in yet still has the
     // account's models: the picker and a saved choice render at once, and
     // only the workspace's own defaults wait for discovery.
     const borrowed = await accountSnapshot(account)
+    assertProfileRevision(harness, revision)
     // Discovery may have finished while the caches were read. `now` callers
     // re-emit what they get and `startLoad` has already reported it.
     const landed = cache.get(key)
@@ -284,12 +322,16 @@ function startLoad(
 ): Promise<HarnessProfile> {
   const { key } = scope
   const revision = profileRevision(loader.provider)
+  const owner = new AbortController()
+  const settled = ownedWorkCompletion()
+  discoveryOwners.set(owner, { provider: loader.provider, settled: settled.promise })
   const request = (async () => {
     let profile: HarnessProfile
     let failed = false
     try {
-      profile = await loader.load(env, cwd)
+      profile = await loader.load(env, cwd, { signal: owner.signal })
     } catch (error) {
+      assertProfileRevision(loader.provider, revision)
       failed = true
       const message = error instanceof Error ? error.message : String(error)
       // The models an account had a minute ago are still its models; the
@@ -320,7 +362,7 @@ function startLoad(
     if (reportedCwd !== undefined) event.cwd = reportedCwd
     for (const listener of listeners) listener(event)
     return profile
-  })().finally(() => { if (loading.get(key) === request) loading.delete(key) })
+  })().finally(() => { discoveryOwners.delete(owner); settled.resolve(); if (loading.get(key) === request) loading.delete(key) })
   loading.set(key, request)
   // Callers that answer from a snapshot never observe this promise.
   request.catch(() => {})
@@ -346,7 +388,7 @@ export async function harnessProfilesNow(
   return providerHost.profiles.list().map((loader) => {
     void loadProfile(loader.provider, cwd, "now")
       .then((profile) => {
-        if (!profile.pending)
+        if (!closing && !profile.pending)
           for (const listener of listeners) listener({ profile, cwd })
       })
       .catch(() => {})

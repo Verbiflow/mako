@@ -5,6 +5,8 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import {
   mkdir,
+  realpath,
+  readlink,
   readFile,
   rename,
   rm,
@@ -12,10 +14,9 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { homedir, userInfo } from "node:os"
-import { join } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import type { JsonValue } from "./codex-app-json.js"
-
 const run = promisify(execFile)
 
 const credentialSalt = randomBytes(32)
@@ -137,7 +138,9 @@ export async function readSelection(provider: string): Promise<string | null> {
     }
   }
   try {
-    return parseSelectionState(contents).get(provider) ?? null
+    const selection = parseSelectionState(contents).get(provider) ?? null
+    // "@cli" chose the CLI's ordinary login when the default could follow a shell router; it is the default now.
+    return selection === "@cli" ? null : selection
   } catch {
     throw new Error("Account selection is invalid. Select the account again.")
   }
@@ -207,6 +210,40 @@ export function cleanAccountName(name: string): string {
 }
 
 /**
+ * A profile whose native sign-in has not finished. It is never listed or
+ * selectable, so an abandoned sign-in cannot appear as a signed-out account.
+ */
+const LOGIN_PENDING = ".mako-login-pending"
+export async function markLoginPending(dir: string): Promise<void> {
+  await writeFile(join(dir, LOGIN_PENDING), "", { mode: 0o600, flag: "wx" })
+}
+export async function clearLoginPending(dir: string): Promise<void> {
+  await rm(join(dir, LOGIN_PENDING), { force: true })
+}
+export function loginPending(dir: string): boolean {
+  return existsSync(join(dir, LOGIN_PENDING))
+}
+
+const AccountHome = z.object({ version: z.literal(1), home: z.string().refine(isAbsolute) })
+/** Preserve the settings/store origin across shell routing changes; never copy credentials here. */
+export async function recordAccountHome(dir: string, home: string): Promise<void> {
+  const canonical = await realpath(home).catch(() => resolve(home))
+  await writeFile(join(dir, ".mako-account.json"), JSON.stringify({ version: 1, home: canonical }), { mode: 0o600, flag: "wx" })
+}
+export async function managedAccountHome(dir: string, fallback: string, store: string): Promise<string> {
+  try { return AccountHome.parse(JSON.parse(await readFile(join(dir, ".mako-account.json"), "utf8"))).home }
+  catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error
+  }
+  // Older captures already own a store symlink. Keep that origin, not today's shell profile.
+  try { return dirname(resolve(dir, await readlink(join(dir, store)))) }
+  catch (error) {
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "EINVAL")) return fallback
+    throw error
+  }
+}
+
+/**
  * Point an account home's shared entries at the real home. Re-run at every
  * spawn, because a skills directory created *after* capture should appear
  * under every account the moment it exists.
@@ -271,9 +308,15 @@ export function jwtClaims(token: string | undefined): JwtClaims {
   }
 }
 
+const KeychainReadFailure = z.object({
+  code: z.union([z.number(), z.enum(["ENOENT", "EACCES", "ETIMEDOUT"])]).optional(),
+  killed: z.boolean().optional(),
+})
+
 export async function readKeychain(
   service: string,
-  account?: string
+  account?: string,
+  failurePolicy: "optional" | "required" = "optional"
 ): Promise<string | null> {
   if (process.platform !== "darwin") return null
   try {
@@ -285,8 +328,28 @@ export async function readKeychain(
       "-w",
     ])
     return stdout.trim() || null
-  } catch {
+  } catch (error) {
+    if (failurePolicy === "required" && !(error instanceof Error && "code" in error && error.code === 44)) {
+      // Native exec failures can contain credential stdout; retain only public failure facts.
+      const failure = KeychainReadFailure.safeParse(error)
+      throw new Error("Could not read macOS Keychain. Unlock it and allow access before using this login.", {
+        // eslint-disable-next-line preserve-caught-error -- Raw execFile causes retain credential stdout; preserve only validated public failure facts.
+        cause: failure.success ? failure.data : { operation: "read-native-credentials" },
+      })
+    }
     return null
+  }
+}
+
+/** When a Keychain item was last written. Reads attributes only, never the secret. */
+export async function keychainWrittenAt(service: string, account?: string): Promise<string | undefined> {
+  if (process.platform !== "darwin") return undefined
+  try {
+    const { stdout } = await run("security", ["find-generic-password", "-s", service, ...(account ? ["-a", account] : [])])
+    const stamp = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)Z/.exec(stdout)
+    return stamp ? `${stamp[1]}-${stamp[2]}-${stamp[3]}T${stamp[4]}:${stamp[5]}:${stamp[6]}Z` : undefined
+  } catch {
+    return undefined
   }
 }
 

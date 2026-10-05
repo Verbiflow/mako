@@ -1,41 +1,38 @@
 /**
  * Several accounts per harness, one machine.
  *
- * The mechanism is borrowed from Orca, which does this right: an account is
- * an *isolated config home* — a directory holding nothing but credentials —
- * selected by environment variable at spawn time (`CLAUDE_CONFIG_DIR` for
- * Claude Code, `CODEX_HOME` for Codex). No harness ever knows more than one
- * account exists; it just wakes up in a home that happens to hold different
- * keys.
+ * Selectable adapters route isolated credential homes through their native
+ * environment. The default account is the CLI's ordinary login, the same one
+ * a terminal uses, whatever config-dir or token overrides the shell exported.
+ * Other accounts are Mako-owned profiles signed into directly. Importing an
+ * existing login remains available, but a copied OAuth login can refresh
+ * independently.
  *
- * Two decisions keep this sane:
- *
- *   * **Everything except credentials is a symlink back to the real home.**
- *     Skills, agents, commands, prompts, config — and above all the session
- *     stores — are shared. Switch accounts and every skill is still there,
- *     every session is still in the rail, and new sessions land in the same
- *     watched store. The *only* thing an account isolates is who pays.
- *   * **Credentials are captured, never invented.** "Add account" copies the
- *     login the CLI already has — sign into the other account with the CLI
- *     as usual, capture it here, switch back. On macOS, Claude Code 2.1+
- *     scopes its Keychain entry by `sha256(configDir)[:8]`, so capture also
- *     writes the scoped Keychain entry the spawned CLI will actually read.
+ * Managed profiles retain their original settings/store home. Sessions and
+ * compatible tools remain shared; credential files and auth-storage policy
+ * stay private. An adapter declares native sign-in support and returns a
+ * secret-free command for its runtime. Native credential formats, OS stores
+ * and profile preparation belong to that adapter, never this facade.
  *
  * Usage comes from the providers' own endpoints: Claude's OAuth usage API,
  * ChatGPT's backend usage API for Codex and OpenCode, Cursor's dashboard
  * service, Grok's ACP billing method and Devin's seat status. Each reports
  * whatever windows its plan has — five hours, a day, a week, a month — so
  * usage is a list, never a fixed pair. A stale token is a classified state,
- * not an error toast — providers refresh their own token the next time they
- * run, and the number appears.
+ * not an error toast. Native refresh remains the provider's responsibility;
+ * a stale token does not establish that a later refresh will succeed.
  *
  * Provider-specific parsing, capture, environment, and usage live in the
  * independent account capability registry. This file intentionally remains
  * the stable compatibility facade used by IPC and process launchers.
  */
 
+import { readdir } from "node:fs/promises"
+import { join } from "node:path"
 import type {
   AccountCatalog,
+  AccountLoginResult,
+  AccountProviderInfo,
   AccountHarness,
   AccountProvider,
   AccountUsage,
@@ -44,12 +41,18 @@ import type {
   SelectedAccount,
 } from "./account-types.js"
 import {
+  accountDir,
+  accountsRoot,
   childProcessEnv,
+  clearLoginPending,
+  loginPending,
   readSelection,
   withAccountMutation,
   writeSelection,
 } from "./accounts-common.js"
 import type {
+  AccountLoginLaunch,
+  AccountLoginTarget,
   ProviderAccountCapability,
   SelectableAccountCapability,
 } from "./providers/account-capability.js"
@@ -63,6 +66,8 @@ import {
 
 export type {
   AccountCatalog,
+  AccountLogin,
+  AccountLoginResult,
   AccountProviderInfo,
   AccountHarness,
   AccountProvider,
@@ -106,9 +111,18 @@ async function listCapabilityAccounts(
   capability: ProviderAccountCapability
 ): Promise<HarnessAccount[]> {
   // One provider's slow or broken login must not hide every other account.
-  return capability
-    .listAccounts(await capabilitySelection(capability))
-    .catch(() => [])
+  const selection = await capabilitySelection(capability).catch(() => null)
+  let accounts: HarnessAccount[]
+  try {
+    accounts = await capability.listAccounts(selection)
+  } catch {
+    return []
+  }
+  // A selection whose account is gone stays on screen, so new sessions
+  // refusing to start has a row to explain it and another to switch to.
+  if (selection !== null && !accounts.some((account) => account.name === selection))
+    accounts.push({ harness: capability.provider, name: selection, dir: "", active: true, source: "mako", route: "managed", missing: true })
+  return accounts
 }
 
 async function harnessAccounts(
@@ -122,12 +136,17 @@ export async function accountCatalog(): Promise<AccountCatalog> {
   return {
     providers: providerHost.accountCapabilities
       .list()
-      .map(({ provider, label, mode, loginCommand }) => ({
-        provider,
-        label,
-        mode,
-        loginCommand,
-      })),
+      .map((capability) => {
+        const info: AccountProviderInfo = {
+          provider: capability.provider,
+          label: capability.label,
+          mode: capability.mode,
+          loginCommand: capability.loginCommand,
+        }
+        if (capability.mode === "selectable" && capability.nativeLogin) info.nativeLogin = true
+        if (capability.readOnlyReason) info.readOnlyReason = capability.readOnlyReason
+        return info
+      }),
     accounts: await listAccounts(),
   }
 }
@@ -145,7 +164,10 @@ export async function captureAccount(
   name: string
 ): Promise<void> {
   await mutateAccount(harness, async () => {
-    await selectableCapability(harness).captureAccount(name)
+    const capability = selectableCapability(harness)
+    if (!capability.captureAccount)
+      throw new Error(`${capability.label} logins can't be copied. Add the account by signing in.`)
+    await capability.captureAccount(name)
     forgetUsage(`${harness}:${name}`)
   })
 }
@@ -189,7 +211,97 @@ export async function removeAccount(
 
 /* ------------------------------------------------------------ selection */
 
-/** `null` selects the CLI's own login (the real home, untouched). */
+function nativeLoginCapability(harness: AccountHarness) {
+  const capability = selectableCapability(harness)
+  if (!capability.nativeLogin) throw new Error(`${capability.label} accounts can't be added in Mako yet.`)
+  return capability
+}
+
+/**
+ * Prepare one native sign-in without copying or changing any other login:
+ * a new empty profile, or an account Mako keeps whose login expired.
+ * Profiles left by an abandoned sign-in go first; the caller runs one
+ * sign-in per provider at a time.
+ */
+export async function prepareAccountLogin(
+  harness: AccountHarness,
+  target: AccountLoginTarget
+): Promise<{ launch: AccountLoginLaunch; previousEmail?: string }> {
+  return mutateAccount(harness, async () => {
+    const capability = nativeLoginCapability(harness)
+    const root = join(accountsRoot(), harness)
+    for (const entry of await readdir(root).catch(() => []))
+      if (!entry.startsWith(".") && entry !== target.name && loginPending(join(root, entry)))
+        await capability.removeAccount(entry)
+    if (!target.renew) return { launch: await capability.prepareAccountLogin(target) }
+    const listed = await capability.listAccounts(await readSelection(harness))
+    const account = listed.find((entry) => entry.name === target.name && entry.source === "mako" && !entry.missing)
+    if (!account) throw new Error("That account isn't one Mako keeps. Refresh to see your accounts.")
+    const launch = await capability.prepareAccountLogin(target)
+    return account.email === undefined ? { launch } : { launch, previousEmail: account.email }
+  })
+}
+
+/**
+ * Whether the sign-in has landed in the profile yet, for a CLI that keeps
+ * running after it succeeds. Changes nothing until it has.
+ */
+export async function accountLoginLanded(harness: AccountHarness, target: AccountLoginTarget): Promise<boolean> {
+  const capability = nativeLoginCapability(harness)
+  const confirm = capability.confirmAccountLogin?.bind(capability)
+  if (!confirm) return false
+  return mutateAccount(harness, () => confirm(target).then(() => true, () => false))
+}
+
+/**
+ * The native sign-in finished: prove the profile is signed in, then list it.
+ * A new login Mako already has is discarded and named instead, so signing in
+ * twice as one person never makes two rows that spend the same plan. An
+ * account signed in again keeps its name and says if it is someone else now.
+ */
+export async function finishAccountLogin(
+  harness: AccountHarness,
+  target: AccountLoginTarget,
+  options: { verify?: (env: NodeJS.ProcessEnv) => Promise<void>; confirmed?: boolean; previousEmail?: string }
+): Promise<AccountLoginResult> {
+  return mutateAccount(harness, async () => {
+    const capability = nativeLoginCapability(harness)
+    const { name } = target
+    if (!options.confirmed) await capability.confirmAccountLogin?.(target)
+    const env = await capability.accountEnv(name, childProcessEnv(process.env))
+    await options.verify?.(env)
+    if (!target.renew) await clearLoginPending(accountDir(harness, name))
+    forgetUsage(`${harness}:${name}`)
+    const listed = await capability.listAccounts(await readSelection(harness))
+    const email = listed.find((account) => account.name === name)?.email
+    if (target.renew) {
+      const result: AccountLoginResult = { status: "renewed", name }
+      if (email !== undefined) result.email = email
+      if (options.previousEmail !== undefined && email !== undefined && email !== options.previousEmail)
+        result.previousEmail = options.previousEmail
+      return result
+    }
+    const existing = email === undefined ? undefined : listed.find(
+      (account) => account.name !== name && account.email === email && !account.missing
+    )
+    if (existing) {
+      await capability.removeAccount(name)
+      return { status: "duplicate" as const, name: existing.name, email }
+    }
+    return email === undefined ? { status: "added" as const, name } : { status: "added" as const, name, email }
+  })
+}
+
+/** A sign-in that will not finish leaves nothing behind; an account being signed in again keeps what it had. */
+export async function discardAccountLogin(harness: AccountHarness, target: AccountLoginTarget): Promise<void> {
+  await mutateAccount(harness, async () => {
+    const capability = nativeLoginCapability(harness)
+    await capability.abandonAccountLogin?.(target)
+    if (!target.renew) await capability.removeAccount(target.name)
+  })
+}
+
+/** `null` is the CLI's ordinary login, the one a terminal signs in to. */
 export async function selectAccount(
   harness: AccountHarness,
   name: string | null
@@ -214,7 +326,46 @@ export async function accountEnv(
   provider: string,
   base: NodeJS.ProcessEnv
 ): Promise<NodeJS.ProcessEnv> {
-  return (await resolveAccountLaunch(provider, base)).env
+  return (await resolveAccountLaunch(provider, base, { trackCredential: false })).env
+}
+
+/** Host-only, prepared once for an execution. Never serialize the environment. */
+export interface AccountLaunch {
+  env: NodeJS.ProcessEnv
+  account: SelectedAccount
+  selection: { kind: "selectable"; name: string | null } | { kind: "observed" } | { kind: "unavailable" }
+  /** Opaque configured-source equality. Host-only, never a native principal. */
+  credential?: { name: string; revision: string }
+}
+
+export class ExecutionAccountChanged extends Error {
+  readonly reason: "selection" | "credentials"
+  constructor(reason: "selection" | "credentials") {
+    super(reason === "selection"
+      ? "The selected account changed. Reconnect this agent before sending; no prompt was dispatched and existing work was preserved."
+      : "The account credentials changed. Reconnect this agent before sending; no prompt was dispatched and existing work was preserved.")
+    this.name = "ExecutionAccountChanged"
+    this.reason = reason
+  }
+}
+
+/** The native process reported a different identity than the account it was launched with. */
+export class ExecutionIdentityMismatch extends Error {
+  constructor(principal: string, expected: string) {
+    super(`This agent is signed in as ${principal}, not ${expected}, the account this session started with. Nothing was sent. Sign ${expected} in again in Settings › Agents, or choose the account it is signed in as.`)
+    this.name = "ExecutionIdentityMismatch"
+  }
+}
+
+/** The email Mako lists for an account, to compare with what its native process reports. */
+export async function accountPrincipal(provider: string, name: string): Promise<string | undefined> {
+  const capability = providerHost.accountCapabilities.get(provider)
+  if (!capability) return undefined
+  try {
+    return (await capability.listAccounts(await capabilitySelection(capability))).find(account => account.name === name && !account.missing)?.email
+  } catch {
+    return undefined
+  }
 }
 
 /** Resolve selection and its launch environment together under the identity lease.
@@ -222,23 +373,43 @@ export async function accountEnv(
  */
 export async function resolveAccountLaunch(
   provider: string,
-  base: NodeJS.ProcessEnv
-): Promise<{ env: NodeJS.ProcessEnv; account: SelectedAccount }> {
+  base: NodeJS.ProcessEnv,
+  options: { trackCredential?: boolean } = {}
+): Promise<AccountLaunch> {
   const env = childProcessEnv(base)
   const capability = providerHost.accountCapabilities.get(provider)
-  if (!capability) return { env, account: { name: "default" } }
+  if (!capability) return { env, account: { name: "default" }, selection: { kind: "unavailable" } }
   const resolve = async () => {
     const selection = await capabilitySelection(capability)
+    const name = selection ?? "default"
+    const before = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
     const resolved = await capability.accountEnv(selection, env)
-    return { env: resolved, account: capability.selectedAccount(selection, resolved) }
+    const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
+    if (before !== revision) throw new ExecutionAccountChanged("credentials")
+    return { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"
+      ? { kind: "selectable" as const, name: selection }
+      : { kind: "observed" as const }, credential: revision === undefined ? undefined : { name, revision } }
   }
   return capability.mode === "selectable" ? mutateAccount(provider, resolve) : resolve()
+}
+
+/** Linearizes new input against configured selection and credential revision.
+ * Running work keeps its launch identity. Equality of the configured source
+ * does not prove the principal reported by native code or OAuth refresh health. */
+export async function assertAccountLaunch(provider: string, launch: AccountLaunch): Promise<void> {
+  if (launch.selection.kind === "selectable" && await readSelection(provider) !== launch.selection.name)
+    throw new ExecutionAccountChanged("selection")
+  if (launch.credential) {
+    const capability = providerHost.accountCapabilities.get(provider)
+    if (!capability || await capability.credentialRevision(launch.credential.name, launch.env) !== launch.credential.revision)
+      throw new ExecutionAccountChanged("credentials")
+  }
 }
 
 export async function selectedAccount(
   provider: string
 ): Promise<SelectedAccount> {
-  return (await resolveAccountLaunch(provider, process.env)).account
+  return (await resolveAccountLaunch(provider, process.env, { trackCredential: false })).account
 }
 
 /* ------------------------------------------------------------ usage */
@@ -517,6 +688,7 @@ export async function switchSuggestion(
   const best = await pickAccount(harness)
   if (!best || best.name === active.name || best.usedPercent >= 70) return null
   const capability = selectableCapability(harness)
+  const other = (await harnessAccounts(harness)).find((account) => account.name === best.name)
   suggestedAt.set(harness, Date.now())
-  return `${capability.label} account "${active.name}" is at ${Math.round(used)}% of its window — "${best.name}" is at ${Math.round(best.usedPercent)}%. Switch in Settings → Agents.`
+  return `${capability.label} account ${active.email ?? active.name} is at ${Math.round(used)}% of its window. ${other?.email ?? best.name} is at ${Math.round(best.usedPercent)}%. Switch in Settings → Agents.`
 }

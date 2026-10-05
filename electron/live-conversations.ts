@@ -1,9 +1,11 @@
 import { LiveQuestions } from "./live-questions.js"
 import { disconnectedContext } from "./execution-context.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.js"
 import { verifyRecoveredSession } from "./provider-recovery.js"
 import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
+import { nativePromptReference } from "./contracts/native-prompt-identity.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import type {
@@ -71,7 +73,7 @@ import type {
   NativeActivityObservation,
 } from "./shared.js"
 import { reduceLiveUpdates, mergeLiveUpdates, changedLiveBlockStart, isTurnStart } from "./contracts/live-content.js"
-import type { InterruptionReason, TurnContinuation } from "./contracts/live-conversations.js"
+import type { AccountSwitchWait, InterruptionReason, TurnContinuation } from "./contracts/live-conversations.js"
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, TurnSteps } from "./interrupted-turn.js"
 import { controlNote } from "./control-launch.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
@@ -1031,7 +1033,7 @@ export class LiveConversations {
     if (clearSince) resident.idleSince = undefined
   }
 
-  private canHibernate(resident: Resident, preparing = false): boolean {
+  private canHibernate(resident: Resident, preparing = false, recoverAccount = false): boolean {
     const native = resident.snapshot.nativeAgents?.agents ?? []
     const children = this.control(resident).children
     const binding = this.activeBinding(resident)
@@ -1053,15 +1055,16 @@ export class LiveConversations {
         !resident.rewinding &&
         !resident.autoContinue &&
         !resident.snapshot.permissions.length &&
-        resident.snapshot.requests.some(
+        (recoverAccount || resident.snapshot.requests.some(
           (request) =>
             request.status === "completed" ||
             request.status === "interrupted"
-        ) &&
+        )) &&
         !resident.snapshot.requests.some(
           (request) =>
             request.status === "dispatching" ||
-            (request.status === "queued" && !this.moves.holdsQueued(resident))
+            (request.status === "queued" && !this.moves.holdsQueued(resident) &&
+              !(recoverAccount && (!request.nativeDelivery || request.nativeDelivery.evidence.kind === "not-accepted")))
         ) &&
         !native.some(isActiveNativeAgent) &&
         !children.some(
@@ -1073,6 +1076,65 @@ export class LiveConversations {
             child.delivery === "queued"
         )
     )
+  }
+
+  /**
+   * What keeps a session that has to change account from reopening now, in
+   * words for the person waiting; undefined when nothing will clear on its
+   * own, such as a harness that cannot resume.
+   */
+  private accountSwitchWait(resident: Resident): AccountSwitchWait | undefined {
+    const binding = this.activeBinding(resident)
+    if (!this.dependencies.driver(binding?.provider ?? "")?.canResume || !binding?.nativeId || !binding.path) return undefined
+    if (resident.snapshot.session.backgroundTasks) return "background"
+    if ((resident.snapshot.nativeAgents?.agents ?? []).some(isActiveNativeAgent)) return "subagents"
+    if (this.control(resident).children.some(child => child.status === "starting" || child.status === "working" || child.status === "needs-permission"))
+      return "children"
+    if (resident.snapshot.permissions.length) return "approval"
+    if (resident.snapshot.session.status === "running") return "turn"
+    return "operation"
+  }
+
+  /** Retire and reopen under the selected account once nothing is running; the queued input then sends. */
+  private async switchAccount(resident: Resident, request: LiveRequest): Promise<void> {
+    if (resident.accountSwitching) return
+    if (!this.canHibernate(resident, false, true)) {
+      const waitingFor = this.accountSwitchWait(resident)
+      if (waitingFor && waitingFor !== request.accountSwitch?.waitingFor) {
+        resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(candidate =>
+          candidate.id === request.id && candidate.accountSwitch ? { ...candidate, accountSwitch: { ...candidate.accountSwitch, waitingFor } } : candidate) }
+        this.flush(resident)
+      }
+      return
+    }
+    resident.accountSwitching = true
+    try {
+      resident.accountRefreshRequest = request.id
+      resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(candidate =>
+        candidate.id === request.id ? { ...candidate, accountSwitch: undefined } : candidate) }
+      this.flush(resident)
+      hostLog("live", "switching a session's account for waiting input", {
+        conversation: resident.snapshot.session.id, request: request.id, reason: request.accountSwitch?.reason,
+      })
+      await this.hibernate(resident, "account-change")
+    } finally {
+      resident.accountSwitching = false
+    }
+    if (resident.closing || resident.snapshot.session.status === "closed") return
+    if (resident.snapshot.session.connection === "hibernated" &&
+      resident.snapshot.requests.some(candidate => candidate.status === "queued")) {
+      await this.wake(resident)
+      return
+    }
+    // Work that started during retirement waits again; a failed close fails
+    // the input rather than retrying it, and never sends under the old account.
+    const waitingFor = this.canHibernate(resident, false, true) ? undefined : this.accountSwitchWait(resident)
+    resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(candidate =>
+      candidate.id !== request.id || candidate.status !== "queued" ? candidate
+        : waitingFor ? { ...candidate, accountSwitch: { reason: request.accountSwitch?.reason ?? "selection", waitingFor } }
+          : { ...candidate, status: "failed", error: new ExecutionAccountChanged(request.accountSwitch?.reason ?? "selection").message }) }
+    resident.accountRefreshRequest = undefined
+    this.flush(resident)
   }
 
   private scheduleHibernation(
@@ -1175,7 +1237,8 @@ export class LiveConversations {
     resident: Resident,
     reason: string
   ): Promise<void> {
-    if (!this.canHibernate(resident)) return
+    const recoverAccount = reason === "account-change"
+    if (!this.canHibernate(resident, false, recoverAccount)) return
     const binding = this.activeBinding(resident)
     if (!binding?.nativeId || !binding.path) return
     const generation = resident.generation
@@ -1188,7 +1251,7 @@ export class LiveConversations {
     if (
       !checkpointReady ||
       resident.generation !== generation ||
-      !this.canHibernate(resident, true)
+      !this.canHibernate(resident, true, recoverAccount)
     )
       return
     const retiringGeneration = ++resident.generation
@@ -2432,6 +2495,7 @@ export class LiveConversations {
           text: command.change.text,
           displayText: undefined,
           nativeDelivery: undefined,
+          nativePrompt: undefined,
         }
         break
     }
@@ -3087,6 +3151,12 @@ export class LiveConversations {
     const request =
       resident.snapshot.session.status === "failed" ? queued.at(-1) : queued[0]
     if (!request || request.status === "held") return
+    if (request.accountSwitch) {
+      void this.switchAccount(resident, request).catch((error) => {
+        hostWarn("live", "account switch failed", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })
+      })
+      return
+    }
     const previousSnapshot = resident.snapshot
     const previousUpdates = [...resident.updates]
     const previousCharacters = resident.pendingCharacters
@@ -3103,6 +3173,7 @@ export class LiveConversations {
     const usage = resident.snapshot.session.usage
     const current = {
       ...request,
+      nativePrompt: undefined,
       nativeDelivery,
       usageFrom: usage?.tokens || usage?.cost ? { ...(usage.tokens && { tokens: usage.tokens }), ...(usage.cost && { cost: usage.cost }) } : undefined,
       status: "dispatching" as const,
@@ -3180,10 +3251,16 @@ export class LiveConversations {
       const delivery = target.nativeDelivery
       const next = advancePromptDelivery(delivery.evidence, evidence)
       if (next === delivery.evidence) return
+      const binding = this.control(resident).bindings.find(item => item.id === bindingId)
+      const prompt = nativePromptReference(driver.nativePromptIdentity, next, {
+        bindingId, attemptId, provider: binding?.provider ?? driver.provider,
+        nativeId: binding?.nativeId,
+        path: binding?.path,
+      })
       resident.snapshot = {
         ...resident.snapshot,
         requests: resident.snapshot.requests.map((item) =>
-          item === target ? { ...item, nativeDelivery: { ...delivery, evidence: next } } : item
+          item === target ? { ...item, nativePrompt: prompt, nativeDelivery: { ...delivery, evidence: next } } : item
         ),
       }
       try {
@@ -3208,7 +3285,7 @@ export class LiveConversations {
           { operationId: request.id, attemptId, report }
         )
       )
-      .catch((error) => {
+      .catch(async (error) => {
         report({ kind: "uncertain", reason: errorMessage({ error }) })
         const target = resident.snapshot.requests.find(
           (candidate) =>
@@ -3217,6 +3294,57 @@ export class LiveConversations {
         if (generation !== resident.generation || !target) return
         const session = resident.snapshot.session
         const refused = target.nativeDelivery?.attemptId === attemptId && target.nativeDelivery.evidence.kind === "not-accepted"
+        if (refused && error instanceof ExecutionAccountChanged && resident.accountRefreshRequest !== request.id &&
+          session.status === "ready" && session.connection === "connected") {
+          resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(candidate =>
+            candidate === target ? { ...candidate, status: "queued", error: undefined, snapshots: undefined } : candidate) }
+          if (this.canHibernate(resident, false, true)) {
+            resident.accountRefreshRequest = request.id
+            this.dependencies.workspaceSnapshots?.abandonRun(request.id)
+            this.flush(resident)
+            await this.hibernate(resident, "account-change")
+            if (resident.snapshot.session.connection === "hibernated" && !resident.closing &&
+              resident.snapshot.requests.some(candidate => candidate.status === "queued")) {
+              hostLog("live", "reopening an idle account for proven-unsent input", {
+                conversation: resident.snapshot.session.id, request: request.id, reason: error.reason,
+              })
+              await this.wake(resident)
+              return
+            }
+          } else {
+            // Background work, subagents or an approval keep the old process
+            // in use. The input waits unsent and the switch happens when they
+            // end, so changing accounts never strands a session on the old one.
+            const waitingFor = this.accountSwitchWait(resident)
+            if (waitingFor) {
+              this.dependencies.workspaceSnapshots?.abandonRun(request.id)
+              resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(candidate =>
+                candidate.id === request.id ? { ...candidate, accountSwitch: { reason: error.reason, waitingFor } } : candidate) }
+              this.flush(resident)
+              hostLog("live", "input waits for a session to switch account", {
+                conversation: resident.snapshot.session.id, request: request.id, reason: error.reason, waitingFor,
+              })
+              return
+            }
+          }
+          // Retirement can be refused by a checkpoint, child or ownership
+          // change. Keep the unsent receipt and require explicit recovery.
+          if (resident.closing || resident.snapshot.session.status === "closed") return
+          if (resident.generation !== generation || this.control(resident).activeBindingId !== bindingId) return
+        }
+        if (refused && error instanceof ExecutionIdentityMismatch) {
+          // The agent is signed in as someone else. Nothing was sent and the
+          // conversation is intact: fail only this input, and retire the
+          // process so the next message launches with whatever credentials
+          // the user fixes or chooses.
+          resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map(candidate =>
+            candidate === target ? { ...candidate, status: "failed", error: error.message, failure: "wrong-account" } : candidate) }
+          this.checkpoints.settle(resident, request.id)
+          this.flush(resident)
+          hostWarn("live", "input refused: the agent reported a different account", { conversation: session.id, request: request.id })
+          if (this.canHibernate(resident, false, true)) await this.hibernate(resident, "account-change")
+          return
+        }
         if (session.status === "running" && session.connection === "connected") {
           if (refused) {
             // The driver refused before sending because the provider was

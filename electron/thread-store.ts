@@ -227,7 +227,7 @@ export interface MoveBegan {
 
 /**
  * The file a native path names. A provider root can be reached through a
- * symlink (a Claude router profile whose `projects` links to
+ * symlink (a Claude account home whose `projects` links to
  * `~/.claude/projects`): the catalog lists the resolved path while a journal
  * kept the one its session was opened by. A `#` suffix (one session inside a
  * Devin or OpenCode database) is kept as it is. A deleted file resolves

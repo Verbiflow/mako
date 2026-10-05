@@ -37,6 +37,8 @@ export * from "./contracts/notifications.js"
 
 export type {
   AccountCatalog,
+  AccountLogin,
+  AccountLoginResult,
   AccountProviderInfo,
   AccountHarness,
   AccountProvider,

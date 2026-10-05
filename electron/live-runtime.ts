@@ -62,6 +62,10 @@ export interface Resident {
   hibernating?: Promise<void>
   /** One coalesced resume for every prompt that arrives while hibernated. */
   waking?: Promise<void>
+  /** At most one automatic account reopen for an input proven unsent. */
+  accountRefreshRequest?: string
+  /** Set while an input waiting for an account switch retires and reopens this session. */
+  accountSwitching?: boolean
   retireWhenIdle?: boolean
   /** The scheduled continuation of a turn that ended on a dropped connection, while it is pending. */
   autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }

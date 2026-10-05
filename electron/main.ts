@@ -206,6 +206,7 @@ import {
   harnessProfilesNow,
   onHarnessProfile,
   refreshHarnessProfiles,
+  stopHarnessProfiles,
   resolveHarnessTuning,
 } from "./harnesses.js"
 import { RuntimeUpdates } from "./runtime-updates.js"
@@ -222,6 +223,12 @@ import {
   type AccountHarness,
   type AccountProvider,
 } from "./accounts.js"
+import {
+  cancelAccountLogin,
+  startAccountLogin,
+  submitAccountLoginCode,
+  waitAccountLogin,
+} from "./account-login.js"
 import type { ProviderConnectionAction } from "./contracts/provider-connection.js"
 import { daemonLoginEnabled, setDaemonLogin } from "./daemon-login.js"
 import { buildTag } from "./build-identity.js"
@@ -1482,6 +1489,10 @@ function bindIpc() {
   }
   /* Harness accounts: several logins per CLI, Orca-style isolated homes. */
   handle("mako:accounts", () => accountCatalog())
+  handle("mako:account-login-start", (_e, harness: AccountHarness, renew?: string) => startAccountLogin(harness, renew))
+  handle("mako:account-login-wait", (_e, id: string) => waitAccountLogin(id))
+  handle("mako:account-login-code", (_e, id: string, code: string) => submitAccountLoginCode(id, code))
+  handle("mako:account-login-cancel", (_e, id: string) => cancelAccountLogin(id))
   handle("mako:account-capture", (_e, harness: AccountHarness, name: string) =>
     captureAccount(harness, name)
   )
@@ -2567,6 +2578,10 @@ const quitLifecycle = backgroundLifecycle({
     cleanup: async () => {
       hostClosing = true
       const callsDrained = stopHostCalls()
+      // Close admission before disposing the UI lifecycle: pending preparation
+      // must not inherit its reset admission callback and dispatch late.
+      const providersDrained = Promise.all([stopDrivers(), stopHarnessProfiles()])
+      void providersDrained.catch(() => {})
       desktopNotifier.dispose()
       application?.dispose()
       sharedConversations?.dispose()
@@ -2598,9 +2613,8 @@ const quitLifecycle = backgroundLifecycle({
       runtimeUpdates.stop()
       void stopRelayWorker()
       stopThreads()
-      await callsDrained
+      await Promise.all([callsDrained, providersDrained])
       await liveConversations?.stop()
-      stopDrivers()
       stopAcp()
       stopCodexApps()
       nativeRequests?.stop()

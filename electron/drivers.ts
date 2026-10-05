@@ -29,7 +29,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { resolveAccountLaunch, switchSuggestion } from "./accounts.js"
+import { assertAccountLaunch, resolveAccountLaunch, switchSuggestion, type AccountLaunch } from "./accounts.js"
 import { resumable, type ResumeVerdict } from "./contracts/conversation-control.js"
 import { reconnectRefusal } from "./live-transfers.js"
 import { providerHost } from "./providers/index.js"
@@ -40,6 +40,10 @@ import {
   type NativeRunner,
 } from "./providers/native-runner.js"
 import { hostLog, hostWarn } from "./host-log.js"
+import { launchContext } from "./execution-context.js"
+import type { ExecutionContext } from "./contracts/execution-context.js"
+import { ExecutionCredentialSchema } from "./contracts/execution-context.js"
+import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"
 import type { HostEvent, ThreadRunState } from "./shared.js"
 import {
   environmentForExecutable,
@@ -69,8 +73,13 @@ export interface NativeRunResult {
   text: string
 }
 
-interface Run {
+interface OwnedSessionClaim {
   releaseSession?: () => void
+  releaseError?: Error
+}
+interface Run extends OwnedSessionClaim {
+  settled: Promise<void>
+  settle(): void
   cwd: string
   token: string
   child: ChildProcess
@@ -82,7 +91,18 @@ interface Run {
 }
 
 const runs = new Map<string, Run>()
-const preparingRuns = new Map<string, LifecycleWork>()
+interface Preparation extends OwnedSessionClaim {
+  work: LifecycleWork
+  settled: Promise<void>
+  cancelled?: boolean
+}
+const preparingRuns = new Map<string, Preparation>()
+let closing = false
+let stopping: Promise<void> | undefined
+function assertNativeAdmission(): void {
+  if (closing) throw new Error("Mako's native launcher is shutting down. Your prompt was not sent.")
+  assertLifecycleAdmission()
+}
 const MAX_REMEMBERED_RUNS = 600
 let emit: (event: HostEvent) => void = () => {}
 
@@ -169,7 +189,7 @@ export async function resumeNative(
 ): Promise<ThreadRunState> {
   if (ref.resumeUnavailable) throw new Error(ref.resumeUnavailable)
   const existing = runs.get(ref.path)
-  if (existing && existing.state.status === "running") throw new Error("This native session already has an active writer")
+  if (existing && (existing.state.status === "running" || existing.releaseSession)) throw new Error("This native session already has an active writer or retained ownership")
 
   const runner = providerHost.nativeRunners.get(ref.harness)
   if (!runner)
@@ -229,22 +249,49 @@ async function launch(
   const cwd = workingDir && existsSync(workingDir) ? workingDir : homedir()
   // The selected account decides who pays for this run, and what the
   // command line may name: Cursor's model list is the account's own.
-  assertLifecycleAdmission()
+  assertNativeAdmission()
   // Reserve before the first await. Concurrent native replies must not build or spawn a second writer.
-  if (preparingRuns.has(key) || runs.get(key)?.state.status === "running")
+  if (preparingRuns.has(key) || runs.get(key)?.state.status === "running" || runs.get(key)?.releaseSession)
     throw new Error("This native session already has an active or preparing writer")
-  preparingRuns.set(key, { id: `preparing:${key}`, token: key, title: "Starting a native agent", provider: harness, cwd, status: "finishing", stoppable: false })
+  const preparing = ownedWorkCompletion()
+  const preparation: Preparation = { work: { id: `native:${key}`, token: randomUUID(), title: "Starting a native agent", provider: harness, cwd, status: "finishing", stoppable: true }, settled: preparing.promise }
+  preparingRuns.set(key, preparation)
+  const assertPreparation = () => {
+    assertNativeAdmission()
+    if (preparation.cancelled || preparingRuns.get(key) !== preparation)
+      throw new Error("Native startup was cancelled. Your prompt was not sent.")
+  }
+  const failedPreparation = () => {
+    releaseOwnership(preparation, harness, key)
+    if (!preparation.releaseSession && preparingRuns.get(key) === preparation) preparingRuns.delete(key)
+    preparing.resolve()
+  }
   let env: NodeJS.ProcessEnv
   let command: string
   let args: string[]
   let commandEnv: Record<string, string> | undefined
   let releaseSession: (() => void) | undefined
+  let executionContext: ExecutionContext
+  let accountLaunch: AccountLaunch
   try {
     const launch = await resolveAccountLaunch(harness, process.env)
-    env = launch.env
+    accountLaunch = launch
+    assertPreparation()
+    const resolved = runner.launchCredentials.kind === "resolved"
+      ? await runner.launchCredentials.resolve(launch.env)
+      : undefined
+    assertPreparation()
+    env = { ...(resolved?.env ?? launch.env) }
+    executionContext = launchContext(runner.transport, {
+      kind: "unavailable", reason: "This headless transport has not reported the executing native identity.",
+    }, launch.account)
+    if (resolved) executionContext.credential = ExecutionCredentialSchema.parse(resolved.credential)
+    else if (runner.launchCredentials.kind === "unavailable")
+      executionContext.credential = { kind: "unavailable", reason: runner.launchCredentials.reason }
     const prepared = runner.prepare
       ? await runner.prepare(options, env)
       : dropUncarried(options, runner.carries)
+    assertPreparation()
     // A setting the command line cannot carry is said out loud, never
     // silently left behind: the ACP transport would have applied it.
     if (prepared.dropped.length) {
@@ -257,37 +304,43 @@ async function launch(
       })
     }
     ;({ command, args, env: commandEnv } = await build(prepared.options, env))
+    assertPreparation()
     if (ref) {
       const verdict = await hooks.assessResume?.(ref)
+      assertPreparation()
       if (!verdict || !resumable(verdict)) throw new Error(reconnectRefusal(verdict))
       if (!hooks.claimSession) throw new Error("Native session ownership is unavailable. Retry after the host reconnects.")
       releaseSession = hooks.claimSession(ref)
+      preparation.releaseSession = releaseSession
       hooks.prepared?.(ref, preparedSettings(prepared.options))
+      assertPreparation()
     }
-    hostLog("native", "launch context prepared", { harness, key, account: launch.account.name, operation: ref ? "resume" : "fresh" })
+    hostLog("native", "launch context prepared", { harness, key, account: launch.account.name, transport: runner.transport, credentialSource: executionContext.credential?.kind === "configured" ? executionContext.credential.source : "unverified", operation: ref ? "resume" : "fresh" })
   } catch (error) {
-    releaseSession?.()
+    failedPreparation()
     throw error
-  } finally {
-    preparingRuns.delete(key)
   }
-  if (commandEnv) env = { ...env, ...commandEnv }
-  const executable = resolveExecutable(command, env)
+  let executable: string | null
   let child: ChildProcess
   try {
+    if (commandEnv) env = { ...env, ...commandEnv }
+    executable = resolveExecutable(command, env)
     if (!executable) throw new Error(`${harness} is not installed`)
-    assertLifecycleAdmission()
+    await assertAccountLaunch(harness, accountLaunch)
+    assertPreparation()
     child = spawn(executable, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: environmentForExecutable(executable, env),
     })
   } catch (error) {
-    releaseSession?.()
+    failedPreparation()
     throw error
   }
 
-  const state: ThreadRunState = { path: key, harness, status: "running" }
+  executionContext.executable = executable
+  const state: ThreadRunState = { path: key, harness, status: "running", executionContext }
+  const settled = ownedWorkCompletion()
   let resolveRun: (result: NativeRunResult) => void = () => {}
   const completed = captureOutput
     ? new Promise<NativeRunResult>((resolve) => {
@@ -295,6 +348,8 @@ async function launch(
       })
     : undefined
   const run: Run = {
+    settled: settled.promise,
+    settle: () => settled.resolve(),
     cwd,
     token: randomUUID(),
     child,
@@ -306,6 +361,9 @@ async function launch(
     releaseSession,
   }
   runs.set(key, run)
+  preparation.releaseSession = undefined
+  if (preparingRuns.get(key) === preparation) preparingRuns.delete(key)
+  preparing.resolve()
   push(state)
 
   // The moment someone spends from an account is the moment its headroom is
@@ -363,31 +421,75 @@ async function launch(
 }
 
 export function nativeLifecycleWork(): LifecycleWork[] {
-  return [...preparingRuns.values(), ...[...runs.values()].filter((run) => run.state.status === "running").map((run): LifecycleWork => ({ id: `native:${run.state.path}`, token: run.token, provider: run.state.harness, title: "Native agent", cwd: run.cwd, status: "running", stoppable: true }))]
+  return [...preparingRuns.values()].map(entry => ({ ...entry.work, stoppable: !entry.cancelled && !entry.releaseError })).concat([...runs.values()]
+    .filter(run => run.state.status === "running" || Boolean(run.releaseSession))
+    .map((run): LifecycleWork => ({ id: `native:${run.state.path}`, token: run.token, provider: run.state.harness, title: "Native agent", cwd: run.cwd, status: run.state.status === "running" ? "running" : "finishing", stoppable: !run.releaseError })))
 }
 
 export function nativeStopToken(path: string): string | null {
+  const preparing = preparingRuns.get(path)
+  if (preparing && !preparing.cancelled && !preparing.releaseError) return preparing.work.token
   const run = runs.get(path)
   return run?.state.status === "running" ? run.token : null
 }
 
 export function abortNative(path: string, expectedToken?: string): void {
+  const preparing = preparingRuns.get(path)
+  if (preparing && (expectedToken === undefined || expectedToken === preparing.work.token)) {
+    preparing.cancelled = true
+    return
+  }
   const run = runs.get(path)
   if (run && run.state.status === "running" && (expectedToken === undefined || expectedToken === run.token)) run.child.kill("SIGTERM")
 }
 
-export function stopDrivers(): void {
-  for (const run of runs.values()) {
+export function stopDrivers(timeoutMs = 30_000): Promise<void> {
+  closing = true
+  if (stopping) return stopping
+  const owned = [...runs.values()]
+  const preparing = [...preparingRuns.entries()]
+  const startedAt = performance.now()
+  hostLog("native", "shutdown drain started", { running: owned.filter(run => run.state.status === "running").length, preparing: preparing.length, retained: owned.filter(run => run.releaseError).length })
+  for (const [key, entry] of preparing) {
+    if (!entry.releaseError) continue
+    releaseOwnership(entry, entry.work.provider, key)
+    if (!entry.releaseSession && preparingRuns.get(key) === entry) preparingRuns.delete(key)
+  }
+  for (const run of owned)
     if (run.state.status === "running") run.child.kill("SIGTERM")
+    else if (run.releaseSession) releaseOwnership(run, run.state.harness, run.state.path)
+  const pending = preparing.map(([, entry]) => entry.settled).concat(owned.map(run => run.settled))
+  const drain = drainOwnedWork(pending, timeoutMs, "Native shutdown did not complete.").then(() => {
+    if (owned.some(run => run.releaseSession) || preparing.some(([, entry]) => entry.releaseSession))
+      throw new Error("Native session ownership could not be released. The ledger must remain open.")
+    hostLog("native", "shutdown drain completed", { elapsedMs: performance.now() - startedAt, runs: owned.length, preparing: preparing.length })
+  }).catch(error => {
+    hostWarn("native", "shutdown drain refused", { elapsedMs: performance.now() - startedAt, running: owned.filter(run => run.state.status === "running").length, retained: owned.filter(run => run.releaseSession).length, preparing: preparingRuns.size })
+    throw error
+  }).finally(() => { if (stopping === drain) stopping = undefined })
+  stopping = drain
+  return drain
+}
+
+function releaseOwnership(run: OwnedSessionClaim, harness: string, path: string): void {
+  try {
+    run.releaseSession?.()
+    run.releaseSession = undefined
+    run.releaseError = undefined
+  } catch (error) {
+    run.releaseError = error instanceof Error ? error : new Error("Native ownership release failed")
+    hostWarn("native", "ownership release failed", { harness, path, error: run.releaseError.name })
   }
 }
 
 function finish(run: Run, next: Partial<ThreadRunState>): void {
   if (run.state.status !== "running") return
-  const release = run.releaseSession
-  run.releaseSession = undefined
-  release?.()
+  releaseOwnership(run, run.state.harness, run.state.path)
   run.state = { ...run.state, ...next }
+  if (run.releaseError) run.state = { ...run.state, status: "failed", error: "The native process closed, but session ownership could not be released." }
+  run.settle()
+  run.resolve({ state: run.state, text: run.stdout.trim() })
+  run.outputSubscribers.clear()
   // A late event owns only this launch, never a later run at the same path.
   if (runs.get(run.state.path) !== run) return
   runs.delete(run.state.path)
@@ -395,7 +497,7 @@ function finish(run: Run, next: Partial<ThreadRunState>): void {
   while (runs.size > MAX_REMEMBERED_RUNS) {
     let removed = false
     for (const [path, entry] of runs) {
-      if (entry.state.status === "running") continue
+      if (entry.state.status === "running" || entry.releaseSession) continue
       runs.delete(path)
       removed = true
       break
@@ -403,8 +505,6 @@ function finish(run: Run, next: Partial<ThreadRunState>): void {
     if (!removed) break
   }
   push(run.state)
-  run.resolve({ state: run.state, text: run.stdout.trim() })
-  run.outputSubscribers.clear()
 }
 
 function push(state: ThreadRunState): void {

@@ -157,7 +157,7 @@ async function startCodex(
   const id = options.conversationId
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
-  const { env, account: configuredAccount } = await trace.step("account", () => resolveAccountLaunch("codex", process.env))
+  const { env, account: configuredAccount } = await trace.step("account", () => options.accountLaunch ?? resolveAccountLaunch("codex", process.env))
   const account = Promise.resolve(configuredAccount.name)
   if (options.conversationTools)
     env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token

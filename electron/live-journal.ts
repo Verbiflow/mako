@@ -1,6 +1,7 @@
 import { LiveInputQuestionSchema } from "./contracts/live-questions.js"
 import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "./contracts/approval-response.js"
 import { PromptDeliverySchema } from "./contracts/prompt-delivery.js"
+import { NativePromptReferenceSchema } from "./contracts/native-prompt-identity.js"
 import { NativeAgentRosterSchema } from "./contracts/native-agents.js"
 import {
   ModelOptionSchema,
@@ -22,7 +23,7 @@ import {
   changedLiveBlockStart,
 } from "./contracts/live-content.js"
 import { RunSnapshotsSchema } from "./contracts/workspace-snapshots.js"
-import { INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "./contracts/live-conversations.js"
+import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "./contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "./contracts/provider-failure.js"
 import { ActorSchema } from "./contracts/thread-identity.js"
 import { ACCESS_TIER_NAMES } from "./contracts/access.js"
@@ -51,6 +52,7 @@ const CostSchema = z.object({ amount: z.number(), currency: z.string() })
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
   nativeDelivery: PromptDeliverySchema.optional(),
+  nativePrompt: NativePromptReferenceSchema.optional(),
   targetBindingId: z.string().optional(),
   snapshots: RunSnapshotsSchema.optional(),
   tuning: SessionSettingsSchema.optional(),
@@ -78,6 +80,7 @@ export const LiveRequestSchema = z.object({
     "interrupted",
   ]),
   error: z.string().optional(),
+  accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS) }).optional(),
   interruption: z
     .object({
       reason: z.enum(INTERRUPTION_REASONS),

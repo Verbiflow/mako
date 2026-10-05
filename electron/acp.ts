@@ -252,7 +252,7 @@ async function startAcp(
   const launchTier = requestedAccess ?? policy?.default
   const launchAccess =
     launchTier && policy?.launch?.includes(launchTier) ? launchTier : null
-  const { env, account } = await trace.step("account", () => resolveAccountLaunch(harness, process.env))
+  const { env, account } = await trace.step("account", () => options.accountLaunch ?? resolveAccountLaunch(harness, process.env))
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const launchOptions: AcpLaunchOptions = {
     cwd: workingDir,
