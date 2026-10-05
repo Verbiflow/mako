@@ -125,6 +125,7 @@ const GrokTurnCompletedSchema = z.object({
 })
 
 export const grokAcpSource: ProviderAcpSource = {
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   ...fileResumeEvidence(grokProcessProbe),
   provider: "grok",
   approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
@@ -231,3 +232,4 @@ export const grokAcpSource: ProviderAcpSource = {
     return launch
   },
 }
+import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"

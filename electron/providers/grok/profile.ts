@@ -30,7 +30,7 @@ export const grokProfileLoader: ProviderProfileLoader = {
     "memory",
   ],
   cacheKey: (env) => `${env.GROK_HOME ?? ""}\0${env.GROK_AUTH_PATH ?? ""}`,
-  async load(env, cwd) {
+  async load(env, cwd, context) {
     const executable = resolveExecutable("grok", env)
     if (!executable) throw new Error("Grok is not installed")
     const output = await runDiscovery(
@@ -38,7 +38,8 @@ export const grokProfileLoader: ProviderProfileLoader = {
       ["models"],
       env,
       undefined,
-      cwd
+      cwd,
+      context?.signal
     )
     const cached = await readJson<GrokModelCache>(
       join(env.GROK_HOME ?? join(homedir(), ".grok"), "models_cache.json")

@@ -1,5 +1,6 @@
 import { resolveExecutable } from "../../executable.js"
 import {
+  CLI_OWNED_CREDENTIALS,
   argumentAfter,
   commandTuning,
   dropUncarried,
@@ -20,6 +21,8 @@ function tuningArgs(options: Parameters<NativeRunner["fresh"]>[1]): string[] {
 
 export const grokNativeRunner: NativeRunner = {
   provider: "grok",
+  transport: "grok-cli-headless",
+  launchCredentials: CLI_OWNED_CREDENTIALS,
   available: () => resolveExecutable("grok") !== null,
   fastMode: "supported",
   carries: CARRIES,
