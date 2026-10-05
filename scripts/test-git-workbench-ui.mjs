@@ -485,6 +485,24 @@ async function check() {
     await capture("review-commit-scope.png", true)
     await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('changesLayout', 'files'))")
     console.log("Review: image thumbnails and sizes in the header; the scope picker lists Since main and recent commits and shows one commit")
+    // A pull request is the harness's to write by default; the form is the override.
+    await evaluate("window.__attached = []; window.addEventListener('mako:attach', (event) => window.__attached.push(event.detail.text('')))")
+    await evaluate("import('/src/state/github.ts').then(m => m.pullComposer.open('/fixture/media'))")
+    await until("Boolean(document.querySelector('section[aria-label=\"Open a pull request\"]'))")
+    const card = "document.querySelector('section[aria-label=\"Open a pull request\"]')"
+    assert.equal(await evaluate(`Boolean(${card}.querySelector('[aria-label="Pull request title"]'))`), false, "The harness writes the pull request unless you choose to")
+    assert.match(await evaluate(`${card}.textContent`), /writes the title and description from the branch's commits/)
+    assert.equal(await evaluate("document.querySelectorAll('.lucide-sparkles').length"), 0, "No sparkle icons")
+    await capture("pull-request-harness.png", true)
+    await evaluate(`[...${card}.querySelectorAll('button')].find(b => b.textContent.trim() === 'Write it yourself').click()`)
+    await until(`Boolean(${card}?.querySelector('[aria-label="Pull request title"]'))`)
+    await capture("pull-request-written.png", true)
+    await evaluate(`[...${card}.querySelectorAll('button')].find(b => b.textContent.startsWith('Let ')).click()`)
+    await until(`!${card}?.querySelector('[aria-label="Pull request title"]')`)
+    await evaluate(`[...${card}.querySelectorAll('button')].find(b => b.textContent.startsWith('Ask ')).click()`)
+    await until("window.__attached.length === 1 && !document.querySelector('section[aria-label=\"Open a pull request\"]')")
+    assert.match(await evaluate("window.__attached[0]"), /^Open a pull request for `feature\/logo` into `main`\. Call pull_request_status/)
+    console.log("Pull request: the harness writes it by default, here or in a new session; Write it yourself is the override; no sparkles")
     console.log(
       "Git UI: 13,000 files with bounded DOM, last-file staging, frame responsiveness, one Push control, pending/success/failure with counts, pull/merge/conflicts, project isolation, history skeletons, commit feedback and reduced motion passed; fixture transport only, no remote pushes"
     )
@@ -515,6 +533,17 @@ async function check() {
     await until("Array.from(document.querySelectorAll('[role=option]')).some(b => b.textContent.includes('Git conflicts') && b.textContent.includes('incoming changes'))")
     assert.ok(await evaluate("import('/src/state/git-conflicts.ts').then(async m => (await m.gitConflictAttachment().file.text()).includes('local-edit.ts'))"))
     console.log("Conflict context: copying preserves drafts; nested repository remains explicit; @ menu inserts a removable attachment without sending")
+    const pull = { number: 42, title: "Keep drafts across reloads", body: "## Summary\n- Drafts survive", state: "open", draft: false, url: "https://github.com/fixture/project/pull/42", head: "main", base: "release", additions: 12, deletions: 3, files: 2, mergeable: "clean", reviewDecision: "none", checks: [{ name: "build", state: "failed" }, { name: "lint", state: "passed" }], reviews: [] }
+    await evaluate(`import('/src/state/github.ts').then(m => m.githubStore.set({ root: '/fixture/mono/mako-backend', statusRoot: '/fixture/mono/mako-backend', branch: 'main', loading: false, pull: ${JSON.stringify(pull)}, status: { installed: true, authenticated: true, repo: 'fixture/project', defaultBranch: 'main' } }))`)
+    await evaluate("(async () => { const {store}=await import('/src/state/session.ts'); store.set({git:{...store.get().git,root:'/fixture/mono/mako-backend',branch:'main',operation:undefined,files:[]}}); window.dispatchEvent(new CustomEvent('mako:compose',{detail:{text:'Why does @42'}})); })()")
+    await until("Array.from(document.querySelectorAll('[role=option]')).some(b => b.textContent.includes('Pull request #42'))")
+    await capture("pull-request-mention-menu.png")
+    await evaluate("Array.from(document.querySelectorAll('[role=option]')).find(b => b.textContent.includes('Pull request #42')).click()")
+    await until("Boolean(document.querySelector('[aria-label=\"Remove mako-backend-pull-42.md\"]'))")
+    assert.equal(await evaluate("document.querySelector('.composer-input').value.includes('mako:pull-request')"), false)
+    assert.match(await evaluate("document.querySelector('[data-composer]').textContent"), /open · main → release · 1 failing/)
+    await captureElement("pull-request-attachment.png", "[data-composer]")
+    console.log("Pull request context: the @ menu attaches the branch's pull request as a snapshot, with its state and failing checks")
     if (process.env.MAKO_GIT_REAL_URL && process.env.MAKO_GIT_REAL_CWD) {
       await window.loadURL(process.env.MAKO_GIT_REAL_URL)
       await until("Boolean(document.querySelector('.composer-input'))")

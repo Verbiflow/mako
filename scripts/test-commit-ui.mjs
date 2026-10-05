@@ -488,7 +488,7 @@ async function check() {
       "The commit controls must not overflow"
     )
     window.setSize(1280, 960)
-    if (automatic) await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'git' })); void 0")
+    if (automatic) await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'models' })); void 0")
     else await click('[aria-label="Connect commit model"]')
     await until(
       "Boolean(document.querySelector('[aria-label=\"Connect Google\"]'))"
@@ -645,7 +645,7 @@ async function check() {
     )
     await click("button[type=submit]")
     await until(
-      "!document.querySelector('input[type=password]') && document.body.textContent.includes('Writes commits and pull requests')"
+      "!document.querySelector('input[type=password]') && document.body.textContent.includes('Drafts commit messages')"
     )
     connected = true
     const snapshot = await evaluate(
@@ -675,16 +675,23 @@ async function check() {
       /sensitive file[s]? left out of the draft/
     )
     await capture("generated-commit.png")
-    // Fast/Deep lives behind the model chip, not in the toolbar row.
-    assert.equal(await evaluate(`document.querySelector('[aria-label="Commit analysis mode"]')`), null)
-    await click('[aria-label^="Drafting model:"]')
-    await until(`document.querySelector('[aria-label="Commit analysis mode"]')`)
-    assert.equal(await evaluate(`document.querySelector('[aria-label="Commit analysis mode"] button[aria-pressed="true"]')?.textContent.trim()`), "Fast")
-    await click('[aria-label="Commit analysis mode"] button', "Deep")
-    assert.equal(await evaluate(`document.querySelector('[aria-label="Commit analysis mode"] button[aria-pressed="true"]')?.textContent.trim()`), "Deep")
-    await capture("generation-settings.png")
+    // The card holds Generate and Commit only; which model drafts and how
+    // hard it reads are one saved choice in Settings › Models.
+    assert.equal(
+      await evaluate(`[...document.querySelectorAll('[data-commit-box] button')].map(button => button.getAttribute('aria-label') ?? button.textContent.trim()).filter(name => /model|analysis|deep|fast/i.test(name)).join()`),
+      "",
+      "Drafting settings belong in Settings, not on the commit card"
+    )
+    await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'models' })); void 0")
+    await until(`document.querySelector('[aria-label="Drafting depth"]')`)
+    assert.equal(await evaluate(`document.querySelector('[aria-label="Drafting depth"] button[aria-pressed="true"]')?.textContent.trim()`), "Fast")
+    await click('[aria-label="Drafting depth"] button', "Deep")
+    await until(`document.querySelector('[aria-label="Drafting depth"] button[aria-pressed="true"]')?.textContent.trim() === "Deep"`)
+    assert.equal(await evaluate("import('/src/state/prefs.ts').then(({ prefsStore }) => prefsStore.get().commitAnalysis)"), "deep")
+    await capture("drafting-settings.png")
+    await click('[aria-label="Drafting depth"] button', "Fast")
     await escape()
-    await until(`!document.querySelector('[aria-label="Commit analysis mode"]')`)
+    await until("!document.querySelector('[role=dialog]')")
     delay = 1_000
     await click('[aria-label="Draft a message from the diff"]')
     await fill('[aria-label="Commit message"]', "My handwritten message")

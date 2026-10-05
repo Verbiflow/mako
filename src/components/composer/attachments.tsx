@@ -21,6 +21,7 @@ import {
   readGitConflictContext,
   type GitConflictSnapshot,
 } from "@/lib/git-conflict-context"
+import { readPullRequestContext } from "@/lib/pull-request-context"
 import {
   formatBytes,
   useAttachmentPreview,
@@ -224,6 +225,17 @@ function Miniature({
       </span>
     )
   }
+  if (origin === "pull-request") {
+    const [heading, ...rest] = text?.head ?? []
+    return (
+      <span className="flex flex-col gap-[3px] text-faint">
+        <span className={cn(line, "text-foreground/80")}>{heading?.replace(/^# Pull request /, "") ?? "#"}</span>
+        {rest.slice(0, 7).map((text, index) => (
+          <span key={index} className={line}>{text || " "}</span>
+        ))}
+      </span>
+    )
+  }
   if (origin === "git-conflicts") {
     const band = "h-1.5 shrink-0 rounded-[2px]"
     const ours = "bg-[color-mix(in_oklab,var(--added)_60%,transparent)]"
@@ -282,6 +294,13 @@ const FileTile = memo(function FileTile({
         : null,
     [item.origin, source]
   )
+  const pull = useMemo(
+    () =>
+      item.origin === "pull-request" && source
+        ? readPullRequestContext(source)
+        : null,
+    [item.origin, source]
+  )
   const lines = text?.lines
   const detail =
     item.error ??
@@ -291,6 +310,14 @@ const FileTile = memo(function FileTile({
         ? conflict.blocker
           ? "Incoming changes blocked"
           : [plural(conflict.conflictedPaths.length, "file"), conflict.branch]
+              .filter(Boolean)
+              .join(" · ")
+        : pull
+          ? [
+              pull.state === "open" && pull.draft ? "draft" : pull.state,
+              `${pull.head} → ${pull.base}`,
+              pull.failing.length ? `${pull.failing.length} failing` : undefined,
+            ]
               .filter(Boolean)
               .join(" · ")
         : [

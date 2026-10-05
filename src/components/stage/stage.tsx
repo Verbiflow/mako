@@ -279,7 +279,7 @@ function RightSidebarTabs({
     <nav
       role="tablist"
       aria-label="Right sidebar"
-      className="flex h-10 shrink-0 items-center gap-1.5 overflow-hidden border-b border-hairline bg-shell px-2"
+      className="flex h-10 shrink-0 items-stretch overflow-hidden bg-shell shadow-[inset_0_-1px_0_var(--hairline)]"
     >
       {surfaces.map((surface) => {
         const active = surface.id === activeId
@@ -326,10 +326,10 @@ function RightSidebarTabs({
               })
             }}
             className={cn(
-              "flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-1.5 text-ui font-medium",
+              "flex min-w-0 flex-1 items-center justify-center gap-1.5 border-r border-hairline px-1.5 text-ui font-medium transition-[background-color,color] duration-150 ease-(--ease-out) last:border-r-0",
               active
-                ? "bg-raised text-foreground"
-                : "bg-shell text-faint hover:bg-fill-hover hover:text-muted-foreground"
+                ? "bg-surface text-foreground"
+                : "text-faint hover:bg-fill-hover hover:text-muted-foreground"
             )}
           >
             {Icon ? <Icon className="size-3.5 shrink-0" /> : null}

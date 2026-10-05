@@ -2,7 +2,7 @@ import { createHook, createStore } from "./store"
 import { git } from "./git"
 import { prefsStore } from "./prefs"
 import { currentCommitModel, refreshCommitModel } from "./commit-model"
-import type { CommitAnalysisMode, CommitGenerationResult } from "@/lib/types"
+import type { CommitGenerationResult } from "@/lib/types"
 import type { SessionStore } from "./session"
 
 /** The repository a draft belongs to; the commit box and ⌘⇧G must agree on it. */
@@ -10,7 +10,6 @@ export const draftRepository = (state: Pick<SessionStore, "git" | "meta">) =>
   state.git?.root ?? state.git?.cwd ?? state.meta?.cwd ?? ""
 
 interface CommitDraft {
-  mode: CommitAnalysisMode
   text: string
   revision: number
   requestId: string | null
@@ -19,7 +18,6 @@ interface CommitDraft {
   error: string | null
 }
 const empty: CommitDraft = {
-  mode: "fast",
   text: "",
   revision: 0,
   requestId: null,
@@ -40,9 +38,6 @@ const update = (cwd: string, patch: Partial<CommitDraft>) =>
   }))
 
 export const commitDrafts = {
-  setMode(cwd: string, mode: CommitAnalysisMode) {
-    if (!current(cwd).requestId) update(cwd, { mode })
-  },
   edit(cwd: string, text: string) {
     update(cwd, { text, revision: current(cwd).revision + 1 })
   },
@@ -57,7 +52,7 @@ export const commitDrafts = {
         cwd,
         requestId,
         model,
-        mode: before.mode,
+        mode: prefsStore.get().commitAnalysis,
         prompt: prefsStore.get().commitPrompt,
       })
       const after = current(cwd)
@@ -119,6 +114,6 @@ export const commitDrafts = {
   },
   committed(cwd: string, revision: number) {
     if (current(cwd).revision === revision)
-      update(cwd, { ...empty, mode: current(cwd).mode, revision: revision + 1 })
+      update(cwd, { ...empty, revision: revision + 1 })
   },
 }

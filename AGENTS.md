@@ -751,7 +751,7 @@ Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Elect
 
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
 
-Drafting lives in the package too: `draftCommit`, `draftPullRequest` and `commitDraft` take a `DraftingModel`. `git-drafting.ts` supplies that model from `UtilityWork.resolve("commit")`, the same harness order and connections project setup uses, so there is no second model path for Git. A pull request is drafted from what the branch's commits change since `merge-base` with `origin/<base>`, never from uncommitted files. The commit prompt is the fixed `COMMIT_RULES` plus the person's style, or `COMMIT_STYLE` when they haven't written one; Settings shows `COMMIT_STYLE` as the default, so what is shown is what is sent. A pull request's style is `pullRequestDraftPrompt(template)` from `contracts/git-actions.ts`, the same text the agent commands use. Structured output goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. A failed draft is logged under `git-drafting`, never with the model's text. `npm run test:git` checks the package against real temporary repositories and a fake model, including 120 random edits compared against full status reads.
+Drafting lives in the package too: `draftCommit`, `draftPullRequest` and `commitDraft` take a `DraftingModel`. `git-drafting.ts` supplies that model from `UtilityWork.resolve("commit")`, the same harness order and connections project setup uses, so there is no second model path for Git. `draftPullRequest` reads what the branch's commits change since `merge-base` with `origin/<base>`, never uncommitted files; the app doesn't call it. A pull request is written by the Thread's harness with its `pull_request_open` tool, by `PULL_REQUEST_WRITING`, in the session on screen or a new session of the Thread (`handGitAction` in `src/state/git-actions.ts`); the Changes form is the hand-written override. The `@` menu and the pull request's row attach it as a snapshot (`pull-request-context.ts`), as Git conflicts are. The commit prompt is the fixed `COMMIT_RULES` plus the person's style, or `COMMIT_STYLE` when they haven't written one; Settings shows `COMMIT_STYLE` as the default, so what is shown is what is sent. Structured output goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. A failed draft is logged under `git-drafting`, never with the model's text. `npm run test:git` checks the package against real temporary repositories and a fake model, including 120 random edits compared against full status reads.
 
 `ChangesPanel` stages, commits, and pushes. Commit drafting uses the host-only
 AI SDK connections in `utility-models.ts`, configured in Settings > Commit
@@ -770,14 +770,16 @@ variable no real host ever reached `~/.mako` and the one-time move was a
 no-op onto itself. A profile's older `<data root>/utility-models` copies
 move into the user store on its first start, newest copy per provider
 winning whichever host starts first. `test-utility-model-location.ts` covers
-the location and the move. The commit box resolves its drafting model from
-the connections, not the `commitModel` preference alone
-(`src/state/commit-model.ts`): the preference is one renderer's storage
-while connections are per user, so a window that never chose reads the first
-usable connection, a preference naming a model no connection covers turns
-Generate into Reconnect model, and only a preference that names a connected
-model is honoured as a choice. The button is Commit, or Commit all when
-nothing is staged; the count is the Changes header's to show.
+the location and the move. Which model drafts commits is the host's
+(`UtilityWork`), read by every view through one snapshot in
+`src/state/commit-model.ts`; a model that can't run turns Generate into
+Choose model. It is chosen once, in Settings › Models under the harness
+order, with the Fast/Deep depth (the `commitAnalysis` preference) and the API
+connections; the harness that drafts wears a Drafting chip there, as the one
+that sets projects up wears Setup. Settings › Git holds only the
+instructions, and the commit card only Generate and Commit. The button is
+Commit, or Commit all when nothing is staged; the count is the Changes
+header's to show.
 `test-commit-model-status.ts` covers the resolution.
 On macOS with a local certificate, every new build is a new keychain partition
 (`cdhash:`, since only Apple-issued certificates carry a Team ID), so the first
@@ -804,7 +806,7 @@ Superseded Git pushes and explicit refresh results are discarded.
 Staging controls keep a stationary 24px hit target around their 14px mark.
 `test-git-staging.ts` covers rapid toggles, parallel clients, reader cancellation,
 root capture, literal filenames, failed writes, and commits queued after staging.
-Commit generation has explicit Fast/Deep modes in the shared input contract and per-workspace draft state. Fast uses complete evidence with direct synthesis and low requested reasoning; Deep adds bounded inspections and higher requested reasoning. Changing this policy must not truncate source or alter Git safeguards. Commit errors must not offer automatic mutation replay; refresh the observed Git state instead.
+Commit generation has explicit Fast/Deep modes in the shared input contract, saved once as `commitAnalysis`. Fast uses complete evidence with direct synthesis and low requested reasoning; Deep adds bounded inspections and higher requested reasoning. Changing this policy must not truncate source or alter Git safeguards. Commit errors must not offer automatic mutation replay; refresh the observed Git state instead.
 
 `commit-drafts.ts` keeps per-workspace edits and offers late results as suggestions
 rather than overwriting a message. `npm run test:commit-generation` exercises model resolution, AI SDK calls,

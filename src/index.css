@@ -203,6 +203,11 @@
    * commit editor, settings cards) lg; controls, fields and one-line strips
    * md; marks (keycaps, inline code, badges) sm; pills and dots full. The
    * prompt bubble keeps its xl with a tighter tail corner.
+   *
+   * Git is structure too. Everything inside a `[data-corners="square"]`
+   * region (the Changes panel, the confirm dialog) meets at square corners:
+   * cards, fields, buttons, rows, toolbars. Only dots and pills stay round.
+   * Menus portaled out of a region keep the floating radius.
    */
   --radius-asset: 0px;
   --radius-sm: 4px;
@@ -2030,6 +2035,11 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
     transition: none;
   }
 }
+
+/* Square regions, by the corner rule in the theme: every radius but a dot's or a pill's. */
+[data-corners="square"],
+[data-corners="square"] [class*="rounded"]:not([class*="rounded-full"]),
+[data-corners="square"] :is(.card, .skeleton, .mako-code) { border-radius: 0; }
 
 /* File chrome uses one shape across draft tiles, inline previews and the gallery. */
 .asset-surface { border-radius: var(--radius-asset); }

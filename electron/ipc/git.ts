@@ -4,7 +4,6 @@ import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepos
 import type { AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
 import { GitDrafting } from "../git-drafting.js"
-import { pullTemplate } from "../pull-requests.js"
 import { UtilityModelStore } from "../utility-model-store.js"
 import type { UtilityWork } from "../utility-work.js"
 import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "../contracts/utility-work.js"
@@ -19,7 +18,6 @@ import { z } from "zod"
 import type {
   CommitGenerationInput,
   GitPushInput,
-  PullRequestDraftInput,
   GitRemoteInput,
   UtilityCatalogInput,
   UtilityConnectionInput,
@@ -152,12 +150,6 @@ export function installGitIpc(context: GitIpcContext): void {
           )
         return drafting.commitMessage(hostClient(), input)
       })
-  )
-  registerIpc("mako:git-draft-pull-request", (_event, input: PullRequestDraftInput) =>
-    withHost(async (host) => {
-      if (host.gitWorkspace !== input.cwd) throw new Error("The workspace changed. Refresh Changes before drafting a pull request.")
-      return drafting.pullRequest(hostClient(), input, await pullTemplate(input.cwd))
-    })
   )
   registerIpc("mako:default-commit-prompt", () => COMMIT_STYLE)
 }

@@ -1,5 +1,7 @@
 import { useGitPush } from "@/state/git-push"
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
+import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
+import { useBranchPull } from "@/state/github"
 import { APP_SETUP_CONTEXT, appSetupRow } from "@/lib/app-setup-context"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 import { ArrowDownIcon, EyeIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, PlayIcon, PlugIcon, SlashIcon, WrenchIcon } from "lucide-react"
@@ -111,6 +113,7 @@ export function MentionMenu({
   const git = useSession(state => state.git)
   const remote = useGitPush(git?.root ?? "", git?.branch ?? "")
   const blockedPull = remote.kind === "failed" && (remote.reason === "untracked" || remote.reason === "dirty")
+  const pull = useBranchPull()?.pull ?? null
   const capabilities = kind !== "@"
   const skillsSnapshot = useSkills((state) => state.snapshot)
   const skillsStatus = useSkills((state) => state.status)
@@ -152,6 +155,13 @@ export function MentionMenu({
         icon: <GitMergeIcon className="size-3.5" />,
         key: `git conflicts merge pull blocked untracked ${git.root}`,
       }] : []),
+      ...(pull ? [{
+        value: PULL_REQUEST_CONTEXT,
+        title: `Pull request #${pull.number}`,
+        hint: `${pull.title} · ${pull.state === "open" && pull.draft ? "draft" : pull.state}`,
+        icon: <GitPullRequestIcon className="size-3.5" />,
+        key: `pull request pr #${pull.number} ${pull.number} ${pull.title} ${pull.head} github checks review`,
+      }] : []),
       ...threads.map((thread) => ({
         value: threadToken(thread.harness, threadReferenceId(thread)),
         title: thread.title ?? "Untitled conversation",
@@ -179,7 +189,7 @@ export function MentionMenu({
     ]
     const rows = rankReferences(candidates, query)
     return rows.length ? [{ label: "Context", rows }] : []
-  }, [appView, blockedPull, capabilities, files, git, query, threads])
+  }, [appView, blockedPull, capabilities, files, git, pull, query, threads])
 
   const capabilityGroups = useMemo<Group[]>(() => {
     if (!capabilities) return []

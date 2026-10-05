@@ -9,7 +9,7 @@ import { ConnectModel } from "./connect-model"
 /**
  * API keys for providers Mako can draft with directly, beside the harnesses.
  * Connecting one makes it the drafting model; the picker above can switch
- * back to Automatic. The settings are that picker's, so the two never disagree.
+ * back to Automatic. Both read one snapshot, so the two never disagree.
  */
 export function ModelConnections({ settings, refresh, choose }: {
   settings: UtilityModelSettings | null
@@ -68,7 +68,7 @@ export function ModelConnections({ settings, refresh, choose }: {
                       {used ? (
                         <span className="flex items-center gap-1 text-label font-normal text-faint">
                           <CheckIcon className="size-3" />
-                          Writes commits and pull requests
+                          Drafts commit messages
                         </span>
                       ) : null}
                     </span>

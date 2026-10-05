@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, SparklesIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
 import { ImageThumbs } from "@/components/inspector/binary-diff"
 import { Annotation, GutterAdd } from "@/components/inspector/review"
 import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
@@ -14,6 +14,7 @@ import { binarySizes } from "@/lib/git-binary"
 import { cn } from "@/lib/utils"
 import type { GitCommitEntry, GitDiff, GitFile } from "@/lib/types"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
+import { HarnessIcon } from "@/components/ui/provider-icon"
 import { git as gitActions } from "@/state/git"
 import { discardFiles } from "@/state/git-discard"
 import { useGitHub } from "@/state/github"
@@ -295,6 +296,10 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
   const hosted = useGitHub((state) => state.status?.defaultBranch)
   const lastTurn = useLastTurn(workspace)
+  const turnHarness = useAcp((state) => {
+    const conversation = scope.kind === "turn" ? state.conversations[scope.conversation] : undefined
+    return conversation?.kind === "live" ? conversation.session.harness : undefined
+  })
   const [since, setSince] = useState<{ ref: string; label: string } | null>(null)
   const [commits, setCommits] = useState<readonly GitCommitEntry[] | null>(null)
   const open = (next: boolean) => {
@@ -317,7 +322,7 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
     <Menu modal={false} onOpenChange={open}>
       <MenuTrigger asChild>
         <Action size="xs" tone="quiet" aria-label={`Showing: ${scope.kind === "commit" ? `commit ${scope.shortHash}` : label}. Choose what to review`} title={scope.kind === "commit" ? scope.subject : undefined} className="max-w-40 gap-1 px-1.5 font-medium">
-          {scope.kind === "commit" ? <GitCommitHorizontalIcon /> : scope.kind === "since" ? <GitBranchIcon /> : scope.kind === "turn" ? <SparklesIcon /> : <PencilIcon />}
+          {scope.kind === "commit" ? <GitCommitHorizontalIcon /> : scope.kind === "since" ? <GitBranchIcon /> : scope.kind === "turn" ? turnHarness ? <HarnessIcon harness={turnHarness} /> : <MessageSquareIcon /> : <PencilIcon />}
           <span className="truncate">{label}</span>
           <ChevronDownIcon className="size-3! text-faint/70" />
         </Action>
@@ -652,7 +657,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, discardable,
               ? "Shortened"
               : null
   return (
-    <div data-review-file={file.path} className="flex h-8 items-center gap-1 border-b border-hairline bg-surface pr-1 pl-2 text-label select-none">
+    <div data-review-file={file.path} className="flex h-8 items-center gap-1 border-b border-hairline bg-surface pr-3 pl-2 text-label select-none">
       <button
         type="button"
         aria-expanded={loaded?.kind === "binary" ? undefined : open}

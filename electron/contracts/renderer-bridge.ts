@@ -28,8 +28,6 @@ import type { QueuedPromptEdit } from "./live-queue.js"
 import type {
   CommitGenerationInput,
   CommitGenerationResult,
-  PullRequestDraftInput,
-  PullRequestDraftResult,
   UtilityConnection,
   UtilityConnectionInput,
   UtilityModelSettings,
@@ -706,8 +704,6 @@ export function createMakoBridge(transport: BridgeTransport) {
         "mako:git-generate-message",
         input
       ),
-    draftPullRequest: (input: PullRequestDraftInput) =>
-      invokeTrustedHost<PullRequestDraftResult>("mako:git-draft-pull-request", input),
     cancelCommitGeneration: (requestId: string) =>
       invokeTrustedHost<void>("mako:git-cancel-generation", requestId),
     utilityModelSettings: () =>

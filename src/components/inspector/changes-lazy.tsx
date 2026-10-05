@@ -14,8 +14,10 @@ const Panel = lazy(() =>
 
 export function ChangesPanel() {
   return (
-    <Suspense fallback={<GitLoading label="Loading changes…" />}>
-      <Panel />
-    </Suspense>
+    <div data-corners="square" className="contents">
+      <Suspense fallback={<GitLoading label="Loading changes…" />}>
+        <Panel />
+      </Suspense>
+    </div>
   )
 }

@@ -1,15 +1,13 @@
 import { z } from "zod"
-import { commitDraft, draftCommit, draftPullRequest, knownRepository, openRepository, type CommitDraft, type DraftOptions } from "@mako/git"
-import type { CommitGenerationInput, CommitGenerationResult, PullRequestDraftInput, PullRequestDraftResult } from "./shared.js"
+import { commitDraft, draftCommit, knownRepository, openRepository, type CommitDraft, type DraftOptions } from "@mako/git"
+import type { CommitGenerationInput, CommitGenerationResult } from "./shared.js"
 import { parseAgentModelId, utilityModelName } from "./contracts/utility-work.js"
-import { pullRequestDraftPrompt } from "./contracts/git-actions.js"
 import { UtilityModelError } from "./utility-model-error.js"
 import type { UtilityModel, UtilityWork } from "./utility-work.js"
 import { hostWarn } from "./host-log.js"
 
 const mode = z.enum(["fast", "deep"]).default("fast")
 const commitInput = z.object({ mode, requestId: z.string().uuid(), cwd: z.string().min(1).max(4_096), prompt: z.string().max(12_000).optional(), model: z.string().max(400).optional() })
-const pullInput = z.object({ mode, requestId: z.string().uuid(), cwd: z.string().min(1).max(4_096), base: z.string().min(1).max(255), model: z.string().max(400).optional() })
 
 /** A model connection answers each request in seconds. */
 const CONNECTION_TIMEOUT_MS = 120_000
@@ -73,18 +71,6 @@ export class GitDrafting {
       const draft = await draftCommit(repository, { ...options, model, mode: request.mode, style: request.prompt })
       this.drafts.set(key, draft)
       return { message: draft.message, model: model.id, modelLabel: utilityModelName(model), scope: draft.snapshot.scope, files: draft.files, warnings: draft.warnings, requests: draft.calls }
-    })
-  }
-
-  async pullRequest(client: string, input: PullRequestDraftInput, template: string | null): Promise<PullRequestDraftResult> {
-    const parsed = pullInput.safeParse(input)
-    if (!parsed.success) throw new Error("Invalid pull request draft request.")
-    const request = parsed.data
-    return this.draft(client, request.requestId, request.model, async (model, options) => {
-      const repository = await openRepository(request.cwd, options.signal)
-      if (!repository) throw new Error("This folder is not a Git repository")
-      const draft = await draftPullRequest(repository, request.base, { ...options, model, mode: request.mode, style: pullRequestDraftPrompt(template) })
-      return { title: draft.title, body: draft.body, model: model.id, modelLabel: utilityModelName(model), commits: draft.commits, files: draft.files, warnings: draft.warnings, requests: draft.calls }
     })
   }
 

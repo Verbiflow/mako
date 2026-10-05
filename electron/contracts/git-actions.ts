@@ -53,7 +53,7 @@ export function pullBaseFor(branch: string, startedFrom: string | null | undefin
 export const MERGE_METHODS = ["squash", "merge", "rebase"] as const
 export type MergeMethod = (typeof MERGE_METHODS)[number]
 
-/** How a pull request's title and body are written, by the drafter in the form and by an agent alike. */
+/** How the Thread's harness writes a pull request's title and body, given with its pull request tool. */
 export const PULL_REQUEST_WRITING = `The title is one concise imperative line with no prefix and no trailing period.
 
 When the repository has a pull request template, the body fills in its sections. Otherwise the body is:
@@ -71,14 +71,6 @@ export const PULL_TEMPLATE_LIMIT = 4_000
 
 export function clipTemplate(template: string): string {
   return template.length > PULL_TEMPLATE_LIMIT ? `${template.slice(0, PULL_TEMPLATE_LIMIT)}\n…` : template
-}
-
-/** How the form's drafter writes, given the repository's template when it has one. */
-export function pullRequestDraftPrompt(template: string | null): string {
-  return [
-    PULL_REQUEST_WRITING,
-    template ? `The repository's pull request template:\n\n${clipTemplate(template.trim())}` : "",
-  ].filter(Boolean).join("\n\n")
 }
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`

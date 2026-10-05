@@ -36,9 +36,10 @@ import {
 
 /**
  * Where Mako made an attachment from, when Mako made it: the tile draws
- * terminal output as a terminal and a conflict snapshot as a conflict.
+ * terminal output as a terminal, a conflict snapshot as a conflict and a
+ * pull request snapshot by its number and state.
  */
-export type AttachmentOrigin = "terminal" | "git-conflicts"
+export type AttachmentOrigin = "terminal" | "git-conflicts" | "pull-request"
 
 export type AttachmentInput = File | { file: File; context?: string; contextLabel?: string; origin?: AttachmentOrigin }
 

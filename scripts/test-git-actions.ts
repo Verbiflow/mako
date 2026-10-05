@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { parse as parseYaml } from "yaml"
 import { z } from "zod"
-import { gitActionPrompt, gitCommands, PULL_REQUEST_WRITING, pullBaseFor, pullRequestDraftPrompt, type GitCommandFacts } from "../electron/contracts/git-actions.js"
+import { gitActionPrompt, gitCommands, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "../electron/contracts/git-actions.js"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { pullRequestTools } from "../electron/pull-request-tools.js"
 import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "../electron/pull-requests.js"
@@ -114,9 +114,6 @@ try {
   assert.equal(pullBaseFor("mako/x", "origin/spike", ["main"], "main"), "main", "a start the remote doesn't have falls back to the default")
   assert.equal(pullBaseFor("mako/x", "a1b2c3d", ["main"], "main"), "main", "a start at a commit falls back to the default")
   assert.equal(pullBaseFor("main", "origin/main", ["main"], "main"), undefined, "never a branch into itself")
-  assert.ok(pullRequestDraftPrompt(null).includes(PULL_REQUEST_WRITING), "the drafter writes by the agent's rules")
-  assert.match(pullRequestDraftPrompt("## Why\n\n## Risk"), /template:\n\n## Why\n\n## Risk$/)
-  assert.ok(pullRequestDraftPrompt("x".repeat(9_000)).length < 6_000, "a long template is cut to fit the drafter's prompt")
 
   const facts: GitCommandFacts = { branch: "mako/x", github: null, defaultBranch: "main", worktree: { into: "main", behind: { from: "origin/main", commits: 4 } }, pull: null }
   const byName = (given: GitCommandFacts) => Object.fromEntries(gitCommands(given).map((command) => [command.name, command]))
@@ -257,7 +254,7 @@ try {
   assert.deepEqual(listed.map((tool) => tool.name), ["pull_request_status", "pull_request_open", "pull_request_merge"])
   for (const tool of listed) assert.match(tool.description ?? "", /^Call (when|before|only when)\b/, `${tool.name} opens with when to call it`)
   const describe = (name: string) => listed.find((tool) => tool.name === name)!
-  assert.ok(describe("pull_request_open").description!.endsWith(PULL_REQUEST_WRITING), "the agent writes by the drafter's rules")
+  assert.ok(describe("pull_request_open").description!.endsWith(PULL_REQUEST_WRITING), "the agent writes by the shared rules")
   assert.match(describe("pull_request_open").description!, /instead of `gh pr create`/)
   assert.equal(describe("pull_request_status").annotations?.readOnlyHint, true)
   assert.equal(describe("pull_request_merge").annotations?.destructiveHint, true)

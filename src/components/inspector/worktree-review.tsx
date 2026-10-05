@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowDownIcon, CheckIcon, GitBranchIcon, Maximize2Icon, SparklesIcon } from "lucide-react"
+import { ArrowDownIcon, CheckIcon, GitBranchIcon, Maximize2Icon } from "lucide-react"
 import { Explained } from "@/components/inspector/git-action-control"
 import { Action } from "@/components/ui/kit"
 import { harnessLabels } from "@/lib/harness-label"
@@ -114,7 +114,6 @@ export function WorktreeReview() {
             {conflicts.length === 1 ? "1 file conflicts" : `${conflicts.length} files conflict`} with {updatedFrom ?? from}
           </span>
           <Action size="xs" tone={asked ? "ghost" : "outline"} disabled={asked} onClick={askAgent}>
-            <SparklesIcon />
             <span key={String(asked)} className="changing-label">{asked ? "Added to your message" : `Ask ${agent} to resolve it`}</span>
           </Action>
         </div>

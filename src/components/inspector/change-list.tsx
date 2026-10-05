@@ -56,7 +56,8 @@ export function ChangeList({
       aria-label="Changed files"
       onScroll={measure}
       className={cn(
-        "min-h-0 overflow-y-auto overscroll-contain px-1 py-1",
+        // The right gutter is the overlay scroller's: it takes clicks along the edge while shown.
+        "min-h-0 overflow-y-auto overscroll-contain py-1 pr-3 pl-1",
         compact ? "max-h-[34%] shrink-0" : fitContent ? "shrink" : "flex-1"
       )}
       style={fitContent ? { flexBasis: rows.length * ROW_HEIGHT + 8 } : undefined}

@@ -28,8 +28,9 @@ export interface ResolvedCommitModel {
   status: CommitModelStatus
 }
 
-const snapshot = createStore<{ settings: UtilityModelSettings | null }>({
+const snapshot = createStore<{ settings: UtilityModelSettings | null; error: string | null }>({
   settings: null,
+  error: null,
 })
 const useSnapshot = createHook(snapshot)
 let inflight: Promise<void> | null = null
@@ -39,8 +40,8 @@ export function refreshCommitModel(): Promise<void> {
   inflight = Promise.resolve()
     .then(() => utilityModels.settings())
     .then(adoptWindowChoice)
-    .then((settings) => snapshot.set({ settings }))
-    .catch(() => snapshot.set({ settings: null }))
+    .then((settings) => snapshot.set({ settings, error: null }))
+    .catch((caught: unknown) => snapshot.set({ settings: null, error: caught instanceof Error ? caught.message : "Models could not be loaded." }))
     .finally(() => {
       inflight = null
     })
@@ -69,6 +70,20 @@ export function resolveCommitModel(settings: UtilityModelSettings | null): Resol
 
 export const useResolvedCommitModel = () =>
   useSnapshot((state) => resolveCommitModel(state.settings))
+
+/** The host's drafting settings and why they couldn't be read, for Settings › Models and Settings › Git alike. */
+export const useCommitModelSettings = () => useSnapshot((state) => state)
+
+/** Choose what drafts commit messages, for every window; the snapshot follows. */
+export async function chooseCommitModel(choice: string): Promise<void> {
+  try {
+    await utilityModels.choose("commit", choice)
+    await inflight
+    snapshot.set({ settings: await utilityModels.settings(), error: null })
+  } catch (caught) {
+    snapshot.set({ error: caught instanceof Error ? caught.message : "The choice could not be saved. Try again." })
+  }
+}
 
 /**
  * The model a draft runs with right now, for callers outside React: the

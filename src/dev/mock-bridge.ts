@@ -790,16 +790,6 @@ export function installMockBridge() {
       warnings: [],
       requests: 1,
     }),
-    draftPullRequest: async () => ({
-      title: "Reserve a gutter for the turn navigator",
-      body: "## Summary\n- Keep the transcript from shifting when the turn navigator appears\n\n## Test plan\n- Open a long Thread and scroll past the first turn",
-      model: "agent:claude/claude-haiku-4-5",
-      modelLabel: "Haiku 4.5 · Claude Code",
-      commits: 2,
-      files: 3,
-      warnings: [],
-      requests: 1,
-    }),
     cancelCommitGeneration: async () => {},
     chooseUtilityModel: async (task: UtilityTask, choice: string) => {
       utilityChoices[task] = choice

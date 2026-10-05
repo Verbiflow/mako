@@ -1,11 +1,13 @@
 import { useEffect } from "react"
 import { createHook, createStore } from "@/state/store"
-import { useSession } from "@/state/session"
+import { store as sessionStore, useSession } from "@/state/session"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { GitHubStatus, PullRequest } from "@/lib/types"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import type { MergeMethod } from "../../electron/contracts/git-actions"
+import type { AttachmentInput } from "@/lib/attachments"
+import { pullRequestContext } from "@/lib/pull-request-context"
 
 /**
  * The pull request for the branch you are on.
@@ -173,6 +175,15 @@ export function useBranchPull(): BranchPull | null {
   }, [branch, cached, cachedRoot, root, statusRoot])
   if (!root || cachedRoot !== root || statusRoot !== root || cached !== branch || !status) return null
   return { status, pull: pull ?? null, loading, branch, root }
+}
+
+/** The checked-out branch's pull request as a composer attachment; null when it has none or GitHub hasn't said. */
+export function pullRequestAttachment(): AttachmentInput | null {
+  const { pull, root, branch } = githubStore.get()
+  const git = sessionStore.get().git
+  if (!pull || !root || root !== git?.root || branch !== git.branch) return null
+  const context = pullRequestContext(root, pull)
+  return { file: new File([context.text], context.name, { type: "text/markdown" }), contextLabel: context.label, origin: "pull-request" }
 }
 
 const composerStore = createStore<{ root: string | null }>({ root: null })

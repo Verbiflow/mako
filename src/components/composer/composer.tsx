@@ -1,5 +1,7 @@
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { gitConflictAttachment } from "@/state/git-conflicts"
+import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
+import { pullRequestAttachment } from "@/state/github"
 import { APP_SETUP_CONTEXT } from "@/lib/app-setup-context"
 import { appSetupAttachment } from "@/state/project-setup"
 import { AttachmentStrip } from "./attachments"
@@ -643,6 +645,12 @@ export function Composer() {
       if (value === GIT_CONFLICT_CONTEXT) {
         const file = gitConflictAttachment()
         if (!file) { toast.info("No conflicts remain in the selected repository."); return }
+        replacement = attachments.add([file])
+        if (!replacement) return
+      }
+      if (value === PULL_REQUEST_CONTEXT) {
+        const file = pullRequestAttachment()
+        if (!file) { toast.info("This branch has no pull request on GitHub."); return }
         replacement = attachments.add([file])
         if (!replacement) return
       }

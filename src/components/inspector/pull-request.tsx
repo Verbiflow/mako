@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Action, IconAction } from "@/components/ui/kit"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { harnessLabels } from "@/lib/harness-label"
+import { harnessLabels, useHarnessIdentity } from "@/lib/harness-label"
 import { activeLiveAcp, useAcp } from "@/state/acp"
-import { stageGitAction } from "@/state/git-actions"
+import { handGitAction, type GitHandoff } from "@/state/git-actions"
 import { pullBaseFor } from "../../../electron/contracts/git-actions"
 import { SearchSelect } from "@/components/ui/search-select"
 import { desktop } from "@/state/desktop"
-import { git } from "@/state/git"
-import { github, pullComposer, useBranchPull, usePullComposer } from "@/state/github"
-import { currentCommitModel } from "@/state/commit-model"
+import { github, pullComposer, pullRequestAttachment, useBranchPull, usePullComposer } from "@/state/github"
 import { useSession } from "@/state/session"
+import { useOnScreen } from "@/state/thread-sessions"
+import { useThreads } from "@/state/threads"
 import { prefsStore, setPref } from "@/state/prefs"
 import { refreshWorktreeSummaries, useWorktrees, worktreeAt } from "@/state/worktrees"
 import { summarizeChecks } from "@/lib/pull-requests"
@@ -20,9 +19,8 @@ import {
   CheckIcon,
   ExternalLinkIcon,
   GitPullRequestIcon,
-  MessageSquareTextIcon,
+  MessageSquarePlusIcon,
   RefreshCwIcon,
-  SparklesIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -164,14 +162,14 @@ function BehindBranch({ behind, upstream }: { behind: number; upstream?: string 
 }
 
 /**
- * Drafting the pull request.
+ * Opening the pull request.
  *
- * Nothing is published until the button is pressed, and the button says
- * exactly what it does. The utility model can draft the title and body from
- * the diff, the same idea as the commit draft, into editable fields. Or the
- * Thread's agent, which knows why the work was done, writes and opens it with
- * its pull request tool: the same operation as the button, staged as a
- * message to read before it's sent.
+ * The Thread's harness writes it by default: it knows why the work was
+ * done, reads the branch's commits and the repository's template with its
+ * pull request tool, and opens it, pushing the branch first. It does so in
+ * the session on screen, or in a new session of the Thread. Writing the
+ * title and description yourself is the override, and nothing is published
+ * until its button is pressed.
  */
 export function ComposePull({
   base,
@@ -190,14 +188,18 @@ export function ComposePull({
   onOpened?: () => void
   className?: string
 }) {
-  const cwd = useSession((state) => state.git?.cwd ?? state.meta?.cwd ?? "")
-  const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
-  const agent = (harness && harnessLabels()[harness]) || "the agent"
+  const live = useAcp((state) => activeLiveAcp(state)?.session.harness)
+  const composing = useThreads((state) => state.composerHarness)
+  const onScreen = useOnScreen()
+  useHarnessIdentity()
+  const harness = live ?? composing
+  const named = harness ? harnessLabels()[harness] : undefined
+  const agent = named || "the agent"
+  const [writing, setWriting] = useState(false)
   const [title, setTitle] = useState("")
   const [body, setBody] = useState("")
   const [draft, setDraft] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [drafting, setDrafting] = useState(false)
   const [branches, setBranches] = useState<string[]>(base ? [base] : [])
   const [selectedBase, setSelectedBase] = useState(base)
   // A base the person picked stays picked when the list arrives.
@@ -217,32 +219,12 @@ export function ComposePull({
       .catch(() => {})
   }, [base, branch, startedFrom])
 
-  const askAgent = () => {
+  const hand = (where: GitHandoff) => {
     if (!branch) return
-    stageGitAction({ kind: "pr", branch, base: selectedBase, draft })
-    onDone()
+    void handGitAction({ kind: "pr", branch, base: selectedBase, draft }, where)
+      .then(onDone)
+      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
   }
-
-  const compose = useCallback(async function composePull() {
-    if (drafting || !selectedBase) return
-    setDrafting(true)
-    try {
-      // The commit drafter's model reads the branch's commits since the base,
-      // with the writing rules the agent's tool gives and the repository's template.
-      const { model } = await currentCommitModel()
-      const result = await git.draftPullRequest({ requestId: crypto.randomUUID(), cwd, base: selectedBase, model })
-      setTitle((current) => current || result.title)
-      setBody((current) => current || result.body)
-    } catch (error) {
-      toast.error("Pull request draft was not generated", {
-        duration: ACTION_TOAST_MS,
-        description: error instanceof Error ? error.message : String(error),
-        action: { label: "Retry", onClick: () => void composePull() },
-      })
-    } finally {
-      setDrafting(false)
-    }
-  }, [drafting, cwd, selectedBase])
 
   const create = useCallback(async function createPullRequest() {
     if (!title.trim() || busy) return
@@ -268,8 +250,24 @@ export function ComposePull({
     }
   }, [body, busy, draft, onDone, onOpened, selectedBase, title])
 
+  const draftToggle = (
+    <button
+      type="button"
+      aria-pressed={draft}
+      onClick={() => setDraft(!draft)}
+      className={cn(
+        "pressable h-7 px-2 text-label transition-colors duration-100",
+        draft ? "bg-fill-selected text-foreground" : "text-faint hover:text-foreground"
+      )}
+    >
+      As draft
+    </button>
+  )
+  // In the Thread's new tab, the session on screen is already a new one.
+  const newSession = Boolean(onScreen.thread) && !onScreen.draft
+
   return (
-    <div className={cn("shrink-0 border-t border-hairline px-2.5 py-2", className)}>
+    <section aria-label="Open a pull request" className={cn("shrink-0 border-t border-hairline px-2.5 py-2", className)}>
       <div className="mb-1.5 flex items-center gap-2">
         <GitPullRequestIcon className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 truncate text-ui text-faint">
@@ -289,57 +287,70 @@ export function ComposePull({
             setSelectedBase(next)
           }}
         />
-        <IconAction label="Draft it from the diff" size="xs" onClick={() => void compose()}>
-          <SparklesIcon className={drafting ? "animate-spin" : undefined} />
-        </IconAction>
         <IconAction label="Cancel" size="xs" onClick={onDone}>
           <XIcon />
         </IconAction>
       </div>
 
-      <input
-        autoFocus
-        value={title}
-        onChange={(event) => setTitle(event.target.value)}
-        placeholder="Title"
-        className="mb-1 h-8 w-full rounded-md bg-raised px-2 text-ui placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
-      />
-      <textarea
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        placeholder="What changed, and why"
-        rows={4}
-        className="w-full resize-none rounded-md bg-raised px-2 py-1.5 text-ui leading-relaxed placeholder:text-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-border"
-      />
-
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Action tone="solid" disabled={!title.trim() || busy} onClick={() => void create()}>
-          {busy ? "Opening…" : draft ? "Open as draft" : "Create pull request"}
-        </Action>
-        <button
-          type="button"
-          onClick={() => setDraft(!draft)}
-          className={cn(
-            "pressable rounded px-1.5 py-1 text-label transition-colors duration-100",
-            draft ? "bg-fill-selected text-foreground" : "text-faint hover:text-foreground"
-          )}
-        >
-          Draft
-        </button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Action tone="ghost" size="xs" className="ml-auto" disabled={!branch} onClick={askAgent}>
-              <MessageSquareTextIcon />
-              Ask {agent} to open it
+      {writing ? (
+        <>
+          <input
+            autoFocus
+            aria-label="Pull request title"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Title"
+            className="mb-1 h-8 w-full bg-raised px-2 text-ui ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
+          />
+          <textarea
+            aria-label="Pull request description"
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="What changed, and why"
+            rows={4}
+            className="w-full resize-none bg-raised px-2 py-1.5 text-ui leading-relaxed ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
+          />
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <Action tone="solid" size="sm" disabled={!title.trim() || busy} onClick={() => void create()}>
+              {busy ? "Opening…" : draft ? "Open as draft" : "Create pull request"}
             </Action>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-64">
-            Puts a message in your composer: {agent} writes the title and body from this conversation and opens it into {selectedBase ?? "the base"}{draft ? " as a draft" : ""}, pushing the branch first.
-          </TooltipContent>
-        </Tooltip>
-      </div>
-    </div>
+            {draftToggle}
+            <Action tone="ghost" size="xs" className="ml-auto" disabled={!branch} onClick={() => setWriting(false)}>
+              Let {agent} write it
+            </Action>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-label leading-snug text-muted-foreground">
+            {named || "The agent"} writes the title and description from the branch's commits and the repository's template, then opens
+            it into {selectedBase ?? "the base"}{draft ? " as a draft" : ""}, pushing the branch first.
+          </p>
+          <div className="mt-2 flex items-center gap-1.5">
+            <Action tone="solid" size="sm" disabled={!branch} onClick={() => hand("here")}>
+              Ask {agent}
+            </Action>
+            {newSession ? (
+              <Action tone="outline" size="sm" disabled={!branch} onClick={() => hand("new")}>
+                In a new session
+              </Action>
+            ) : null}
+            {draftToggle}
+            <Action tone="ghost" size="xs" className="ml-auto" onClick={() => setWriting(true)}>
+              Write it yourself
+            </Action>
+          </div>
+        </>
+      )}
+    </section>
   )
+}
+
+/** The branch's pull request in the composer, as the `@` menu adds it. */
+function attachPull() {
+  const file = pullRequestAttachment()
+  if (!file) return void toast.info("This branch has no pull request on GitHub.")
+  window.dispatchEvent(new CustomEvent("mako:attach", { detail: { files: [file], text: (references: string) => references } }))
 }
 
 /** An open pull request, in one line plus whatever CI has to say; the Git control above merges it or hands failing checks to the agent. */
@@ -377,6 +388,9 @@ function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; ro
           data-on={loading || undefined}
         >
           <RefreshCwIcon className={loading ? "animate-spin" : undefined} />
+        </IconAction>
+        <IconAction label="Add to your message" size="xs" onClick={() => attachPull()}>
+          <MessageSquarePlusIcon />
         </IconAction>
         <IconAction label="Open on GitHub" size="xs" onClick={() => void desktop.openUrl(pull.url)}>
           <ExternalLinkIcon />

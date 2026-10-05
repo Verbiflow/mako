@@ -116,6 +116,8 @@ export interface Prefs {
   terminalTitles: PreferenceStringMap
   /** Overrides the host's default commit-drafting prompt. */
   commitPrompt?: string
+  /** How hard a commit draft reads: the diff once, or the diff and the source where it's unclear. */
+  commitAnalysis: "fast" | "deep"
   commitModel?: string
   externalEditor?: string
   /** Desktop banners while Mako is in the background. */
@@ -164,6 +166,7 @@ const defaults: Prefs = {
   diffStyle: "unified",
   wrapDiff: false,
   filesView: "tree",
+  commitAnalysis: "fast",
   newThreadsInWorktree: false,
   selectedDiffs: {},
   pinnedThreads: [],
@@ -402,6 +405,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     diffStyle: readChoice(value.diffStyle, ["unified", "split"], defaults.diffStyle),
     wrapDiff: readBoolean(value.wrapDiff, defaults.wrapDiff),
     filesView: readChoice(value.filesView, ["tree", "folders"], defaults.filesView),
+    commitAnalysis: readChoice(value.commitAnalysis, ["fast", "deep"], defaults.commitAnalysis),
     newThreadsInWorktree: readBoolean(value.newThreadsInWorktree, defaults.newThreadsInWorktree),
     selectedDiffs: readStringRecord(value.selectedDiffs),
     pinnedThreads: readStringList(value.pinnedThreads, defaults.pinnedThreads),

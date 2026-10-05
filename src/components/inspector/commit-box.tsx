@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { Action, Keys, Segmented } from "@/components/ui/kit"
+import { Action, Keys } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { ReasonedItem } from "@/components/inspector/git-action-control"
 import { cn } from "@/lib/utils"
@@ -24,12 +24,6 @@ import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, GitBranchIcon, GitPullRequ
 import { Orb } from "@/components/ui/orb/orb"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { BorderBeam } from "border-beam"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import type { CommitAnalysisMode } from "@/lib/types"
 import { useGitPush } from "@/state/git-push"
 import { pullComposer, useBranchPull } from "@/state/github"
 import { pullSetupReason } from "@/lib/pull-requests"
@@ -134,9 +128,7 @@ function CommitEditor({
     async function draftCommitMessage() {
       if (drafting || busy || !cwd || !total) return
       if (!hasModel || disconnected) {
-        window.dispatchEvent(
-          new CustomEvent("mako:settings", { detail: "git" })
-        )
+        openModelSettings()
         return
       }
       await commitDrafts.generate(cwd)
@@ -207,14 +199,11 @@ function CommitEditor({
     return () => window.removeEventListener("keydown", onKey)
   }, [commit])
 
-  const openModelSettings = () =>
-    window.dispatchEvent(new CustomEvent("mako:settings", { detail: "git" }))
-
   if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} detail={pushState.kind === "failed" ? pushState.detail : undefined} />
 
   return (
     <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} data-drafting={drafting || undefined} className="shrink-0 px-2.5 pt-2.5 pb-0.5">
-      <BorderBeam size="md" colorVariant="mono" theme={theme} active={drafting} brightness={1.8}>
+      <BorderBeam size="md" colorVariant="mono" theme={theme} active={drafting} brightness={1.8} borderRadius={0}>
       <div className="commit-editor relative overflow-hidden rounded-lg bg-raised ring-1 ring-hairline focus-within:ring-border">
         <textarea
           aria-label="Commit message"
@@ -278,14 +267,10 @@ function CommitEditor({
             </ul>
           </Notice>
         ) : null}
-        {/* One row, never wrapping. The model chip is the only thing that
-            shrinks; Generate's word and the shortcut hint go before the
-            primary action does. Three weights, read left to right: Generate
-            is an action and takes the composer chips' `quiet` foreground,
-            the model chip is a setting and stays muted with the picker
-            chevron every other chooser in the desk wears, and Commit is
-            the one lit control. Before this Generate and the model sat in
-            the same muted grey and read as two labels. */}
+        {/* One row, never wrapping: Generate's word and the shortcut hint go
+            before the primary action does. Which model drafts, and how hard
+            it reads, are Settings › Models; the row holds only the two
+            actions, Generate in the quiet foreground and Commit lit. */}
         <div className="@container/commit flex items-center gap-2 px-1.5 pb-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             {drafting ? (
@@ -310,26 +295,17 @@ function CommitEditor({
                 Choose model
               </Action>
             ) : hasModel ? (
-              <>
-                <Action
-                  size="xs"
-                  tone="quiet"
-                  aria-label="Draft a message from the diff"
-                  title={`Generate (${draftState.mode}) with ${modelLabel ?? model} · ${formatChord(draftKeys).join(" ")}`}
-                  disabled={total === 0 || busy}
-                  onClick={() => void draft()}
-                >
-                  <DraftMark />
-                  <span className="@max-[22rem]/commit:hidden">Generate</span>
-                </Action>
-                <GenerationSettings
-                  model={modelLabel ?? model ?? ""}
-                  mode={draftState.mode}
-                  disabled={busy}
-                  onMode={(mode) => commitDrafts.setMode(cwd, mode)}
-                  onChangeModel={openModelSettings}
-                />
-              </>
+              <Action
+                size="xs"
+                tone="quiet"
+                aria-label="Draft a message from the diff"
+                title={`Generate with ${modelLabel ?? model} · ${formatChord(draftKeys).join(" ")}`}
+                disabled={total === 0 || busy}
+                onClick={() => void draft()}
+              >
+                <DraftMark />
+                <span className="@max-[22rem]/commit:hidden">Generate</span>
+              </Action>
             ) : (
               <Action
                 size="xs"
@@ -443,78 +419,14 @@ function Notice({
  * not scaled. The library stops itself offscreen, when the document hides,
  * and under reduced motion.
  */
+const openModelSettings = () =>
+  window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))
+
 function DraftMark({ active = false }: { active?: boolean }) {
   return (
     <span aria-hidden className="flex size-4 shrink-0 items-center justify-center">
       <Orb state="shaping" size={20} paused={!active} />
     </span>
-  )
-}
-
-const MODE_TEXT = {
-  fast: "Reads the whole diff in one pass with low reasoning effort.",
-  deep: "Reads the whole diff with higher reasoning effort and looks at the source files where the diff alone is unclear.",
-} satisfies Record<CommitAnalysisMode, string>
-
-/**
- * The model chip opens how a draft is generated: which model, and how hard
- * it thinks. Fast/Deep sat in the toolbar row before, where it was a third
- * control competing with Generate and the Commit button for a 300px row.
- */
-function GenerationSettings({
-  model,
-  mode,
-  disabled,
-  onMode,
-  onChangeModel,
-}: {
-  model: string
-  mode: CommitAnalysisMode
-  disabled: boolean
-  onMode: (mode: CommitAnalysisMode) => void
-  onChangeModel: () => void
-}) {
-  const shortName = model.split(" · ")[0] || model
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Action
-          aria-label={`Drafting model: ${model}. Generation settings`}
-          title={model}
-          size="xs"
-          className="min-w-16 shrink gap-1 font-normal text-faint aria-expanded:bg-fill-selected aria-expanded:text-foreground"
-        >
-          <span className="truncate">{shortName}</span>
-          {/* The picker's chevron, as on the composer's agent and model
-              chips; the first thing to go when the row is short of room. */}
-          <ChevronDownIcon className="size-3! text-faint/70 @max-[22rem]/commit:hidden" />
-        </Action>
-      </PopoverTrigger>
-      <PopoverContent side="top" align="start" sideOffset={8} className="w-64 gap-3 p-3" aria-label="Commit generation settings">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-label text-faint">Drafting model</p>
-            <p className="truncate text-ui font-medium" title={model}>{shortName}</p>
-          </div>
-          <Action size="xs" tone="outline" onClick={onChangeModel}>
-            Change
-          </Action>
-        </div>
-        <div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-label text-faint">Analysis</span>
-            <Segmented
-              label="Commit analysis mode"
-              value={mode}
-              options={[{ value: "fast", label: "Fast" }, { value: "deep", label: "Deep" }]}
-              disabled={disabled}
-              onChange={onMode}
-            />
-          </div>
-          <p className="mt-1.5 text-label leading-snug text-muted-foreground">{MODE_TEXT[mode]}</p>
-        </div>
-      </PopoverContent>
-    </Popover>
   )
 }
 

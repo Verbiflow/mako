@@ -3,7 +3,6 @@ import { getMako } from "@/lib/bridge"
 import { pushCurrentBranch, runGitRemote } from "@/state/git-push"
 import type {
   CommitGenerationInput,
-  PullRequestDraftInput,
   GitCommitEntry,
   GitDiff,
   GitCommitFile,
@@ -88,10 +87,6 @@ export const git = {
 
   generateMessage(input: CommitGenerationInput) {
     return getMako().generateCommitMessage(input)
-  },
-
-  draftPullRequest(input: PullRequestDraftInput) {
-    return getMako().draftPullRequest(input)
   },
 
   cancelGeneration(requestId: string): Promise<void> {
