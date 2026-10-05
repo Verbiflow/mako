@@ -17,6 +17,7 @@ import { GitLoading } from "@/components/inspector/git-loading"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { ChangeList } from "@/components/inspector/change-list"
 import { ReviewStream } from "@/components/inspector/review-stream"
+import { DIFF_THEME } from "@/lib/diff-theme"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
 import { Collapse } from "@/components/ui/collapse"
@@ -25,10 +26,16 @@ import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { viewer } from "@/state/viewer"
 import type { GitDiff, GitFile, GitStatus } from "@/lib/types"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
+import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { LineCounts } from "@/components/inspector/change-marks"
+import { MARK, type StatusMark } from "@/lib/git-marks"
 import {
   CheckCircle2Icon,
   ChevronRightIcon,
   Columns2Icon,
+  FolderIcon,
+  FolderOpenIcon,
+  GitBranchIcon,
   ListIcon,
   ListTreeIcon,
   Maximize2Icon,
@@ -54,22 +61,8 @@ function lineAt(diff: GitDiff, line: number, side: "additions" | "deletions"): s
   return file?.contents.split("\n")[line - 1]
 }
 
-interface StatusMark {
-  glyph: string
-  tone: string
-  title: string
-}
-
-const MARK = {
-  conflicted: { glyph: "!", tone: "text-removed", title: "Merge conflict" },
-  added: { glyph: "A", tone: "text-added", title: "Added" },
-  untracked: { glyph: "U", tone: "text-added", title: "Untracked" },
-  modified: { glyph: "M", tone: "text-caution", title: "Modified" },
-  deleted: { glyph: "D", tone: "text-removed", title: "Deleted" },
-} satisfies Record<GitFile["status"], StatusMark>
-
-/** Pixels per tree level. The staging checkboxes stay in one column. */
-const TREE_INDENT = 12
+/** Pixels per tree level. */
+const TREE_INDENT = 10
 
 export function ChangesPanel() {
   const focus = useWorkspaceFocus()
@@ -113,14 +106,22 @@ function RepositoryChanges({ snapshot }: { snapshot: GitStatus }) {
             <section key={repository.root} className={cn("flex min-h-0 flex-col", expanded ? grow : "shrink-0")}>
               <button type="button" aria-label={repository.label} aria-expanded={expanded}
                 disabled={Boolean(pending)} title={repository.root}
-                className="pressable flex h-7 w-full shrink-0 items-center gap-1.5 border-b border-hairline px-2 text-left text-label hover:bg-foreground/5 disabled:cursor-wait"
+                className="pressable group flex h-8 w-full shrink-0 items-center gap-2 border-b border-hairline px-2.5 text-left transition-colors duration-100 hover:bg-fill-hover disabled:cursor-wait"
                 onClick={() => {
                   if (repository.root === snapshot.root) setCollapsed((value) => !value)
                   else void select(repository.root)
                 }}>
-                <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint", expanded && "rotate-90")} />
-                <span className="min-w-0 flex-1 truncate font-medium">{repository.label}</span>
-                <span className="truncate text-faint">{repository.unavailable ? "Unavailable" : repository.branch ?? "Detached HEAD"}</span>
+                <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)]", expanded && "rotate-90")} />
+                <span className={cn("min-w-0 truncate text-ui font-medium", expanded ? "text-foreground" : "text-foreground/80")}>{repository.label}</span>
+                {/* Expanded, the Files header below counts them. */}
+                {!expanded && repository.changes ? <span className="tabular shrink-0 rounded-full bg-foreground/[0.07] px-1.5 text-label leading-4 text-muted-foreground">{repository.changes}</span> : null}
+                <span className="flex-1" />
+                {repository.unavailable ? <span className="truncate text-label text-faint">Unavailable</span> : (
+                  <span className="flex min-w-0 items-center gap-1 text-label text-faint">
+                    <GitBranchIcon className="size-3 shrink-0" />
+                    <span className="truncate">{repository.branch ?? "Detached HEAD"}</span>
+                  </span>
+                )}
               </button>
               {expanded ? (
                 <div role="region" aria-label={`Changes in ${repository.label}`} className={cn("flex min-h-0 flex-col", grow)}>
@@ -387,20 +388,20 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   return (
     <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
       <WorktreeReview />
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline px-2.5 text-label text-faint">
+      <div className="flex h-8 shrink-0 items-center gap-2 pr-1.5 pl-3 text-label">
         {/* The counts already project pending checkbox intent, so a stage
             write in flight only marks the reading busy; swapping the whole
             sentence for "Updating..." and back made every click blink. */}
-        <span role="status" aria-busy={staging || undefined} className="min-w-0 flex-1 truncate tabular">
-          {`${files.length} ${files.length === 1 ? "file" : "files"} changed${staged > 0 ? ` · ${staged} staged` : ""}`}
+        <span role="status" aria-busy={staging || undefined} className="tabular min-w-0 truncate text-muted-foreground">
+          {`${files.length} ${files.length === 1 ? "change" : "changes"}`}
+          {staged > 0 ? <span className="text-faint">{` · ${staged} staged`}</span> : null}
         </span>
         {/* Line totals are deferred for large changesets; an unknown total
             shows nothing rather than a label explaining its absence. */}
-        {files.every((file) => file.insertions !== null && file.deletions !== null) ? <>
-          <span className="tabular text-added">+{files.reduce((sum, file) => sum + (file.insertions ?? 0), 0)}</span>
-          <span className="tabular text-removed">−{files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)}</span>
-        </> : null}
-        <div className="ml-auto flex items-center gap-0.5">
+        {files.every((file) => file.insertions !== null && file.deletions !== null) ? (
+          <LineCounts insertions={files.reduce((sum, file) => sum + (file.insertions ?? 0), 0)} deletions={files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)} />
+        ) : null}
+        <div className="ml-auto flex items-center text-faint">
           <IconAction
             label="Review current changes in the center"
             size="xs"
@@ -496,6 +497,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
                   ? { oldFile: null, newFile: diff.newFile }
                   : { oldFile: diff.oldFile!, newFile: null })}
               options={{
+                theme: DIFF_THEME,
                 disableFileHeader: true,
                 diffStyle,
                 overflow: wrapDiff ? "wrap" : "scroll",
@@ -565,25 +567,30 @@ function CommitsSection({
   const [open, setOpen] = useState(defaultOpen)
   const hasRepo = useSession((state) => Boolean(state.git?.root))
   const branch = useSession((state) => state.git?.branch)
+  const ahead = useSession((state) => state.git?.ahead ?? 0)
+  // With several repositories, each one's header already names its branch.
+  const named = useSession((state) => Boolean(state.git?.repositories?.length))
   if (!hasRepo) return null
   return (
     <div className="flex min-h-0 shrink-0 flex-col border-t border-hairline">
-      <div className="flex h-8 shrink-0 items-center px-1.5">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={branch ? `History on ${branch}` : "History"}
-          onClick={() => setOpen((value) => !value)}
-          className="pressable flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-label text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-        >
-          <ChevronRightIcon
-            className={cn("size-3 shrink-0 text-faint transition-transform duration-200 ease-[var(--ease-out)]", open && "rotate-90")}
-          />
-          <span className="truncate">History</span>
-          {branch ? <span className="truncate font-mono text-faint">{branch}</span> : null}
-        </button>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={branch ? `History on ${branch}` : "History"}
+        onClick={() => setOpen((value) => !value)}
+        className="pressable flex h-8 w-full shrink-0 items-center gap-2 pr-2.5 pl-3 text-left text-label transition-colors duration-100 hover:bg-fill-hover"
+      >
+        <span className="text-muted-foreground">History</span>
+        {ahead > 0 ? <span className="tabular text-caution/80">{ahead} not pushed</span> : null}
         <span className="flex-1" />
-      </div>
+        {branch && !named ? (
+          <span className="flex min-w-0 items-center gap-1 text-faint">
+            <GitBranchIcon className="size-3 shrink-0" />
+            <span className="truncate">{branch}</span>
+          </span>
+        ) : null}
+        <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-200 ease-[var(--ease-out)]", open ? "-rotate-90" : "rotate-90")} />
+      </button>
       <Collapse open={open}>
         <div className="max-h-[36vh] overflow-y-auto overscroll-contain">
           <GitLog onPickFile={onPickFile} onPickCommit={onPickCommit} />
@@ -594,57 +601,81 @@ function CommitsSection({
 }
 
 /**
- * A staging checkbox. Directories carry the same control as files and act on
- * everything beneath them, with a partial state for the common case where the
- * agent touched several files in a folder and you only staged some.
+ * The cell at a row's end: the file's status letter, which turns into its
+ * staging checkbox on hover or focus. Staged rows keep the check, so what the
+ * next commit takes reads at a glance. Folders carry the same control and act
+ * on everything beneath them, partial when only some of it is staged.
  */
-function StageBox({
+function StageCell({
   state,
+  mark,
   label,
   busy,
   onToggle,
 }: {
   state: "on" | "off" | "partial"
+  mark?: StatusMark
   label: string
   busy: boolean
   onToggle: () => void
 }) {
+  const shown = state !== "off" || busy
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-label={label}
-      aria-checked={state === "partial" ? "mixed" : state === "on"}
-      aria-busy={busy}
-      onClick={(event) => {
-        // The row underneath is a click target too; staging must not also
-        // expand a folder or open a diff.
-        event.stopPropagation()
-        onToggle()
-      }}
-      className="pressable stage-hit-target flex size-6 shrink-0 cursor-pointer items-center justify-center select-none"
-    >
-      <span aria-hidden className={cn(
-        "pointer-events-none flex size-3.5 items-center justify-center rounded-[3px] ring-1 ring-inset transition-colors",
-        state === "off" ? "ring-border group-hover:ring-foreground/40" : "bg-foreground/85 ring-foreground/85"
-      )}>
-        {state === "on" ? (
-          <svg viewBox="0 0 10 10" className="size-2.5 text-background" aria-hidden>
-            <path
-              d="M1.5 5.2 4 7.5 8.5 2.8"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        ) : state === "partial" ? (
-          <span className="block h-[1.5px] w-[7px] rounded-full bg-background" />
-        ) : null}
-      </span>
-    </button>
+    <span className="relative flex size-6 shrink-0 items-center justify-center">
+      {mark ? (
+        <span title={mark.title} className={cn(
+          "pointer-events-none font-mono text-label leading-none font-semibold transition-opacity duration-100 group-hover:opacity-0 group-focus-within:opacity-0",
+          mark.tone,
+          shown && "opacity-0"
+        )}>
+          {mark.glyph}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        role="checkbox"
+        aria-label={label}
+        aria-checked={state === "partial" ? "mixed" : state === "on"}
+        aria-busy={busy}
+        onClick={(event) => {
+          // The row underneath is a click target too; staging must not also
+          // expand a folder or open a diff.
+          event.stopPropagation()
+          onToggle()
+        }}
+        className={cn(
+          "pressable stage-hit-target absolute inset-0 flex cursor-pointer items-center justify-center rounded select-none transition-opacity duration-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
+          !shown && "opacity-0"
+        )}
+      >
+        <span aria-hidden className={cn(
+          "pointer-events-none flex size-3.5 items-center justify-center rounded-[4px] ring-1 ring-inset transition-colors duration-100",
+          state === "off" ? "ring-foreground/35 hover:ring-foreground/55" : "bg-foreground/80 ring-foreground/80"
+        )}>
+          {state === "on" ? (
+            <svg viewBox="0 0 10 10" className="size-2.5 text-background" aria-hidden>
+              <path d="M1.8 5.2 4 7.3 8.2 2.9" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : state === "partial" ? (
+            <span className="block h-[1.5px] w-[7px] rounded-full bg-background" />
+          ) : null}
+        </span>
+      </button>
+    </span>
   )
+}
+
+/** Where a row's content starts, as the Files tab indents. */
+function indent(depth: number) {
+  return { paddingInlineStart: 4 + depth * TREE_INDENT }
+}
+
+/** One faint line per enclosing folder, under that folder's chevron. */
+function Guides({ depth }: { depth: number }) {
+  if (depth === 0) return null
+  return <>{Array.from({ length: depth }, (_, level) => (
+    <span key={level} aria-hidden className="pointer-events-none absolute inset-y-0 w-px bg-foreground/[0.07]" style={{ left: 4 + level * TREE_INDENT + 6 }} />
+  ))}</>
 }
 
 function DirRow({
@@ -661,10 +692,32 @@ function DirRow({
   onDiscard: (paths: readonly string[]) => void
 }) {
   const state = row.staged === 0 ? "off" : row.staged === row.files ? "on" : "partial"
-
+  const FolderGlyph = row.collapsed ? FolderIcon : FolderOpenIcon
   return (
-    <div className="group flex h-6 items-center rounded pr-1 pl-0.5 select-none transition-colors duration-100 hover:bg-fill-hover">
-      <StageBox
+    <div className="group relative flex h-6 items-center gap-1 rounded select-none transition-colors duration-100 hover:bg-fill-hover">
+      <Guides depth={row.depth} />
+      <button
+        type="button"
+        aria-expanded={!row.collapsed}
+        onClick={() => onToggle(row.key)}
+        title={row.key}
+        style={indent(row.depth)}
+        className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
+      >
+        <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)]", !row.collapsed && "rotate-90")} />
+        <FolderGlyph className="size-3.5 shrink-0 text-faint" />
+        <span className="min-w-0 truncate text-ui text-foreground/85">{row.label}</span>
+        {/* Open, the files below say what the count would; it earns its
+            place when it hides them or when only part of them is staged. */}
+        {row.collapsed || state === "partial" ? (
+          <span className="tabular shrink-0 text-label text-faint">
+            {state === "partial" ? `${row.staged} of ${row.files}` : row.files}
+          </span>
+        ) : null}
+      </button>
+      <DiscardAction label={`Discard changes in ${row.label}`} onDiscard={() => onDiscard(row.paths)} />
+      {row.collapsed ? <LineCounts insertions={row.insertions} deletions={row.deletions} className="group-hover:hidden group-focus-within:hidden" /> : null}
+      <StageCell
         state={state}
         busy={busy}
         // Partially staged reads as "not yet done", so the useful action is to
@@ -672,30 +725,6 @@ function DirRow({
         label={state === "on" ? `Unstage ${row.label}` : `Stage all of ${row.label}`}
         onToggle={() => onStage(row.paths, state !== "on")}
       />
-      <button
-        type="button"
-        onClick={() => onToggle(row.key)}
-        style={{ paddingInlineStart: row.depth * TREE_INDENT }}
-        className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1 text-left"
-      >
-        <ChevronRightIcon
-          className={cn(
-            "size-3.5 shrink-0 text-faint transition-transform duration-150",
-            !row.collapsed && "rotate-90"
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
-          {row.label}
-        </span>
-        {/* Open, the files below say what the count would; it earns its
-            place when it hides them or when only part of them is staged. */}
-        {row.collapsed || (row.staged > 0 && row.staged < row.files) ? (
-          <span className="tabular shrink-0 pr-1 text-label text-faint">
-            {row.staged > 0 && row.staged < row.files ? `${row.staged}/${row.files}` : row.files}
-          </span>
-        ) : null}
-      </button>
-      <DiscardAction label={`Discard changes in ${row.label}`} onDiscard={() => onDiscard(row.paths)} />
     </div>
   )
 }
@@ -703,7 +732,7 @@ function DirRow({
 /** Shown on the row's hover or focus, as VS Code's is; the dialog it opens says what goes. */
 function DiscardAction({ label, onDiscard }: { label: string; onDiscard: () => void }) {
   return (
-    <IconAction label={label} size="xs" onClick={onDiscard} className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100">
+    <IconAction label={label} size="xs" onClick={onDiscard} className="hidden text-faint group-hover:flex group-focus-within:flex focus-visible:flex">
       <Undo2Icon />
     </IconAction>
   )
@@ -726,52 +755,38 @@ function FileRow({
 }) {
   const file = row.file
   const mark = MARK[file.status]
-
   return (
-    <div
-      className={cn(
-        "group flex h-6 items-center rounded pr-1 pl-0.5 select-none transition-colors duration-100",
-        "hover:bg-fill-hover",
-        active && "bg-fill-selected"
-      )}
-    >
-      <StageBox
+    <div className={cn(
+      "group relative flex h-6 items-center gap-1 rounded select-none transition-colors duration-100",
+      active ? "bg-fill-selected" : "hover:bg-fill-hover"
+    )}>
+      <Guides depth={row.depth} />
+      <button
+        type="button"
+        onClick={() => onSelect(file.path)}
+        title={`${file.path} · ${mark.title}`}
+        style={indent(row.depth)}
+        className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
+      >
+        {/* Files sit under their folder's label, past the chevron column. */}
+        <span className="w-3 shrink-0" />
+        <FileTypeIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
+        <span className={cn(
+          "min-w-0 truncate text-ui",
+          file.status === "deleted" ? "text-faint line-through decoration-faint/60" : file.status === "conflicted" ? "text-removed" : active ? "text-foreground" : "text-foreground/85"
+        )}>
+          {row.label}
+        </span>
+      </button>
+      {file.status !== "conflicted" ? <DiscardAction label={`Discard changes to ${row.label}`} onDiscard={() => onDiscard([file.path])} /> : null}
+      <LineCounts insertions={file.insertions} deletions={file.deletions} className="group-hover:hidden group-focus-within:hidden" />
+      <StageCell
         state={file.staged ? "on" : "off"}
+        mark={mark}
         busy={busy}
         label={file.staged ? `Unstage ${row.label}` : `Stage ${row.label}`}
         onToggle={() => onToggleStage(file)}
       />
-
-      <button
-        type="button"
-        onClick={() => onSelect(file.path)}
-        title={file.path}
-        // Files sit under their folder's label, past the chevron column.
-        style={{ paddingInlineStart: row.depth * TREE_INDENT + 18 }}
-        className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
-      >
-        <span
-          title={mark.title}
-          className={cn("w-2.5 shrink-0 font-mono text-label font-semibold", mark.tone)}
-        >
-          {mark.glyph}
-        </span>
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-ui",
-            active ? "text-foreground" : "text-foreground/85"
-          )}
-        >
-          {row.label}
-        </span>
-        {file.insertions || file.deletions ? (
-          <span className="tabular flex shrink-0 gap-1 text-label">
-            {file.insertions ? <span className="text-added">+{file.insertions}</span> : null}
-            {file.deletions ? <span className="text-removed">−{file.deletions}</span> : null}
-          </span>
-        ) : null}
-      </button>
-      {file.status !== "conflicted" ? <DiscardAction label={`Discard changes to ${row.label}`} onDiscard={() => onDiscard([file.path])} /> : null}
       <Slot name="changes.file.trailing" file={file} />
     </div>
   )

@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react"
-import { Action, Blank } from "@/components/ui/kit"
+import { Action, Blank, IconAction } from "@/components/ui/kit"
+import { Collapse } from "@/components/ui/collapse"
+import { FileTypeIcon } from "@/components/ui/file-type-icon"
+import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
+import { PathLabel } from "@/components/ui/path-label"
 import { GitLoading } from "@/components/inspector/git-loading"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { useWorkspaceTransition } from "@/state/workspace-transition"
@@ -7,31 +11,18 @@ import { git, type GitCommitFile } from "@/state/git"
 import { formatRelative } from "@/lib/format"
 import { useSession } from "@/state/session"
 import { cn } from "@/lib/utils"
-import type { GitCommitEntry, GitFileStatus } from "@/lib/types"
-import { ChevronRightIcon, GitCommitHorizontalIcon } from "lucide-react"
+import type { GitCommitEntry } from "@/lib/types"
+import { GitCommitHorizontalIcon, Maximize2Icon } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"
 
 /**
  * Commit history, openable.
  *
- * A commit row expands into the files it touched — fetched the first time it
- * opens, kept after — and each file is a click from its diff: the parent's
- * version against the commit's, in the same diff surface the working tree
- * uses. History you can only read is a list; history you can open is a tool.
+ * A commit row unfolds into the files it touched — fetched the first time it
+ * opens, kept after — as a folder in the tree does, and each file is a click
+ * from its diff: the parent's version against the commit's, on the center
+ * stage. The whole commit opens there from the row's own action.
  */
-
-interface StatusGlyph {
-  glyph: string
-  tone: string
-}
-
-const GLYPH = {
-  added: { glyph: "A", tone: "text-added" },
-  modified: { glyph: "M", tone: "text-caution" },
-  deleted: { glyph: "D", tone: "text-removed" },
-  conflicted: { glyph: "!", tone: "text-removed" },
-  untracked: { glyph: "U", tone: "text-added" },
-} satisfies Record<GitFileStatus, StatusGlyph>
 
 export function GitLog(props: Parameters<typeof WorkspaceGitLog>[0]) {
   const focus = useWorkspaceFocus()
@@ -111,122 +102,80 @@ function WorkspaceGitLog({
   }
 
   return (
-    <div className="py-1">
+    <div className="px-1 pb-1.5">
       {commits.map((commit, index) => {
         const expanded = open === commit.hash
         const commitFiles = filesByHash[commit.hash]
+        // Unpushed commits are the ones still under your control.
+        const unpushed = index < ahead
         return (
-          <div key={commit.hash}>
+          <div key={commit.hash} className="group/commit relative">
+            {index < commits.length - 1 ? <span aria-hidden className="pointer-events-none absolute top-[17px] bottom-0 left-[13.5px] w-px bg-foreground/[0.09]" /> : null}
             <button
               type="button"
-              // The commit is the unit you read: clicking it opens the whole
-              // diff on the center stage. The chevron below is the smaller
-              // gesture — unfold the file list without leaving the panel.
-              onClick={() =>
-                onPickCommit ? onPickCommit(commit.hash, commit.subject) : toggle(commit.hash)
-              }
-              className="contain-turn group flex w-full gap-2 rounded-md px-2.5 py-1 text-left transition-colors duration-100 hover:bg-fill-hover [contain-intrinsic-size:auto_38px]"
+              aria-expanded={expanded}
+              onClick={() => toggle(commit.hash)}
+              title={`${commit.subject}\n${commit.shortHash} · ${commit.author} · ${new Date(commit.date).toLocaleString()}`}
+              className="pressable flex w-full items-start gap-2.5 rounded-md py-1.5 pr-9 pl-2 text-left transition-colors duration-100 hover:bg-fill-hover [contain-intrinsic-size:auto_42px] [content-visibility:auto]"
             >
-              <span className="relative flex w-3 shrink-0 justify-center">
-                {index < commits.length - 1 ? (
-                  <span className="absolute top-3.5 bottom-[-4px] w-px bg-hairline" />
-                ) : null}
-                <span
-                  className={cn(
-                    "relative z-10 mt-[7px] size-1.5 rounded-full",
-                    // Unpushed commits are the ones still under your control.
-                    index < ahead ? "bg-caution" : "bg-foreground/30"
-                  )}
-                />
+              <span aria-hidden className="relative flex h-[18px] w-3 shrink-0 items-center justify-center">
+                <span className={cn(
+                  "size-[7px] rounded-full ring-[1.5px]",
+                  unpushed ? "bg-caution/25 ring-caution/80" : index === 0 ? "bg-foreground/60 ring-foreground/60" : "bg-background ring-foreground/30"
+                )} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="flex items-baseline gap-2">
-                  <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">
-                    {commit.subject}
-                  </span>
-                  <span className="tabular shrink-0 text-label text-faint">
-                    {formatRelative(commit.date)}
-                  </span>
-                </span>
-                <span className="flex items-center gap-2 text-label text-faint">
-                  <span
-                    role="button"
-                    tabIndex={-1}
-                    aria-label={expanded ? "Hide files" : "Show files"}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      toggle(commit.hash)
-                    }}
-                    className="rounded p-0.5 hover:text-foreground"
-                  >
-                    <ChevronRightIcon
-                      className={cn(
-                        "size-2.5 shrink-0 transition-transform duration-200 ease-out",
-                        expanded && "rotate-90"
-                      )}
-                    />
-                  </span>
-                  <span className="font-mono">{commit.shortHash}</span>
-                  <span className="truncate">{commit.author}</span>
-                  {commit.insertions || commit.deletions ? (
-                    <span className="tabular ml-auto shrink-0">
-                      <span className="text-added">+{commit.insertions}</span>{" "}
-                      <span className="text-removed">−{commit.deletions}</span>
-                    </span>
-                  ) : null}
+                <span className={cn("block truncate text-ui", expanded ? "text-foreground" : "text-foreground/85")}>{commit.subject}</span>
+                <span className="flex min-w-0 items-center gap-1.5 text-label text-faint">
+                  <span className="shrink-0 font-mono">{commit.shortHash}</span>
+                  <span aria-hidden>·</span>
+                  <span className="min-w-0 truncate">{commit.author}</span>
+                  <span aria-hidden>·</span>
+                  <span className="tabular shrink-0">{formatRelative(commit.date)}</span>
+                  {unpushed ? <span className="shrink-0 text-caution/80">· Not pushed</span> : null}
                 </span>
               </span>
             </button>
-
-            <div
-              className={cn(
-                "grid transition-[grid-template-rows] duration-200 ease-out",
-                expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-              )}
-            >
-              <div className="min-h-0 overflow-hidden">
-                {expanded ? (
-                  commitFiles === undefined ? (
-                    <p className="py-1 pl-10 text-label"><Shimmer text="Reading the commit…" /></p>
-                  ) : commitFiles.length === 0 ? (
-                    <p className="py-1 pl-10 text-label text-faint">Nothing readable in it.</p>
-                  ) : (
-                    <>{commitFiles.slice(page * 100, (page + 1) * 100).map((file) => {
-                      const mark = GLYPH[file.status] ?? GLYPH.modified
-                      const active = picked?.hash === commit.hash && picked.path === file.path
-                      return (
-                        <button
-                          key={file.path}
-                          type="button"
-                          disabled={!onPickFile}
-                          onClick={() => onPickFile?.(commit.hash, file.path)}
-                          data-active={active || undefined}
-                          className={cn(
-                            "flex w-full items-center gap-2 rounded py-[3px] pr-2.5 pl-10 text-left",
-                            "transition-colors duration-100 data-active:bg-raised",
-                            onPickFile && "hover:bg-fill-hover"
-                          )}
-                        >
-                          <span className={cn("w-2.5 shrink-0 text-label font-semibold", mark?.tone)}>
-                            {mark?.glyph}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate font-mono text-label text-foreground/80">
-                            {file.path}
-                          </span>
-                          {!file.binary && file.insertions !== null && file.deletions !== null ? (
-                            <span className="tabular shrink-0 text-label text-faint">
-                              <span className="text-added">+{file.insertions}</span>{" "}
-                              <span className="text-removed">−{file.deletions}</span>
-                            </span>
-                          ) : null}
-                        </button>
-                      )
-                    })}
-                    {commitFiles.length > 100 ? <div className="flex items-center justify-between px-3 py-2 pl-10 text-label text-faint"><Action size="xs" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</Action><span>{page * 100 + 1}–{Math.min((page + 1) * 100, commitFiles.length)} of {commitFiles.length} files</span><Action size="xs" disabled={(page + 1) * 100 >= commitFiles.length} onClick={() => setPage((value) => value + 1)}>Next</Action></div> : null}</>
-                  )
-                ) : null}
+            {onPickCommit ? (
+              <IconAction label="Open the commit in the center" size="xs" onClick={() => onPickCommit(commit.hash, commit.subject)}
+                className="absolute top-1.5 right-1.5 text-faint opacity-0 group-hover/commit:opacity-100 focus-visible:opacity-100">
+                <Maximize2Icon />
+              </IconAction>
+            ) : null}
+            <Collapse open={expanded}>
+              <div className="pt-0.5 pb-1.5 pl-[26px]">
+                {commitFiles === undefined ? (
+                  <p className="flex h-6 items-center px-2 text-label"><Shimmer text="Reading the commit…" /></p>
+                ) : commitFiles.length === 0 ? (
+                  <p className="flex h-6 items-center px-2 text-label text-faint">Nothing readable in it.</p>
+                ) : (
+                  <>{commitFiles.slice(page * 100, (page + 1) * 100).map((file) => {
+                    const active = picked?.hash === commit.hash && picked.path === file.path
+                    return (
+                      <button
+                        key={file.path}
+                        type="button"
+                        disabled={!onPickFile}
+                        onClick={() => onPickFile?.(commit.hash, file.path)}
+                        data-active={active || undefined}
+                        title={file.path}
+                        className={cn(
+                          "flex h-6 w-full items-center gap-1.5 rounded pr-1.5 pl-2 text-left",
+                          "transition-colors duration-100 data-active:bg-fill-selected",
+                          onPickFile && "hover:bg-fill-hover"
+                        )}
+                      >
+                        <FileTypeIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
+                        <PathLabel path={file.path} className="flex-1" nameClassName={file.status === "deleted" ? "text-faint line-through decoration-faint/60" : "text-foreground/85"} />
+                        {!file.binary ? <LineCounts insertions={file.insertions} deletions={file.deletions} /> : null}
+                        <StatusLetter status={file.status} className="w-3 text-center" />
+                      </button>
+                    )
+                  })}
+                  {commitFiles.length > 100 ? <div className="flex items-center justify-between py-1.5 pr-1.5 pl-2 text-label text-faint"><Action size="xs" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Previous</Action><span>{page * 100 + 1}–{Math.min((page + 1) * 100, commitFiles.length)} of {commitFiles.length} files</span><Action size="xs" disabled={(page + 1) * 100 >= commitFiles.length} onClick={() => setPage((value) => value + 1)}>Next</Action></div> : null}</>
+                )}
               </div>
-            </div>
+            </Collapse>
           </div>
         )
       })}

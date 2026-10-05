@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/state/confirm"
+import { PathLabel } from "@/components/ui/path-label"
 
 const icons = { remove: Trash2Icon, merge: GitMergeIcon, stop: CircleStopIcon }
 const subjectIcons = { folder: FolderIcon, branch: GitBranchIcon, app: AppWindowIcon, file: FileIcon }
@@ -33,39 +34,40 @@ export function ConfirmHost() {
           first.current?.focus()
         }}
       >
-        <div className="flex gap-3.5 px-5 pt-5">
+        <div className="flex gap-3 px-5 pt-5">
           {Icon ? (
             <span
               className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-lg",
-                negative ? "bg-negative/12 text-negative" : "bg-raised text-foreground ring-1 ring-hairline"
+                "flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.06]",
+                negative ? "text-negative/90" : "text-muted-foreground"
               )}
               aria-hidden
             >
-              <Icon className="size-[18px]" strokeWidth={1.75} />
+              <Icon className="size-4" strokeWidth={1.75} />
             </span>
           ) : null}
-          <div className="min-w-0 flex-1 pt-px">
-            <DialogTitle className="text-title">{request?.title}</DialogTitle>
-            <p id={bodyId} className="mt-1 text-ui leading-relaxed text-muted-foreground">{request?.body}</p>
+          <div className="min-w-0 flex-1">
+            <DialogTitle className="text-title leading-8">{request?.title}</DialogTitle>
+            <p id={bodyId} className="text-ui leading-relaxed text-muted-foreground">{request?.body}</p>
           </div>
         </div>
         {request?.subjects?.length ? (
-          <ul className="mx-5 mt-4 overflow-hidden rounded-lg bg-surface ring-1 ring-hairline">
+          <ul className="mx-5 mt-4 overflow-hidden rounded-lg bg-foreground/[0.03] py-1 ring-1 ring-hairline">
             {request.subjects.map((subject) => {
               const SubjectIcon = subjectIcons[subject.kind]
               return (
-                <li key={`${subject.kind}:${subject.name}`} className="flex h-9 items-center gap-2.5 border-b border-hairline px-3 last:border-0">
+                <li key={`${subject.kind}:${subject.name}`} className="flex h-8 items-center gap-2.5 px-3">
                   <SubjectIcon className="size-3.5 shrink-0 text-faint" aria-label={subject.kind} />
-                  <span className={cn("min-w-0 flex-1 truncate text-label text-foreground/90", subject.kind !== "app" && "font-mono")} title={subject.name}>{subject.name}</span>
+                  {subject.kind === "file" ? <PathLabel path={subject.name} className="flex-1" nameClassName="text-foreground/90" /> :
+                  <span className={cn("min-w-0 flex-1 truncate text-label text-foreground/90", subject.kind !== "app" && "font-mono")} title={subject.name}>{subject.name}</span>}
                   {subject.detail ? (
-                    <span className={cn("shrink-0 text-label", subject.lost ? "text-negative" : "text-faint")}>{subject.detail}</span>
+                    <span className={cn("shrink-0 text-label", subject.lost ? "text-negative/85" : "text-faint")}>{subject.detail}</span>
                   ) : null}
                 </li>
               )
             })}
             {request.more ? (
-              <li className="flex h-9 items-center px-3 text-label text-faint">And {request.more} more</li>
+              <li className="flex h-8 items-center px-3 pl-9 text-label text-faint">And {request.more} more</li>
             ) : null}
           </ul>
         ) : null}
@@ -75,16 +77,16 @@ export function ConfirmHost() {
             {request.note}
           </p>
         ) : null}
-        <div className="mt-5 flex justify-end gap-2 border-t border-hairline bg-surface px-4 py-3">
-          <Action ref={cancel} size="md" tone="quiet" data-confirm-cancel="" onClick={() => live?.answer(false)}>
+        <div className="mt-5 flex justify-end gap-2 px-5 pb-5">
+          <Action ref={cancel} size="sm" tone="quiet" data-confirm-cancel="" onClick={() => live?.answer(false)}>
             Cancel
           </Action>
           <Action
             ref={proceed}
-            size="md"
+            size="sm"
             data-confirm-action=""
             onClick={() => live?.answer(true)}
-            className={cn("px-3", negative ? "bg-negative text-background hover:not-disabled:opacity-90" : "bg-primary text-primary-foreground hover:not-disabled:opacity-90")}
+            className={cn("px-3", negative ? "bg-negative/15 text-negative hover:not-disabled:bg-negative/25" : "bg-primary text-primary-foreground hover:not-disabled:opacity-90")}
           >
             {request?.confirm}
           </Action>

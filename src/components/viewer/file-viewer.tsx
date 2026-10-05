@@ -416,7 +416,7 @@ function DocumentView({ document }: { document: ViewerDocument }) {
  * a syntax-highlighting runtime that has no business in the boot path.
  */
 const LazyDiff = lazy(async () => {
-  const { MultiFileDiff, Virtualizer } = await import("@pierre/diffs/react")
+  const [{ MultiFileDiff, Virtualizer }, { DIFF_THEME }] = await Promise.all([import("@pierre/diffs/react"), import("@/lib/diff-theme")])
   function Center({
     diffs,
     note,
@@ -443,6 +443,7 @@ const LazyDiff = lazy(async () => {
                 ? { oldFile: null, newFile: diff.newFile }
                 : { oldFile: diff.oldFile!, newFile: null })}
             options={{
+              theme: DIFF_THEME,
               diffStyle: "split",
             }}
           />

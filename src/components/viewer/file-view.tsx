@@ -9,6 +9,7 @@ import { resolveMarkdownMedia } from "@/lib/markdown-media"
 import { ArtifactPreview } from "./artifact-preview"
 import { useEffect, useRef } from "react"
 import { File, Virtualizer } from "@pierre/diffs/react"
+import { DIFF_THEME } from "@/lib/diff-theme"
 import { FileIcon } from "lucide-react"
 import { formatBytes } from "@/lib/format"
 import { Prose } from "@/components/transcript/markdown"
@@ -123,6 +124,7 @@ export function FileView({
           file={{ name: file.path, contents: file.contents }}
           selectedLines={line ? { start: line, end: line } : null}
           options={{
+            theme: DIFF_THEME,
             disableFileHeader: true,
           }}
         />

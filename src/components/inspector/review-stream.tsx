@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, SparklesIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
 import { ImageThumbs } from "@/components/inspector/binary-diff"
 import { Annotation, GutterAdd } from "@/components/inspector/review"
+import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
+import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { Action, IconAction } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { SearchSelect } from "@/components/ui/search-select"
+import { DIFF_THEME } from "@/lib/diff-theme"
 import { binarySizes } from "@/lib/git-binary"
 import { cn } from "@/lib/utils"
 import type { GitCommitEntry, GitDiff, GitFile } from "@/lib/types"
+import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { git as gitActions } from "@/state/git"
 import { discardFiles } from "@/state/git-discard"
 import { useGitHub } from "@/state/github"
@@ -32,10 +36,14 @@ type Loaded =
   | { kind: "binary"; diff: GitDiff }
   | { kind: "unavailable"; reason: string }
 
-/** Which changes the stream shows: what isn't committed, everything since the branch left its base, or one commit. */
+/**
+ * Which changes the stream shows: what isn't committed, everything since the
+ * branch left its base, what the agent's last turn changed, or one commit.
+ */
 type Scope =
   | { kind: "uncommitted" }
   | { kind: "since"; ref: string; label: string }
+  | { kind: "turn"; conversation: string; requestId: string; prompt: string }
   | { kind: "commit"; hash: string; shortHash: string; subject: string }
 
 const UNCOMMITTED: Scope = { kind: "uncommitted" }
@@ -47,14 +55,6 @@ interface Entry {
   /** The status changed since this was read; it shows until the new read lands. */
   stale: boolean
 }
-
-const MARK = {
-  conflicted: { glyph: "!", tone: "text-removed", title: "Merge conflict" },
-  added: { glyph: "A", tone: "text-added", title: "Added" },
-  untracked: { glyph: "U", tone: "text-added", title: "Untracked" },
-  modified: { glyph: "M", tone: "text-caution", title: "Modified" },
-  deleted: { glyph: "D", tone: "text-removed", title: "Deleted" },
-} satisfies Record<GitFile["status"], { glyph: string; tone: string; title: string }>
 
 /** Viewed marks by repository and path, each with the contents it was given for. */
 const viewedStore = createStore<{ marks: Readonly<Record<string, string>> }>({ marks: {} })
@@ -200,33 +200,58 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
   const scope = chosen.workspace === workspace ? chosen.scope : UNCOMMITTED
   const choose = useCallback((next: Scope) => setChosen({ workspace, scope: next }), [workspace])
   const [read, setRead] = useState<{ key: string; files: readonly GitFile[] | null; base?: string }>()
-  const key = scope.kind === "uncommitted" ? "uncommitted" : scope.kind === "since" ? `since:${scope.ref}` : `commit:${scope.hash}`
+  const key = scopeKey(scope)
+  // A since scope changes with every edit too, so it is read again with the status; a turn or a commit is fixed.
+  const edits = scope.kind === "since" ? files : null
 
-  // A since scope changes with every edit too, so it is read again with the status.
   useEffect(() => {
     if (scope.kind === "uncommitted") return
     let current = true
-    const reading = scope.kind === "since"
-      ? gitActions.changedSince(scope.ref).then((since) => ({ files: since?.files ?? null, base: since?.base }))
-      : gitActions.commitFiles(scope.hash).then((listed) => ({ files: listed.map((file): GitFile => ({ ...file, staged: false })), base: undefined }))
-    void reading.then(
+    void readScope(scope, workspace).then(
       (next) => { if (current) setRead({ key, ...next }) },
       () => { if (current) setRead({ key, files: null }) },
     )
     return () => { current = false }
-  }, [files, key, scope])
+  }, [edits, key, scope, workspace])
 
   const shown = scope.kind === "uncommitted" ? files : read?.key === key ? read.files : undefined
   const base = read?.key === key ? read.base : undefined
   const load = loader(scope, base)
-  const picker = <ScopePicker scope={scope} onChoose={choose} />
+  const picker = <ScopePicker scope={scope} workspace={workspace} onChoose={choose} />
   if (shown === undefined || (scope.kind === "since" && shown && !base)) return <ScopeMessage picker={picker} text="Reading…" />
-  if (shown === null) return <ScopeMessage picker={picker} text={scope.kind === "since" ? `This branch shares no history with ${scope.label.replace(/^Since /, "")}.` : "This commit couldn't be read."} />
+  if (shown === null) return <ScopeMessage picker={picker} text={unreadScope(scope)} />
+  if (shown.length === 0 && scope.kind === "turn") return <ScopeMessage picker={picker} text="The last turn changed no files." />
   return <ReviewFiles key={key} files={shown} workspace={workspace} staged={scope.kind === "uncommitted" ? staged : 0} scope={scope} picker={picker} load={load} onReviewInCenter={onReviewInCenter} />
+}
+
+function scopeKey(scope: Scope): string {
+  if (scope.kind === "since") return `since:${scope.ref}`
+  if (scope.kind === "turn") return `turn:${scope.conversation}:${scope.requestId}`
+  if (scope.kind === "commit") return `commit:${scope.hash}`
+  return "uncommitted"
+}
+
+async function readScope(scope: Exclude<Scope, { kind: "uncommitted" }>, workspace: string): Promise<{ files: readonly GitFile[] | null; base?: string }> {
+  if (scope.kind === "since") {
+    const since = await gitActions.changedSince(scope.ref)
+    return { files: since?.files ?? null, base: since?.base }
+  }
+  if (scope.kind === "turn") {
+    const turn = await acp.turnChanges(scope.conversation, scope.requestId)
+    return { files: turn.root === workspace ? turn.files : null }
+  }
+  return { files: (await gitActions.commitFiles(scope.hash)).map((file): GitFile => ({ ...file, staged: false })) }
+}
+
+function unreadScope(scope: Scope): string {
+  if (scope.kind === "since") return `This branch shares no history with ${scope.label.replace(/^Since /, "")}.`
+  if (scope.kind === "turn") return "The last turn's checkpoints couldn't be read."
+  return "This commit couldn't be read."
 }
 
 function loader(scope: Scope, base: string | undefined): (path: string) => Promise<GitDiff> {
   if (scope.kind === "commit") return (path) => gitActions.commitFileDiff(scope.hash, path)
+  if (scope.kind === "turn") return (path) => acp.turnDiff(scope.conversation, scope.requestId, path)
   if (scope.kind === "since") return (path) => base ? gitActions.sinceDiff(base, path) : Promise.reject(new Error("Reading where the branch started…"))
   return (path) => gitActions.diff(path)
 }
@@ -241,14 +266,35 @@ function ScopeMessage({ picker, text }: { picker: ReactNode; text: string }) {
 }
 
 /**
- * The scope menu. Since main is offered on a branch other than the default
- * one; in a Thread's worktree it is the same Since main its branch bar shows.
+ * The last finished turn of the open conversation, when checkpoints either
+ * side of it saved this repository. Kept as one string so the selector is stable.
  */
-function ScopePicker({ scope, onChoose }: { scope: Scope; onChoose: (scope: Scope) => void }) {
+function useLastTurn(workspace: string): Extract<Scope, { kind: "turn" }> | null {
+  const found = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    const request = live?.requests?.findLast((item) => item.snapshots?.after)
+    const snapshots = request?.snapshots
+    if (!live || !request || snapshots?.before.kind !== "ready" || snapshots.after?.kind !== "ready" || snapshots.before.snapshot.scope !== workspace) return null
+    return `${live.key}\n${request.id}\n${request.text}`
+  })
+  return useMemo(() => {
+    if (!found) return null
+    const [conversation = "", requestId = "", ...prompt] = found.split("\n")
+    return { kind: "turn", conversation, requestId, prompt: prompt.join(" ").trim() }
+  }, [found])
+}
+
+/**
+ * The scope menu. Since main is offered on a branch other than the default
+ * one, named by GitHub or else by the repository itself; in a Thread's
+ * worktree it is the same Since main its branch bar shows.
+ */
+function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: string; onChoose: (scope: Scope) => void }) {
   const cwd = useSession((state) => state.git?.cwd)
   const branch = useSession((state) => state.git?.branch)
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
-  const defaultBranch = useGitHub((state) => state.status?.defaultBranch)
+  const hosted = useGitHub((state) => state.status?.defaultBranch)
+  const lastTurn = useLastTurn(workspace)
   const [since, setSince] = useState<{ ref: string; label: string } | null>(null)
   const [commits, setCommits] = useState<readonly GitCommitEntry[] | null>(null)
   const open = (next: boolean) => {
@@ -259,14 +305,19 @@ function ScopePicker({ scope, onChoose }: { scope: Scope; onChoose: (scope: Scop
         (review) => setSince({ ref: review.into ?? review.base, label: `Since ${review.into ?? "it started"}` }),
         () => setSince(null),
       )
-    } else setSince(defaultBranch && branch && branch !== defaultBranch ? { ref: defaultBranch, label: `Since ${defaultBranch}` } : null)
+      return
+    }
+    const offer = (name: string | null | undefined) => setSince(name && branch && branch !== name ? { ref: name, label: `Since ${name}` } : null)
+    if (hosted) offer(hosted)
+    else void gitActions.defaultBranch().then(offer, () => setSince(null))
   }
-  const label = scope.kind === "uncommitted" ? "Uncommitted" : scope.kind === "since" ? scope.label : scope.shortHash
+  const label = scope.kind === "uncommitted" ? "Uncommitted" : scope.kind === "since" ? scope.label : scope.kind === "turn" ? "Last turn" : scope.shortHash
+  const turnOn = scope.kind === "turn" && lastTurn?.requestId === scope.requestId
   return (
     <Menu modal={false} onOpenChange={open}>
       <MenuTrigger asChild>
         <Action size="xs" tone="quiet" aria-label={`Showing: ${scope.kind === "commit" ? `commit ${scope.shortHash}` : label}. Choose what to review`} title={scope.kind === "commit" ? scope.subject : undefined} className="max-w-40 gap-1 px-1.5 font-medium">
-          {scope.kind === "commit" ? <GitCommitHorizontalIcon /> : scope.kind === "since" ? <GitBranchIcon /> : <PencilIcon />}
+          {scope.kind === "commit" ? <GitCommitHorizontalIcon /> : scope.kind === "since" ? <GitBranchIcon /> : scope.kind === "turn" ? <SparklesIcon /> : <PencilIcon />}
           <span className="truncate">{label}</span>
           <ChevronDownIcon className="size-3! text-faint/70" />
         </Action>
@@ -274,6 +325,7 @@ function ScopePicker({ scope, onChoose }: { scope: Scope; onChoose: (scope: Scop
       <MenuContent align="start" className="max-h-96 w-72 overflow-y-auto">
         <ScopeItem on={scope.kind === "uncommitted"} onSelect={() => onChoose(UNCOMMITTED)} title="Uncommitted" detail="What isn't committed yet, staged or not" />
         {since ? <ScopeItem on={scope.kind === "since" && scope.ref === since.ref} onSelect={() => onChoose({ kind: "since", ...since })} title={since.label} detail="Every commit on this branch and what isn't committed" /> : null}
+        {lastTurn ? <ScopeItem on={turnOn} onSelect={() => onChoose(lastTurn)} title="Last turn" detail={lastTurn.prompt || "What the agent changed in its last answer"} /> : null}
         <MenuSeparator />
         <MenuLabel>A commit</MenuLabel>
         {commits === null ? <MenuItem disabled>Reading history…</MenuItem> : commits.length === 0 ? <MenuItem disabled>No commits yet</MenuItem> : commits.map((commit) => (
@@ -448,6 +500,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
   }), [files])
 
   const options = useMemo((): CodeViewReactOptions<undefined> => ({
+    theme: DIFF_THEME,
     diffStyle,
     overflow: wrapDiff ? "wrap" : "scroll",
     stickyHeaders: true,
@@ -457,25 +510,23 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline pr-2.5 pl-1.5 text-label text-faint">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline pr-1.5 pl-1.5 text-label">
         {picker}
-        <span role="status" className="min-w-0 flex-1 truncate tabular">
-          {`${files.length} ${files.length === 1 ? "file" : "files"}${scope.kind === "uncommitted" ? " changed" : ""}${staged > 0 ? ` · ${staged} staged` : ""}`}
+        <span role="status" className="tabular min-w-0 truncate text-muted-foreground">
+          {`${files.length} ${files.length === 1 ? "file" : "files"}`}
+          {staged > 0 ? <span className="text-faint">{` · ${staged} staged`}</span> : null}
         </span>
-        {counted ? <>
-          <span className="tabular text-added">+{insertions}</span>
-          <span className="tabular text-removed">−{deletions}</span>
-        </> : null}
-        <div className="ml-auto flex items-center gap-0.5">
+        {counted ? <LineCounts insertions={insertions} deletions={deletions} /> : null}
+        <div className="ml-auto flex items-center text-faint">
           <SearchSelect
             value=""
             options={jumpOptions}
             onChange={reveal}
             label="Jump to file"
-            placeholder="Jump to file"
+            placeholder="Jump to…"
             searchPlaceholder="Jump to file"
             emptyMessage="No changed file matches."
-            className="h-6 w-28 bg-transparent text-label ring-0"
+            className="h-6 w-24 bg-transparent text-label text-faint ring-0"
           />
           <IconAction label={anyOpen ? "Fold every file" : "Unfold every file"} size="xs" onClick={() => setAll(!anyOpen)}>
             {anyOpen ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />}
@@ -581,7 +632,6 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, discardable,
     queue.need(file.path)
     return () => queue.drop(file.path)
   }, [due, file.path, queue])
-  const mark = MARK[file.status]
   const slash = file.path.lastIndexOf("/")
   const folder = slash > 0 ? file.path.slice(0, slash + 1) : ""
   const name = file.path.slice(slash + 1)
@@ -602,7 +652,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, discardable,
               ? "Shortened"
               : null
   return (
-    <div data-review-file={file.path} className="flex h-8 items-center gap-1.5 border-b border-hairline bg-surface px-2 text-label select-none">
+    <div data-review-file={file.path} className="flex h-8 items-center gap-1 border-b border-hairline bg-surface pr-1 pl-2 text-label select-none">
       <button
         type="button"
         aria-expanded={loaded?.kind === "binary" ? undefined : open}
@@ -611,26 +661,32 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, discardable,
         title={file.path}
         className="pressable flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
-        <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)] motion-reduce:transition-none", open && "rotate-90")} />
-        <span title={mark.title} className={cn("w-2.5 shrink-0 font-mono font-semibold", mark.tone)}>{mark.glyph}</span>
+        <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-150 ease-[var(--ease-out)] motion-reduce:transition-none", open && "rotate-90")} />
+        <FileTypeIcon path={file.path} className="ml-0.5 size-3.5 shrink-0 text-faint/80" />
         <span className="min-w-0 truncate text-ui">
           <span className="text-faint">{folder}</span>
-          <span className={viewed ? "text-muted-foreground" : "text-foreground"}>{name}</span>
+          <span className={file.status === "deleted" ? "text-faint line-through decoration-faint/60" : viewed ? "text-muted-foreground" : "text-foreground"}>{name}</span>
         </span>
         {loaded?.kind === "binary" ? <ImageThumbs diff={loaded.diff} /> : null}
         {note ? <span className="shrink-0 truncate text-faint" title={loaded?.kind === "unavailable" ? loaded.reason : undefined}>{note}</span> : null}
-        <span className="ml-auto flex shrink-0 gap-1 tabular">
-          {file.insertions ? <span className="text-added">+{file.insertions}</span> : null}
-          {file.deletions ? <span className="text-removed">−{file.deletions}</span> : null}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          <LineCounts insertions={file.insertions} deletions={file.deletions} />
+          <StatusLetter status={file.status} />
         </span>
       </button>
-      <label className="pressable flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded px-1 text-faint hover:text-foreground">
+      <label className={cn("pressable ml-1 flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded px-1.5 transition-colors duration-100 hover:bg-fill-hover", viewed ? "text-muted-foreground" : "text-faint hover:text-foreground")}>
         <input
           type="checkbox"
           checked={viewed}
           onChange={(event) => onViewed(file.path, event.target.checked)}
-          className="size-3 accent-foreground"
+          className="peer sr-only"
         />
+        <span aria-hidden className={cn(
+          "flex size-3.5 items-center justify-center rounded-[4px] ring-1 ring-inset transition-colors duration-100 peer-focus-visible:outline-2 peer-focus-visible:outline-ring",
+          viewed ? "bg-foreground/70 ring-foreground/70" : "ring-foreground/35"
+        )}>
+          {viewed ? <CheckIcon className="size-2.5 text-background" strokeWidth={3} /> : null}
+        </span>
         Viewed
       </label>
       <Menu modal={false}>

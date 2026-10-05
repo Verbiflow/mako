@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react"
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon, MessageSquareTextIcon, RefreshCwIcon, Trash2Icon, Undo2Icon, XIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon, MessageSquareTextIcon, RefreshCwIcon, Trash2Icon, Undo2Icon, XIcon, type LucideIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { Action, IconAction } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
@@ -23,6 +24,23 @@ import { mergeWorktree, refreshWorktreeSummaries, removeWorktree, useWorktreeRev
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`
 
 const MERGE_STRATEGIES = [["squash", "Squash and merge"], ["merge", "Create a merge commit"], ["rebase", "Rebase and merge"]] as const
+
+/**
+ * A menu item that may be unavailable for a stated reason. Unavailable, it
+ * stays legible: the label goes faint and the reason sits under it, rather
+ * than the whole row fading to where neither can be read.
+ */
+export function ReasonedItem({ icon: Icon, reason, onSelect, children }: { icon: LucideIcon; reason: string | null | undefined; onSelect: () => void; children: ReactNode }) {
+  return (
+    <MenuItem disabled={Boolean(reason)} onSelect={onSelect} className={reason ? "items-start data-[disabled]:opacity-100" : undefined}>
+      <Icon className={cn("size-3.5", reason ? "mt-0.5 text-faint/60" : "text-faint")} />
+      <span className="min-w-0 flex-1">
+        <span className={reason ? "text-faint" : undefined}>{children}</span>
+        {reason ? <span className="mt-0.5 block text-label leading-snug whitespace-normal text-faint/80">{reason}</span> : null}
+      </span>
+    </MenuItem>
+  )
+}
 
 /** A button, with why it can't be pressed in its tooltip when it can't. */
 export function Explained({ reason, children }: { reason: string | null | undefined; children: ReactNode }) {
@@ -148,7 +166,7 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
     }
   }
 
-  const style = "h-6 gap-1 px-1.5 text-label font-normal tabular disabled:opacity-50 [&_svg]:size-3"
+  const style = "h-6 gap-1.5 px-2 text-label tabular disabled:opacity-50 [&_svg]:size-3"
   const button = (step: GitStep): ReactNode => {
     const segment = more.length ? "rounded-r-none" : ""
     switch (step.kind) {
@@ -203,21 +221,20 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
 
   const item = (step: GitStep): ReactNode => {
     const icon = "size-3.5 text-faint"
-    const reasoned = (label: ReactNode, reason: string | null) => <span className="min-w-0 flex-1">{label}{reason ? <span className="block text-label text-faint">{reason}</span> : null}</span>
     switch (step.kind) {
       case "abort":
         return <MenuItem key="abort" disabled={pending} onSelect={() => run(step)}><Undo2Icon className={icon} />Abort {step.operation}</MenuItem>
       case "push":
         return <MenuItem key="push" disabled={pending || conflicts} onSelect={() => run(step)}><ArrowUpIcon className={icon} />{step.publish ? `Publish ${branch}` : `Push ${plural(step.commits, "commit")}`}</MenuItem>
       case "open-pull":
-        return <MenuItem key="open-pull" disabled={Boolean(step.blocked)} onSelect={() => run(step)}><GitPullRequestIcon className={icon} />{reasoned("Open a pull request", step.blocked)}</MenuItem>
+        return <ReasonedItem key="open-pull" icon={GitPullRequestIcon} reason={step.blocked} onSelect={() => run(step)}>Open a pull request</ReasonedItem>
       case "land":
-        return <MenuItem key="land" disabled={Boolean(step.blocked)} onSelect={() => run(step)}><GitMergeIcon className={icon} />{reasoned(`Merge into ${step.into} here`, step.blocked)}</MenuItem>
+        return <ReasonedItem key="land" icon={GitMergeIcon} reason={step.blocked} onSelect={() => run(step)}>Merge into {step.into} here</ReasonedItem>
       case "view-pull":
         return <MenuItem key="view-pull" onSelect={() => run(step)}><GitPullRequestIcon className={icon} />View #{step.number} on GitHub</MenuItem>
       case "merge-pull":
         return step.blocked
-          ? <MenuItem key="merge-pull" disabled><GitMergeIcon className={icon} />{reasoned(`Merge #${step.number} on GitHub`, step.blocked)}</MenuItem>
+          ? <ReasonedItem key="merge-pull" icon={GitMergeIcon} reason={step.blocked} onSelect={() => undefined}>Merge #{step.number} on GitHub</ReasonedItem>
           : <span key="merge-pull" className="contents">
             <MenuLabel>Merge #{step.number} on GitHub</MenuLabel>
             {MERGE_STRATEGIES.map(([strategy, label]) => <MenuItem key={strategy} onSelect={() => void mergePull(strategy)}><GitMergeIcon className={icon} />{label}</MenuItem>)}
@@ -243,17 +260,17 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
   return (
     // The worktree merge check reads the main checkout too, which this worktree's watch doesn't hear: read it again as the pointer or focus arrives.
     <span data-push-control className="flex shrink-0 items-center gap-1" onPointerEnter={worktree ? reread : undefined} onFocus={worktree ? reread : undefined}>
-      <IconAction size="xs" label="Fetch remote changes" disabled={pending} onClick={() => void git.remote("fetch")}>
+      <IconAction size="xs" label="Fetch remote changes" disabled={pending} className="text-faint" onClick={() => void git.remote("fetch")}>
         <RefreshCwIcon className={state.kind === "syncing" && state.action === "fetch" ? "animate-spin motion-reduce:animate-none" : ""} />
       </IconAction>
       {primary ? (
-        <span data-git-next={primary.kind} className="inline-flex items-stretch rounded-md ring-1 ring-hairline">
+        <span data-git-next={primary.kind} className="inline-flex items-stretch rounded-md bg-foreground/[0.06]">
           {button(primary)}
           {more.length ? <>
-            <span aria-hidden className="my-1 w-px bg-hairline" />
+            <span aria-hidden className="my-1.5 w-px bg-foreground/10" />
             <Menu modal={false}>
               <MenuTrigger asChild>
-                <Action size="xs" tone="quiet" aria-label="More Git actions" className="h-6 rounded-l-none px-1 [&_svg]:size-3">
+                <Action size="xs" tone="quiet" aria-label="More Git actions" className="h-6 rounded-l-none px-1 text-faint [&_svg]:size-3">
                   <ChevronDownIcon />
                 </Action>
               </MenuTrigger>

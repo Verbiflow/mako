@@ -377,6 +377,19 @@
   --added: var(--positive);
   --removed: var(--negative);
 
+  /*
+   * Syntax: warm greys with three quiet accents. No red or green, so in a
+   * diff the only hue that says "changed" is the added or removed line.
+   */
+  --syntax-text: var(--foreground);
+  --syntax-keyword: oklch(0.71 0.014 60);
+  --syntax-function: oklch(0.86 0.055 72);
+  --syntax-string: oklch(0.8 0.04 200);
+  --syntax-constant: oklch(0.81 0.045 300);
+  --syntax-parameter: oklch(0.85 0.012 60);
+  --syntax-punctuation: oklch(0.62 0.008 55);
+  --syntax-comment: oklch(0.58 0.008 55);
+
   /* shadcn contract — vendored components keep compiling untouched. */
   --background: var(--shell);
   --card: var(--surface);
@@ -454,6 +467,14 @@
   --terminal-magenta: #80528e;
   --terminal-bright-magenta: #9461a3;
 
+  --syntax-keyword: oklch(0.44 0.012 50);
+  --syntax-function: oklch(0.47 0.08 58);
+  --syntax-string: oklch(0.46 0.06 215);
+  --syntax-constant: oklch(0.47 0.075 305);
+  --syntax-parameter: oklch(0.33 0.008 50);
+  --syntax-punctuation: oklch(0.56 0.005 45);
+  --syntax-comment: oklch(0.6 0.004 45);
+
   --primary: var(--foreground);
   --primary-foreground: var(--surface);
   --muted: oklch(0.95 0.0025 55);
@@ -477,18 +498,29 @@ diffs-container {
   --diffs-bg-context-gutter-override: var(--raised);
   --diffs-bg-separator-override: var(--surface);
   --diffs-bg-hover-override: var(--fill-hover);
-  --diffs-fg-number-override: var(--faint);
-  --diffs-fg-number-addition-override: var(--added);
-  --diffs-fg-number-deletion-override: var(--removed);
+  --diffs-fg-number-override: color-mix(in oklab, var(--faint) 80%, transparent);
+  --diffs-fg-number-addition-override: color-mix(in oklab, var(--added) 60%, var(--faint));
+  --diffs-fg-number-deletion-override: color-mix(in oklab, var(--removed) 60%, var(--faint));
   --diffs-addition-color-override: var(--added);
   --diffs-deletion-color-override: var(--removed);
   --diffs-modified-color-override: var(--caution);
-  --diffs-bg-addition-override: color-mix(in oklab, var(--added) 12%, var(--surface));
-  --diffs-bg-deletion-override: color-mix(in oklab, var(--removed) 12%, var(--surface));
-  --diffs-bg-addition-number-override: color-mix(in oklab, var(--added) 8%, var(--surface));
-  --diffs-bg-deletion-number-override: color-mix(in oklab, var(--removed) 8%, var(--surface));
-  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--added) 24%, transparent);
-  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--removed) 24%, transparent);
+  --diffs-bg-addition-override: color-mix(in oklab, var(--added) 9%, var(--surface));
+  --diffs-bg-deletion-override: color-mix(in oklab, var(--removed) 9%, var(--surface));
+  --diffs-bg-addition-number-override: color-mix(in oklab, var(--added) 6%, var(--surface));
+  --diffs-bg-deletion-number-override: color-mix(in oklab, var(--removed) 6%, var(--surface));
+  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--added) 17%, transparent);
+  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--removed) 17%, transparent);
+  --diffs-foreground: var(--syntax-text);
+  --diffs-background: var(--surface);
+  --diffs-token-keyword: var(--syntax-keyword);
+  --diffs-token-function: var(--syntax-function);
+  --diffs-token-string: var(--syntax-string);
+  --diffs-token-string-expression: var(--syntax-string);
+  --diffs-token-constant: var(--syntax-constant);
+  --diffs-token-parameter: var(--syntax-parameter);
+  --diffs-token-punctuation: var(--syntax-punctuation);
+  --diffs-token-comment: var(--syntax-comment);
+  --diffs-token-link: var(--syntax-string);
   --diffs-selection-color-override: var(--foreground);
   --diffs-bg-selection-override: var(--fill-selected);
   --diffs-bg-selection-number-override: var(--fill-selected);
@@ -1779,17 +1811,17 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 }
 
 :root {
-  --shiki-foreground: var(--foreground);
+  --shiki-foreground: var(--syntax-text);
   --shiki-background: var(--raised);
-  --shiki-token-constant: var(--foreground);
-  --shiki-token-string: var(--muted-foreground);
-  --shiki-token-comment: var(--faint);
-  --shiki-token-keyword: var(--foreground);
-  --shiki-token-parameter: var(--muted-foreground);
-  --shiki-token-function: var(--foreground);
-  --shiki-token-string-expression: var(--muted-foreground);
-  --shiki-token-punctuation: var(--faint);
-  --shiki-token-link: var(--foreground);
+  --shiki-token-constant: var(--syntax-constant);
+  --shiki-token-string: var(--syntax-string);
+  --shiki-token-comment: var(--syntax-comment);
+  --shiki-token-keyword: var(--syntax-keyword);
+  --shiki-token-parameter: var(--syntax-parameter);
+  --shiki-token-function: var(--syntax-function);
+  --shiki-token-string-expression: var(--syntax-string);
+  --shiki-token-punctuation: var(--syntax-punctuation);
+  --shiki-token-link: var(--syntax-string);
 }
 
 /* Keep xterm's scrolling inside the dock and match the surrounding chrome. */

@@ -8,13 +8,14 @@ import { actions } from "@/state/session"
 /** Files named in the dialog; the rest are counted. */
 const SHOWN = 6
 
+/** What becomes of a file besides going back, which the dialog's body already says. */
 const OUTCOME = {
-  modified: "Reverted",
+  modified: undefined,
   deleted: "Restored",
   added: "Removed",
   untracked: "Removed",
-  conflicted: "Reverted",
-} satisfies Record<GitFile["status"], string>
+  conflicted: undefined,
+} satisfies Record<GitFile["status"], string | undefined>
 
 /**
  * Asks, then puts `files` back as the last commit has them. Git's stash keeps
@@ -26,14 +27,14 @@ export async function discardFiles(files: readonly GitFile[]): Promise<void> {
   const confirmed = await confirmAction({
     title: one ? `Discard changes to ${one.path.slice(one.path.lastIndexOf("/") + 1)}?` : `Discard changes to ${files.length} files?`,
     body: one
-      ? "It goes back to how the last commit has it, staged and unstaged."
-      : "They go back to how the last commit has them, staged and unstaged.",
+      ? "Its staged and unstaged edits go back to the last commit."
+      : "Their staged and unstaged edits go back to the last commit.",
     confirm: "Discard changes",
     tone: "negative",
     icon: "remove",
     subjects: files.slice(0, SHOWN).map((file) => ({ kind: "file", name: file.path, detail: OUTCOME[file.status], lost: file.status === "added" || file.status === "untracked" })),
     more: files.length > SHOWN ? files.length - SHOWN : undefined,
-    note: "Mako keeps what you discard in this repository's Git stash, so Undo, or git stash pop, brings it back.",
+    note: "Kept in Git's stash: Undo, or git stash pop, brings it back.",
   })
   if (!confirmed) return
   const label = one ? one.path : `${files.length} files`

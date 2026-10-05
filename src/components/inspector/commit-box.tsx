@@ -11,6 +11,8 @@ import {
 } from "react"
 import { Action, Keys, Segmented } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
+import { ReasonedItem } from "@/components/inspector/git-action-control"
+import { cn } from "@/lib/utils"
 import { Notice as SharedNotice } from "@/components/ui/notice"
 import { formatChord } from "@/extend/commands"
 import { git } from "@/state/git"
@@ -18,7 +20,7 @@ import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, draftRepository, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowUpIcon, ChevronDownIcon, GitPullRequestIcon, Settings2Icon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, GitBranchIcon, GitPullRequestIcon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { BorderBeam } from "border-beam"
@@ -55,15 +57,24 @@ export function CommitBox({ staged, total }: { staged: number; total: number }) 
   const status = useSession(state => state.git)
   const root = status?.root
   const resolving = Boolean(status?.operation || status?.files.some(file => file.status === "conflicted"))
+  // Several repositories share one footer, so it names the one it commits to.
+  const named = Boolean(status?.repositories?.length)
   return <div data-git-footer className="shrink-0 border-t border-hairline">
+    <CommitEditor staged={staged} total={total} />
     {root && status.branch ? <>
-      <div data-git-actions data-repository={root} className="flex min-h-8 items-center gap-2 px-2.5">
-        <span className="min-w-0 flex-1 truncate text-label text-muted-foreground" title={`${root} · ${status.branch}`}>{root.split("/").filter(Boolean).at(-1)}</span>
+      {!resolving ? <GitRemoteNotice cwd={root} branch={status.branch} /> : null}
+      {/* As Zed's panel ends: the branch the commit lands on, and what to do with it next. */}
+      <div data-git-actions data-repository={root} className="flex h-9 items-center gap-2 pr-2 pl-3">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-label" title={`${root} · ${status.branch}`}>
+          {named ? <span className="shrink-0 text-faint">{root.split("/").filter(Boolean).at(-1)}</span> : null}
+          <GitBranchIcon className="size-3 shrink-0 text-faint" />
+          <span className="min-w-0 truncate text-muted-foreground">{status.branch}</span>
+          {status.ahead > 0 ? <span className="tabular flex shrink-0 items-center text-faint" title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}><ArrowUpIcon className="size-3" />{status.ahead}</span> : null}
+          {status.behind > 0 ? <span className="tabular flex shrink-0 items-center text-faint" title={`${status.behind} incoming ${status.behind === 1 ? "commit" : "commits"}`}><ArrowDownIcon className="size-3" />{status.behind}</span> : null}
+        </span>
         {status.head ? <GitActionControl cwd={root} branch={status.branch} /> : null}
       </div>
-      {!resolving ? <GitRemoteNotice cwd={root} branch={status.branch} /> : null}
     </> : null}
-    <CommitEditor staged={staged} total={total} />
   </div>
 }
 
@@ -124,7 +135,7 @@ function CommitEditor({
       if (drafting || busy || !cwd || !total) return
       if (!hasModel || disconnected) {
         window.dispatchEvent(
-          new CustomEvent("mako:settings", { detail: "models" })
+          new CustomEvent("mako:settings", { detail: "git" })
         )
         return
       }
@@ -197,12 +208,12 @@ function CommitEditor({
   }, [commit])
 
   const openModelSettings = () =>
-    window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))
+    window.dispatchEvent(new CustomEvent("mako:settings", { detail: "git" }))
 
   if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} detail={pushState.kind === "failed" ? pushState.detail : undefined} />
 
   return (
-    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} data-drafting={drafting || undefined} className="shrink-0 p-3">
+    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} data-drafting={drafting || undefined} className="shrink-0 px-2.5 pt-2.5 pb-0.5">
       <BorderBeam size="md" colorVariant="mono" theme={theme} active={drafting} brightness={1.8}>
       <div className="commit-editor relative overflow-hidden rounded-lg bg-raised ring-1 ring-hairline focus-within:ring-border">
         <textarea
@@ -214,7 +225,7 @@ function CommitEditor({
           placeholder={placeholder}
           disabled={total === 0}
           spellCheck={false}
-          className="block max-h-40 min-h-16 w-full resize-none bg-transparent px-3 pt-3 pb-1 text-ui leading-5 placeholder:text-faint focus:outline-none disabled:opacity-50"
+          className="block max-h-40 min-h-16 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui leading-5 placeholder:text-faint focus:outline-none disabled:opacity-50"
         />
 
         {/* What the last draft left behind lives inside the card, between the
@@ -275,7 +286,7 @@ function CommitEditor({
             chevron every other chooser in the desk wears, and Commit is
             the one lit control. Before this Generate and the model sat in
             the same muted grey and read as two labels. */}
-        <div className="@container/commit flex items-center gap-2 px-2 pb-2">
+        <div className="@container/commit flex items-center gap-2 px-1.5 pb-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             {drafting ? (
               <>
@@ -341,18 +352,19 @@ function CommitEditor({
               for the chord the padding evens back out. */}
           {/* Commit, and behind its chevron the two motions that follow it
               most: push, or open the pull request form. */}
-          <span className="flex items-stretch">
+          <span className={cn("flex items-stretch rounded-md transition-colors duration-150", !armed && "bg-foreground/[0.06]")}>
             <Action
               tone={armed ? "solid" : "ghost"}
               size="xs"
               disabled={!armed || busy || drafting || total === 0}
               onClick={() => void commit()}
-              className="gap-1.5 rounded-r-none pl-2 pr-1 tabular @max-[26rem]/commit:pr-2"
+              className={cn("gap-1.5 rounded-r-none pl-2 tabular", armed ? "pr-1 @max-[26rem]/commit:pr-2" : "pr-2 disabled:opacity-100 disabled:text-faint")}
             >
               {commitLabel}
-              <span className="contents @max-[26rem]/commit:hidden">
-                <Keys keys={formatChord("mod+enter")} inverted={armed} />
-              </span>
+              {/* The chord is shown once there's a message to commit. */}
+              {armed ? <span className="contents @max-[26rem]/commit:hidden">
+                <Keys keys={formatChord("mod+enter")} inverted />
+              </span> : null}
             </Action>
             <Menu modal={false}>
               <MenuTrigger asChild>
@@ -361,7 +373,7 @@ function CommitEditor({
                   size="xs"
                   aria-label="More ways to commit"
                   disabled={!armed || busy || drafting || total === 0}
-                  className={`rounded-l-none border-l px-1 [&_svg]:size-3 ${armed ? "border-background/20" : "border-hairline"}`}
+                  className={cn("rounded-l-none border-l px-1 [&_svg]:size-3", armed ? "border-background/20" : "border-foreground/10 disabled:opacity-100 disabled:text-faint")}
                 >
                   <ChevronDownIcon />
                 </Action>
@@ -371,13 +383,9 @@ function CommitEditor({
                   <ArrowUpIcon className="size-3.5 text-faint" />
                   Commit and push
                 </MenuItem>
-                <MenuItem disabled={Boolean(pullBlocked)} onSelect={() => void commit("pull")}>
-                  <GitPullRequestIcon className="size-3.5 text-faint" />
-                  <span className="min-w-0 flex-1">
-                    Commit and open pull request
-                    {pullBlocked ? <span className="block text-label text-faint">{pullBlocked}</span> : null}
-                  </span>
-                </MenuItem>
+                <ReasonedItem icon={GitPullRequestIcon} reason={pullBlocked} onSelect={() => void commit("pull")}>
+                  Commit and open pull request
+                </ReasonedItem>
               </MenuContent>
             </Menu>
           </span>
@@ -474,9 +482,8 @@ function GenerationSettings({
           aria-label={`Drafting model: ${model}. Generation settings`}
           title={model}
           size="xs"
-          className="min-w-20 shrink gap-1 aria-expanded:bg-fill-selected aria-expanded:text-foreground"
+          className="min-w-16 shrink gap-1 font-normal text-faint aria-expanded:bg-fill-selected aria-expanded:text-foreground"
         >
-          <Settings2Icon className="mr-0.5" />
           <span className="truncate">{shortName}</span>
           {/* The picker's chevron, as on the composer's agent and model
               chips; the first thing to go when the row is short of room. */}
