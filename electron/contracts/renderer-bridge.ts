@@ -71,6 +71,7 @@ import type {
   GitCommitEntry,
   GitCommitFile,
   GitDiff,
+  GitFile,
   GitHubStatus,
   IntegrationCatalogSnapshot,
   GitStatus,
@@ -657,6 +658,15 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:git-stage", paths),
     gitUnstage: (paths: string[]) =>
       invokeTrustedHost<void>("mako:git-unstage", paths),
+    /** Puts the files back as HEAD has them; what they held is kept in Git's stash. */
+    gitDiscard: (paths: string[]) =>
+      invokeTrustedHost<{ stash: string }>("mako:git-discard", paths),
+    gitRestoreDiscarded: (stash: string) =>
+      invokeTrustedHost<void>("mako:git-restore-discarded", stash),
+    gitChangedSince: (ref: string) =>
+      invokeTrustedHost<{ base: string; files: GitFile[] } | null>("mako:git-changed-since", ref),
+    gitSinceDiff: (base: string, path: string) =>
+      invokeTrustedHost<GitDiff>("mako:git-since-diff", base, path),
     gitStageAll: () => invokeTrustedHost<void>("mako:git-stage-all"),
     gitUnstageAll: () => invokeTrustedHost<void>("mako:git-unstage-all"),
     gitCommit: (message: string, options?: { amend?: boolean }) =>

@@ -6,8 +6,13 @@ import { locate, Repository } from "./repository.js"
 const OPEN_LIMIT = 64
 /** Folders remembered as being in a repository, so asking again spawns nothing. */
 const FOLDER_LIMIT = 512
+/** A repository nobody watches or asked for in this long is closed, with its status and previews. */
+const IDLE_MS = 5 * 60_000
 
 const open = new Map<string, Repository>()
+/** When each open repository was last asked for, by `Date.now()`. */
+const used = new Map<Repository, number>()
+let sweeping: NodeJS.Timeout | undefined
 /**
  * A folder as callers name it (often through a symlink such as macOS's
  * `/var`) to its repository's root, and whether the folder had a `.git` of
@@ -64,15 +69,14 @@ async function find(cwd: string): Promise<Repository | null> {
   if (!location) return null
   let repository = open.get(location.root)
   if (!repository || repository.gitDir !== location.gitDir) {
-    repository?.close()
+    if (repository) forget(location.root, repository)
     repository = new Repository(location)
   }
   touch(cwd, location.root, repository)
   for (const [root, oldest] of open) {
     if (open.size <= OPEN_LIMIT) break
-    if (oldest.watched) continue
-    oldest.close()
-    open.delete(root)
+    if (oldest.watched || oldest.busy) continue
+    forget(root, oldest)
   }
   return repository
 }
@@ -80,6 +84,11 @@ async function find(cwd: string): Promise<Repository | null> {
 function touch(cwd: string, root: string, repository: Repository): void {
   open.delete(root)
   open.set(root, repository)
+  used.set(repository, Date.now())
+  if (!sweeping) {
+    sweeping = setInterval(sweep, IDLE_MS / 5)
+    sweeping.unref()
+  }
   if (cwd === root) return
   const own = folders.get(cwd)?.own ?? existsSync(join(cwd, ".git"))
   folders.delete(cwd)
@@ -87,9 +96,36 @@ function touch(cwd: string, root: string, repository: Repository): void {
   if (folders.size > FOLDER_LIMIT) folders.delete(folders.keys().next().value!)
 }
 
+function forget(root: string, repository: Repository): void {
+  repository.close()
+  open.delete(root)
+  used.delete(repository)
+  for (const [cwd, folder] of folders) if (folder.root === root) folders.delete(cwd)
+}
+
+/** Closes what nobody watches, is using, or asked for lately. */
+export function sweep(now = Date.now()): void {
+  for (const [root, repository] of open) {
+    if (repository.watched || repository.busy || now - (used.get(repository) ?? 0) < IDLE_MS) continue
+    forget(root, repository)
+  }
+  if (open.size === 0 && sweeping) {
+    clearInterval(sweeping)
+    sweeping = undefined
+  }
+}
+
+/** How many repositories are open, for `git:doctor`. */
+export function openRepositories(): number {
+  return open.size
+}
+
 /** Ends every repository's helper process, for a host that is quitting. */
 export function closeRepositories(): void {
   for (const repository of open.values()) repository.close()
   open.clear()
+  used.clear()
   folders.clear()
+  clearInterval(sweeping)
+  sweeping = undefined
 }

@@ -20,6 +20,7 @@ import { ReviewStream } from "@/components/inspector/review-stream"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
 import { Collapse } from "@/components/ui/collapse"
+import { discardFiles } from "@/state/git-discard"
 import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { viewer } from "@/state/viewer"
 import type { GitDiff, GitFile, GitStatus } from "@/lib/types"
@@ -36,6 +37,7 @@ import {
   PanelBottomOpenIcon,
   PlusIcon,
   RefreshCwIcon,
+  Undo2Icon,
   WrapTextIcon,
   XIcon,
 } from "lucide-react"
@@ -339,6 +341,10 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   }, [files, updateStaging])
 
   const toggleStage = useCallback((file: GitFile) => stagePaths([file.path], !(requestedStages.current.get(file.path) ?? file.staged)), [stagePaths])
+  const discardPaths = useCallback((paths: readonly string[]) => {
+    const chosen = new Set(paths)
+    void discardFiles(files.filter((file) => chosen.has(file.path) && file.status !== "conflicted"))
+  }, [files])
 
   if (files.length === 0) {
     return (
@@ -432,9 +438,9 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
       </div>
 
       <ChangeList rows={rows} compact={showDiff} fitContent={inline && !showDiff} renderRow={(row) => row.kind === "dir" ? (
-        <DirRow row={row} busy={row.paths.some((path) => stageOverrides.has(path))} onToggle={toggleDir} onStage={stagePaths} />
+        <DirRow row={row} busy={row.paths.some((path) => stageOverrides.has(path))} onToggle={toggleDir} onStage={stagePaths} onDiscard={discardPaths} />
       ) : (
-        <FileRow row={row} busy={stageOverrides.has(row.file.path)} active={selected === row.file.path} onSelect={selectFile} onToggleStage={toggleStage} />
+        <FileRow row={row} busy={stageOverrides.has(row.file.path)} active={selected === row.file.path} onSelect={selectFile} onToggleStage={toggleStage} onDiscard={discardPaths} />
       )} />
 
       {showDiff ? (
@@ -646,11 +652,13 @@ function DirRow({
   busy,
   onToggle,
   onStage,
+  onDiscard,
 }: {
   busy: boolean
   row: Extract<TreeRow, { kind: "dir" }>
   onToggle: (key: string) => void
   onStage: (paths: string[], stage: boolean) => void
+  onDiscard: (paths: readonly string[]) => void
 }) {
   const state = row.staged === 0 ? "off" : row.staged === row.files ? "on" : "partial"
 
@@ -687,7 +695,17 @@ function DirRow({
           </span>
         ) : null}
       </button>
+      <DiscardAction label={`Discard changes in ${row.label}`} onDiscard={() => onDiscard(row.paths)} />
     </div>
+  )
+}
+
+/** Shown on the row's hover or focus, as VS Code's is; the dialog it opens says what goes. */
+function DiscardAction({ label, onDiscard }: { label: string; onDiscard: () => void }) {
+  return (
+    <IconAction label={label} size="xs" onClick={onDiscard} className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100">
+      <Undo2Icon />
+    </IconAction>
   )
 }
 
@@ -697,12 +715,14 @@ function FileRow({
   busy,
   onSelect,
   onToggleStage,
+  onDiscard,
 }: {
   busy: boolean
   row: Extract<TreeRow, { kind: "file" }>
   active: boolean
   onSelect: (path: string) => void
   onToggleStage: (file: GitFile) => void
+  onDiscard: (paths: readonly string[]) => void
 }) {
   const file = row.file
   const mark = MARK[file.status]
@@ -751,6 +771,7 @@ function FileRow({
           </span>
         ) : null}
       </button>
+      {file.status !== "conflicted" ? <DiscardAction label={`Discard changes to ${row.label}`} onDiscard={() => onDiscard([file.path])} /> : null}
       <Slot name="changes.file.trailing" file={file} />
     </div>
   )

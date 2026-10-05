@@ -2,7 +2,7 @@ import { createHook, createStore } from "@/state/store"
 
 /** One thing the action touches, named exactly, with what becomes of it. */
 export interface ConfirmSubject {
-  kind: "folder" | "branch" | "app"
+  kind: "folder" | "branch" | "app" | "file"
   name: string
   /** A word or two: "Deleted", "Kept", "3 commits". */
   detail?: string

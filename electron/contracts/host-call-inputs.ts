@@ -71,6 +71,7 @@ export const hostCallInputs = {
     z.union([z.literal("before"), z.literal("at")]).optional(),
   ]),
   "mako:git-cancel-generation": z.tuple([z.string()]),
+  "mako:git-changed-since": z.tuple([z.string()]),
   "mako:git-commit": z.tuple([
     z.string(),
     z.object({ amend: z.boolean().optional() }).optional(),
@@ -80,6 +81,7 @@ export const hostCallInputs = {
   "mako:git-commit-files": z.tuple([z.string()]),
   "mako:git-diff": z.tuple([z.string()]),
   "mako:git-diff-all": z.tuple([]),
+  "mako:git-discard": z.tuple([z.array(z.string())]),
   "mako:git-doctor": z.tuple([z.string()]),
   "mako:git-draft-pull-request": z.tuple([
     z.object({
@@ -116,7 +118,9 @@ export const hostCallInputs = {
       branch: z.string(),
     }),
   ]),
+  "mako:git-restore-discarded": z.tuple([z.string()]),
   "mako:git-select-repository": z.tuple([z.string(), z.string()]),
+  "mako:git-since-diff": z.tuple([z.string(), z.string()]),
   "mako:git-stage": z.tuple([z.array(z.string())]),
   "mako:git-stage-all": z.tuple([]),
   "mako:git-status": z.tuple([]),

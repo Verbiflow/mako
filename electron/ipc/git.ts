@@ -1,6 +1,6 @@
 import { app } from "electron"
 import { electronSecretEncryption } from "../secure-storage.js"
-import { COMMIT_STYLE, gitActivity, knownRepository, openRepository } from "@mako/git"
+import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepository } from "@mako/git"
 import type { AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
 import { GitDrafting } from "../git-drafting.js"
@@ -52,6 +52,18 @@ export function installGitIpc(context: GitIpcContext): void {
   registerIpc("mako:git-unstage", (_event, paths: string[]) =>
     withHost((host) => host.gitUnstage(paths))
   )
+  registerIpc("mako:git-discard", (_event, paths: string[]) =>
+    withHost((host) => host.gitDiscard(paths))
+  )
+  registerIpc("mako:git-restore-discarded", (_event, stash: string) =>
+    withHost((host) => host.gitRestoreDiscarded(stash))
+  )
+  registerIpc("mako:git-changed-since", (_event, ref: string) =>
+    withHost((host) => host.gitChangedSince(ref))
+  )
+  registerIpc("mako:git-since-diff", (_event, base: string, path: string) =>
+    withHost((host) => host.gitSinceDiff(base, path))
+  )
   registerIpc("mako:git-stage-all", () =>
     withHost((host) => host.gitStageAll())
   )
@@ -96,7 +108,7 @@ export function installGitIpc(context: GitIpcContext): void {
     const held = knownRepository(path) !== undefined
     const repository = await openRepository(path)
     if (!repository) throw new Error(`${path} isn't inside a Git repository.`)
-    return { held, diagnosis: await repository.diagnose(), activity: gitActivity() }
+    return { held, diagnosis: await repository.diagnose(), activity: gitActivity(), open: openRepositories() }
   })
   const drafting = new GitDrafting(work)
   const catalog = new UtilityModelCatalog(models)

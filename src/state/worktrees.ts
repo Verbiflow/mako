@@ -236,6 +236,10 @@ export function useWorktreeReview(path: string | undefined, status: GitStatus | 
   return { review: review?.path === path ? review : undefined, reread } satisfies { review: WorktreeReview | undefined; reread: () => void }
 }
 
+export function readWorktreeReview(path: string): Promise<WorktreeReview> {
+  return getMako().worktreeReview(path)
+}
+
 export function readWorktreeReviewDiffs(path: string): Promise<{ diffs: GitDiff[]; truncated: number }> {
   return getMako().worktreeReviewDiffs(path)
 }

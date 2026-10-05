@@ -1,9 +1,9 @@
 import { realpathSync } from "node:fs"
 import { join, relative, sep } from "node:path"
-import { commitFiles, GitError, grep, knownRepository, listFiles, log, openRepository, push, remote, within, type Comparison, type Preview, type Repository, type RepositoryStatus, type StatusEntry } from "@mako/git"
+import { changedSince, commitFiles, GitError, grep, knownRepository, listFiles, log, openRepository, push, remote, within, type BinarySide, type Comparison, type Preview, type Repository, type RepositoryStatus, type StatusEntry } from "@mako/git"
 import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
 import { QUIET_FOLDERS } from "./tree-watcher.js"
-import type { GitRemoteInput, GitRemoteResult, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "./shared.js"
+import type { GitBinarySide, GitRemoteInput, GitRemoteResult, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "./shared.js"
 
 /** Resolves once every Git write Mako queued for `root` has finished. */
 export async function waitForIndexWrites(root: string, signal: AbortSignal): Promise<void> {
@@ -32,10 +32,20 @@ function gitFiles(status: RepositoryStatus): GitFile[] {
 function gitDiff(path: string, preview: Preview): GitDiff {
   switch (preview.kind) {
     case "files": return { path, binary: false, oldFile: preview.before == null ? null : { name: path, contents: preview.before }, newFile: preview.after == null ? null : { name: path, contents: preview.after } }
-    case "binary": return { path, binary: true, oldFile: null, newFile: null }
+    case "binary": return { path, binary: true, oldFile: null, newFile: null, before: binarySide(preview.mime, preview.before), after: binarySide(preview.mime, preview.after) }
     case "patch": return { path, binary: false, oldFile: null, newFile: null, preview: { kind: "patch", contents: preview.patch, limited: preview.limited } }
     case "unavailable": return { path, binary: false, oldFile: null, newFile: null, preview: { kind: "unavailable", reason: preview.reason } }
   }
+}
+
+function binarySide(mime: string | null, side: BinarySide | null): GitBinarySide | null {
+  if (!side) return null
+  return mime && side.image ? { bytes: side.bytes, image: `data:${mime};base64,${side.image.toString("base64")}` } : { bytes: side.bytes }
+}
+
+/** What a diff carries across to the window. */
+function diffBytes(diff: GitDiff): number {
+  return Buffer.byteLength(diff.oldFile?.contents ?? "") + Buffer.byteLength(diff.newFile?.contents ?? "") + Buffer.byteLength(diff.preview?.kind === "patch" ? diff.preview.contents : "") + (diff.before?.image?.length ?? 0) + (diff.after?.image?.length ?? 0)
 }
 
 const PREVIEW_SET = { files: 25, bytes: 512 * 1024, ms: 5_000, concurrency: 4 }
@@ -50,7 +60,7 @@ async function previewSet(repository: Repository, paths: readonly string[], comp
     const batch = paths.slice(offset, Math.min(offset + PREVIEW_SET.concurrency, offset + PREVIEW_SET.files - diffs.length))
     for (const diff of await Promise.all(batch.map(async (path) => gitDiff(path, await repository.preview(path, comparison))))) {
       if (bytes >= PREVIEW_SET.bytes) break
-      bytes += Buffer.byteLength(diff.oldFile?.contents ?? "") + Buffer.byteLength(diff.newFile?.contents ?? "") + Buffer.byteLength(diff.preview?.kind === "patch" ? diff.preview.contents : "")
+      bytes += diffBytes(diff)
       diffs.push(diff)
     }
   }
@@ -290,6 +300,22 @@ export class WorkspaceGit {
     return previewSet(repository, (await repository.status()).entries.map((entry) => entry.path), { kind: "worktree" })
   }
 
+  /**
+   * Every file that differs from where HEAD left `ref` (or `origin/<ref>`
+   * when there's no such local branch), committed or not, and that point's
+   * commit. Null when HEAD shares no history with it.
+   */
+  async changedSince(ref: string): Promise<{ base: string; files: GitFile[] } | null> {
+    const repository = await this.repository()
+    const since = await changedSince(repository.root, ref) ?? (ref.startsWith("origin/") ? null : await changedSince(repository.root, `origin/${ref}`))
+    if (!since) return null
+    return { base: since.base, files: since.files.map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", staged: false, insertions: null, deletions: null, binary: false })) }
+  }
+
+  async sinceDiff(base: string, path: string): Promise<GitDiff> {
+    return gitDiff(path, await (await this.repository()).preview(path, { kind: "since", oid: base }))
+  }
+
   async commitDiffAll(oid: string): Promise<{ diffs: GitDiff[]; truncated: number }> {
     const repository = await this.repository()
     return previewSet(repository, (await commitFiles(repository.root, oid)).map((file) => file.path), { kind: "commit", oid })
@@ -300,6 +326,11 @@ export class WorkspaceGit {
   async unstage(paths: string[]): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).unstage(paths) }
   async stageAll(): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).stageAll() }
   async unstageAll(): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).unstageAll() }
+  async discard(paths: string[]): Promise<{ stash: string }> {
+    const message = paths.length === 1 ? `Mako discarded ${paths[0]}` : `Mako discarded ${paths.length} files`
+    return (knownRepository(this.target) ?? await this.repository()).discard(paths, message)
+  }
+  async restoreDiscarded(stash: string): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).restoreDiscarded(stash) }
   async commit(message: string, options: { amend?: boolean } = {}): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).commit({ message, amend: options.amend }) }
 
   async remote(input: GitRemoteInput): Promise<GitRemoteResult> {

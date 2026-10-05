@@ -72,9 +72,16 @@ export type GitDiffPreview =
   | { kind: "patch"; contents: string; limited: boolean }
   | { kind: "unavailable"; reason: string }
 
+/** One side of a binary file: its size, and an image as a data URL when it is small enough to show. */
+export interface GitBinarySide {
+  bytes: number
+  image?: string
+}
+
 export type GitDiff = { path: string } & (
-  | { binary: boolean; oldFile: { name: string; contents: string } | null; newFile: { name: string; contents: string } | null; preview?: never }
-  | { binary: false; oldFile: null; newFile: null; preview: GitDiffPreview }
+  /** For a binary file, `before` and `after` are null where it doesn't exist and absent where nothing was read. */
+  | { binary: boolean; oldFile: { name: string; contents: string } | null; newFile: { name: string; contents: string } | null; preview?: never; before?: GitBinarySide | null; after?: GitBinarySide | null }
+  | { binary: false; oldFile: null; newFile: null; preview: GitDiffPreview; before?: never; after?: never }
 )
 
 /** One workspace file, for the composer's `@` picker. */

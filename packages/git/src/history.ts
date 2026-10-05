@@ -42,6 +42,32 @@ export async function commitFiles(root: string, oid: string): Promise<CommitFile
   return files
 }
 
+/**
+ * Where HEAD left `ref`, and every file that differs from there in the
+ * working tree: committed since, staged, unstaged and untracked. Null when
+ * `ref` names nothing or shares no history with HEAD.
+ */
+export async function changedSince(root: string, ref: string): Promise<{ base: string; files: CommitFile[] } | null> {
+  if (!ref || ref.startsWith("-") || ref.includes("\0")) return null
+  const merged = await run({ cwd: root, args: ["merge-base", "HEAD", ref], codes: [1, 128], read: true })
+  const base = merged.code === 0 ? merged.stdout.toString("utf8").trim() : ""
+  if (!base) return null
+  const [tracked, untracked] = await Promise.all([
+    run({ cwd: root, args: ["diff", "--name-status", "--no-renames", "-z", base, "--"], read: true }),
+    run({ cwd: root, args: ["ls-files", "-z", "--others", "--exclude-standard"], read: true }),
+  ])
+  const fields = tracked.stdout.toString("utf8").split("\0")
+  const files: CommitFile[] = []
+  for (let at = 0; at + 1 < fields.length; at += 2) {
+    const code = fields[at]!.trim()
+    if (!code) continue
+    files.push({ path: fields[at + 1]!, change: CHANGES.get(code[0]!) ?? "modified" })
+  }
+  for (const path of untracked.stdout.toString("utf8").split("\0")) if (path) files.push({ path, change: "added" })
+  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+  return { base, files }
+}
+
 /** Tracked files, and untracked ones Git doesn't ignore. */
 export async function listFiles(root: string): Promise<string[]> {
   const result = await run({ cwd: root, args: ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], read: true })

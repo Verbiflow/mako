@@ -1,19 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
-import { ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, Maximize2Icon, MessageSquareIcon, RefreshCwIcon, WrapTextIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
+import { ImageThumbs } from "@/components/inspector/binary-diff"
 import { Annotation, GutterAdd } from "@/components/inspector/review"
-import { IconAction } from "@/components/ui/kit"
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
+import { Action, IconAction } from "@/components/ui/kit"
+import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { SearchSelect } from "@/components/ui/search-select"
+import { binarySizes } from "@/lib/git-binary"
 import { cn } from "@/lib/utils"
-import type { GitDiff, GitFile } from "@/lib/types"
+import type { GitCommitEntry, GitDiff, GitFile } from "@/lib/types"
 import { git as gitActions } from "@/state/git"
+import { discardFiles } from "@/state/git-discard"
+import { useGitHub } from "@/state/github"
 import { setPref, usePrefs } from "@/state/prefs"
 import { review, useReview } from "@/state/review"
-import { actions, store } from "@/state/session"
+import { actions, store, useSession } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { viewer } from "@/state/viewer"
+import { readWorktreeReview, useWorktrees, worktreeAt } from "@/state/worktrees"
 
 /** Diffs read at once; each is a preview the host serves from `cat-file` and the disk. */
 const LOADS = 4
@@ -24,8 +29,18 @@ const HEADER_HEIGHT = 32
 
 type Loaded =
   | { kind: "diff"; fileDiff: FileDiffMetadata; signature: string; lines: number; limited: boolean }
-  | { kind: "binary" }
+  | { kind: "binary"; diff: GitDiff }
   | { kind: "unavailable"; reason: string }
+
+/** Which changes the stream shows: what isn't committed, everything since the branch left its base, or one commit. */
+type Scope =
+  | { kind: "uncommitted" }
+  | { kind: "since"; ref: string; label: string }
+  | { kind: "commit"; hash: string; shortHash: string; subject: string }
+
+const UNCOMMITTED: Scope = { kind: "uncommitted" }
+/** Commits the scope menu offers. */
+const RECENT_COMMITS = 15
 
 interface Entry {
   loaded: Loaded
@@ -81,7 +96,7 @@ function unreadable(error: Error): Loaded {
 }
 
 function toLoaded(diff: GitDiff): Loaded {
-  if (diff.binary) return { kind: "binary" }
+  if (diff.binary) return { kind: "binary", diff }
   if (diff.preview?.kind === "unavailable") return { kind: "unavailable", reason: diff.preview.reason }
   if (diff.preview?.kind === "patch") {
     const fileDiff = getSingularPatch(diff.preview.contents)
@@ -105,7 +120,8 @@ function lineCount(fileDiff: FileDiffMetadata): number {
 }
 
 /** Reads the diffs of mounted headers, `LOADS` at a time; a header that unmounts first is skipped. */
-function diffQueue(onLoaded: (path: string, loaded: Loaded) => void) {
+function diffQueue(first: (path: string) => Promise<GitDiff>, onLoaded: (path: string, loaded: Loaded) => void) {
+  let load = first
   let wanted: string[] = []
   let open = true
   const reading = new Set<string>()
@@ -114,7 +130,7 @@ function diffQueue(onLoaded: (path: string, loaded: Loaded) => void) {
       const path = wanted.shift()
       if (path === undefined) return
       reading.add(path)
-      void gitActions.diff(path).then(toLoaded, unreadable).then((loaded) => {
+      void load(path).then(toLoaded, unreadable).then((loaded) => {
         if (open) onLoaded(path, loaded)
       }).finally(() => {
         reading.delete(path)
@@ -132,6 +148,10 @@ function diffQueue(onLoaded: (path: string, loaded: Loaded) => void) {
     },
     open() {
       open = true
+    },
+    /** Reads from here on go through `next`. */
+    use(next: (path: string) => Promise<GitDiff>) {
+      load = next
     },
     close() {
       open = false
@@ -165,18 +185,126 @@ function placeholder(file: GitFile): FileDiffMetadata {
 function sameLoaded(left: Loaded, right: Loaded): boolean {
   if (left.kind === "diff" && right.kind === "diff") return left.signature === right.signature && left.limited === right.limited
   if (left.kind === "unavailable" && right.kind === "unavailable") return left.reason === right.reason
+  if (left.kind === "binary" && right.kind === "binary") return binarySizes(left.diff) === binarySizes(right.diff) && left.diff.after?.image === right.diff.after?.image
   return left.kind === right.kind
 }
 
 /**
- * Every changed file in one scroll, the Review layout of Changes.
+ * Every changed file in one scroll, the Review layout of Changes, for the
+ * scope chosen in its header: what isn't committed (the default), everything
+ * since the branch left its base, or one commit.
+ */
+export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { files: readonly GitFile[]; workspace: string; staged: number; onReviewInCenter: () => void }) {
+  // A scope belongs to the repository it was chosen in.
+  const [chosen, setChosen] = useState<{ workspace: string; scope: Scope }>({ workspace, scope: UNCOMMITTED })
+  const scope = chosen.workspace === workspace ? chosen.scope : UNCOMMITTED
+  const choose = useCallback((next: Scope) => setChosen({ workspace, scope: next }), [workspace])
+  const [read, setRead] = useState<{ key: string; files: readonly GitFile[] | null; base?: string }>()
+  const key = scope.kind === "uncommitted" ? "uncommitted" : scope.kind === "since" ? `since:${scope.ref}` : `commit:${scope.hash}`
+
+  // A since scope changes with every edit too, so it is read again with the status.
+  useEffect(() => {
+    if (scope.kind === "uncommitted") return
+    let current = true
+    const reading = scope.kind === "since"
+      ? gitActions.changedSince(scope.ref).then((since) => ({ files: since?.files ?? null, base: since?.base }))
+      : gitActions.commitFiles(scope.hash).then((listed) => ({ files: listed.map((file): GitFile => ({ ...file, staged: false })), base: undefined }))
+    void reading.then(
+      (next) => { if (current) setRead({ key, ...next }) },
+      () => { if (current) setRead({ key, files: null }) },
+    )
+    return () => { current = false }
+  }, [files, key, scope])
+
+  const shown = scope.kind === "uncommitted" ? files : read?.key === key ? read.files : undefined
+  const base = read?.key === key ? read.base : undefined
+  const load = loader(scope, base)
+  const picker = <ScopePicker scope={scope} onChoose={choose} />
+  if (shown === undefined || (scope.kind === "since" && shown && !base)) return <ScopeMessage picker={picker} text="Reading…" />
+  if (shown === null) return <ScopeMessage picker={picker} text={scope.kind === "since" ? `This branch shares no history with ${scope.label.replace(/^Since /, "")}.` : "This commit couldn't be read."} />
+  return <ReviewFiles key={key} files={shown} workspace={workspace} staged={scope.kind === "uncommitted" ? staged : 0} scope={scope} picker={picker} load={load} onReviewInCenter={onReviewInCenter} />
+}
+
+function loader(scope: Scope, base: string | undefined): (path: string) => Promise<GitDiff> {
+  if (scope.kind === "commit") return (path) => gitActions.commitFileDiff(scope.hash, path)
+  if (scope.kind === "since") return (path) => base ? gitActions.sinceDiff(base, path) : Promise.reject(new Error("Reading where the branch started…"))
+  return (path) => gitActions.diff(path)
+}
+
+function ScopeMessage({ picker, text }: { picker: ReactNode; text: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline px-1.5 text-label text-faint">{picker}</div>
+      <p role="status" className="p-3 text-label text-faint">{text}</p>
+    </div>
+  )
+}
+
+/**
+ * The scope menu. Since main is offered on a branch other than the default
+ * one; in a Thread's worktree it is the same Since main its branch bar shows.
+ */
+function ScopePicker({ scope, onChoose }: { scope: Scope; onChoose: (scope: Scope) => void }) {
+  const cwd = useSession((state) => state.git?.cwd)
+  const branch = useSession((state) => state.git?.branch)
+  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
+  const defaultBranch = useGitHub((state) => state.status?.defaultBranch)
+  const [since, setSince] = useState<{ ref: string; label: string } | null>(null)
+  const [commits, setCommits] = useState<readonly GitCommitEntry[] | null>(null)
+  const open = (next: boolean) => {
+    if (!next) return
+    void gitActions.log(RECENT_COMMITS).then(setCommits, () => setCommits([]))
+    if (worktree) {
+      void readWorktreeReview(worktree.path).then(
+        (review) => setSince({ ref: review.into ?? review.base, label: `Since ${review.into ?? "it started"}` }),
+        () => setSince(null),
+      )
+    } else setSince(defaultBranch && branch && branch !== defaultBranch ? { ref: defaultBranch, label: `Since ${defaultBranch}` } : null)
+  }
+  const label = scope.kind === "uncommitted" ? "Uncommitted" : scope.kind === "since" ? scope.label : scope.shortHash
+  return (
+    <Menu modal={false} onOpenChange={open}>
+      <MenuTrigger asChild>
+        <Action size="xs" tone="quiet" aria-label={`Showing: ${scope.kind === "commit" ? `commit ${scope.shortHash}` : label}. Choose what to review`} title={scope.kind === "commit" ? scope.subject : undefined} className="max-w-40 gap-1 px-1.5 font-medium">
+          {scope.kind === "commit" ? <GitCommitHorizontalIcon /> : scope.kind === "since" ? <GitBranchIcon /> : <PencilIcon />}
+          <span className="truncate">{label}</span>
+          <ChevronDownIcon className="size-3! text-faint/70" />
+        </Action>
+      </MenuTrigger>
+      <MenuContent align="start" className="max-h-96 w-72 overflow-y-auto">
+        <ScopeItem on={scope.kind === "uncommitted"} onSelect={() => onChoose(UNCOMMITTED)} title="Uncommitted" detail="What isn't committed yet, staged or not" />
+        {since ? <ScopeItem on={scope.kind === "since" && scope.ref === since.ref} onSelect={() => onChoose({ kind: "since", ...since })} title={since.label} detail="Every commit on this branch and what isn't committed" /> : null}
+        <MenuSeparator />
+        <MenuLabel>A commit</MenuLabel>
+        {commits === null ? <MenuItem disabled>Reading history…</MenuItem> : commits.length === 0 ? <MenuItem disabled>No commits yet</MenuItem> : commits.map((commit) => (
+          <ScopeItem key={commit.hash} on={scope.kind === "commit" && scope.hash === commit.hash} onSelect={() => onChoose({ kind: "commit", hash: commit.hash, shortHash: commit.shortHash, subject: commit.subject })} title={commit.subject} detail={commit.shortHash} mono />
+        ))}
+      </MenuContent>
+    </Menu>
+  )
+}
+
+function ScopeItem({ on, title, detail, mono = false, onSelect }: { on: boolean; title: string; detail: string; mono?: boolean; onSelect: () => void }) {
+  return (
+    <MenuItem onSelect={onSelect} aria-checked={on} role="menuitemradio">
+      <CheckIcon className={cn("size-3.5 shrink-0", on ? "text-foreground" : "invisible")} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{title}</span>
+        <span className={cn("block truncate text-label text-faint", mono && "font-mono")}>{detail}</span>
+      </span>
+    </MenuItem>
+  )
+}
+
+/**
+ * One scope's files in one scroll.
  *
  * Each file starts as its header. A diff is read when its file enters the
  * rendered window, a few at a time, so 5,000 changed files cost what the
  * visible ones do. A status change re-reads only the files in view, and the
  * old diff stays up until the new one lands.
  */
-export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { files: readonly GitFile[]; workspace: string; staged: number; onReviewInCenter: () => void }) {
+function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewInCenter }: { files: readonly GitFile[]; workspace: string; staged: number; scope: Scope; picker: ReactNode; load: (path: string) => Promise<GitDiff>; onReviewInCenter: () => void }) {
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
   const marks = useViewed((state) => state.marks)
@@ -186,7 +314,7 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
   const scrollTop = useRef(0)
   const [entries, setEntries] = useState(() => new Map<string, Entry>())
   const [opened, setOpened] = useState(() => new Map<string, boolean>())
-  const [queue] = useState(() => diffQueue((path, loaded) => setEntries((previous) => {
+  const [queue] = useState(() => diffQueue(load, (path, loaded) => setEntries((previous) => {
     const current = previous.get(path)
     return new Map(previous).set(path, { loaded: current && sameLoaded(current.loaded, loaded) ? current.loaded : loaded, stale: false })
   })))
@@ -194,6 +322,7 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
     queue.open()
     return () => queue.close()
   }, [queue])
+  useEffect(() => queue.use(load), [load, queue])
 
   const byPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files])
 
@@ -205,6 +334,7 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
   }, [marks, workspace])
 
   const isOpen = useCallback((file: GitFile, entry: Entry | undefined) => {
+    if (entry?.loaded.kind === "binary") return false
     const chosen = opened.get(file.path)
     if (chosen !== undefined) return chosen
     if (viewedFor(file.path, entry) || generated(file.path)) return false
@@ -327,9 +457,10 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline px-2.5 text-label text-faint">
+      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-hairline pr-2.5 pl-1.5 text-label text-faint">
+        {picker}
         <span role="status" className="min-w-0 flex-1 truncate tabular">
-          {`${files.length} ${files.length === 1 ? "file" : "files"} changed${staged > 0 ? ` · ${staged} staged` : ""}`}
+          {`${files.length} ${files.length === 1 ? "file" : "files"}${scope.kind === "uncommitted" ? " changed" : ""}${staged > 0 ? ` · ${staged} staged` : ""}`}
         </span>
         {counted ? <>
           <span className="tabular text-added">+{insertions}</span>
@@ -355,9 +486,11 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
           <IconAction label={wrapDiff ? "Disable line wrapping" : "Wrap long lines"} size="xs" data-on={wrapDiff || undefined} onClick={() => setPref("wrapDiff", !wrapDiff)}>
             <WrapTextIcon />
           </IconAction>
-          <IconAction label="Review current changes in the center" size="xs" onClick={onReviewInCenter}>
-            <Maximize2Icon />
-          </IconAction>
+          {scope.kind === "uncommitted" ? (
+            <IconAction label="Review current changes in the center" size="xs" onClick={onReviewInCenter}>
+              <Maximize2Icon />
+            </IconAction>
+          ) : null}
           <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
             <RefreshCwIcon />
           </IconAction>
@@ -391,6 +524,8 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
                 onViewed={markViewed}
                 queue={queue}
                 root={workspace}
+                load={load}
+                discardable={scope.kind === "uncommitted"}
               />
             )
           }}
@@ -427,17 +562,20 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
  * One file's header. The stream mounts headers only for files in its window,
  * so a header asks for its own diff while it is mounted and the diff is due.
  */
-function FileHeader({ file, entry, open, viewed, root, queue, onToggle, onViewed }: {
+function FileHeader({ file, entry, open, viewed, root, queue, load, discardable, onToggle, onViewed }: {
   file: GitFile
   entry: Entry | undefined
   open: boolean
   viewed: boolean
   root: string
   queue: ReturnType<typeof diffQueue>
+  load: (path: string) => Promise<GitDiff>
+  /** The file's changes aren't committed, so Discard can take them back. */
+  discardable: boolean
   onToggle: (path: string) => void
   onViewed: (path: string, on: boolean) => void
 }) {
-  const due = !file.binary && (entry ? entry.stale : open)
+  const due = entry ? entry.stale : open
   useEffect(() => {
     if (!due) return
     queue.need(file.path)
@@ -449,8 +587,9 @@ function FileHeader({ file, entry, open, viewed, root, queue, onToggle, onViewed
   const name = file.path.slice(slash + 1)
   const loaded = entry?.loaded
   const lines = loaded?.kind === "diff" ? loaded.lines : changedLines(file)
-  const note = file.binary || loaded?.kind === "binary"
-    ? "Binary"
+  const center = () => void viewer.openDiff(file.path, async () => ({ diffs: [await load(file.path)] }))
+  const note = loaded?.kind === "binary"
+    ? (loaded.diff.before?.image || loaded.diff.after?.image ? binarySizes(loaded.diff) : `Binary${binarySizes(loaded.diff) ? ` · ${binarySizes(loaded.diff)}` : ""}`)
     : loaded?.kind === "unavailable"
       ? loaded.reason
       : !open && generated(file.path)
@@ -466,9 +605,9 @@ function FileHeader({ file, entry, open, viewed, root, queue, onToggle, onViewed
     <div data-review-file={file.path} className="flex h-8 items-center gap-1.5 border-b border-hairline bg-surface px-2 text-label select-none">
       <button
         type="button"
-        aria-expanded={open}
-        aria-label={`${open ? "Fold" : "Unfold"} ${file.path}`}
-        onClick={() => onToggle(file.path)}
+        aria-expanded={loaded?.kind === "binary" ? undefined : open}
+        aria-label={loaded?.kind === "binary" ? `Review ${file.path} in the center` : `${open ? "Fold" : "Unfold"} ${file.path}`}
+        onClick={() => (loaded?.kind === "binary" ? center() : onToggle(file.path))}
         title={file.path}
         className="pressable flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
@@ -478,6 +617,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, onToggle, onViewed
           <span className="text-faint">{folder}</span>
           <span className={viewed ? "text-muted-foreground" : "text-foreground"}>{name}</span>
         </span>
+        {loaded?.kind === "binary" ? <ImageThumbs diff={loaded.diff} /> : null}
         {note ? <span className="shrink-0 truncate text-faint" title={loaded?.kind === "unavailable" ? loaded.reason : undefined}>{note}</span> : null}
         <span className="ml-auto flex shrink-0 gap-1 tabular">
           {file.insertions ? <span className="text-added">+{file.insertions}</span> : null}
@@ -506,7 +646,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, onToggle, onViewed
               Open file
             </MenuItem>
           ) : null}
-          <MenuItem onSelect={() => void viewer.openDiff(file.path, async () => ({ diffs: [await gitActions.diff(file.path)] }))}>
+          <MenuItem onSelect={center}>
             <Maximize2Icon className="size-3.5 text-faint" />
             Review in the center
           </MenuItem>
@@ -518,6 +658,13 @@ function FileHeader({ file, entry, open, viewed, root, queue, onToggle, onViewed
             <CopyIcon className="size-3.5 text-faint" />
             Copy path
           </MenuItem>
+          {discardable && file.status !== "conflicted" ? <>
+            <MenuSeparator />
+            <MenuItem onSelect={() => void discardFiles([file])} className="text-negative">
+              <Undo2Icon className="size-3.5" />
+              Discard changes…
+            </MenuItem>
+          </> : null}
         </MenuContent>
       </Menu>
     </div>

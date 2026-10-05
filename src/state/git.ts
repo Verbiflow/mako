@@ -7,6 +7,7 @@ import type {
   GitCommitEntry,
   GitDiff,
   GitCommitFile,
+  GitFile,
 } from "@/lib/types"
 
 export type { GitCommitFile } from "@/lib/types"
@@ -34,6 +35,22 @@ export const git = {
 
   unstage(paths: string[]): Promise<void> {
     return getMako().gitUnstage(paths)
+  },
+
+  discard(paths: string[]): Promise<{ stash: string }> {
+    return getMako().gitDiscard(paths)
+  },
+
+  restoreDiscarded(stash: string): Promise<void> {
+    return getMako().gitRestoreDiscarded(stash)
+  },
+
+  changedSince(ref: string): Promise<{ base: string; files: GitFile[] } | null> {
+    return getMako().gitChangedSince(ref)
+  },
+
+  sinceDiff(base: string, path: string): Promise<GitDiff> {
+    return getMako().gitSinceDiff(base, path)
   },
 
   stageAll(): Promise<void> {

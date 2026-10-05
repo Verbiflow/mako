@@ -70,6 +70,7 @@ export type {
   ExternalEditor,
   ExternalThreadActivity,
   FileContents,
+  GitBinarySide,
   GitCommitEntry,
   GitCommitFile,
   GitDiff,

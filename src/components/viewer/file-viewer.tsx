@@ -1,3 +1,4 @@
+import { BinaryDiff } from "@/components/inspector/binary-diff"
 import {
   Fragment,
   lazy,
@@ -424,7 +425,7 @@ const LazyDiff = lazy(async () => {
     note?: string
   }) {
     const showable = diffs.filter(
-      (diff) => !diff.binary && (diff.preview || diff.oldFile || diff.newFile)
+      (diff) => diff.binary || diff.preview || diff.oldFile || diff.newFile
     )
     if (showable.length === 0) {
       return (
@@ -433,7 +434,7 @@ const LazyDiff = lazy(async () => {
     }
     return (
       <Virtualizer className="min-h-full">
-        {showable.map((diff) => diff.preview ? <GitDiffPreviewView key={diff.path} path={diff.path} preview={diff.preview} /> : (
+        {showable.map((diff) => diff.binary ? <BinaryDiff key={diff.path} diff={diff} /> : diff.preview ? <GitDiffPreviewView key={diff.path} path={diff.path} preview={diff.preview} /> : (
           <MultiFileDiff
             key={diff.path}
             {...(diff.oldFile && diff.newFile

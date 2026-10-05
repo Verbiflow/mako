@@ -1,12 +1,12 @@
 import { useId, useRef, useState } from "react"
-import { AppWindowIcon, CircleStopIcon, FolderIcon, GitBranchIcon, GitMergeIcon, InfoIcon, Trash2Icon } from "lucide-react"
+import { AppWindowIcon, CircleStopIcon, FileIcon, FolderIcon, GitBranchIcon, GitMergeIcon, InfoIcon, Trash2Icon } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/state/confirm"
 
 const icons = { remove: Trash2Icon, merge: GitMergeIcon, stop: CircleStopIcon }
-const subjectIcons = { folder: FolderIcon, branch: GitBranchIcon, app: AppWindowIcon }
+const subjectIcons = { folder: FolderIcon, branch: GitBranchIcon, app: AppWindowIcon, file: FileIcon }
 
 /** The one dialog `confirmAction` opens, mounted once beside the toaster. */
 export function ConfirmHost() {

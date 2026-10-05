@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 import { appDataFolder, runtimeDataRoot, runtimeLocation } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
-import { gitActivity, openRepository } from "@mako/git"
+import { gitActivity, openRepositories, openRepository } from "@mako/git"
 
 const path = resolve(process.argv[2] ?? process.cwd())
 const dataRoot = runtimeDataRoot(appDataFolder(), process.env)
@@ -33,12 +33,13 @@ if (!report) {
     console.error(`${path} isn't inside a Git repository.`)
     process.exit(2)
   }
-  report = { held: false, diagnosis: await repository.diagnose(), activity: gitActivity() }
+  report = { held: false, diagnosis: await repository.diagnose(), activity: gitActivity(), open: openRepositories() }
 }
 
-const { held, diagnosis: d, activity } = report
+const { held, diagnosis: d, activity, open: opened } = report
 const ms = (value) => value < 10 ? `${value.toFixed(1)} ms` : `${Math.round(value)} ms`
 const count = (value) => value.toLocaleString("en-US")
+const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`
 const ago = (value) => value < 60_000 ? `${Math.round(value / 1000)} s ago` : `${Math.round(value / 60_000)} min ago`
 const lines = [
   `Repository  ${d.root}`,
@@ -52,7 +53,7 @@ const lines = [
   `Last full   ${d.lastFull ? `${ago(d.lastFull.agoMs)}: ${d.lastFull.reason}` : "never"}`,
   `Pending     ${d.pending === "all" ? "a full read" : `${count(d.pending)} path${d.pending === 1 ? "" : "s"}`}${held ? "" : " (the host hadn't opened this repository)"}`,
   `Timings     held status ${ms(d.heldMs)}, fresh git status ${ms(d.freshMs)}`,
-  `Previews    ${count(d.previews.count)} cached, ${(d.previews.bytes / 1024 / 1024).toFixed(1)} MB`,
+  `Previews    ${count(d.previews.count)} cached, ${mb(d.previews.bytes)}${d.previews.allBytes === undefined ? "" : `; ${mb(d.previews.allBytes)} across ${opened === undefined ? "every" : count(opened)} open ${opened === 1 ? "repository" : "repositories"}`}`,
   `Processes   ${activity.running.length ? activity.running.map((entry) => `git ${entry.command} ${ms(entry.ms)} in ${entry.cwd}`).join("; ") : "none"}${activity.queued ? `, ${activity.queued} reads queued` : ""}`,
 ]
 console.log(lines.join("\n"))

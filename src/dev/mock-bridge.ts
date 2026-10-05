@@ -662,6 +662,10 @@ export function installMockBridge() {
     gitUnstage: async () => {},
     gitStageAll: async () => {},
     gitUnstageAll: async () => {},
+    gitDiscard: async () => ({ stash: "0".repeat(40) }),
+    gitRestoreDiscarded: async () => {},
+    gitChangedSince: async () => ({ base: "b".repeat(40), files: GIT.files }),
+    gitSinceDiff: async (_base: string, path: string) => ({ path, binary: false, oldFile: { name: path, contents: "const base = 1\n" }, newFile: { name: path, contents: "const base = 2\n" } }),
     gitCommit: async () => {},
     gitPush: async () => {},
     gitCommitFiles: async () => [

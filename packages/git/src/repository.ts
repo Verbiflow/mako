@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from "node:path"
 import { GitError } from "./errors.js"
 import { ObjectReader } from "./objects.js"
 import { previewBytes, readPreview, type Comparison, type Preview } from "./preview.js"
+import { previewCacheBytes, PreviewShelf } from "./preview-cache.js"
 import { run, text } from "./run.js"
 import { mergeStatus, parseStatus, statusMismatches, within, type StatusEntry, type StatusHead, type StatusMismatch } from "./status.js"
 
@@ -36,7 +37,8 @@ export interface Diagnosis {
   held: { entries: number; head: string }
   fresh: { entries: number; head: string }
   mismatches: readonly StatusMismatch[]
-  previews: { count: number; bytes: number }
+  /** This repository's cached previews, and what every repository's hold together. */
+  previews: { count: number; bytes: number; allBytes: number }
 }
 
 export interface RepositoryLocation {
@@ -57,8 +59,6 @@ const REREAD_LIMIT = 64
 const TRACKED_BYTES = 1024 * 1024
 /** Files that change what every path's status means. */
 const GLOBAL_FILES = new Set([".gitignore", ".gitattributes", ".gitmodules"])
-/** What previews keep, by the bytes they carry. */
-const PREVIEW_CACHE_BYTES = 32 * 1024 * 1024
 const EMPTY_RAW: ReadonlyMap<string, Buffer> = new Map()
 const OPERATIONS: ReadonlyArray<[string, Operation]> = [
   ["rebase-merge", "rebase"],
@@ -96,8 +96,9 @@ export class Repository {
   /** The unheard folders the index tracks files in, by the index file they were read from. */
   private tracked: { stamp: string; folders: readonly string[] | null } | undefined
   private writes: Promise<unknown> = Promise.resolve()
-  private readonly previews = new Map<string, { preview: Preview; bytes: number; path: string; worktree: boolean }>()
-  private previewBytes = 0
+  private writing = 0
+  private previewing = 0
+  private readonly previews = new PreviewShelf()
   private empty: Promise<string> | undefined
   /** The bytes of each status path that isn't valid UTF-8, by the text shown for it. */
   private raw: ReadonlyMap<string, Buffer> = EMPTY_RAW
@@ -117,6 +118,11 @@ export class Repository {
   /** Whether anyone is reporting this tree's changes. */
   get watched(): boolean {
     return this.watchers > 0
+  }
+
+  /** A status read, a preview or a write is running or queued. */
+  get busy(): boolean {
+    return this.reading !== undefined || this.writing > 0 || this.previewing > 0
   }
 
   /**
@@ -184,7 +190,7 @@ export class Repository {
     this.everything = true
     this.dirty.clear()
     this.version += 1
-    for (const [key, entry] of this.previews) if (entry.worktree) this.dropPreview(key)
+    this.previews.dropWhere((entry) => entry.worktree)
   }
 
   /** Status as of this call: changes reported before it are in what it returns. */
@@ -304,7 +310,7 @@ export class Repository {
       held: { entries: held.entries.length, head: head(held.head) },
       fresh: { entries: fresh.entries.length, head: head(fresh.head) },
       mismatches: statusMismatches(held.entries, fresh.entries),
-      previews: { count: this.previews.size, bytes: this.previewBytes },
+      previews: { count: this.previews.count, bytes: this.previews.bytes, allBytes: previewCacheBytes() },
     }
   }
 
@@ -343,47 +349,34 @@ export class Repository {
   async preview(path: string, comparison: Comparison): Promise<Preview> {
     this.path(path)
     if (this.raw.has(path)) return { kind: "unavailable", reason: "This file's name isn't valid UTF-8, so Mako can't show it. Staging and commits still include it." }
-    const worktree = comparison.kind === "worktree"
+    if (comparison.kind !== "worktree" && (comparison.oid.startsWith("-") || !/^[\w./^~@{}-]+$/.test(comparison.oid)))
+      throw new GitError({ kind: "failed", message: "Choose a commit to compare with." })
+    const worktree = comparison.kind !== "commit"
+    const commit = comparison.kind === "worktree" || /^[0-9a-f]{40,64}$/.test(comparison.oid)
     // A worktree side is current only while a watcher reports its changes; a commit never changes.
-    const cacheable = worktree ? this.watched : /^[0-9a-f]{40,64}$/.test(comparison.oid)
-    const key = `${worktree ? "w" : comparison.oid}\0${path}`
+    const cacheable = commit && (!worktree || this.watched)
+    const key = `${comparison.kind === "worktree" ? "w" : comparison.kind === "since" ? `s${comparison.oid}` : comparison.oid}\0${path}`
     const cached = cacheable ? this.previews.get(key) : undefined
-    if (cached) {
-      this.previews.delete(key)
-      this.previews.set(key, cached)
-      return cached.preview
-    }
+    if (cached) return cached.preview
     const version = this.version
-    const preview = await readPreview({ root: this.root, objects: this.objects, base: () => this.base() }, path, comparison)
-    if (cacheable && (!worktree || version === this.version)) this.keepPreview(key, { preview, bytes: previewBytes(preview), path, worktree })
+    this.previewing += 1
+    const preview = await readPreview({ root: this.root, objects: this.objects, base: () => this.base() }, path, comparison).finally(() => {
+      this.previewing -= 1
+    })
+    if (cacheable && (!worktree || version === this.version)) this.previews.keep(key, { preview, bytes: previewBytes(preview), path, worktree })
     return preview
   }
 
-  private keepPreview(key: string, entry: { preview: Preview; bytes: number; path: string; worktree: boolean }): void {
-    if (entry.bytes > PREVIEW_CACHE_BYTES / 4) return
-    this.dropPreview(key)
-    this.previews.set(key, entry)
-    this.previewBytes += entry.bytes
-    for (const [oldest] of this.previews) {
-      if (this.previewBytes <= PREVIEW_CACHE_BYTES) break
-      this.dropPreview(oldest)
-    }
-  }
-
-  private dropPreview(key: string): void {
-    const entry = this.previews.get(key)
-    if (!entry) return
-    this.previews.delete(key)
-    this.previewBytes -= entry.bytes
-  }
-
   private forgetPreviews(scope: string): void {
-    for (const [key, entry] of this.previews) if (entry.worktree && within(entry.path, scope)) this.dropPreview(key)
+    this.previews.dropWhere((entry) => entry.worktree && within(entry.path, scope))
   }
 
   /** Runs `action` after every write before it, alone among this repository's writes. */
   write<T>(action: () => Promise<T>): Promise<T> {
-    const next = this.writes.then(() => action(), () => action())
+    this.writing += 1
+    const next = this.writes.then(() => action(), () => action()).finally(() => {
+      this.writing -= 1
+    })
     this.writes = next.catch(() => undefined)
     return next
   }
@@ -463,6 +456,54 @@ export class Repository {
   }
 
   /**
+   * Puts `paths` back as HEAD has them, staged and unstaged, and deletes
+   * untracked ones. What was there is kept as a stash entry with `message`,
+   * so `git stash pop` brings it back. Refuses while a merge or another
+   * operation is under way, and before the first commit.
+   */
+  async discard(paths: readonly string[], message: string): Promise<{ stash: string }> {
+    if (paths.length === 0) throw new GitError({ kind: "failed", message: "Choose a file to discard." })
+    const input = this.pathspecs(paths)
+    return this.write(async () => {
+      try {
+        if (this.operation()) throw new GitError({ kind: "conflicts", message: "Finish or abort the merge before discarding changes." })
+        if ((await this.head()).oid === null) throw new GitError({ kind: "failed", message: "Discarding needs a first commit to go back to." })
+        const before = await this.stashTop()
+        await run({ cwd: this.root, args: ["stash", "push", "--include-untracked", "--quiet", `--message=${commitMessage(message).trim()}`, "--pathspec-from-file=-", "--pathspec-file-nul"], input })
+        const stash = await this.stashTop()
+        if (!stash || stash === before) throw new GitError({ kind: "failed", message: "Nothing to discard: those files have no changes." })
+        return { stash }
+      } finally {
+        this.changedAll("discarded changes")
+      }
+    })
+  }
+
+  /**
+   * Puts back what `discard` kept in stash entry `oid`, staged as it was, and
+   * drops the entry. When the files changed since in a way that collides,
+   * Git refuses and the entry stays.
+   */
+  async restoreDiscarded(oid: string): Promise<void> {
+    if (!/^[0-9a-f]{40,64}$/.test(oid)) throw new GitError({ kind: "failed", message: "Choose a discard to bring back." })
+    await this.write(async () => {
+      try {
+        const list = await run({ cwd: this.root, args: ["stash", "list", "--format=%H"], read: true })
+        const at = list.stdout.toString("utf8").split("\n").indexOf(oid)
+        if (at < 0) throw new GitError({ kind: "missing", message: "That discard is no longer in Git's stash." })
+        await run({ cwd: this.root, args: ["stash", "pop", "--index", "--quiet", `stash@{${at}}`] })
+      } finally {
+        this.changedAll("brought back discarded changes")
+      }
+    })
+  }
+
+  private async stashTop(): Promise<string | null> {
+    const result = await run({ cwd: this.root, args: ["rev-parse", "-q", "--verify", "refs/stash"], codes: [1], read: true })
+    return result.code === 0 ? result.stdout.toString("utf8").trim() : null
+  }
+
+  /**
    * Commits what is staged; with nothing staged, everything first. `amend`
    * rewrites the last commit with what is staged now.
    */
@@ -481,7 +522,6 @@ export class Repository {
   close(): void {
     this.objects.close()
     this.previews.clear()
-    this.previewBytes = 0
   }
 }
 

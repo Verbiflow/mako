@@ -11,6 +11,7 @@ import type {
   FileContents,
   GitCommitEntry,
   GitDiff,
+  GitFile,
   GitCommitFile,
   GitStatus,
   HostEvent,
@@ -373,6 +374,24 @@ export class AgentHost {
   async gitUnstage(paths: string[]): Promise<void> {
     await this.workspaceGit.unstage(paths)
     await this.pushGit("index")
+  }
+
+  async gitDiscard(paths: string[]): Promise<{ stash: string }> {
+    try { return await this.workspaceGit.discard(paths) }
+    finally { await this.pushGit("index") }
+  }
+
+  async gitRestoreDiscarded(stash: string): Promise<void> {
+    try { await this.workspaceGit.restoreDiscarded(stash) }
+    finally { await this.pushGit("index") }
+  }
+
+  async gitChangedSince(ref: string): Promise<{ base: string; files: GitFile[] } | null> {
+    return this.workspaceGit.changedSince(ref)
+  }
+
+  async gitSinceDiff(base: string, path: string): Promise<GitDiff> {
+    return this.workspaceGit.sinceDiff(base, path)
   }
 
   async gitStageAll(): Promise<void> {
