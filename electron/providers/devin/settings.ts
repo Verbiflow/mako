@@ -13,13 +13,14 @@ import { devinEnvironment } from "./environment.js"
 export async function devinDefaultModel(
   executable: string,
   base: NodeJS.ProcessEnv,
-  cwd: string
+  cwd: string,
+  signal?: AbortSignal
 ): Promise<string> {
   const env = devinEnvironment(base)
   // Never leave empty discovery sessions in the user's history.
   return withDevinProbeWorkspace(executable, env, (workspace) =>
     withDiscoveryProcess(
-      { command: executable, args: ["acp"], env, cwd },
+      { command: executable, args: ["acp"], env, cwd, signal },
       async ({ child, phase }) => {
         const connection = new ClientSideConnection(
           () => ({

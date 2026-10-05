@@ -17,6 +17,7 @@ import { hostWarn } from "../../host-log.js"
 import { devinUsageUpdate } from "./usage.js"
 
 export const devinAcpSource: ProviderAcpSource = {
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   ...devinResumePolicy(),
   provider: "devin",
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question"], coverage: "Structured question selections from exact native tool events and the saved main branch. Tool permission choices remain submission-only." },
@@ -64,3 +65,4 @@ export const devinAcpSource: ProviderAcpSource = {
     }
   },
 }
+import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"

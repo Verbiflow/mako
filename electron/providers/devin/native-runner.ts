@@ -1,6 +1,7 @@
 import { resolveExecutable } from "../../executable.js"
 import { devinExecutable } from "./executable.js"
 import {
+  CLI_OWNED_CREDENTIALS,
   argumentAfter,
   commandTuning,
   dropUncarried,
@@ -12,6 +13,8 @@ const CARRIES: readonly string[] = []
 
 export const devinNativeRunner: NativeRunner = {
   provider: "devin",
+  transport: "devin-cli-headless",
+  launchCredentials: CLI_OWNED_CREDENTIALS,
   available: () => resolveExecutable(devinExecutable() ?? "devin") !== null,
   fastMode: "supported",
   carries: CARRIES,

@@ -1,6 +1,8 @@
-import { readFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { z } from "zod"
 import type {
   AccountUsage,
   HarnessAccount,
@@ -8,15 +10,22 @@ import type {
   UsageWindow,
 } from "../../account-types.js"
 import {
+  accountDir,
+  accountsRoot,
+  childProcessEnv,
+  cleanAccountName,
   credentialFileFingerprint,
   jsonFields,
+  loginPending,
+  markLoginPending,
   numberValue,
   parseUsageReset,
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
 import type { JsonValue } from "../../codex-app-json.js"
-import type { ObservedAccountCapability } from "../account-capability.js"
+import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
+import { devinExecutable } from "./executable.js"
 
 function credentialsPath(env: NodeJS.ProcessEnv): string {
   return join(
@@ -113,10 +122,10 @@ class DevinStatusError extends Error {
   }
 }
 
-async function fetchDevinStatus(): Promise<DevinStatus | null> {
+async function fetchDevinStatus(path: string): Promise<DevinStatus | null> {
   let contents: string
   try {
-    contents = await readFile(credentialsPath(process.env), "utf8")
+    contents = await readFile(path, "utf8")
   } catch {
     return null
   }
@@ -151,56 +160,195 @@ async function fetchDevinStatus(): Promise<DevinStatus | null> {
 
 /**
  * The same call answers who is signed in and what is left, so listing and
- * usage share one reading a minute rather than asking twice.
+ * usage share one reading a minute per login rather than asking twice.
  */
-let reading: { at: number; revision: string; status: Promise<DevinStatus | null> } | undefined
+const readings = new Map<string, { at: number; revision: string; status: Promise<DevinStatus | null> }>()
 
-async function devinStatus(): Promise<DevinStatus | null> {
-  const revision = await credentialFileFingerprint(credentialsPath(process.env))
+async function devinStatus(path: string): Promise<DevinStatus | null> {
+  const revision = await credentialFileFingerprint(path)
+  const reading = readings.get(path)
   if (reading && reading.revision === revision && Date.now() - reading.at < 60_000) return reading.status
-  const status = fetchDevinStatus()
-  reading = { at: Date.now(), revision, status }
+  const status = fetchDevinStatus(path)
+  readings.set(path, { at: Date.now(), revision, status })
   status.catch(() => {
-    if (reading?.status === status) reading = undefined
+    if (readings.get(path)?.status === status) readings.delete(path)
   })
   return status
 }
 
-export const devinAccountCapability: ObservedAccountCapability = {
+/**
+ * An account Mako keeps is Devin's own data folder, signed in by Devin's
+ * CLI. Devin reads only one data folder per user, so sessions are pointed
+ * at an account through the key variables Devin honours instead, read from
+ * that folder at launch; `devin acp` and its tools see the key.
+ */
+function accountRoot(name: string): string {
+  return accountDir("devin", name)
+}
+function accountCredentials(name: string, root = accountRoot(name)): string {
+  return credentialsPath({ XDG_DATA_HOME: join(root, "data") })
+}
+/** A login being renewed lands here first, so a failed one leaves the old login as it was. */
+function renewalRoot(name: string): string {
+  return join(accountRoot(name), "renewal")
+}
+const IdentitySchema = z.object({ email: z.string() })
+function identityPath(name: string): string {
+  return join(accountRoot(name), "identity.json")
+}
+
+async function managedAccounts(selection: string | null): Promise<HarnessAccount[]> {
+  const accounts: HarnessAccount[] = []
+  for (const name of await readdir(join(accountsRoot(), "devin")).catch(() => [])) {
+    if (name.startsWith(".") || loginPending(accountRoot(name))) continue
+    const email = await readFile(identityPath(name), "utf8")
+      .then((contents) => IdentitySchema.parse(JSON.parse(contents)).email)
+      .catch(() => undefined)
+    const account: HarnessAccount = {
+      harness: "devin",
+      name,
+      dir: accountCredentials(name),
+      active: selection === name,
+      source: "mako",
+      route: "managed",
+    }
+    if (email !== undefined) account.email = email
+    if (!existsSync(accountCredentials(name))) account.signedOut = true
+    accounts.push(account)
+  }
+  return accounts
+}
+
+/** Keys that would sign Devin in as someone else than the selected account. */
+const AUTH_ENV = ["WINDSURF_API_KEY", "WINDSURF_API_SERVER_URL", "DEVIN_API_KEY"]
+
+async function accountEnv(selection: string | null, base: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+  const env = { ...base }
+  if (!selection || selection === "default") return env
+  if (!existsSync(accountRoot(selection)))
+    throw new Error("The selected Devin account no longer exists. Choose another account in Settings → Agents.")
+  const contents = await readFile(accountCredentials(selection), "utf8").catch(() => null)
+  const apiKey = contents === null ? undefined : devinCredential(contents, "windsurf_api_key")
+  if (contents === null || !apiKey)
+    throw new Error("The selected Devin account is signed out. Sign in again in Settings → Agents.")
+  for (const key of AUTH_ENV) delete env[key]
+  env.WINDSURF_API_KEY = apiKey
+  const server = devinCredential(contents, "api_server_url")
+  if (server) env.WINDSURF_API_SERVER_URL = server
+  return env
+}
+
+/**
+ * Devin's sign-in asks only through a terminal and refuses when already
+ * signed in, so it always runs into a fresh data folder: the account's own
+ * for a new account, a renewal folder beside it for one signed in again.
+ * The page shows a code to paste back rather than calling a local port.
+ */
+async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
+  const base = childProcessEnv(process.env)
+  const executable = devinExecutable(base)
+  if (!executable) throw new Error("Devin isn't installed. Install it, then sign in.")
+  let root: string
+  if (renew) {
+    if (!existsSync(accountRoot(name))) throw new Error("That Devin account is gone. Refresh to see your accounts.")
+    root = renewalRoot(name)
+    await rm(root, { recursive: true, force: true })
+    await mkdir(root, { mode: 0o700 })
+  } else {
+    root = accountRoot(cleanAccountName(name))
+    await mkdir(join(accountsRoot(), "devin"), { recursive: true, mode: 0o700 })
+    await mkdir(root, { mode: 0o700 })
+    await markLoginPending(root).catch(async (error) => {
+      await rm(root, { recursive: true, force: true })
+      throw error
+    })
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    XDG_DATA_HOME: join(root, "data"),
+    XDG_CONFIG_HOME: join(root, "config"),
+    XDG_CACHE_HOME: join(root, "cache"),
+    XDG_STATE_HOME: join(root, "state"),
+  }
+  for (const key of AUTH_ENV) delete env[key]
+  return {
+    kind: "command",
+    executable,
+    args: ["auth", "login", "--force-manual-token-flow"],
+    env,
+    paste: "code",
+    pasteOnly: true,
+    terminal: true,
+    opensBrowser: false,
+    refusedCode: /failed to exchange code/i,
+  }
+}
+
+/** Devin's status command answers the same whether or not it is signed in; Devin's server is asked instead. */
+async function confirmAccountLogin({ name, renew }: AccountLoginTarget): Promise<void> {
+  const landed = renew ? accountCredentials(name, renewalRoot(name)) : accountCredentials(name)
+  if (!existsSync(landed)) throw new Error("Devin finished, but no login was saved. Try again.")
+  const status = await fetchDevinStatus(landed).catch(() => null)
+  if (!status) throw new Error("Devin finished, but the login didn't check out. Try again.")
+  if (renew) {
+    await mkdir(join(accountRoot(name), "data", "devin"), { recursive: true, mode: 0o700 })
+    await rename(landed, accountCredentials(name))
+    await rm(renewalRoot(name), { recursive: true, force: true })
+  }
+  await chmod(accountCredentials(name), 0o600)
+  if (status.email !== undefined)
+    await writeFile(identityPath(name), JSON.stringify({ email: status.email }), { mode: 0o600 })
+}
+
+async function usageFor(path: string): Promise<AccountUsage> {
+  try {
+    const status = await devinStatus(path)
+    return status?.usage ?? { status: "missing-credentials" }
+  } catch (error) {
+    if (error instanceof DevinStatusError && error.status === 401)
+      return {
+        status: "stale-token",
+        detail: "Devin refused this login. Sign in again.",
+      }
+    return {
+      status: "error",
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+export const devinAccountCapability: SelectableAccountCapability = {
   provider: "devin",
-  mode: "observed",
+  mode: "selectable",
+  nativeLogin: true,
   label: "Devin",
   loginCommand: "devin auth login",
-  async listAccounts() {
-    const status = await devinStatus().catch(() => null)
-    if (!status) return []
+  async listAccounts(selection) {
+    const accounts = await managedAccounts(selection)
+    const status = await devinStatus(credentialsPath(process.env)).catch(() => null)
+    if (!status) return accounts
     const account: HarnessAccount = {
       harness: "devin",
       name: "default",
       dir: credentialsPath(process.env),
-      active: true,
+      active: !selection,
       source: "cli",
     }
     if (status.email !== undefined) account.email = status.email
-    return [account]
+    return [account, ...accounts]
   },
-  accountEnv: async (_selection, base) => ({ ...base }),
-  selectedAccount: () => ({ name: "default" }),
-  credentialRevision: () => credentialFileFingerprint(credentialsPath(process.env)),
-  async accountUsage() {
-    try {
-      const status = await devinStatus()
-      return status?.usage ?? { status: "missing-credentials" }
-    } catch (error) {
-      if (error instanceof DevinStatusError && error.status === 401)
-        return {
-          status: "stale-token",
-          detail: "Sign in to Devin again with devin auth login",
-        }
-      return {
-        status: "error",
-        detail: error instanceof Error ? error.message : String(error),
-      }
-    }
+  accountEnv,
+  prepareAccountLogin,
+  confirmAccountLogin,
+  abandonAccountLogin: async ({ name, renew }) => {
+    if (renew) await rm(renewalRoot(name), { recursive: true, force: true })
   },
+  removeAccount: async (name) => {
+    if (name === "default") throw new Error("The default account is Devin's own login")
+    await rm(accountRoot(name), { recursive: true, force: true })
+  },
+  selectedAccount: (selection) => ({ name: selection ?? "default" }),
+  credentialRevision: (name, env = process.env) =>
+    credentialFileFingerprint(name === "default" ? credentialsPath(env) : accountCredentials(name)),
+  accountUsage: (name) => usageFor(name === "default" ? credentialsPath(process.env) : accountCredentials(name)),
 }

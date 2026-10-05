@@ -29,7 +29,7 @@ export const devinProfileLoader: ProviderProfileLoader = {
     "models",
   ],
   cacheKey: (env) => JSON.stringify(["standalone", devinExecutable(), env.XDG_CONFIG_HOME ?? "", env.XDG_DATA_HOME ?? ""]),
-  async load(base, cwd) {
+  async load(base, cwd, context) {
     const env = devinEnvironment(base)
     const executable = devinExecutable()
     if (!executable) throw new Error("Devin CLI is not installed")
@@ -39,13 +39,15 @@ export const devinProfileLoader: ProviderProfileLoader = {
         ["models", "list", "--format", "json"],
         env,
         undefined,
-        cwd
+        cwd,
+        context?.signal
       )
     )
     parsed.default_model = await devinDefaultModel(
       executable,
       env,
-      cwd ?? homedir()
+      cwd ?? homedir(),
+      context?.signal
     )
     return availableProviderProfile(
       devinProfileLoader,
