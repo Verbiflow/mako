@@ -1,12 +1,11 @@
 import { basename } from "node:path"
 import { z } from "zod"
 import type { ToolDetail } from "@mako/sessions"
-import type { LiveUpdate } from "../../../contracts/live-content.js"
+import { MAX_STREAMED_TOOL_OUTPUT, type LiveUpdate } from "../../../contracts/live-content.js"
+import { sameJson } from "../../../codex-app-json.js"
 import type { JsonValue, SdkDelta, SdkMessage } from "./wire.js"
 
 const MAX_TOOL_TEXT = 32 * 1024
-/** A running command's row keeps the tail of what it printed. */
-const MAX_STREAMED_OUTPUT = 16 * 1024
 
 /**
  * The summary Cursor wrote when it compacted the conversation. The SDK
@@ -111,8 +110,8 @@ export class CursorSdkProjection {
     const tool = id === undefined ? undefined : this.tools.get(id)
     if (id === undefined || !tool) return []
     const output = (tool.output ?? "") + text
-    tool.output = output.length > MAX_STREAMED_OUTPUT ? output.slice(-MAX_STREAMED_OUTPUT) : output
-    return [{ kind: "tool-update", id, output: tool.output }]
+    tool.output = output.length > MAX_STREAMED_TOOL_OUTPUT ? output.slice(-MAX_STREAMED_TOOL_OUTPUT) : output
+    return [{ kind: "tool-update", id, outputAppend: text }]
   }
 
   message(message: SdkMessage): LiveUpdate[] {
@@ -297,10 +296,6 @@ class Accumulated {
     this.emitted = total
     return fresh
   }
-}
-
-function sameJson(left: JsonValue | undefined, right: JsonValue | undefined): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 const StringSchema = z.string()

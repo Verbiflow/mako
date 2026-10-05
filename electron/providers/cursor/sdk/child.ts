@@ -47,7 +47,6 @@ import {
   type SdkHeadlessSpec,
   JsonValueSchema,
   SdkRequestSchema,
-  sdkMessageForWire,
   type JsonValue,
   type SdkChildLine,
   type SdkImportSource,
@@ -77,7 +76,7 @@ interface ActiveTurn {
   /** Native stream and terminal result must drain before cancel acknowledges. */
   finished: Promise<void>
   /** What the host was sent of this turn, so a host that lost track of it can be shown it again (`active`). */
-  replay: SdkChildLine[]
+  replay: string[]
   replayCharacters: number
   replayTruncated: boolean
   /** The next message's `seq`. */
@@ -97,9 +96,22 @@ let closing = false
 /** One-shot mode: stdout carries the reply's text, so protocol lines have no reader. */
 let headless = false
 
+/**
+ * The account's key arrives in `CURSOR_API_KEY` and leaves the environment
+ * here, before any agent opens: the agent's shell, MCP servers and other
+ * tools are this process's children and would inherit it. Every SDK call
+ * names the key instead.
+ */
+const apiKey = process.env.CURSOR_API_KEY || undefined
+delete process.env.CURSOR_API_KEY
+
 function write(line: SdkChildLine): void {
+  writeText(JSON.stringify(line))
+}
+
+function writeText(text: string): void {
   if (headless) return
-  process.stdout.write(`${JSON.stringify(line)}\n`)
+  process.stdout.write(`${text}\n`)
 }
 
 function log(level: "info" | "warn", message: string): void {
@@ -194,6 +206,7 @@ function mcpConfig(servers: Record<string, SdkMcpServer> | undefined): Record<st
 
 function handleOptions(open: Omit<OpenAgent, "handle">): Partial<AgentOptions> {
   return {
+    apiKey,
     model: open.model,
     // Agent with the full toolset: no `tools` allowlist, and never
     // `autoReview`, whose classifier refuses calls nobody at the desk can
@@ -329,31 +342,28 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   return { agentId: handle.agentId, model: handle.model, importRevision, imported: imported || undefined, importSource: !params.create ? params.importFrom?.path : undefined }
 }
 
-function remember(line: SdkChildLine & { turn: string }): void {
+/** Keeps a written line of `turn` for `activeTurn`, as the text that was written. */
+function remember(turn: string, text: string): void {
   const current = active
-  if (current?.turn !== line.turn) return
-  const characters = JSON.stringify(line).length
-  current.replay.push(line)
-  current.replayCharacters += characters
+  if (current?.turn !== turn) return
+  current.replay.push(text)
+  current.replayCharacters += text.length
   while (current.replayCharacters > MAX_REPLAY_CHARACTERS && current.replay.length > 1) {
-    const dropped = current.replay.shift()!
-    current.replayCharacters -= JSON.stringify(dropped).length
+    current.replayCharacters -= current.replay.shift()!.length
     current.replayTruncated = true
   }
 }
 
+/**
+ * Serialized once, as the SDK made it. The host checks the line against
+ * `SdkMessageSchema` after it is JSON, which drops the `undefined` fields
+ * the SDK's objects hold, and drops a message the wire does not describe.
+ */
 function forwardMessage(turn: string, message: SDKMessage): void {
-  const wire = sdkMessageForWire(message)
-  if ("refused" in wire) {
-    log("warn", `dropped an SDK message of type ${message.type} the wire does not describe (${wire.refused})`)
-    return
-  }
   const seq = active?.turn === turn ? active.messages++ : undefined
-  const line = seq === undefined
-    ? { event: "message", turn, message: wire.message } as const
-    : { event: "message", turn, seq, message: wire.message } as const
-  write(line)
-  remember(line)
+  const text = JSON.stringify(seq === undefined ? { event: "message", turn, message } : { event: "message", turn, seq, message })
+  writeText(text)
+  remember(turn, text)
 }
 
 async function pump(turn: string, run: Run): Promise<void> {
@@ -449,9 +459,9 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
         return
       case "thinking-completed":
       case "turn-ended": {
-        const line = { event: "delta", turn: params.turn, delta: { type: update.type } } as const
-        write(line)
-        remember(line)
+        const text = JSON.stringify({ event: "delta", turn: params.turn, delta: { type: update.type } } satisfies SdkChildLine)
+        writeText(text)
+        remember(params.turn, text)
         return
       }
       case "summary-started":
@@ -509,7 +519,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
  */
 function activeTurn(): SdkResult<"active"> {
   if (active) {
-    for (const line of active.replay) write(line)
+    for (const text of active.replay) writeText(text)
     return { turn: active.turn, runId: active.run.id, truncated: active.replayTruncated || undefined }
   }
   if (sending) return { turn: sending, starting: true }
@@ -561,12 +571,12 @@ async function authStatus(): Promise<SdkResult<"authStatus">> {
   const status = await Cursor.auth.status()
   if (status.status === "logged-in")
     return { status: "logged-in", email: status.email, apiKeyExpiresAtMs: status.apiKeyExpiresAtMs }
-  // `auth.status()` reads only the SDK's own key store. A key handed in
-  // through the environment signs every request just the same, so it is
-  // checked against the account it names before the host is told "signed out".
-  if (process.env.CURSOR_API_KEY) {
+  // `auth.status()` reads only the SDK's own key store. The key Mako hands
+  // in signs every request just the same, so it is checked against the
+  // account it names before the host is told "signed out".
+  if (apiKey) {
     try {
-      const user = await Cursor.me()
+      const user = await Cursor.me({ apiKey })
       return { status: "logged-in", email: user.userEmail }
     } catch (error) {
       log("warn", `CURSOR_API_KEY was rejected: ${error instanceof Error ? error.message : String(error)}`)
@@ -576,7 +586,7 @@ async function authStatus(): Promise<SdkResult<"authStatus">> {
 }
 
 async function me(): Promise<SdkResult<"me">> {
-  const user = await Cursor.me()
+  const user = await Cursor.me({ apiKey })
   const name = [user.userFirstName, user.userLastName].filter(Boolean).join(" ")
   return {
     email: user.userEmail,
@@ -603,7 +613,7 @@ async function dispatch(request: SdkRequest): Promise<SdkResult<SdkRequest["meth
     case "close":
       return close()
     case "models":
-      return { models: await Cursor.models.list() }
+      return { models: await Cursor.models.list({ apiKey }) }
     case "authStatus":
       return authStatus()
     case "login":
