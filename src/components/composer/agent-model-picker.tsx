@@ -736,13 +736,15 @@ function AccountRow({ harness }: { harness: string }) {
                 <MenuRadioItem
                   key={account.name}
                   value={account.name}
-                  disabled={Boolean(busy) || account.signedOut}
-                  title={account.signedOut ? "Signed out. Sign it in again in Settings › Agents." : undefined}
+                  disabled={Boolean(busy) || account.signedOut || account.removing}
+                  title={account.removing ? "This account is being removed"
+                    : account.signedOut ? "Signed out. Sign it in again in Settings › Agents." : undefined}
                   className="py-1.5"
                 >
                   <span className="min-w-0 flex-1 truncate">{accountIdentity(account)}</span>
                   {switching ? <Shimmer text="Switching…" className="text-label" />
-                    : account.signedOut ? <span className="text-label text-faint">Signed out</span> : null}
+                    : account.removing ? <span className="text-label text-faint">Removing</span>
+                      : account.signedOut ? <span className="text-label text-faint">Signed out</span> : null}
                 </MenuRadioItem>
               )
             })}

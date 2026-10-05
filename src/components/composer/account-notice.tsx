@@ -1,6 +1,7 @@
 import { useEffect } from "react"
 import { HarnessIcon } from "@/components/ui/provider-icon"
-import { accountReading, stopSwitches, waitText } from "@/lib/account-switch"
+import { accountReading, stopSwitches, waitText, type AccountReading } from "@/lib/account-switch"
+import type { LiveSessionState } from "@/lib/types"
 import { accounts, useAccounts, type ProviderAccount } from "@/state/accounts"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { shallowEqual } from "@/state/store"
@@ -29,12 +30,8 @@ export function AccountSwitchNotice() {
   const label = useAccounts((state) => state.providers.find((provider) => provider.provider === harness && provider.mode === "selectable")?.label)
   useEffect(() => { if (harness) accounts.load() }, [harness])
   const reading = live && label ? accountReading(live, listed) : null
-  if (!live || !reading) return null
-  const text =
-    reading.kind === "differs" ? `${label} is signed in as ${reading.principal}, not ${reading.expected}. Messages won’t send until that’s fixed.`
-      : reading.kind === "waiting" ? `Switches to ${reading.selected} when ${waitText(reading.waitingFor)}. Your message is waiting.`
-        : live.session.status === "running" ? `This turn runs as ${reading.running}. The next message switches to ${reading.selected}.`
-          : `This session runs as ${reading.running}. Your next message switches it to ${reading.selected}.`
+  if (!live || !label || !reading) return null
+  const text = noticeText(reading, live.session, label)
 
   return (
     <div
@@ -68,4 +65,17 @@ export function AccountSwitchNotice() {
       ) : null}
     </div>
   )
+}
+
+function noticeText(reading: AccountReading, session: LiveSessionState, label: string): string {
+  if (reading.kind === "differs") return `${label} is signed in as ${reading.principal}, not ${reading.expected}. Messages won’t send until that’s fixed.`
+  if (reading.kind === "waiting") return `Switches to ${reading.selected} when ${waitText(reading.waitingFor)}. Your message is waiting.`
+  const { running, selected, removing } = reading
+  if (session.status === "running") return removing
+    ? `This turn runs as ${running}, which Mako removes when the turn ends. The next message uses ${selected}.`
+    : `This turn runs as ${running}. The next message switches to ${selected}.`
+  if (session.backgroundTasks) return removing
+    ? `Background work runs as ${running}, which Mako removes when it finishes. A new message waits for it, then uses ${selected}.`
+    : `Background work runs as ${running}. A new message waits for it, then switches to ${selected}.`
+  return `This session runs as ${running}. Your next message switches it to ${selected}.`
 }
