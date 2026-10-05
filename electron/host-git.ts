@@ -67,21 +67,44 @@ function diffBytes(diff: GitDiff): number {
 
 const PREVIEW_SET = { files: 25, bytes: 512 * 1024, ms: 5_000, concurrency: 4 }
 
-/** As many previews of `paths`, in order, as fit 25 files, 512 KB and five seconds. */
-async function previewSet(repository: Repository, paths: readonly string[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
+/** A path to preview, and where it was before a rename. */
+export interface PreviewPath {
+  path: string
+  from?: string
+}
+
+/**
+ * The diffs of `files` in the repository at `root`, against `comparison`,
+ * as many as fit the window's budget. A Thread's worktree review reads
+ * through this, the same reader the Changes panel uses.
+ */
+export async function previewDiffs(root: string, files: readonly PreviewPath[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
+  const repository = await openRepository(root)
+  if (!repository) throw new Error("This folder is not a Git repository")
+  return previewSet(repository, files, comparison)
+}
+
+/** As many previews of `files`, in order, as fit 25 files, 512 KB and five seconds. */
+async function previewSet(repository: Repository, files: readonly (string | PreviewPath)[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
   const deadline = Date.now() + PREVIEW_SET.ms
   const diffs: GitDiff[] = []
   let bytes = 0
-  for (let offset = 0; offset < paths.length; offset += PREVIEW_SET.concurrency) {
+  const read = async (file: string | PreviewPath) => {
+    const { path, from } = typeof file === "string" ? { path: file, from: undefined } : file
+    const diff = gitDiff(path, await repository.preview(path, comparison, from))
+    if (from && diff.oldFile) diff.oldFile = { ...diff.oldFile, name: from }
+    return diff
+  }
+  for (let offset = 0; offset < files.length; offset += PREVIEW_SET.concurrency) {
     if (diffs.length >= PREVIEW_SET.files || bytes >= PREVIEW_SET.bytes || Date.now() >= deadline) break
-    const batch = paths.slice(offset, Math.min(offset + PREVIEW_SET.concurrency, offset + PREVIEW_SET.files - diffs.length))
-    for (const diff of await Promise.all(batch.map(async (path) => gitDiff(path, await repository.preview(path, comparison))))) {
+    const batch = files.slice(offset, Math.min(offset + PREVIEW_SET.concurrency, offset + PREVIEW_SET.files - diffs.length))
+    for (const diff of await Promise.all(batch.map(read))) {
       if (bytes >= PREVIEW_SET.bytes) break
       bytes += diffBytes(diff)
       diffs.push(diff)
     }
   }
-  return { diffs, truncated: paths.length - diffs.length }
+  return { diffs, truncated: files.length - diffs.length }
 }
 
 const CHANGE_STATUS = new Map<string, GitFileStatus>([["added", "added"], ["deleted", "deleted"]])

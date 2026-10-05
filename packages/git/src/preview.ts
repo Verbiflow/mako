@@ -60,15 +60,16 @@ export interface PreviewContext {
   env?: Readonly<Record<string, string | undefined>>
 }
 
-export async function readPreview(context: PreviewContext, path: string, comparison: Comparison): Promise<Preview> {
+/** `from` is where a renamed file was before: the older side is read there. */
+export async function readPreview(context: PreviewContext, path: string, comparison: Comparison, from = path): Promise<Preview> {
   const literal = `:(literal)${path}`
   const mime = IMAGES.get(path.slice(path.lastIndexOf(".") + 1).toLowerCase()) ?? null
   const limit = mime ? IMAGE_BYTES : INLINE_BYTES
   const [before, after] = comparison.kind === "commit"
-    ? await Promise.all([blob(context.objects, `${comparison.oid}^:${path}`, limit), blob(context.objects, `${comparison.oid}:${path}`, limit)])
+    ? await Promise.all([blob(context.objects, `${comparison.oid}^:${from}`, limit), blob(context.objects, `${comparison.oid}:${path}`, limit)])
     : comparison.kind === "trees"
-      ? await Promise.all([blob(context.objects, `${comparison.from}:${path}`, limit), blob(context.objects, `${comparison.to}:${path}`, limit)])
-      : await Promise.all([blob(context.objects, `${comparison.kind === "since" ? comparison.oid : "HEAD"}:${path}`, limit), worktree(context.root, path, limit)])
+      ? await Promise.all([blob(context.objects, `${comparison.from}:${from}`, limit), blob(context.objects, `${comparison.to}:${path}`, limit)])
+      : await Promise.all([blob(context.objects, `${comparison.kind === "since" ? comparison.oid : "HEAD"}:${from}`, limit), worktree(context.root, path, limit)])
   const sides = [before, after]
   if (mime && sides.every((side) => side.kind !== "special")) return { kind: "binary", mime, before: binarySide(before, true), after: binarySide(after, true) }
   if (sides.some((side) => side.kind === "large" && side.size > SOURCE_BYTES))
@@ -77,17 +78,20 @@ export async function readPreview(context: PreviewContext, path: string, compari
   if (sides.every((side) => side.kind === "missing" || (side.kind === "bytes" && lines(side.data) <= FILE_LINES)))
     return { kind: "files", before: text(before), after: text(after) }
 
+  const renamed = from !== path
+  const flags = renamed ? [...DIFF_FLAGS.filter((flag) => flag !== "--no-renames"), "-M"] : DIFF_FLAGS
+  const paths = renamed ? [`:(literal)${from}`, literal] : [literal]
   let args: string[]
   let codes: number[] = []
   if (comparison.kind === "commit") {
-    args = ["diff-tree", "-p", "--no-commit-id", "--root", "-m", "--first-parent", ...DIFF_FLAGS, comparison.oid, "--", literal]
+    args = ["diff-tree", "-p", "--no-commit-id", "--root", "-m", "--first-parent", ...flags, comparison.oid, "--", ...paths]
   } else if (comparison.kind === "trees") {
-    args = ["diff-tree", "-p", "-r", ...DIFF_FLAGS, comparison.from, comparison.to, "--", literal]
+    args = ["diff-tree", "-p", "-r", ...flags, comparison.from, comparison.to, "--", ...paths]
   } else if (before.kind === "missing" && !(await context.objects.info(`:${path}`))) {
     args = ["diff", "--no-index", ...DIFF_FLAGS, "--", "/dev/null", path]
     codes = [1]
   } else {
-    args = ["diff", ...DIFF_FLAGS, comparison.kind === "since" ? comparison.oid : await context.base(), "--", literal]
+    args = ["diff", ...flags, comparison.kind === "since" ? comparison.oid : await context.base(), "--", ...paths]
   }
   const result = await run({ cwd: context.root, args, codes, env: context.env, maxBytes: PATCH_BYTES, read: true })
   const patch = result.stdout.toString("utf8")

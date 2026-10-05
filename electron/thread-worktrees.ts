@@ -11,6 +11,7 @@ import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDet
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, mergesWithoutCheckout, numstatEntries, PARALLEL_CHECKOUT, run, succeeds, untrackedLines } from "@mako/git"
+import { previewDiffs } from "./host-git.js"
 import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 
@@ -75,20 +76,9 @@ export interface PreparedWorktree {
   spare: boolean
 }
 
-/** What a review loads in full; the files past these are listed but not read. */
-const REVIEW_FILES = 25
-const REVIEW_BYTES = 512 * 1024
-const REVIEW_FILE_BYTES = 256 * 1024
 /** Untracked files whose lines a review counts; past this they are listed uncounted. */
 const COUNTED_UNTRACKED = 200
 
-
-/** A file as Git has it at `revision`, byte for byte, or null when it isn't there. */
-async function shown(cwd: string, revision: string, path: string): Promise<string | null> {
-  return run({ cwd, args: ["show", `${revision}:${path}`], maxBytes: 16 * 1024 * 1024, read: true }).then(({ stdout, truncated }) => truncated ? null : stdout.toString("utf8"), () => null)
-}
-
-/** `map` with at most `limit` running at once, results in order. */
 /**
  * Why removing the worktree at `path` would lose work, if it would:
  * uncommitted files, a rebase or merge under way, or a detached HEAD on a
@@ -116,6 +106,7 @@ async function removalBlocker(path: string, status?: string): Promise<string | u
   return undefined
 }
 
+/** `map` with at most `limit` running at once, results in order. */
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
   // One iterator shared by every worker: each takes the next value as it frees up.
@@ -552,34 +543,10 @@ export class ThreadWorktreeService {
     return { ok: true, into }
   }
 
-  /** The review's files, before and after, for the diff viewer. */
+  /** The review's files, the commit it started from against the worktree as it is, for the diff viewer. */
   async reviewDiffs(path: string): Promise<{ diffs: GitDiff[]; truncated: number }> {
     const review = await this.review(path)
-    const diffs: GitDiff[] = []
-    let bytes = 0
-    for (const file of review.files) {
-      if (diffs.length >= REVIEW_FILES || bytes >= REVIEW_BYTES) break
-      if (file.insertions === null) {
-        diffs.push({ path: file.path, binary: true, oldFile: null, newFile: null })
-        continue
-      }
-      const [before, after] = await Promise.all([
-        shown(path, review.base, file.from ?? file.path),
-        readFile(join(path, file.path), "utf8").catch(() => null),
-      ])
-      if ((before?.length ?? 0) > REVIEW_FILE_BYTES || (after?.length ?? 0) > REVIEW_FILE_BYTES) {
-        diffs.push({ path: file.path, binary: false, oldFile: null, newFile: null, preview: { kind: "unavailable", reason: "Too large to show here." } })
-        continue
-      }
-      bytes += (before?.length ?? 0) + (after?.length ?? 0)
-      diffs.push({
-        path: file.path,
-        binary: false,
-        oldFile: before === null ? null : { name: file.from ?? file.path, contents: before },
-        newFile: after === null ? null : { name: file.path, contents: after },
-      })
-    }
-    return { diffs, truncated: review.files.length - diffs.length }
+    return previewDiffs(path, review.files, { kind: "since", oid: review.base })
   }
 
   /**

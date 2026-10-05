@@ -293,6 +293,30 @@ try {
     assert.deepEqual(await repo.preview("notes.txt", { kind: "since", oid: first.oid }), { kind: "files", before: "first\n", after: "third\n" }, "since a commit spans every commit after it and what isn't committed")
   })
 
+  await test("a renamed file reads its earlier side where it was, whole or as one patch", async () => {
+    const root = await repository("renamed")
+    const long = Array.from({ length: 3_000 }, (_, line) => `line ${line}`).join("\n") + "\n"
+    await writeFile(join(root, "old.txt"), "kept\n")
+    await writeFile(join(root, "old-long.txt"), long)
+    await sh(root, "add", ".")
+    await sh(root, "commit", "-qm", "first")
+    const [first] = await log(root, 1)
+    await sh(root, "mv", "old.txt", "new.txt")
+    await sh(root, "mv", "old-long.txt", "new-long.txt")
+    await writeFile(join(root, "new.txt"), "kept\nmoved\n")
+    await writeFile(join(root, "new-long.txt"), long.replace("line 1500\n", "line 1500 moved\n"))
+    const repo = await openRepository(root)
+    const since = { kind: "since", oid: first.oid }
+    assert.deepEqual(await repo.preview("new.txt", since), { kind: "files", before: null, after: "kept\nmoved\n" }, "without its old path a rename reads as new")
+    assert.deepEqual(await repo.preview("new.txt", since, "old.txt"), { kind: "files", before: "kept\n", after: "kept\nmoved\n" })
+    const patch = await repo.preview("new-long.txt", since, "old-long.txt")
+    assert.equal(patch.kind, "patch")
+    assert.match(patch.patch, /^rename from old-long\.txt$/m)
+    assert.match(patch.patch, /^\+line 1500 moved$/m)
+    assert.doesNotMatch(patch.patch, /^\+line 0$/m, "a large rename patches only what changed")
+    await assert.rejects(repo.preview("new.txt", since, "../outside"), GitError)
+  })
+
   await test("previews share one cache; a repository nobody uses is closed", async () => {
     const root = await repository("idle")
     await writeFile(join(root, "a.txt"), "a\n")

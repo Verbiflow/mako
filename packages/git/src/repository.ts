@@ -364,8 +364,10 @@ export class Repository {
     return path
   }
 
-  async preview(path: string, comparison: Exclude<Comparison, { kind: "trees" }>): Promise<Preview> {
+  /** `from` is a renamed file's older path, where its earlier side is read. */
+  async preview(path: string, comparison: Exclude<Comparison, { kind: "trees" }>, from = path): Promise<Preview> {
     this.path(path)
+    this.path(from)
     if (this.raw.has(path)) return { kind: "unavailable", reason: "This file's name isn't valid UTF-8, so Mako can't show it. Staging and commits still include it." }
     if (comparison.kind !== "worktree" && (comparison.oid.startsWith("-") || !/^[\w./^~@{}-]+$/.test(comparison.oid)))
       throw new GitError({ kind: "failed", message: "Choose a commit to compare with." })
@@ -373,12 +375,12 @@ export class Repository {
     const commit = comparison.kind === "worktree" || /^[0-9a-f]{40,64}$/.test(comparison.oid)
     // A worktree side is current only while a watcher reports its changes; a commit never changes.
     const cacheable = commit && (!worktree || this.watched)
-    const key = `${comparison.kind === "worktree" ? "w" : comparison.kind === "since" ? `s${comparison.oid}` : comparison.oid}\0${path}`
+    const key = `${comparison.kind === "worktree" ? "w" : comparison.kind === "since" ? `s${comparison.oid}` : comparison.oid}\0${path}${from === path ? "" : `\0${from}`}`
     const cached = cacheable ? this.previews.get(key) : undefined
     if (cached) return cached.preview
     const version = this.version
     this.previewing += 1
-    const preview = await readPreview({ root: this.root, objects: this.objects, base: () => this.base() }, path, comparison).finally(() => {
+    const preview = await readPreview({ root: this.root, objects: this.objects, base: () => this.base() }, path, comparison, from).finally(() => {
       this.previewing -= 1
     })
     if (cacheable && (!worktree || version === this.version)) this.previews.keep(key, { preview, bytes: previewBytes(preview), path, worktree })
