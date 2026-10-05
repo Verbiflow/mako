@@ -16,9 +16,7 @@ import { codexWireSettings } from "./settings.js"
  */
 export const codexUtilityRunner: ProviderUtilityRunner = {
   provider: "codex",
-  async complete(request) {
-    const { resolveAccountLaunch } = await import("../../accounts.js")
-    const { env } = await resolveAccountLaunch("codex", process.env)
+  async complete(request, env) {
     const command = await resolveCodexExecutable(env)
     if (!command) throw new UtilityModelError("request", "Codex isn't installed. Install it in Settings › Agents.")
     const folder = await mkdtemp(join(tmpdir(), "mako-utility-"))
