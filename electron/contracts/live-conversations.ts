@@ -71,6 +71,12 @@ export const INTERRUPTION_REASONS = [
    * process rather than being sent again.
    */
   "provider-exited",
+  /**
+   * The provider's account signed out after it had accepted the prompt. The
+   * turn so far stands in its session; it continues only when the user
+   * resumes after signing in, never on its own.
+   */
+  "signed-out",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -109,14 +115,34 @@ export interface InterruptedCall {
 
 /**
  * What a request that carries on an earlier, cut-short turn records about
- * it. `auto` is Mako's own continuation, sent without the user; the
- * transcript shows it as Mako's line rather than as the user's words.
+ * it. `auto` is a continuation Mako words itself, sent on its own or on the
+ * user's Resume; the transcript shows it as Mako's line rather than as the
+ * user's words.
  */
 export interface TurnContinuation {
   requestId: string
   reason: InterruptionReason
   auto: boolean
 }
+
+/**
+ * The sign-out a session's work is paused on. It belongs to the session, so
+ * every request it holds carries the same marker, and it persists with them.
+ * `credential` is a one-way digest of the account's credentials when the
+ * sign-out was seen; a different digest later means someone signed in.
+ */
+export interface SignInHold {
+  harness: string
+  account: string
+  credential: string
+  at: number
+}
+
+/** Whether a paused session can resume: the account was signed in again, or another one chosen. */
+export type SignInReadiness = "signed-out" | "ready"
+
+/** What Resume did: `resumed` also answers a pause that had already ended. */
+export type SignInResume = "resumed" | "signed-out"
 
 /** What keeps a session on its old account while a message waits to switch it. */
 export const ACCOUNT_SWITCH_WAITS = ["background", "subagents", "children", "approval", "turn", "operation"] as const
@@ -163,6 +189,12 @@ export interface LiveRequest {
    * selected account; `waitingFor` is what still holds the old process.
    */
   accountSwitch?: { reason: "selection" | "credentials"; waitingFor: AccountSwitchWait }
+  /**
+   * The sign-out this request waits on. A `held` request is unsent and goes
+   * when the user resumes; the turn the sign-out cut short keeps its own
+   * outcome and is continued, or left for review, on Resume.
+   */
+  signIn?: SignInHold
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**
@@ -246,7 +278,31 @@ export interface LiveBatch {
   updates: LiveUpdate[]
   session?: LiveSessionState
   permissions?: LivePermissionRequest[]
+  /** Every request, when one went away or they changed order; see `requestChanges`. */
   requests?: LiveRequest[]
+  /** The requests that changed or were added since the last batch, the rest kept in order; see `requestsAfter`. */
+  requestChanges?: LiveRequest[]
+}
+
+/** How a batch carries `next`: only what changed while the earlier requests keep their places. */
+export function requestsDelta(previous: readonly LiveRequest[], next: LiveRequest[]): Pick<LiveBatch, "requests" | "requestChanges"> {
+  if (previous === next) return {}
+  if (next.length < previous.length || previous.some((request, index) => next[index]!.id !== request.id)) return { requests: next }
+  return { requestChanges: next.filter((request, index) => request !== previous[index]) }
+}
+
+/** The requests after `batch`, from those the receiver held; `undefined` when the batch changed none. */
+export function requestsAfter(current: readonly LiveRequest[] | undefined, batch: Pick<LiveBatch, "requests" | "requestChanges">): LiveRequest[] | undefined {
+  if (batch.requests) return batch.requests
+  if (!batch.requestChanges) return undefined
+  const next = [...(current ?? [])]
+  const index = new Map(next.map((request, at) => [request.id, at]))
+  for (const request of batch.requestChanges) {
+    const at = index.get(request.id)
+    if (at === undefined) next.push(request)
+    else next[at] = request
+  }
+  return next
 }
 
 export type LiveDriverEvent =

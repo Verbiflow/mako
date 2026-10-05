@@ -16,8 +16,10 @@ export const PROVIDER_FAILURE_KINDS = [
   "transcript-rejected",
   /** The conversation no longer fits the model's context window. */
   "context-exhausted",
-  /** The provider's account is signed out, the key is invalid, or a plan does not cover the model. */
+  /** The provider's account is signed out or its key is invalid; signing in again fixes it. */
   "auth",
+  /** The account is signed in but its plan, billing or credits do not cover the request. */
+  "plan",
   /** The agent reported a different signed-in identity than the account the session runs as; nothing was sent. */
   "wrong-account",
   /** The provider throttled or is over capacity; the same message works later. */
@@ -88,9 +90,15 @@ const rules: Rule[] = [
     match: /is signed in as .+, not .+, the account this session started with/,
   },
   {
+    // A signed-in account its plan refuses; before auth, whose 403 it could also trip.
+    kind: "plan",
+    match:
+      /subscription|billing|payment required|\b402\b|insufficient (?:credits|balance|funds)|out of credits|credit balance|plan does not|not (?:included|available) (?:in|on|with) your plan|upgrade your plan/i,
+  },
+  {
     kind: "auth",
     match:
-      /\b401\b|\b403\b|unauthori[sz]ed|authentication|failed to authenticate|oauth session (?:has )?expired|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|(?:log|sign) in (?:again|to)|login required|login (?:has )?expired|run \/login|credentials|token (?:has )?expired|expired token|subscription|billing|payment required|insufficient (?:permissions|scope|credits)|plan does not/i,
+      /\b401\b|\b403\b|unauthori[sz]ed|unauthenticated|authentication|failed to authenticate|oauth session (?:has )?expired|auth_required|invalid (?:api[_ ]?key|token|credentials)|api[_ ]?key|not (?:logged|signed) in|signed out|(?:log|sign) in (?:again|to)|login required|login (?:has )?expired|run \/login|credentials|token (?:has )?(?:expired|been revoked)|expired token|insufficient (?:permissions|scope)/i,
   },
   {
     kind: "rate-limited",
@@ -173,8 +181,15 @@ export function describeProviderFailure(
       return {
         kind,
         retriable: false,
-        title: `${providerLabel} is signed out or this account cannot use the selected model`,
-        guidance: `Sign in to ${providerLabel} again, or choose a model the account covers, then send the message.`,
+        title: `${providerLabel} is signed out`,
+        guidance: `Sign in to ${providerLabel} again, then send the message.`,
+      }
+    case "plan":
+      return {
+        kind,
+        retriable: false,
+        title: `${providerLabel}'s plan doesn't cover this request`,
+        guidance: `Choose a model the plan covers or another account in Settings › Agents, or check the account's billing with ${providerLabel}.`,
       }
     case "wrong-account":
       return {

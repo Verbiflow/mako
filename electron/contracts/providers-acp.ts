@@ -20,6 +20,8 @@ export interface HarnessDescriptor {
   provider: string
   displayName: string
   presentation?: import("./harness-presentation.js").HarnessPresentation
+  /** Mako's model choices for this harness until the person makes their own. */
+  defaults?: import("./harness-defaults.js").HarnessDefaults
   /** A headless native run can continue this provider's sessions. */
   resumable: boolean
   /** An interactive transport can drive this provider right now. */

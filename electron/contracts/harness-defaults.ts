@@ -7,69 +7,34 @@ import {
   type SettingValue,
 } from "@mako/sessions/settings"
 
-/**
- * Mako's own defaults, in one place and updated as harnesses ship new
- * models. A person's choice in Settings always wins; until they make one,
- * each release's defaults apply, so nobody is left on a model that has
- * since been replaced.
- *
- * - `HARNESS_ORDER` is the order Mako tries harnesses in when it must pick
- *   one itself: setting a project up, drafting commit messages. Settings › Models lets the person reorder it.
- * - `work` is what a new conversation and a project's setup start on.
- * - `light` drafts commit messages: a small model at low reasoning, never
- *   the fast lane's surcharge.
- *
- * Each list is tried in order and the first model the harness's own catalog
- * offers wins, so a harness without the newest model falls back to the one
- * before it. Without a match, `work` keeps the harness's own default and
- * `light` takes the catalog's first model it describes as fast or cheap.
- * `light: "own"` runs the harness's own default model at low reasoning, for
- * a harness such as OpenCode whose default is a free model it changes
- * itself.
- */
-export const HARNESS_ORDER = ["claude", "codex", "cursor", "opencode", "grok", "devin"] as const
-
-type DefaultHarness = (typeof HARNESS_ORDER)[number]
-
-interface ModelPick {
+/** A model by catalog id or alias, and the options to start it with. */
+export interface ModelPick {
   model: string
   options?: Readonly<Record<string, SettingValue>>
 }
 
-interface HarnessDefaults {
+/**
+ * Mako's own model choices for one harness, declared with its profile and
+ * updated as the harness ships new models. A person's choice in Settings
+ * always wins; until they make one, each release's defaults apply, so nobody
+ * is left on a model that has since been replaced.
+ *
+ * Each list is tried in order and the first model the harness's catalog
+ * offers wins, so a harness without the newest model falls back to the one
+ * before it.
+ */
+export interface HarnessDefaults {
+  /** What a new conversation and a project's setup start on. Without a match, the harness's own default. */
   work: readonly ModelPick[]
+  /**
+   * What drafts commit messages: a small model at low reasoning, never the
+   * fast lane's surcharge. Without a match, the catalog's first model it
+   * describes as fast or cheap. `"own"` runs the harness's own default model
+   * at low reasoning, for a harness such as OpenCode whose default is a free
+   * model it changes itself.
+   */
   light: readonly ModelPick[] | "own"
 }
-
-const HARNESS_DEFAULTS = {
-  claude: {
-    work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: false } }],
-    light: [{ model: "claude-haiku-4-5", options: { fast: false } }],
-  },
-  codex: {
-    work: [{ model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }],
-    light: [{ model: "gpt-6-luna", options: { effort: "low", serviceTier: "default" } }],
-  },
-  cursor: {
-    work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: "false" } }],
-    light: [{ model: "grok-4.7", options: { effort: "low", fast: "false" } }],
-  },
-  opencode: {
-    work: [],
-    light: "own",
-  },
-  grok: {
-    work: [{ model: "grok-4.7", options: { effort: "high" } }],
-    light: [{ model: "grok-4.7", options: { effort: "low" } }],
-  },
-  devin: {
-    work: [{ model: "swe-2", options: { effort: "high" } }],
-    light: [
-      { model: "gpt-6-luna", options: { effort: "low", fast: false } },
-      { model: "gemini-3.8-flash", options: { effort: "low" } },
-    ],
-  },
-} as const satisfies Record<DefaultHarness, HarnessDefaults>
 
 /** A model's option values by the catalog's option ids. */
 export type ModelOptions = Record<string, SettingValue>
@@ -81,25 +46,26 @@ export interface HarnessPick {
 }
 
 /**
- * Every known harness once, in the person's saved order, then Mako's, then
- * any harness neither names. A harness that went away is dropped.
+ * Every known harness once, in the person's saved order and then Mako's.
+ * `known` is in Mako's order: the order harnesses are installed in
+ * (`providers/index.ts`). A harness that went away is dropped.
  */
 export function harnessOrder(saved: readonly string[] | undefined, known: readonly string[]): string[] {
   const order: string[] = []
-  for (const harness of [...(saved ?? []), ...HARNESS_ORDER, ...known])
+  for (const harness of [...(saved ?? []), ...known])
     if (known.includes(harness) && !order.includes(harness)) order.push(harness)
   return order
 }
 
-/** True when `order` is Mako's own order over these harnesses. */
-export function isDefaultOrder(order: readonly string[]): boolean {
-  const known = [...order]
-  return harnessOrder(undefined, known).every((harness, index) => harness === order[index])
+/** True when `order` is Mako's own order over `known`. */
+export function isDefaultOrder(order: readonly string[], known: readonly string[]): boolean {
+  const own = harnessOrder(undefined, known)
+  return own.length === order.length && own.every((harness, index) => harness === order[index])
 }
 
 /** What a new conversation and a project's setup start on, when Mako's defaults name a model this catalog has. */
-export function workDefault(harness: string, models: readonly SessionModel[]): SessionSettings | undefined {
-  const pick = firstPick(defaultsFor(harness)?.work ?? [], models)
+export function workDefault(defaults: HarnessDefaults | undefined, models: readonly SessionModel[]): SessionSettings | undefined {
+  const pick = firstPick(defaults?.work ?? [], models)
   return pick ? { model: pick.model.id, options: pick.options } : undefined
 }
 
@@ -108,8 +74,8 @@ export function workDefault(harness: string, models: readonly SessionModel[]): S
  * reasoning. `ownDefault` is the model the harness itself
  * starts on, from its catalog.
  */
-export function lightDefault(harness: string, models: readonly SessionModel[], ownDefault?: string): HarnessPick | undefined {
-  const light = defaultsFor(harness)?.light ?? []
+export function lightDefault(defaults: HarnessDefaults | undefined, models: readonly SessionModel[], ownDefault?: string): HarnessPick | undefined {
+  const light = defaults?.light ?? []
   const pick = light === "own" ? undefined : firstPick(light, models)
   if (pick) return { model: pick.model, options: { ...lightOptions(pick.model), ...pick.options } }
   const model = (light === "own" && ownDefault ? catalogModel(models, ownDefault) : undefined) ?? lightModel(models)
@@ -145,11 +111,6 @@ export function lightModel(models: readonly SessionModel[]): SessionModel | unde
   const text = (model: SessionModel) => [model.id, model.label, model.description ?? "", ...(model.aliases ?? [])].join(" ")
   const light = models.filter((model) => LIGHT.test(text(model)))
   return light.find((model) => !RETIRED.test(text(model))) ?? light[0]
-}
-
-function defaultsFor(harness: string): HarnessDefaults | undefined {
-  const known = HARNESS_ORDER.find((entry) => entry === harness)
-  return known ? HARNESS_DEFAULTS[known] : undefined
 }
 
 function firstPick(picks: readonly ModelPick[], models: readonly SessionModel[]): HarnessPick | undefined {
