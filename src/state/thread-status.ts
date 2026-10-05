@@ -95,7 +95,8 @@ export function threadStatus(
     // once read from the session's own status, which stays `failed` until the
     // next prompt, so a row and its folder's chip wore the red mark for as
     // long as the session existed, whatever you did.
-    return attention?.kind === "review" || attention?.kind === "failed"
+    // A session paused on a sign-out is recorded as needing you, the same way.
+    return attention?.kind === "review" || attention?.kind === "failed" || attention?.kind === "needs-permission"
       ? attention
       : IDLE_STATUS
   }

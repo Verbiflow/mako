@@ -18,6 +18,7 @@ import {
 import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/threads"
 import { describeProviderFailure } from "../../electron/contracts/provider-failure"
 import { autoContinuePending } from "@/state/prompt-delivery"
+import { signInPause } from "../../electron/contracts/sign-in-hold"
 
 export function updateLive(
   id: string,
@@ -81,6 +82,13 @@ function permissionDetail(permission: LivePermissionRequest): string {
 
 /** The permission each conversation was last asked about, to retire it once answered. */
 const askedPermissions = new Map<string, string>()
+/** The sign-out each conversation was last announced for, by when it began. */
+const announcedSignIns = new Map<string, number>()
+
+/** A session paused on a sign-out waits on the person, like a question; it hasn't failed. */
+function signedOutDetail(conversation: LiveAcpConversation): string {
+  return `${harnessLabel(conversation.harness)} signed out. Sign in again, then Resume.`
+}
 
 /**
  * Turn a status transition into an outcome for the attention centre. This
@@ -119,6 +127,14 @@ function noteLiveOutcome(
   }
   if (session.status === "closed") {
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
+    return
+  }
+  const pause = signInPause(conversation.requests ?? [])
+  if (pause) {
+    if (announcedSignIns.get(conversation.key) !== pause.hold.at) {
+      announcedSignIns.set(conversation.key, pause.hold.at)
+      noteOutcome({ kind: "ask", subject, marker: `sign-in:${pause.hold.at}`, detail: signedOutDetail(conversation), quiet })
+    }
     return
   }
   // A drop Mako is about to continue itself is not an outcome yet: the thread
@@ -180,6 +196,11 @@ export function syncThreadStatus(
   }
   if (session.status === "running" || autoContinuePending(conversation.requests)) {
     setThreadAttention(threadPath, null)
+    return
+  }
+  const pause = signInPause(conversation.requests ?? [])
+  if (pause) {
+    setThreadAttention(threadPath, { kind: "needs-permission", since: pause.hold.at, detail: signedOutDetail(conversation) })
     return
   }
   // A failure is recorded once, when it happens or when a failed session

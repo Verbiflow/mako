@@ -25,13 +25,20 @@ export function loadHarnessOrder(): Promise<void> {
 }
 
 /** These harnesses, by default every one Mako knows, in the person's order. */
-export function currentHarnessOrder(known: readonly string[] = knownHarnesses(Object.keys(providerStore.get().profiles), threadsStore.get().descriptors)): string[] {
-  return harnessOrder(saved.get().order, known)
+export function currentHarnessOrder(known?: readonly string[]): string[] {
+  const descriptors = threadsStore.get().descriptors
+  return harnessOrder(saved.get().order, known ? inMakoOrder(known, descriptors) : knownHarnesses(Object.keys(providerStore.get().profiles), descriptors))
 }
 
-/** Every registered harness, listed before its catalog arrives. */
+/** `known` in the order the host describes harnesses in; any it doesn't describe follow. */
+function inMakoOrder(known: readonly string[], descriptors: readonly { provider: string }[]): string[] {
+  const described = descriptors.map((entry) => entry.provider)
+  return [...described.filter((harness) => known.includes(harness)), ...known.filter((harness) => !described.includes(harness))]
+}
+
+/** Every registered harness in Mako's order, the host's descriptor order, listed before its catalog arrives. */
 function knownHarnesses(profiles: readonly string[], descriptors: readonly { provider: string }[]): string[] {
-  return [...new Set([...profiles, ...descriptors.map((entry) => entry.provider)])]
+  return [...new Set([...descriptors.map((entry) => entry.provider), ...profiles])]
 }
 
 /** The order the person saved; empty while it is Mako's own. */
@@ -48,7 +55,8 @@ export function useHarnessOrder(): string[] {
 
 /** Save a new order; Mako's own is saved as none, so later defaults still reach it. */
 export async function saveHarnessOrder(order: string[]): Promise<void> {
-  const next = isDefaultOrder(order) ? [] : order
+  const known = knownHarnesses(Object.keys(providerStore.get().profiles), threadsStore.get().descriptors)
+  const next = isDefaultOrder(order, known) ? [] : order
   const previous = saved.get().order
   saved.set({ order: next })
   try {

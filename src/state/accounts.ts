@@ -28,12 +28,24 @@ import type {
   AccountLogin,
   AccountLoginResult,
   AccountProvider,
+  AccountRemoval,
   AccountUsage,
   AccountProviderInfo,
   HarnessAccount,
 } from "@/lib/types"
 export type { AccountHarness, AccountProvider, AccountUsage } from "@/lib/types"
 export type ProviderAccount = Omit<HarnessAccount, "dir">
+
+/** What the window says after removing an account whose key its provider still accepts. */
+export function removalNotice(label: string, stillValid: NonNullable<AccountRemoval["stillValid"]>) {
+  const until = stillValid.expiresAt === undefined
+    ? "until you revoke it"
+    : `until ${new Date(stillValid.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" })} unless you revoke it`
+  return {
+    title: `${label} still accepts this account's key`,
+    description: `Mako removed the account, but ${stillValid.reason}. The key Mako made for it keeps working ${until}.`,
+  }
+}
 
 export interface AccountGroup {
   provider: AccountProviderInfo
@@ -422,9 +434,20 @@ export const accounts = {
     if (!confirmed) return
     accountsStore.set({ busy: key })
     try {
-      await getMako().removeAccount(harness, name)
+      const { stillValid } = await getMako().removeAccount(harness, name)
       accounts.load(true)
       await providers.refreshAccount(harness)
+      if (stillValid) {
+        const notice = removalNotice(label, stillValid)
+        toast.warning(notice.title, {
+          duration: ACTION_TOAST_MS,
+          description: notice.description,
+          action: {
+            label: "Open API keys",
+            onClick: () => void desktop.openUrl(stillValid.manageUrl),
+          },
+        })
+      }
     } catch (error) {
       toast.error("Account was not removed", {
         duration: ACTION_TOAST_MS,

@@ -42,7 +42,7 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
     const automatic = request.interruption?.autoContinue !== undefined
     stops.set(request.id, {
       reason,
-      continuable: !running && !automatic && reason !== "stopped" && request === newest,
+      continuable: !running && !automatic && !request.signIn && reason !== "stopped" && request === newest,
       automatic,
     })
   }
@@ -95,6 +95,8 @@ export function turnStopLabel(reason: InterruptionReason, provider: string): str
       return `The connection to ${provider} dropped`
     case "provider-exited":
       return `${provider} stopped unexpectedly`
+    case "signed-out":
+      return `${provider} signed out`
   }
 }
 
@@ -105,6 +107,8 @@ export interface PendingPrompt {
   text: string
   attachments: PromptAttachment[]
   status?: LiveRequest["status"]
+  /** Set on a held message that waits for its session to be signed in again and resumed. */
+  signIn?: LiveRequest["signIn"]
   displayText?: string
   /**
    * The host dropped under this send and did not come back within the
