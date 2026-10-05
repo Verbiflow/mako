@@ -1,6 +1,7 @@
 import { LiveQuestions } from "./live-questions.js"
 import { disconnectedContext } from "./execution-context.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, signInState } from "./accounts.js"
+import type { AccountRemovalSession, AccountRemovalWait } from "./account-types.js"
 import { holdForSignIn, releaseSignIn, signInPause } from "./contracts/sign-in-hold.js"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
 import { verifyRecoveredSession } from "./provider-recovery.js"
@@ -26,6 +27,7 @@ import {
 } from "./contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { captureNativeHistory } from "./native-history.js"
+import { nativeRecord } from "./native-source.js"
 import { prepareLiveContext, contextPrompt } from "./live-context.js"
 import { LiveTransfers, reconnectRefusal } from "./live-transfers.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
@@ -1123,6 +1125,66 @@ export class LiveConversations {
     this.drain(resident)
   }
 
+  /**
+   * The sessions whose process runs on one of these bindings, each with what
+   * it waits for before it lets go of its account; an idle one waits for
+   * nothing and its next message reopens it on the selected account.
+   */
+  accountSessions(bindingIds: readonly string[]): AccountRemovalSession[] {
+    return this.residentsOn(bindingIds).map((resident) => {
+      const session: AccountRemovalSession = {
+        conversation: resident.snapshot.session.id,
+        title: resident.snapshot.session.title || "Untitled conversation",
+      }
+      const waitingFor = this.removalWait(resident)
+      if (waitingFor) session.waitingFor = waitingFor
+      return session
+    })
+  }
+
+  /** Let idle sessions on these bindings go of their account now; busy ones go once idle. */
+  retireAccountSessions(bindingIds: readonly string[]): void {
+    for (const resident of this.residentsOn(bindingIds))
+      if (this.canHibernate(resident, false, true)) void this.retireFromAccount(resident)
+  }
+
+  private residentsOn(bindingIds: readonly string[]): Resident[] {
+    const wanted = new Set(bindingIds)
+    return [...this.records.values()].filter((resident) => resident.driver && wanted.has(this.control(resident).activeBindingId))
+  }
+
+  private removalWait(resident: Resident): AccountRemovalWait | undefined {
+    if (this.canHibernate(resident, false, true)) return undefined
+    if (!this.dependencies.driver(this.activeBinding(resident)?.provider ?? "")?.canResume) return "close"
+    return this.accountSwitchWait(resident) ?? "operation"
+  }
+
+  /** Close the process so its account can be removed; queued input then sends on the selected account. */
+  private async retireFromAccount(resident: Resident): Promise<void> {
+    if (resident.accountSwitching) return
+    const conversation = resident.snapshot.session.id
+    resident.accountSwitching = true
+    hostLog("live", "a session lets go of an account being removed", { conversation })
+    try {
+      // Input waiting to switch is carried by this reopen, not a second one.
+      if (resident.snapshot.requests.some((request) => request.accountSwitch)) {
+        resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) =>
+          request.accountSwitch ? { ...request, accountSwitch: undefined } : request) }
+        this.flush(resident)
+      }
+      await this.hibernate(resident, "account-change")
+      resident.accountSwitching = false
+      if (resident.closing || resident.snapshot.session.status === "closed") return
+      if (resident.snapshot.session.connection === "hibernated" &&
+        resident.snapshot.requests.some((request) => request.status === "queued"))
+        await this.wake(resident)
+    } catch (error) {
+      hostWarn("live", "a session could not let go of an account being removed", { conversation, error: errorMessage({ error }) })
+    } finally {
+      resident.accountSwitching = false
+    }
+  }
+
   private releaseHold(provider: string, nativeId: string, conversationId: string): void {
     try {
       this.dependencies.memory?.release(provider, nativeId, conversationId)
@@ -1296,6 +1358,12 @@ export class LiveConversations {
     resident: Resident,
     enforceWarmLimit = true
   ): void {
+    if (resident.driver && this.dependencies.accountRemoving?.(this.control(resident).activeBindingId) &&
+      this.canHibernate(resident, false, true)) {
+      this.clearHibernationTimer(resident)
+      void this.retireFromAccount(resident)
+      return
+    }
     if (!this.canHibernate(resident)) {
       this.clearHibernationTimer(resident)
       return
@@ -1791,12 +1859,22 @@ export class LiveConversations {
         resident.connections.delete(bindingId)
         void this.revokeTools(bindingId, id)
       }
-      if ((previousStatus === "running" && event.session.status !== "running") ||
-        event.session.connection === "disconnected" || event.session.status === "closed") {
+      const gone = event.session.connection === "disconnected" || event.session.status === "closed"
+      if ((previousStatus === "running" && event.session.status !== "running") || gone) {
         this.actions.settle(resident, bindingId)
         this.approvals.settle(resident, bindingId)
       }
-      if (previousStatus === "running" && event.session.status !== "running") {
+      // Once the process is gone nothing reports a request it was handed, so
+      // it settles here even if its turn never showed as running.
+      if ((previousStatus === "running" && event.session.status !== "running") || (gone && finishedRequest)) {
+        const outcome = previousStatus === "running" || event.session.status !== "ready"
+          ? event.session
+          : { ...event.session, status: "failed" as const, error: event.session.error ?? "The provider stopped before the turn started" }
+        if (previousStatus !== "running" && finishedRequest)
+          hostWarn("live", "a request's provider went away before its turn ran", {
+            conversation: resident.snapshot.session.id, request: finishedRequest.id,
+            delivery: finishedRequest.nativeDelivery?.evidence.kind ?? "none", status: event.session.status,
+          })
         resident.snapshot = {
           ...resident.snapshot,
           permissions: [],
@@ -1804,7 +1882,7 @@ export class LiveConversations {
             request.status === "dispatching"
               ? settleRequest(
                   request,
-                  event.session,
+                  outcome,
                   resident.closing || resident.stopping === request.id
                 )
               : request
@@ -2542,10 +2620,26 @@ export class LiveConversations {
 
   private updateBinding(resident: Resident, session: LiveSessionState): void {
     const control = this.control(resident)
-    const path = bindingPath(this.dependencies, session, session.nativePath ?? resident.snapshot.threadPath)
+    const active = this.activeBinding(resident)
+    const reported = session.nativePath ?? resident.snapshot.threadPath
+    // A session that changes native ID (Claude's /clear) can still report the
+    // previous session's source; that pairing would reopen the wrong record.
+    const renamed = Boolean(active?.nativeId && session.nativeId && session.nativeId !== active.nativeId)
+    const driver = resident.driver ?? this.dependencies.driver(session.harness)
+    const before = renamed && active?.path ? nativeRecord(driver, active.path, active.nativeId) : undefined
+    const after = renamed && reported ? nativeRecord(driver, reported, session.nativeId) : undefined
+    const stale = renamed && Boolean(reported) && (!after || (before?.path === after.path && before.record === after.record))
+    const path = bindingPath(this.dependencies, session, stale ? undefined : reported)
+    if (renamed)
+      hostLog("live", "a session changed native ID", {
+        conversation: resident.snapshot.session.id, harness: session.harness,
+        source: path ? (stale ? "found by catalog" : "reported") : "awaiting location",
+      })
     const context = session.executionContext && {
       ...session.executionContext,
-      store: path ? { kind: "located" as const, path } : session.executionContext.store,
+      store: path ? { kind: "located" as const, path }
+        : stale ? { kind: "unavailable" as const, reason: "The session's new native source has not been located yet" }
+        : session.executionContext.store,
     }
     resident.snapshot = {
       ...resident.snapshot,
@@ -2559,7 +2653,7 @@ export class LiveConversations {
                 ...binding,
                 nativeId: session.nativeId ?? binding.nativeId,
                 executionContext: context ?? binding.executionContext,
-                path: path ?? binding.path,
+                path: renamed ? path : path ?? binding.path,
                 tuning: session.settings ?? binding.tuning,
                 modeId:
                   session.currentMode ?? binding.modeId,

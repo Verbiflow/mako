@@ -1,3 +1,5 @@
+import type { AccountSwitchWait } from "./contracts/live-conversations.js"
+
 /** Account discovery is registry-driven, so provider modules may add more ids. */
 export type AccountHarness = string
 export type AccountProvider = string
@@ -54,6 +56,8 @@ export interface HarnessAccount {
   signedOut?: true
   /** The selected account no longer exists; new sessions refuse until another is chosen. */
   missing?: true
+  /** Removal waits for the work still running on it; it can't be selected meanwhile. */
+  removing?: true
 }
 
 /** One limit an account spends against, as the provider reports it. */
@@ -124,6 +128,42 @@ export interface AccountRemoval {
     /** Where the person can revoke it themselves. */
     manageUrl: string
   }
+}
+
+/**
+ * What Remove did. Work still running on the account keeps its credentials:
+ * removal is then pending and finishes by itself when that work ends.
+ */
+export type AccountRemovalOutcome =
+  | ({ status: "removed" } & AccountRemoval)
+  | { status: "pending" }
+
+/** Every step of a removal, as the host reports it to windows. */
+export type AccountRemovalEvent =
+  | AccountRemovalOutcome
+  | { status: "failed"; message: string }
+  | { status: "kept" }
+
+/**
+ * What a session on the account waits for before it lets go of it, or
+ * `close` for a harness that can't reopen a session and keeps the process
+ * until the session is closed. Absent when it is idle and lets go now.
+ */
+export type AccountRemovalWait = AccountSwitchWait | "close"
+
+export interface AccountRemovalSession {
+  conversation: string
+  title: string
+  waitingFor?: AccountRemovalWait
+}
+
+/** Who still uses an account, read before asking to remove it. */
+export interface AccountRemovalPlan {
+  sessions: AccountRemovalSession[]
+  /** Runs outside a session in this Mako, such as a headless turn or a title. */
+  runs: number
+  /** Another copy of Mako on this Mac runs work on it. */
+  elsewhere: boolean
 }
 
 /** Public account controls contributed by the provider, without credential data. */

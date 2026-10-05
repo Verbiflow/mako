@@ -30,6 +30,7 @@ import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { assertAccountLaunch, resolveAccountLaunch, switchSuggestion, type AccountLaunch } from "./accounts.js"
+import type { AccountHold } from "./account-holds.js"
 import { resumable, type ResumeVerdict } from "./contracts/conversation-control.js"
 import { reconnectRefusal } from "./live-transfers.js"
 import { providerHost } from "./providers/index.js"
@@ -88,6 +89,8 @@ interface Run extends OwnedSessionClaim {
   resolve: (result: NativeRunResult) => void
   state: ThreadRunState
   stdout: string
+  /** Released when the process closes, so its account can be removed. */
+  accountHold?: AccountHold
 }
 
 const runs = new Map<string, Run>()
@@ -261,7 +264,9 @@ async function launch(
     if (preparation.cancelled || preparingRuns.get(key) !== preparation)
       throw new Error("Native startup was cancelled. Your prompt was not sent.")
   }
+  let accountHold: AccountHold | undefined
   const failedPreparation = () => {
+    accountHold?.release()
     releaseOwnership(preparation, harness, key)
     if (!preparation.releaseSession && preparingRuns.get(key) === preparation) preparingRuns.delete(key)
     preparing.resolve()
@@ -274,8 +279,9 @@ async function launch(
   let executionContext: ExecutionContext
   let accountLaunch: AccountLaunch
   try {
-    const launch = await resolveAccountLaunch(harness, process.env)
+    const launch = await resolveAccountLaunch(harness, process.env, { holder: { kind: "run" } })
     accountLaunch = launch
+    accountHold = launch.hold
     assertPreparation()
     const resolved = runner.launchCredentials.kind === "resolved"
       ? await runner.launchCredentials.resolve(launch.env)
@@ -359,6 +365,7 @@ async function launch(
     state,
     stdout: "",
     releaseSession,
+    accountHold,
   }
   runs.set(key, run)
   preparation.releaseSession = undefined
@@ -484,6 +491,7 @@ function releaseOwnership(run: OwnedSessionClaim, harness: string, path: string)
 
 function finish(run: Run, next: Partial<ThreadRunState>): void {
   if (run.state.status !== "running") return
+  run.accountHold?.release()
   releaseOwnership(run, run.state.harness, run.state.path)
   run.state = { ...run.state, ...next }
   if (run.releaseError) run.state = { ...run.state, status: "failed", error: "The native process closed, but session ownership could not be released." }

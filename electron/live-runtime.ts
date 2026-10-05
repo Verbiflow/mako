@@ -123,6 +123,12 @@ export interface Dependencies {
    * run as before and carry no Thread identity.
    */
   threads?: ThreadStore
+  /**
+   * Whether the account this binding's process runs on is being removed: the
+   * session then lets go of it as soon as it is idle. Called on every idle
+   * check, so it must be cheap when nothing is being removed.
+   */
+  accountRemoving?(bindingId: string): boolean
   /** Test override for `AUTO_CONTINUE_DELAY_MS`, the wait before Mako continues a dropped turn itself. */
   autoContinueDelayMs?: number
   /** Test override for ready provider residency. */

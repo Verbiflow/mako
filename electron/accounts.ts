@@ -28,15 +28,17 @@
  */
 
 import { createHash } from "node:crypto"
-import { readdir } from "node:fs/promises"
-import { join } from "node:path"
+import { existsSync } from "node:fs"
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import type {
   AccountCatalog,
   AccountLoginResult,
   AccountProviderInfo,
   AccountHarness,
   AccountProvider,
-  AccountRemoval,
+  AccountRemovalEvent,
+  AccountRemovalOutcome,
   AccountUsage,
   HarnessAccount,
   ResetCreditOutcome,
@@ -59,7 +61,15 @@ import type {
   SelectableAccountCapability,
 } from "./providers/account-capability.js"
 import { providerHost } from "./providers/index.js"
-import { hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "./host-log.js"
+import {
+  accountHolders,
+  heldElsewhere,
+  holdAccount,
+  onAccountReleased,
+  type AccountHold,
+  type AccountHolder,
+} from "./account-holds.js"
 import {
   bindingWindow,
   hasReset,
@@ -75,6 +85,11 @@ export type {
   AccountHarness,
   AccountProvider,
   AccountRemoval,
+  AccountRemovalEvent,
+  AccountRemovalOutcome,
+  AccountRemovalPlan,
+  AccountRemovalSession,
+  AccountRemovalWait,
   AccountUsage,
   HarnessAccount,
   OpenCodeAuthType,
@@ -126,7 +141,11 @@ async function listCapabilityAccounts(
   // refusing to start has a row to explain it and another to switch to.
   if (selection !== null && !accounts.some((account) => account.name === selection))
     accounts.push({ harness: capability.provider, name: selection, dir: "", active: true, source: "mako", route: "managed", missing: true })
-  return accounts
+  if (capability.mode !== "selectable") return accounts
+  const removing = await removingNames(capability.provider)
+  return removing.size
+    ? accounts.map((account) => removing.has(account.name) && account.source === "mako" ? { ...account, removing: true } : account)
+    : accounts
 }
 
 async function harnessAccounts(
@@ -195,11 +214,63 @@ async function mutateAccount<T>(
   }
 }
 
+/* ------------------------------------------------------------ removal */
+
+/**
+ * Removing an account never pulls credentials from under running work.
+ *
+ * With nothing holding it, the account goes at once. Otherwise a marker
+ * records the request: the account can't be selected or signed in again,
+ * idle sessions on it let go now and busy ones when their work ends, and the
+ * last holder to let go — in this Mako or another sharing ~/.mako — finishes
+ * the removal. A marker left by a quit finishes at the next start. Keep
+ * withdraws it.
+ */
+const removalListeners = new Set<(harness: string, name: string, event: AccountRemovalEvent) => void>()
+
+export function onAccountRemoval(
+  listener: (harness: string, name: string, event: AccountRemovalEvent) => void
+): () => void {
+  removalListeners.add(listener)
+  return () => removalListeners.delete(listener)
+}
+
+function reportRemoval(harness: string, name: string, event: AccountRemovalEvent): void {
+  for (const listener of removalListeners) listener(harness, name, event)
+}
+
+function removalMarker(provider: string, name: string): string {
+  accountDir(provider, name)
+  return join(accountsRoot(), "removing", provider, `${name}.json`)
+}
+
+/** Names whose removal waits; a marker is the whole record, read the same by every host. */
+async function removingNames(provider: string): Promise<ReadonlySet<string>> {
+  const files = await readdir(join(accountsRoot(), "removing", provider)).catch(() => [])
+  return new Set(files.filter((file) => file.endsWith(".json")).map((file) => file.slice(0, -".json".length)))
+}
+
+/** Held by running work here or in another Mako. */
+async function accountHeld(provider: string, name: string): Promise<boolean> {
+  return accountHolders(provider, name).length > 0 || heldElsewhere(provider, name)
+}
+
+/** Delete the credentials and the marker. A failure leaves the account listed as it was. */
+async function finishRemoval(capability: SelectableAccountCapability, name: string): Promise<Extract<AccountRemovalOutcome, { status: "removed" }>> {
+  try {
+    const removal = await capability.removeAccount(name)
+    forgetUsage(`${capability.provider}:${name}`)
+    return { status: "removed", ...removal }
+  } finally {
+    await rm(removalMarker(capability.provider, name), { force: true })
+  }
+}
+
 export async function removeAccount(
   harness: AccountHarness,
   name: string
-): Promise<AccountRemoval> {
-  return mutateAccount(harness, async () => {
+): Promise<AccountRemovalOutcome> {
+  const outcome = await mutateAccount(harness, async (): Promise<AccountRemovalOutcome> => {
     const capability = selectableCapability(harness)
     // Removing credentials must never choose a different paying identity.
     // The user first selects another saved account or explicitly selects the
@@ -208,10 +279,88 @@ export async function removeAccount(
       throw new Error(
         "This account is selected. Choose another account before removing it."
       )
-    const removal = await capability.removeAccount(name)
-    forgetUsage(`${harness}:${name}`)
-    return removal
+    // The marker goes before holds are read: a holder letting go meanwhile
+    // either finds it and finishes the removal, or is already gone below.
+    const marker = removalMarker(harness, name)
+    await mkdir(dirname(marker), { recursive: true, mode: 0o700 })
+    await writeFile(marker, JSON.stringify({ version: 1, requestedAt: new Date().toISOString() }), { mode: 0o600 })
+    if (await accountHeld(harness, name)) return { status: "pending" }
+    return finishRemoval(capability, name)
   })
+  if (outcome.status === "pending") {
+    hostLog("accounts", "removal waits for work on the account", { harness, holders: accountHolders(harness, name).length })
+    reportRemoval(harness, name, outcome)
+  }
+  return outcome
+}
+
+/** Finish a pending removal once nothing holds the account; quiet when there is none. */
+async function completeRemoval(provider: string, name: string): Promise<void> {
+  let event: AccountRemovalEvent | undefined
+  try {
+    event = await mutateAccount(provider, async () => {
+      const marker = removalMarker(provider, name)
+      if (!existsSync(marker)) return undefined
+      const capability = providerHost.accountCapabilities.get(provider)
+      if (capability?.mode !== "selectable" || await accountHeld(provider, name)) return undefined
+      // Selected meanwhile by a Mako that doesn't refuse it: that choice keeps it.
+      if ((await readSelection(provider)) === name) {
+        await rm(marker, { force: true })
+        return { status: "kept" } satisfies AccountRemovalEvent
+      }
+      return finishRemoval(capability, name)
+    })
+  } catch (error) {
+    hostWarn("accounts", "a pending removal failed", { harness: provider, error: error instanceof Error ? error.message : String(error) })
+    event = { status: "failed", message: error instanceof Error ? error.message : String(error) }
+  }
+  if (!event) return
+  hostLog("accounts", "pending removal finished", { harness: provider, status: event.status })
+  reportRemoval(provider, name, event)
+}
+
+onAccountReleased((provider, name) => {
+  // Released before this check, so a removal marked after it reads no hold.
+  if (existsSync(removalMarker(provider, name))) void completeRemoval(provider, name)
+})
+
+/** Removals a quit left waiting finish now if nothing else holds them. */
+export async function completePendingRemovals(): Promise<void> {
+  const providers = await readdir(join(accountsRoot(), "removing")).catch(() => [])
+  await Promise.all(providers.map(async (provider) => {
+    for (const name of await removingNames(provider)) await completeRemoval(provider, name)
+  }))
+}
+
+/** Withdraw a pending removal. False when it already finished. */
+export async function keepAccount(harness: AccountHarness, name: string): Promise<boolean> {
+  const kept = await mutateAccount(harness, async () => {
+    const marker = removalMarker(harness, name)
+    if (!existsSync(marker)) return false
+    await rm(marker, { force: true })
+    return true
+  })
+  if (kept) reportRemoval(harness, name, { status: "kept" })
+  return kept
+}
+
+/** Whether a removal waits on this account. */
+export function removalPending(provider: string, name: string): boolean {
+  return existsSync(removalMarker(provider, name))
+}
+
+/** Who holds the account now, for the confirmation; this host's holders and whether another host has any. */
+export async function accountRemovalHolders(
+  harness: AccountHarness,
+  name: string
+): Promise<{ holders: AccountHolder[]; elsewhere: boolean }> {
+  accountDir(harness, name)
+  return { holders: accountHolders(harness, name), elsewhere: await heldElsewhere(harness, name) }
+}
+
+function refuseRemoving(provider: string, name: string): void {
+  if (removalPending(provider, name))
+    throw new Error("This account is being removed. Choose Keep to use it again.")
 }
 
 /* ------------------------------------------------------------ selection */
@@ -239,6 +388,7 @@ export async function prepareAccountLogin(
       if (!entry.startsWith(".") && entry !== target.name && loginPending(join(root, entry)))
         await capability.removeAccount(entry)
     if (!target.renew) return { launch: await capability.prepareAccountLogin(target) }
+    refuseRemoving(harness, target.name)
     const listed = await capability.listAccounts(await readSelection(harness))
     const account = listed.find((entry) => entry.name === target.name && entry.source === "mako" && !entry.missing)
     if (!account) throw new Error("That account isn't one Mako keeps. Refresh to see your accounts.")
@@ -314,8 +464,10 @@ export async function selectAccount(
 ): Promise<void> {
   return mutateAccount(harness, async () => {
     const capability = selectableCapability(harness)
-    if (name !== null)
+    if (name !== null) {
+      refuseRemoving(harness, name)
       await capability.accountEnv(name, childProcessEnv(process.env))
+    }
     await writeSelection(harness, name)
   })
 }
@@ -342,6 +494,8 @@ export interface AccountLaunch {
   selection: { kind: "selectable"; name: string | null } | { kind: "observed" } | { kind: "unavailable" }
   /** Opaque configured-source equality. Host-only, never a native principal. */
   credential?: { name: string; revision: string }
+  /** Keeps a Mako-kept account's credentials until the launched work ends. */
+  hold?: AccountHold
 }
 
 export class ExecutionAccountChanged extends Error {
@@ -376,11 +530,13 @@ export async function accountPrincipal(provider: string, name: string): Promise<
 
 /** Resolve selection and its launch environment together under the identity lease.
  * This is configured identity, not proof of the identity reported by native code.
+ * A `holder` keeps the account from being removed until it releases the
+ * launch's `hold`; work that outlives the call must pass one.
  */
 export async function resolveAccountLaunch(
   provider: string,
   base: NodeJS.ProcessEnv,
-  options: { trackCredential?: boolean } = {}
+  options: { trackCredential?: boolean; holder?: AccountHolder } = {}
 ): Promise<AccountLaunch> {
   const env = childProcessEnv(base)
   const capability = providerHost.accountCapabilities.get(provider)
@@ -392,9 +548,13 @@ export async function resolveAccountLaunch(
     const resolved = await capability.accountEnv(selection, env)
     const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env)
     if (before !== revision) throw new ExecutionAccountChanged("credentials")
-    return { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"
+    const launch: AccountLaunch = { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"
       ? { kind: "selectable" as const, name: selection }
       : { kind: "observed" as const }, credential: revision === undefined ? undefined : { name, revision } }
+    // The CLI's own login is never Mako's to remove; only kept accounts are held.
+    if (options.holder && capability.mode === "selectable" && selection !== null)
+      launch.hold = holdAccount(provider, selection, options.holder)
+    return launch
   }
   return capability.mode === "selectable" ? mutateAccount(provider, resolve) : resolve()
 }

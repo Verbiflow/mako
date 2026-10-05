@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { optionAccepts, type SessionModel, type SettingValue } from "@mako/sessions/settings"
-import type { JsonSchema, ProviderUtilityRunner } from "./providers/utility-runner.js"
+import type { JsonSchema, UtilityRunner } from "./providers/utility-runner.js"
 import { harnessOrder, lightDefault, lightOptions, type HarnessDefaults } from "./contracts/harness-defaults.js"
 import {
   AUTOMATIC,
@@ -27,7 +27,7 @@ export interface UtilityAgent {
   defaultModel?: string
   /** Mako's model choices for the harness. */
   defaults?: HarnessDefaults
-  runner: ProviderUtilityRunner
+  runner: UtilityRunner
 }
 
 export interface UtilityRequest {

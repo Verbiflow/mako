@@ -218,12 +218,15 @@ import {
   onAccountUsage,
   captureAccount,
   accountCatalog,
+  completePendingRemovals,
+  keepAccount,
   removeAccount,
   useResetCredit,
   selectAccount,
   type AccountHarness,
   type AccountProvider,
 } from "./accounts.js"
+import { accountRemovalSessions } from "./account-removal-sessions.js"
 import {
   cancelAccountLogin,
   startAccountLogin,
@@ -838,6 +841,11 @@ function noteSpend(event: HostEvent) {
 }
 
 onAccountUsage((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
+
+const accountRemoval = accountRemovalSessions(
+  () => liveConversations ?? undefined,
+  (harness, name, event) => emit({ type: "account-removal", harness, name, event })
+)
 
 function emit(event: HostEvent, client?: string) {
   if (hostClosing) return
@@ -1529,6 +1537,12 @@ function bindIpc() {
   )
   handle("mako:account-remove", (_e, harness: AccountHarness, name: string) =>
     removeAccount(harness, name)
+  )
+  handle("mako:account-removal-plan", (_e, harness: AccountHarness, name: string) =>
+    accountRemoval.plan(harness, name)
+  )
+  handle("mako:account-keep", (_e, harness: AccountHarness, name: string) =>
+    keepAccount(harness, name)
   )
   handle("mako:account-usage", (_e, harness: AccountProvider, name: string) =>
     accountUsage(harness, name)
@@ -2311,6 +2325,7 @@ app.whenReady().then(async () => {
       await controlSessions.stop(bindingId)
     },
     driver: (provider) => providerHost.liveDrivers.get(provider),
+    accountRemoving: accountRemoval.removing,
     history: pageThread,
     emit,
     planBuilt: (planId, build) => {
@@ -2325,6 +2340,9 @@ app.whenReady().then(async () => {
       level: "error",
       message: `Workspace rewind recovery needs attention: ${error instanceof Error ? error.message : String(error)}`,
     })
+  )
+  void completePendingRemovals().catch((error) =>
+    hostWarn("accounts", "pending removals could not be read", { error: error instanceof Error ? error.message : String(error) })
   )
   nativeRequests = new NativeRequests(
     join(app.getPath("userData"), "native-requests"),
