@@ -1,6 +1,10 @@
 {
   "harness": "devin",
   "source": "devin 3000.10.23 (deb81600), captured through Mako with MAKO_NATIVE_CAPTURE=devin in an isolated home; config, command and usage updates removed",
+  "native": {
+    "version": "3000.10.23",
+    "origin": "captured"
+  },
   "about": "Plan mode, captured: write_plan proposes a card, exit_plan_mode's bare permission request builds it with plan_accept_edits, and Devin reports accept-edits after the approval. Devin's front matter is not part of the plan.",
   "session": {
     "settings": {

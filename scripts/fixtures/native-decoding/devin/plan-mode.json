@@ -1,6 +1,10 @@
 {
   "harness": "devin",
   "source": "Shapes from devin 3000.10.23's saved sessions (tool_call_state) and its binary's option ids; plan text invented. The permission request's bare toolCall, carrying only the exit_plan_mode call's id, is as captured in plan-approved.json.",
+  "native": {
+    "version": "3000.10.23",
+    "origin": "written"
+  },
   "about": "Plan mode: write_plan revisions replace one card, exit_plan_mode's permission builds that card, and a revision after the rejected exit opens a new card.",
   "session": {},
   "steps": [

@@ -1,6 +1,14 @@
 {
   "harness": "devin",
   "source": "Written from the ACP schema (SDK zod types) for the kinds Devin shares with every ACP harness, 2026-09-30",
+  "native": {
+    "version": null,
+    "sdk": {
+      "name": "@agentclientprotocol/sdk",
+      "version": "1.3.0"
+    },
+    "origin": "written"
+  },
   "about": "Ordinary ACP traffic every ACP harness shares: a replayed user message, thinking, a reply, a plan of entries, a mode change, a model change, a title, and the usage and command lists Mako reads elsewhere.",
   "session": {},
   "steps": [
