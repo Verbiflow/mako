@@ -2,6 +2,7 @@ import { resolveExecutable } from "../../executable.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import { codexWireSettings } from "./settings.js"
 import {
+  CLI_OWNED_CREDENTIALS,
   argumentAfter,
   dropUncarried,
   type NativeRunner,
@@ -35,6 +36,8 @@ function overrides(args: readonly string[]): Map<string, string> {
 
 export const codexNativeRunner: NativeRunner = {
   provider: "codex",
+  transport: "codex-cli-headless",
+  launchCredentials: CLI_OWNED_CREDENTIALS,
   available: () => resolveExecutable("codex") !== null,
   fastMode: "supported",
   carries: CARRIES,

@@ -14,9 +14,14 @@ import {
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
+import type { AccountCaptureSource, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
+import { NATIVE_ACCOUNT } from "../../account-types.js"
 import {
   credentialFingerprint,
+  loginPending,
+  markLoginPending,
+  managedAccountHome,
+  recordAccountHome,
   accountDir,
   accountsRoot,
   childProcessEnv,
@@ -28,16 +33,23 @@ import {
   valueFields,
 } from "../../accounts-common.js"
 import type { JsonValue } from "../../codex-app-json.js"
-import type { SelectableAccountCapability } from "../account-capability.js"
+import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
 import { resolveCodexExecutable } from "./executable.js"
 import { parseCodexRateLimits, parseResetOutcome } from "./rate-limits.js"
+import { managedCodexConfig, readCodexCredentials } from "./credentials.js"
 
 /** Env vars that would override file credentials and cross accounts. */
-const AUTH_ENV = ["OPENAI_API_KEY"]
+const AUTH_ENV = ["OPENAI_API_KEY", "CODEX_API_KEY"]
+const ROUTING_ENV = ["OPENAI_BASE_URL"]
+function nativeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base }
+  for (const key of [...AUTH_ENV, ...ROUTING_ENV, "CODEX_HOME"]) delete env[key]
+  return env
+}
 
-/** Everything except credentials stays shared across accounts. */
+/** Settings and stores retain their origin; auth and its storage policy stay private. */
 const HOME = ".codex"
 function defaultHome(env: NodeJS.ProcessEnv = process.env) {
   return env.CODEX_HOME || join(homedir(), HOME)
@@ -58,7 +70,7 @@ function hasCredentials(contents: string): boolean {
 function isPrivateEntry(name: string): boolean {
   return (
     name.startsWith("auth.json") ||
-    ["models_cache.json", "log", "memories", "tmp"].includes(name)
+    [".mako-account.json", "config.toml", "models_cache.json", "log", "memories", "tmp"].includes(name)
   )
 }
 /**
@@ -137,11 +149,6 @@ interface CodexAuth {
   accountId?: string
 }
 
-interface RouterAccount {
-  auth: CodexAuth
-  authJson: string
-}
-
 function parseCodexAuthValue(value: JsonValue | undefined): CodexAuth {
   const tokens = valueFields(valueFields(value)?.get("tokens"))
   if (!tokens) return {}
@@ -160,61 +167,14 @@ function parseCodexAuth(contents: string): CodexAuth {
   return parseCodexAuthValue(value)
 }
 
-function parseRouterAccount(contents: string): RouterAccount {
-  const fields = jsonFields(contents)
-  const authValue = fields.get("auth")
-  const authFields = valueFields(authValue)
-  return {
-    auth: parseCodexAuthValue(authValue),
-    authJson: authFields
-      ? JSON.stringify(Object.fromEntries(authFields))
-      : "{}",
-  }
-}
-
 async function accountEmail(dir: string): Promise<string | undefined> {
   try {
-    const auth = parseCodexAuth(await readFile(join(dir, "auth.json"), "utf8"))
+    const credentials = await readCodexCredentials(dir)
+    const auth = credentials ? parseCodexAuth(credentials) : {}
     return jwtClaims(auth.idToken).email
   } catch {
     return undefined
   }
-}
-
-/**
- * Subrouter keeps Codex logins as <router>/accounts/<email>.json. Those files
- * contain tokens only; selecting one materializes an isolated Codex home.
- */
-async function subrouterAccounts(): Promise<HarnessAccount[]> {
-  const accounts: HarnessAccount[] = []
-  const root = join(homedir(), ".subrouter")
-  let routers: string[]
-  try {
-    routers = (await readdir(root)).filter(
-      (name) => !name.startsWith(".") && !name.includes(".")
-    )
-  } catch {
-    return accounts
-  }
-  for (const router of routers) {
-    try {
-      for (const file of await readdir(join(root, router, "accounts"))) {
-        if (!file.endsWith(".json")) continue
-        const email = file.slice(0, -".json".length)
-        accounts.push({
-          harness: "codex",
-          name: email,
-          email,
-          dir: join(root, router, "accounts", file),
-          active: false,
-          source: "subrouter",
-        })
-      }
-    } catch {
-      // This router has no Codex accounts.
-    }
-  }
-  return accounts
 }
 
 async function listAccounts(
@@ -225,33 +185,36 @@ async function listAccounts(
   accounts.push({
     harness: "codex",
     name: "default",
-    email: await accountEmail(defaultDir),
+    email: AUTH_ENV.some(key => process.env[key]) ? undefined : await accountEmail(defaultDir),
     dir: defaultDir,
     active: !selection,
+    source: "cli",
+    route: process.env.CODEX_HOME || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key]) ? "inherited" : "native",
   })
+  if (selection === NATIVE_ACCOUNT || process.env.CODEX_HOME || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key])) {
+    // The ordinary home is only worth a row when it is signed in or chosen.
+    const email = await accountEmail(join(homedir(), HOME))
+    if (email || selection === NATIVE_ACCOUNT)
+      accounts.push({ harness: "codex", name: NATIVE_ACCOUNT, email, dir: join(homedir(), HOME),
+        active: selection === NATIVE_ACCOUNT, source: "cli", route: "native" })
+  }
   try {
     for (const name of await readdir(join(accountsRoot(), "codex"))) {
       if (name.startsWith(".")) continue
       const dir = accountDir("codex", name)
+      if (loginPending(dir)) continue
       accounts.push({
         harness: "codex",
         name,
         email: await accountEmail(dir),
         dir,
         active: selection === name,
+        source: "mako",
+        route: "managed",
       })
     }
   } catch {
-    // No captured Codex accounts yet.
-  }
-
-  // Router-managed logins ride along, deduped by identity against what Mako
-  // captured itself.
-  const known = new Set(
-    accounts.map((account) => account.email ?? account.name)
-  )
-  for (const account of await subrouterAccounts()) {
-    if (!known.has(account.email ?? account.name)) accounts.push(account)
+    // No Codex accounts added in Mako yet.
   }
   return accounts
 }
@@ -260,22 +223,24 @@ async function listAccounts(
  * Capture the CLI's current login as a named account. Credentials are copied,
  * never invented; browser OAuth remains the CLI's job.
  */
-async function captureAccount(name: string): Promise<void> {
+async function captureAccount(name: string, source: AccountCaptureSource = "inherited"): Promise<void> {
   const clean = cleanAccountName(name)
-  const realHome = defaultHome()
+  const env = source === "native" ? nativeEnv(process.env) : process.env
+  if (AUTH_ENV.some(key => env[key]))
+    throw new Error("This profile uses an environment API key. Choose Ordinary CLI login to save the native login; environment credentials are not captured as a different account.")
+  const realHome = defaultHome(env)
   const dir = accountDir("codex", clean)
   await mkdir(join(accountsRoot(), "codex"), { recursive: true, mode: 0o700 })
   await mkdir(dir, { mode: 0o700 })
 
   try {
     // Credentials are required — an account with no keys is nothing.
-    const source = join(realHome, "auth.json")
-    if (!existsSync(source)) {
+    const credentials = await readCodexCredentials(realHome)
+    if (!credentials) {
       throw new Error(
         "No codex login found to capture — sign in with the CLI first"
       )
     }
-    const credentials = await readFile(source, "utf8")
     if (!hasCredentials(credentials))
       throw new Error(
         "The Codex login is missing or invalid. Sign in with the CLI and capture it again."
@@ -284,6 +249,8 @@ async function captureAccount(name: string): Promise<void> {
     await chmod(join(dir, "auth.json"), 0o600)
 
     // Sessions, archives and names remain in the one watched store for every account.
+    await recordAccountHome(dir, realHome)
+    await managedCodexConfig(realHome, dir, Boolean(parseCodexAuth(credentials).accessToken))
     await shareHome(realHome, dir)
   } catch (error) {
     await rm(dir, { recursive: true, force: true })
@@ -291,8 +258,41 @@ async function captureAccount(name: string): Promise<void> {
   }
 }
 
+/**
+ * Codex's ChatGPT sign-in into a profile whose private config keeps auth in
+ * its own file: a new empty one, or one Mako keeps whose login expired,
+ * which Codex replaces in place.
+ */
+async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
+  const executable = await resolveCodexExecutable()
+  if (!executable) throw new Error("Codex isn't installed. Install it, then sign in.")
+  const command = (dir: string): AccountLoginLaunch => {
+    const env = childProcessEnv(process.env)
+    for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
+    env.CODEX_HOME = dir
+    return { kind: "command", executable, args: ["login"], statusArgs: ["login", "status"], env }
+  }
+  if (renew) {
+    const dir = accountDir("codex", name)
+    if (!existsSync(dir)) throw new Error("That Codex account is gone. Refresh to see your accounts.")
+    await managedCodexConfig(await managedAccountHome(dir, defaultHome(), "sessions"), dir, true)
+    return command(dir)
+  }
+  const dir = accountDir("codex", cleanAccountName(name))
+  const home = join(homedir(), HOME)
+  await mkdir(join(accountsRoot(), "codex"), { recursive: true, mode: 0o700 })
+  await mkdir(dir, { mode: 0o700 })
+  try {
+    await markLoginPending(dir)
+    await recordAccountHome(dir, home)
+    await managedCodexConfig(home, dir, true)
+    await shareHome(home, dir)
+    return command(dir)
+  } catch (error) { await rm(dir, { recursive: true, force: true }); throw error }
+}
+
 async function removeAccount(name: string): Promise<void> {
-  if (name === "default")
+  if (name === "default" || name === NATIVE_ACCOUNT)
     throw new Error("The default account is the CLI's own login")
   await rm(accountDir("codex", name), { recursive: true, force: true })
 }
@@ -303,43 +303,26 @@ async function accountEnv(
 ): Promise<NodeJS.ProcessEnv> {
   const env = { ...base }
   if (!selection) return env
-  for (const key of AUTH_ENV) delete env[key]
+  if (selection === NATIVE_ACCOUNT) return nativeEnv(base)
+  for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
 
-  let dir = accountDir("codex", selection)
-  if (!existsSync(dir)) {
-    // A router account file materializes into a Mako home once, then routes
-    // like any captured account with its home shared.
-    const routed = (await subrouterAccounts()).find(
-      (account) => account.name === selection
+  const dir = accountDir("codex", selection)
+  if (!existsSync(dir))
+    throw new Error(
+      "The selected Codex account no longer exists. Choose another account in Settings → Agents."
     )
-    if (routed) {
-      dir = accountDir("codex", selection)
-      if (!existsSync(join(dir, "auth.json"))) {
-        try {
-          const account = parseRouterAccount(await readFile(routed.dir, "utf8"))
-          await mkdir(dir, { recursive: true, mode: 0o700 })
-          await writeFile(join(dir, "auth.json"), account.authJson, {
-            encoding: "utf8",
-            mode: 0o600,
-          })
-          await chmod(join(dir, "auth.json"), 0o600)
-        } catch {
-          throw new Error(
-            "The selected Codex account could not be loaded. Select another account or capture it again."
-          )
-        }
-      }
-    }
-  }
   if (!existsSync(join(dir, "auth.json")))
     throw new Error(
-      "The selected Codex account has no credentials. Select another account or capture it again."
+      "The selected Codex account is signed out. Sign in again in Settings → Agents."
     )
-  if (!hasCredentials(await readFile(join(dir, "auth.json"), "utf8")))
+  const credentials = await readFile(join(dir, "auth.json"), "utf8")
+  if (!hasCredentials(credentials))
     throw new Error(
-      "The selected Codex account has invalid credentials. Sign in with the CLI and capture it again."
+      "The selected Codex account's login is unreadable. Sign in again in Settings → Agents."
     )
-  await shareHome(defaultHome(base), dir)
+  const home = await managedAccountHome(dir, defaultHome(base), "sessions")
+  await managedCodexConfig(home, dir, Boolean(parseCodexAuth(credentials).accessToken))
+  await shareHome(home, dir)
   env.CODEX_HOME = dir
   return env
 }
@@ -347,12 +330,8 @@ async function accountEnv(
 async function usageForDir(dir: string): Promise<AccountUsage> {
   let auth: CodexAuth
   try {
-    if (dir.endsWith(".json")) {
-      // A router file wraps the same tokens in {email, auth: {tokens}}.
-      auth = parseRouterAccount(await readFile(dir, "utf8")).auth
-    } else {
-      auth = parseCodexAuth(await readFile(join(dir, "auth.json"), "utf8"))
-    }
+    const credentials = await readCodexCredentials(dir)
+    auth = credentials ? parseCodexAuth(credentials) : {}
   } catch {
     return { status: "missing-credentials" }
   }
@@ -368,14 +347,7 @@ async function usageForDir(dir: string): Promise<AccountUsage> {
 async function accountUsage(name: string): Promise<AccountUsage> {
   const fromCodex = await codexAppServerUsage(name).catch(() => null)
   if (fromCodex?.status === "ok") return fromCodex
-  // Router-managed accounts resolve by identity, not by a Mako-owned dir.
-  const routed = (await subrouterAccounts()).find(
-    (account) => account.name === name
-  )
-  const captured = accountDir("codex", name)
-  const dir = name === "default" ? defaultHome()
-    : existsSync(join(captured, "auth.json")) ? captured : routed?.dir ?? captured
-  return usageForDir(dir)
+  return usageForDir(name === NATIVE_ACCOUNT ? join(homedir(), HOME) : name === "default" ? defaultHome() : accountDir("codex", name))
 }
 
 async function codexAppServerUsage(name: string): Promise<AccountUsage | null> {
@@ -407,27 +379,28 @@ async function useResetCredit(name: string, attempt: string): Promise<ResetCredi
 export const codexAccountCapability: SelectableAccountCapability = {
   provider: "codex",
   mode: "selectable",
+  nativeLogin: true,
   label: "Codex",
   loginCommand: "codex login",
   listAccounts,
   captureAccount,
+  prepareAccountLogin,
   removeAccount,
   accountEnv,
   selectedAccount: (selection, env) =>
-    selection && env.CODEX_HOME
-      ? { name: selection, dir: env.CODEX_HOME }
-      : { name: "default" },
+    ({ name: selection ?? "default", dir: defaultHome(env) }),
   accountUsage,
-  credentialRevision: async (name) => {
-    const captured = accountDir("codex", name)
-    const routed = (await subrouterAccounts()).find((account) => account.name === name)
-    const source = name === "default" ? join(defaultHome(), "auth.json")
-      : existsSync(join(captured, "auth.json")) ? join(captured, "auth.json") : routed?.dir ?? join(captured, "auth.json")
-    const raw = await readFile(source, "utf8").catch((error) => {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
-      throw error
-    })
-    return credentialFingerprint([raw, name === "default" ? process.env.OPENAI_API_KEY ?? null : null])
+  credentialRevision: async (name, base = process.env) => {
+    const native = name === NATIVE_ACCOUNT
+    const inherited = name === "default"
+    const raw = native || inherited
+      ? await readCodexCredentials(native ? join(homedir(), HOME) : defaultHome(base))
+      : await readFile(join(accountDir("codex", name), "auth.json"), "utf8").catch((error) => {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
+        throw error
+      })
+    const env = native ? nativeEnv(base) : inherited ? base : {}
+    return credentialFingerprint([native || inherited ? defaultHome(env) : null, raw, ...[...AUTH_ENV, ...ROUTING_ENV].map(key => env[key] ?? null)])
   },
   useResetCredit,
 }

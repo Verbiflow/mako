@@ -1,3 +1,4 @@
+import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { codexQuestionAnswer } from "./questions.js"
 import { readCodexQuestionHistory } from "./question-reader.js"
 import { codexExecutableCandidates } from "./executable.js"
@@ -13,8 +14,10 @@ export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server accoun
 export const codexLiveDriver: ProviderLiveDriver = {
   ...fileResumeEvidence(codexProcessProbe),
   provider: "codex",
+  launchEnvironment: { kind: "prepared", via: "app-server spawn consumes ProviderStartOptions.accountLaunch." },
   nativeIdentity: CODEX_NATIVE_IDENTITY,
   nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   sessionQuestions: { encodeAnswer: codexQuestionAnswer, history: readCodexQuestionHistory },
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission"], coverage: "Native codex.tool_decision user events confirm once/session/decline/abort for a unique command or file approval. Repeated tool IDs, amendments and other request families remain unconfirmed. Normalized decisions survive reconnect; request-resolved alone is not confirmation." },
   planning: { via: "setting", option: CODEX_PLAN_OPTION.id, proposal: "The Plan collaboration mode's plan item, built by a message that asks for the implementation" },

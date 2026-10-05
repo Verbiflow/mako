@@ -64,12 +64,12 @@ export const codexProfileLoader: ProviderProfileLoader = {
     "review",
   ],
   cacheKey: (env) => `${env.CODEX_HOME ?? ""}\0${env.CODEX_EXECUTABLE ?? ""}`,
-  async load(env, cwd) {
+  async load(env, cwd, context) {
     const executable = await resolveCodexExecutable(env)
     if (!executable)
       throw new Error("The selected Codex executable is not available")
     return withDiscoveryRpc(
-      { command: executable, args: ["app-server"], env, cwd, jsonrpc: false },
+      { command: executable, args: ["app-server"], env, cwd, jsonrpc: false, signal: context?.signal },
       async (rpc) => {
         const result: CodexModelListResponse = { data: [] }
         let cursor: string | undefined
