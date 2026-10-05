@@ -121,7 +121,7 @@ function accountsFrom(credentials: Map<string, OpenCodeCredential>, path: string
       authType: credential.type,
       dir: path,
       active: true,
-      source: "opencode",
+      source: "model-provider",
     }
     if (claims.email !== undefined) account.email = claims.email
     if (accountId !== undefined) account.accountId = accountId

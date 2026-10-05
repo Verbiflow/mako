@@ -13,6 +13,8 @@ import { openCodeProfileLoader } from "./profile.js"
 import { emitOpenCodeSession } from "./session-emitter.js"
 import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
+import { openCodeUsageHistory } from "./usage-history.js"
+import { openCodePresentation } from "./presentation.js"
 
 /**
  * OpenCode v2 runs through its native API: one `opencode serve --stdio` per
@@ -22,7 +24,8 @@ import { openCodeUpdateSource } from "./updates.js"
  */
 export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   provider: "opencode",
-  presentation: { icon: { id: "opencode-mark", tint: "currentColor" } },
+  presentation: openCodePresentation,
+  diagnostics: { sdk: "@opencode/client" },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: openCodeCommands,
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -50,5 +53,5 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   connection: lacks("Signs in through OpenCode’s own providers"),
   updates: openCodeUpdateSource,
   utility: notBuilt("OpenCode keeps every prompt as a session in its own database; a one-off request would have to be deleted after, which Mako doesn't do yet"),
-  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: openCodeUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
 })
