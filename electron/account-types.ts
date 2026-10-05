@@ -41,10 +41,11 @@ export interface HarnessAccount {
   dir: string
   active: boolean
   /**
-   * Where the login came from: added in Mako, found in OpenCode's store, or
-   * the CLI's own login that Mako only reads.
+   * Where the login came from: added in Mako, the CLI's own login that Mako
+   * only reads, or one model provider's login (`providerId`) in a harness
+   * that signs into several, such as OpenCode.
    */
-  source?: "mako" | "opencode" | "cli"
+  source?: "mako" | "cli" | "model-provider"
   /** Profile provenance, independent of the account's email or saved name. */
   route?: "native" | "managed"
   /** The plan as the provider names it, when discovery already knows it. */
@@ -110,6 +111,19 @@ export type AccountUsage =
 export interface SelectedAccount {
   name: string
   dir?: string
+}
+
+/** What removing an account left at its provider. */
+export interface AccountRemoval {
+  /** A key Mako minted that the provider still accepts, because revoking it failed. */
+  stillValid?: {
+    /** Why, worded to follow "but": "Cursor couldn't be reached (…)". */
+    reason: string
+    /** ISO time the key lapses on its own. */
+    expiresAt?: string
+    /** Where the person can revoke it themselves. */
+    manageUrl: string
+  }
 }
 
 /** Public account controls contributed by the provider, without credential data. */

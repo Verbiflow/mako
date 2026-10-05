@@ -24,6 +24,8 @@ import {
 } from "./backend-connection.js"
 import type { RelayConversations } from "./relay-conversations.js"
 import { harnessProfile, resolveHarnessTuning } from "./harnesses.js"
+import { namedHarnesses } from "./providers/harness-descriptors.js"
+import { providerHost } from "./providers/index.js"
 import {
   relayPrompt,
   stageRelayAttachments,
@@ -616,6 +618,7 @@ function createRelayWorker(
       heartbeat: () => {
         const heartbeat: RelayHostHeartbeat = {
           defaultHarness: DEFAULT_HARNESS,
+          harnesses: namedHarnesses(providerHost),
           deviceId: id,
           deviceName: options.deviceName,
           version: options.version,

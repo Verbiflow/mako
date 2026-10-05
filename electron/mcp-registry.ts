@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 import { promisify } from "node:util"
 import { z } from "zod"
 import { resolveAccountLaunch } from "./accounts.js"
+import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
 import { backendConnectionCredentials } from "./backend-connection.js"
@@ -508,7 +509,7 @@ function providerStatus(
 ): McpRegistryProviderStatus {
   return {
     id: provider,
-    label: providerHost.profiles.get(provider)?.label ?? provider,
+    label: harnessLabel(providerHost, provider),
     account: route.account,
     available,
     source: route.userFiles[0] ?? `${provider} mcp list --json`,

@@ -8,6 +8,7 @@ import {
   pendingProviderProfile,
   unavailableProviderProfile,
   unknownProviderProfile,
+  withWorkDefault,
   type ProviderProfileLoader,
 } from "./providers/profile-loader.js"
 import type { HarnessProfile } from "./shared.js"
@@ -250,7 +251,7 @@ async function loadProfile(
     loading.get(key) ?? startLoad(loader, { key, account }, env, scope, cwd)
   if (mode === "display" || mode === "now") {
     // Stale beats blank: the refresh lands as an event moments later.
-    const snapshot = held?.profile ?? (await providerProfileCache.get(key))
+    const snapshot = held?.profile ?? current(await providerProfileCache.get(key))
     assertProfileRevision(harness, revision)
     if (snapshot) return snapshot
     // A workspace this account has not been seen in yet still has the
@@ -278,10 +279,16 @@ async function lastDiscoveredProfile(
 ): Promise<HarnessProfile | null> {
   const held = cache.get(scope.key)?.profile
   if (held?.available && held.models.length) return held
-  const stored = await providerProfileCache.get(scope.key)
+  const stored = current(await providerProfileCache.get(scope.key))
   if (stored?.available && stored.models.length) return stored
   const borrowed = await accountSnapshot(scope.account)
   return borrowed?.models.length ? borrowed : null
+}
+
+/** A saved snapshot with this release's defaults; an earlier release saved its own. */
+function current(profile: HarnessProfile | null): HarnessProfile | null {
+  const loader = profile && providerHost.profiles.get(profile.id)
+  return profile && loader ? withWorkDefault(profile, loader.defaults) : profile
 }
 
 /** One discovery's cache key and the prefix shared by the account's workspaces. */
@@ -296,7 +303,7 @@ async function accountSnapshot(
     if (!entry.profile.available || entry.profile.configurationError) continue
     if (!held || entry.loadedAt > held.loadedAt) held = entry
   }
-  const source = held?.profile ?? (await providerProfileCache.nearest(prefix))
+  const source = held?.profile ?? current(await providerProfileCache.nearest(prefix))
   if (!source) return null
   // Models and capabilities belong to the account; defaults and the
   // configured model can differ per workspace, so they stay unknown.

@@ -15,6 +15,7 @@ import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { JsonObject } from "./codex-app-json.js"
+import type { McpJsonFormat } from "./providers/mcp-source.js"
 import { mcpDiscoveryRoute, type McpDiscoveryRoute } from "./mcp-registry.js"
 import type {
   McpRegistrySnapshot,
@@ -56,19 +57,13 @@ function directPath(
     : (route.workspaceFiles[0] ?? null)
 }
 
-/** Native JSON shapes, reusable by any adapter declaring that shape. */
-const JSON_FORMATS = {
-  claude: { root: "mcpServers", command: "string", remote: "transport" },
-  cursor: { root: "mcpServers", command: "string", remote: "implicit" },
-  opencode: { root: "mcp", command: "array", remote: "remote" },
-} as const
-type JsonMcpFormat = keyof typeof JSON_FORMATS
+/** Two definitions are the same server when they serialize alike in the format that keeps every transport field. */
+const COMPARISON_FORMAT: McpJsonFormat = { root: "mcpServers", command: "string", remote: "transport" }
 
 function serializableDefinition(
   definition: McpServerDefinition,
-  format: JsonMcpFormat = "cursor"
+  encoding: McpJsonFormat
 ): JsonObject {
-  const encoding = JSON_FORMATS[format]
   if (definition.transport === "stdio") {
     if (encoding.command === "array")
       return {
@@ -93,10 +88,10 @@ function parseConfig(contents: string): JsonObject {
 export function mergeJsonMcpConfig(
   contents: string,
   definition: McpServerDefinition,
-  format: JsonMcpFormat = "cursor"
+  format: McpJsonFormat
 ): string {
   const config = parseConfig(contents)
-  const root = JSON_FORMATS[format].root
+  const root = format.root
   const parsed = JsonObjectSchema.safeParse(config[root])
   const servers = parsed.success ? { ...parsed.data } : {}
   const entry = JsonObjectSchema.safeParse(servers[definition.name])
@@ -112,7 +107,7 @@ export async function atomicJsonMcpMerge(
   path: string,
   expectedHash: string,
   definition: McpServerDefinition,
-  format: JsonMcpFormat = "cursor"
+  format: McpJsonFormat
 ): Promise<void> {
   const previous = writes.get(path) ?? Promise.resolve()
   const operation = previous
@@ -165,8 +160,8 @@ function definitionEqual(
   right: McpServerDefinition
 ): boolean {
   return (
-    JSON.stringify(serializableDefinition(left)) ===
-    JSON.stringify(serializableDefinition(right))
+    JSON.stringify(serializableDefinition(left, COMPARISON_FORMAT)) ===
+    JSON.stringify(serializableDefinition(right, COMPARISON_FORMAT))
   )
 }
 

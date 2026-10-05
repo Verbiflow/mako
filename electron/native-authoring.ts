@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { resolve } from "node:path"
 import { NativeAuthoringFamilySchema, type NativeAuthoringCatalog, type NativeAuthoringTarget, type NativeAuthoringWrite, type NativeAuthoringRemove } from "./contracts/native-authoring.js"
+import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 
 const Target = z.object({ provider: z.string().min(1), family: NativeAuthoringFamilySchema, cwd: z.string().min(1) })
@@ -21,7 +22,7 @@ function capability(cwd: string, target: NativeAuthoringTarget) {
 export function nativeAuthoringCatalog(cwd: string): NativeAuthoringCatalog {
   return { cwd, capabilities: providerHost.harnesses.list().flatMap((harness) => NativeAuthoringFamilySchema.options.map((family) => {
     const implementation = providerHost[family].get(harness.provider)
-    return { provider: harness.provider, family, label: providerHost.profiles.get(harness.provider)?.label ?? harness.provider,
+    return { provider: harness.provider, family, label: harnessLabel(providerHost, harness.provider),
       supported: implementation !== undefined, detail: implementation?.detail ?? harness.absent[family]?.reason ?? "Unavailable" }
   })) }
 }

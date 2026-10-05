@@ -66,12 +66,6 @@ import {
 const SETTLE_MS = 25_000
 /** While the Room is open its memory figures are this fresh: a look reads the process table (about 35 ms) and the footprint of each process whose size moved (about 30 ms of CPU each). */
 const ROOM_MEMORY_MS = 15_000
-/**
- * How long app_check waits for a result, by harness: Codex gives Mako's
- * own servers fifteen minutes (mcp-runtime.ts), and Claude bounds an MCP
- * call by nothing by default. The others get SETTLE_MS.
- */
-const CHECK_WAIT_MS = new Map([["codex", 10 * 60_000], ["claude", 10 * 60_000]])
 /** Under memory pressure, or for a start that won't fit in free memory, another Thread's app unused this long is stopped to make room. */
 const EVICT_QUIET_MS = 15 * 60 * 1000
 const PREPARE_KEY = runKey("prepare", "checkout")
@@ -113,7 +107,8 @@ interface Deps {
   /** What the conversation's agent process was started with. */
   launchedWith(conversationId: string): ThreadEnvironment | undefined
   /** A conversation Mako runs now, to name the Thread setting a project up and say whether its turn is still going; undefined once it's gone. */
-  conversation?(conversationId: string): { title: string; harness: string; working: boolean } | undefined
+  /** `checkWaitMs`: how long its harness lets an MCP call run, when that is longer than `SETTLE_MS`. */
+  conversation?(conversationId: string): { title: string; harness: string; working: boolean; checkWaitMs?: number } | undefined
   /** The app in a folder, for a person at the desk; `claim` gives it ports if it has none. */
   folder?(cwd: string, claim: boolean): Promise<FolderApp>
   processes: ThreadProcesses
@@ -854,7 +849,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     for (const [, entry] of waiting) entry.result = result
   }
   const checkWait = (conversation?: string) =>
-    deps.settleMs ?? (conversation === undefined ? undefined : CHECK_WAIT_MS.get(deps.conversation?.(conversation)?.harness ?? "")) ?? SETTLE_MS
+    deps.settleMs ?? (conversation === undefined ? undefined : deps.conversation?.(conversation)?.checkWaitMs) ?? SETTLE_MS
   /** Waits for the check under way, and returns its result or says it's still running. */
   const awaitCheck = async (app: AppKey, tier: CheckTier, plan: CheckPlan, conversation: string | undefined, joined: boolean): Promise<string> => {
     const [status] = await deps.processes.settle(app, [runKey("check", tier)], checkWait(conversation))

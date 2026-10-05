@@ -13,6 +13,7 @@ import {
 import { parse } from "yaml"
 import { z } from "zod"
 import { selectedAccount } from "./accounts.js"
+import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import {
   SKILL_HANDOVER_LIMIT,
@@ -332,7 +333,7 @@ async function providerStatuses(): Promise<SkillProviderStatus[]> {
       }
       return {
         id: source.provider,
-        label: providerHost.profiles.get(source.provider)?.label ?? source.provider,
+        label: harnessLabel(providerHost, source.provider),
         account: account.name,
         available,
         readsUniversalRoot: source.readsUniversalRoot,

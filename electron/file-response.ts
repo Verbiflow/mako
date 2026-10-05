@@ -58,7 +58,10 @@ export async function fileResponse(
       autoClose: true,
       signal: request.signal,
     })
-    return new Response(Readable.toWeb(stream), { status: 206, headers })
+    // SAFETY: `Readable.toWeb` returns the runtime's own ReadableStream; only
+    // the typings differ when DOM and Node declarations are both loaded.
+    const body = Readable.toWeb(stream) as ReadableStream<Uint8Array>
+    return new Response(body, { status: 206, headers })
   } catch (error) {
     await file.close()
     throw error
