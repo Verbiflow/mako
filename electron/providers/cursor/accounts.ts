@@ -2,7 +2,9 @@ import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { readFile } from "node:fs/promises"
+import { z } from "zod"
 import type {
+  AccountRemoval,
   AccountUsage,
   HarnessAccount,
   UsageBalance,
@@ -20,6 +22,7 @@ import type { JsonValue } from "../../codex-app-json.js"
 import type { SelectableAccountCapability } from "../account-capability.js"
 import { CURSOR_ACCOUNT_ENV, type CursorSdkAuth } from "./sdk/auth.js"
 import type { CursorAccountKeys, StoredCursorCredential } from "./sdk/credentials.js"
+import { CURSOR_API_KEY_URL } from "./connection.js"
 
 const API = "https://api2.cursor.sh"
 
@@ -107,7 +110,7 @@ class CursorUsageError extends Error {
   }
 }
 
-async function post(path: string, bearer: string): Promise<string> {
+async function post(path: string, bearer: string, body: JsonValue = {}): Promise<string> {
   const response = await fetch(`${API}${path}`, {
     method: "POST",
     headers: {
@@ -115,7 +118,7 @@ async function post(path: string, bearer: string): Promise<string> {
       "Content-Type": "application/json",
       "Connect-Protocol-Version": "1",
     },
-    body: "{}",
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(10_000),
   })
   if (!response.ok) throw new CursorUsageError(response.status)
@@ -181,6 +184,59 @@ async function usageForKey(apiKey: string): Promise<AccountUsage> {
       status: "error",
       detail: error instanceof Error ? error.message : String(error),
     }
+  }
+}
+
+const UserApiKeysSchema = z.object({
+  apiKeys: z.array(z.object({
+    id: z.number(),
+    maskedKey: z.string().default(""),
+    name: z.string().default(""),
+    expiresAt: z.union([z.string(), z.number()]).optional(),
+  })).default([]),
+})
+
+/**
+ * Whether `masked`, a key as Cursor's dashboard shows it, rules out `key`:
+ * the ends it shows aren't the key's. Cursor masks on its side, so a shape
+ * this doesn't recognise rules nothing out.
+ */
+function maskedOtherThan(masked: string, key: string): boolean {
+  const [, head = "", tail = ""] = /^([\w-]*)[^\w-]+([\w-]*)$/.exec(masked) ?? []
+  return !key.startsWith(head) || !key.endsWith(tail)
+}
+
+/**
+ * Revokes the key a Mako sign-in minted: the one with the name it was
+ * minted under and its exact expiry, to the millisecond, that the ends
+ * Cursor shows don't rule out. Nothing else is touched. Resolves
+ * `undefined` once Cursor no longer accepts the key, otherwise why it
+ * still does.
+ */
+async function revokeMintedKey(credential: StoredCursorCredential): Promise<string | undefined> {
+  let token: string
+  try {
+    token = await sessionToken(credential.apiKey)
+  } catch (error) {
+    if (error instanceof CursorUsageError && (error.status === 401 || error.status === 403)) return undefined
+    return `Cursor couldn't be reached (${error instanceof Error ? error.message : String(error)})`
+  } finally {
+    sessions.delete(createHash("sha256").update(credential.apiKey).digest("hex"))
+  }
+  try {
+    const listed = UserApiKeysSchema.parse(JSON.parse(await post("/aiserver.v1.DashboardService/ListUserApiKeys", token)))
+    const expiresAt = credential.expiresAt === undefined ? Number.NaN : Date.parse(credential.expiresAt)
+    const minted = listed.apiKeys.filter(key =>
+      key.name === credential.keyName && Number(key.expiresAt) === expiresAt && !maskedOtherThan(key.maskedKey, credential.apiKey))
+    const [only] = minted
+    if (!only || minted.length > 1)
+      return minted.length ? "Cursor lists more than one key that could be this one" : "Cursor's key list doesn't show this key"
+    await post("/aiserver.v1.DashboardService/RevokeUserApiKey", token, { id: only.id })
+    return undefined
+  } catch (error) {
+    return error instanceof CursorUsageError
+      ? `Cursor refused to revoke it (${error.message})`
+      : `Cursor's answer couldn't be read (${error instanceof Error ? error.message : String(error)})`
   }
 }
 
@@ -260,7 +316,14 @@ export function cursorAccountCapability(
     },
     removeAccount: async (name) => {
       if (name === "default") throw new Error("The default account is Cursor's own login")
-      await keys.store(name).clear()
+      const store = keys.store(name)
+      const credential = await store.load().catch(() => null)
+      const reason = credential?.method === "browser" && !expired(credential) ? await revokeMintedKey(credential) : undefined
+      await store.clear()
+      if (reason === undefined || !credential) return {}
+      const stillValid: NonNullable<AccountRemoval["stillValid"]> = { reason, manageUrl: CURSOR_API_KEY_URL }
+      if (credential.expiresAt !== undefined) stillValid.expiresAt = credential.expiresAt
+      return { stillValid }
     },
     selectedAccount: (selection) => ({ name: selection ?? "default" }),
     credentialRevision: async (name, env) => {

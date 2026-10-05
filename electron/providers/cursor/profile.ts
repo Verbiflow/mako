@@ -35,6 +35,10 @@ export function createCursorProfileLoader(options: CursorProfileOptions): Provid
   const loader: ProviderProfileLoader = {
     provider: "cursor",
     label: "Cursor",
+    defaults: {
+      work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: "false" } }],
+      light: [{ model: "grok-4.7", options: { effort: "low", fast: "false" } }],
+    },
     transport: "sdk",
     capabilities: CAPABILITIES,
     cacheKey: () => options.accountKey(),

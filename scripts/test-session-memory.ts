@@ -10,6 +10,8 @@ import { heldReason } from "../electron/contracts/session-hold.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import {
   HOLD_STALE_MS,
   SessionHeldError,
@@ -74,9 +76,20 @@ async function until(condition: () => boolean, what: string): Promise<void> {
   throw new Error(`Timed out waiting for ${what}`)
 }
 
+const FIXTURE_CAPABILITIES: Pick<ProviderLiveDriver, "approvalEvidence" | "launchEnvironment" | "nativeIdentity" | "nativeExclusion" | "nativePromptIdentity" | "planning" | "backgroundStop" | "turnRecovery"> = {
+  approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
+}
+
 function fixtureDriver(nativeId: string, starts: string[]): ProviderLiveDriver {
   return {
-    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    ...FIXTURE_CAPABILITIES,
     canResume: true,
     provider: "cursor",
     available: () => true,
@@ -141,7 +154,7 @@ async function reconnectAfterRestart() {
   try {
     assert.equal(after.snapshot(id)?.session.connection, "disconnected", "the restarted host recovers the journal disconnected")
     const moved = reconnect(after, "Go ahead")
-    await until(() => after.snapshot(id)?.control?.transfers.some((transfer) => transfer.input.id === moved.id && transfer.state.kind !== "preparing" && transfer.state.kind !== "pending") === true, "the moved reconnect to settle")
+    await until(() => after.snapshot(id)?.control?.transfers.some((transfer) => transfer.input.id === moved.id && transfer.state.kind !== "preparing" && transfer.state.kind !== "queued") === true, "the moved reconnect to settle")
     const accepted = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === moved.id)
     assert.equal(accepted?.state.kind, "accepted", `a record that moved while the host was away still reconnects: ${JSON.stringify(accepted?.state)}`)
     assert.equal(starts.length, 2, "the provider was started once for the reconnect")
@@ -459,7 +472,7 @@ async function liveConversationsRoundTrip() {
   })
   let events: (event: import("../electron/shared.js").LiveDriverEvent) => void = () => {}
   const driver: ProviderLiveDriver = {
-    approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    ...FIXTURE_CAPABILITIES,
     canResume: true,
     provider: "cursor",
     available: () => true,
@@ -467,6 +480,7 @@ async function liveConversationsRoundTrip() {
       starts.push(options.conversationId)
       launched.push(options.modeId)
       launchedModels.push(options.tuning?.model)
+      assert.ok(options.emit, "the host listens to the provider it starts")
       events = options.emit
       return state(options.conversationId)
     },

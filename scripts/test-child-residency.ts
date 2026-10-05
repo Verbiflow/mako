@@ -8,6 +8,8 @@ import { LiveConversations } from "../electron/live-conversations.ts"
 import { DevinAgents } from "../electron/providers/devin/agents.ts"
 import { ApplicationLifecycle } from "../electron/application-lifecycle.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
 
 async function until(check: () => boolean) {
@@ -26,6 +28,13 @@ let catalogPath: string | undefined
 const session: LiveSessionState = { id, nativeId: "native-parent", harness: "devin-fixture", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
 const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "devin-fixture", canResume: true, available: () => true,
   start: async () => session,
   prompt: async () => {

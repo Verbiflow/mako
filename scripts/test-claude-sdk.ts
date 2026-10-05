@@ -11,6 +11,7 @@ import type {
   SDKResultSuccess,
   SDKUserMessage,
   SDKAssistantMessage,
+  SDKAssistantMessageError,
   PermissionUpdate,
 } from "@anthropic-ai/claude-agent-sdk"
 import {
@@ -224,16 +225,14 @@ await assert.rejects(
   await mkdir(join(configDir, "projects", "-tmp-other"), { recursive: true })
   await writeFile(transcriptPath, "{}\n")
   let fail: ((error: Error) => void) | undefined
-  const dying: AsyncIterable<SDKMessage> = {
-    [Symbol.asyncIterator]: () => ({
-      next: () => new Promise<IteratorResult<SDKMessage>>((_, reject) => { fail = reject }),
-    }),
+  async function* dying(): AsyncGenerator<SDKMessage, void> {
+    yield await new Promise<never>((_, reject) => { fail = reject })
   }
   const deaths: LiveDriverEvent[] = []
   const dyingDriver = createClaudeSdkDriver({
     ...dependencies,
     configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: configDir } }, account: { name: "fixture-launch" } }),
-    query: (options) => ({ ...dependencies.query(options), [Symbol.asyncIterator]: () => dying[Symbol.asyncIterator]() }),
+    query: (options) => ({ ...dependencies.query(options), [Symbol.asyncIterator]: dying }),
   })
   await dyingDriver.start("/tmp/work", { conversationId, emit: (event) => deaths.push(event) })
   await dyingDriver.prompt(conversationId, "Begin", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
@@ -312,6 +311,7 @@ const observedQuestion = permissionEvents.at(-1)
 assert.ok(observedQuestion?.type === "live-permission")
 abort.abort()
 const cancelledDecision = await cancelledQuestion
+assert.ok(cancelledDecision)
 assert.equal(cancelledDecision.behavior, "deny")
 assert.equal(cancelledDecision.decisionClassification, undefined, "an aborted request must not invent a user click")
 assert.deepEqual(permissionEvents.at(-1), { type: "live-permission-ended", id: "permission-fixture",
@@ -322,6 +322,7 @@ for (const [optionId, classification] of [["allow_once", "user_temporary"], ["al
   const reply = permissions.tool("Bash", { command: "echo harmless" }, { ...options, suggestions: [sessionRule, persistentRule] })
   permissions.respond(options.requestId, { kind: "choice", optionId })
   const native = await reply
+  assert.ok(native)
   assert.equal(native.decisionClassification, classification)
   if (native.behavior === "allow")
     assert.deepEqual(native.updatedPermissions, optionId === "allow_session" ? [sessionRule] : undefined,
@@ -726,7 +727,8 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
   noticeDriver.close("notice-fixture")
 }
 console.log("PASS: Claude limits, fallbacks, notices, mode, commands, usage and stop reasons reach the session once each")
-diagnostic.observe({ ...assistant, error: "authentication_failed", parent_tool_use_id: "child-tool" })
+const assistantError = (error: SDKAssistantMessageError): SDKAssistantMessage => ({ ...assistant, error })
+diagnostic.observe({ ...assistantError("authentication_failed"), parent_tool_use_id: "child-tool" })
 assert.equal(authDiagnostics.length, 1, "a child failure must not be attributed to the parent account")
 diagnostic.observe({
   type: "system", subtype: "init", uuid: randomUUID(), session_id: "fixture",
@@ -734,17 +736,17 @@ diagnostic.observe({
   tools: [], mcp_servers: [], model: "fixture", permissionMode: "default",
   slash_commands: [], output_style: "default", skills: [], plugins: [],
 })
-diagnostic.observe({ ...assistant, error: "authentication_failed" })
-diagnostic.observe({ ...assistant, error: "authentication_failed" })
+diagnostic.observe(assistantError("authentication_failed"))
+diagnostic.observe(assistantError("authentication_failed"))
 await diagnostic.settled()
 assert.equal(authDiagnostics.length, 2)
 assert.equal(authDiagnostics.at(-1)?.nativeVersion, "2.1.263")
 assert.equal(authDiagnostics.at(-1)?.category, "authentication_failed")
-diagnostic.observe({ ...assistant, error: "rate_limit" })
+diagnostic.observe(assistantError("rate_limit"))
 assert.equal(authDiagnostics.length, 2, "rate limits are not authentication failures")
 const revokedFields: HostLogFields[] = []
 const revoked = claudeAuthDiagnostics({}, fields => revokedFields.push(fields), async () => { throw new Error("Keychain locked") })
-revoked.observe({ ...assistant, error: "authentication_failed", message: { ...assistant.message,
+revoked.observe({ ...assistantError("authentication_failed"), message: { ...assistant.message,
   content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked.", citations: null }] } })
 await revoked.settled()
 assert.equal(revokedFields[0]?.category, "access-revoked")

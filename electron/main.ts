@@ -1,6 +1,6 @@
 import { browserApplicationIcon } from "./browser-icon.js"
 import { z } from "zod"
-import { recoveryCapabilities } from "./providers/live-driver.js"
+import { describeHarnesses } from "./providers/harness-descriptors.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
 import { backgroundLifecycle } from "./background-lifecycle.js"
 import { devHostBuild } from "./dev-host-build.js"
@@ -26,7 +26,6 @@ import { createContinuationPlanner } from "./continuation.js"
 import { NativeRequests } from "./native-requests.js"
 import type {
   BlockAddress,
-  HarnessDescriptor,
   NativeRequestInput,
 } from "./shared.js"
 import { startConversationMcp } from "./conversation-mcp.js"
@@ -133,7 +132,7 @@ import {
 } from "./computer-permissions.js"
 import { check, installUpdates, updateState } from "./updates.js"
 import { installApplicationIpc } from "./ipc/application.js"
-import { usageSummary } from "./usage.js"
+import { usageHarnesses, usageSummary } from "./usage.js"
 import {
   automationList,
   bindAutomations,
@@ -1353,7 +1352,7 @@ function bindIpc() {
   handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace)))
 
   handle("mako:usage", () =>
-    usageSummary(join(homedir(), ".mako", "sessions"), homedir(), join(app.getPath("userData"), "conversations"))
+    usageSummary(usageHarnesses(providerHost), join(homedir(), ".mako", "sessions"), homedir(), join(app.getPath("userData"), "conversations"))
   )
 
   /* Cross-harness threads: every agent's sessions on this machine. */
@@ -1746,27 +1745,10 @@ function bindIpc() {
   )
 
   handle("mako:harness-descriptors", () => {
-    const resumable = new Set(resumableHarnesses())
-    const drivers = providerHost.liveDrivers
-      .list()
-      .filter((driver) => driver.available(app.getAppPath()))
-    return providerHost.harnesses.list().map(({ provider, presentation }) => {
-      const driver = drivers.find((entry) => entry.provider === provider)
-      const descriptor: HarnessDescriptor = {
-        provider,
-        displayName: providerHost.profiles.get(provider)?.label ?? provider,
-        presentation,
-        resumable: resumable.has(provider),
-        live: driver !== undefined,
-        canResume: driver?.canResume ?? false,
-        observesNativeAgents: driver?.observesNativeAgents === true,
-        canSteer: Boolean(driver?.steer),
-        recovery: recoveryCapabilities(driver),
-      }
-      if (driver?.steering) descriptor.steering = driver.steering
-      if (driver?.modes?.length) descriptor.modes = [...driver.modes]
-      if (driver?.defaultMode) descriptor.defaultMode = driver.defaultMode
-      return descriptor
+    const appPath = app.getAppPath()
+    return describeHarnesses(providerHost, {
+      live: (provider) => providerHost.liveDrivers.get(provider)?.available(appPath) === true,
+      resumable: new Set(resumableHarnesses()),
     })
   })
   handle(
@@ -1928,6 +1910,12 @@ function bindIpc() {
   )
   handle("mako:live-clear-queue", (_event, id: string) =>
     liveConversations.clearQueue(id)
+  )
+  handle("mako:live-sign-in-readiness", (_event, id: string) =>
+    liveConversations.signInReadiness(id)
+  )
+  handle("mako:live-sign-in-resume", (_event, id: string, anyway: boolean) =>
+    liveConversations.resumeSignIn(id, anyway)
   )
   handle("mako:live-earlier", (_event, id: string) =>
     liveConversations.earlier(id)
@@ -2382,7 +2370,12 @@ app.whenReady().then(async () => {
     launchedWith: (id) => threadEnvironments.launchedWith(id),
     conversation: (id) => {
       const session = liveConversations.snapshot(id)?.session
-      return session && { title: session.title || "Untitled conversation", harness: session.harness, working: session.status === "running" }
+      return session && {
+        title: session.title || "Untitled conversation",
+        harness: session.harness,
+        working: session.status === "running",
+        checkWaitMs: providerHost.mcpSources.get(session.harness)?.callWaitMs,
+      }
     },
     folder: (cwd, claim) => threadEnvironments.forFolder(cwd, claim),
     processes: threadProcesses,

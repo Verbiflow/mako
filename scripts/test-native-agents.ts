@@ -23,6 +23,8 @@ import { ApplicationLifecycle } from "../electron/application-lifecycle.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { LiveJournal } from "../electron/live-journal.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { HostEvent, LiveSessionState } from "../electron/shared.ts"
 
 const claude = new ClaudeAgents()
@@ -265,6 +267,13 @@ const session: LiveSessionState = {
 const events: HostEvent[] = []
 const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",
   canResume: true,
   available: () => true,

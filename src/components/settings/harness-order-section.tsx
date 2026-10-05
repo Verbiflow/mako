@@ -13,7 +13,9 @@ import { refreshCommitModel } from "@/state/commit-model"
 import { loadHarnessOrder, saveHarnessOrder, useHarnessOrder, useSavedHarnessOrder } from "@/state/harness-order"
 import { utilityModels } from "@/state/model-runtime"
 import { useSetupAgent } from "@/state/project-setup"
+import { harnessDefaultsFor } from "@/state/descriptors"
 import { useProviders } from "@/state/providers"
+import { useThreads } from "@/state/thread-store"
 import { HarnessDefaultPicker } from "./harness-default-picker"
 import { ModelConnections } from "./model-connections"
 import { UtilityModelPicker } from "./utility-model-picker"
@@ -160,7 +162,8 @@ function HarnessOrderRow({
 }) {
   const signedIn = Boolean(profile?.available)
   const pending = !profile || Boolean(profile.pending && !profile.available)
-  const light = signedIn && profile ? lightDefault(harness, profile.models, profile.defaultModel) : undefined
+  const defaults = useThreads((state) => harnessDefaultsFor(state, harness))
+  const light = signedIn && profile ? lightDefault(defaults, profile.models, profile.defaultModel) : undefined
   const keys = (event: KeyboardEvent) => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return
     event.preventDefault()

@@ -4,6 +4,7 @@ import { mock } from "node:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import { LiveHistoryReader } from "../electron/live-history-reader"
+import type { LiveHistoryRead } from "../electron/contracts/live-history"
 import { auditId, auditSnapshot, auditStats } from "./performance-audit-fixtures"
 const evidence = process.env.MAKO_PERFORMANCE_EVIDENCE ?? "docs/audits/2026-09-23/live-history-performance"
 await mkdir(evidence, { recursive: true })
@@ -21,7 +22,7 @@ for (const [index, provider] of registeredHarnessIds().entries()) {
   const id = source.session.id
   const reader = new LiveHistoryReader()
   let bytes = 0, reads = 0, details = 0
-  const bridge = mock.method(getMako(), "liveRead", async (_id, input) => {
+  const bridge = mock.method(getMako(), "liveRead", async (_id: string, input: LiveHistoryRead) => {
     reads++; if (input.kind === "detail") details++
     const result = await reader.read(id, input, async () => source)
     bytes += Buffer.byteLength(JSON.stringify(result))

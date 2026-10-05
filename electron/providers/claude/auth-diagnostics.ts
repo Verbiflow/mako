@@ -5,6 +5,9 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { HostLogFields } from "../../host-log.js"
 import { claudeCredentialState, type ClaudeCredentialState } from "./accounts.js"
 
+/** The host-log scope Claude's native authentication failures are written under. */
+export const CLAUDE_AUTH_LOG = "claude-auth"
+
 /**
  * What the failing store's shape says. `unexplained` is the only case that implicates
  * refresh rotation, a competing writer or lock contention; the rest are visible in the store.

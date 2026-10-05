@@ -10,6 +10,7 @@ import {
   ControlProgramRuntime,
   type ControlProgramOutput,
 } from "@mako/control/program"
+import type { JsonValue } from "@mako/control"
 
 const imageValue = z.object({ data: z.string(), mimeType: z.string() })
 const textOf = (block: ControlProgramOutput | undefined) =>
@@ -167,7 +168,7 @@ try {
     namespace: "computer",
     actions: ["observe", "click", "capture"],
     artifacts: join(artifacts, "computer"),
-    call: async (command) => {
+    call: async (command): Promise<JsonValue> => {
       sharedCalls.push(command)
       return command.action === "observe"
         ? { token: "snapshot:1" }

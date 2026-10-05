@@ -37,7 +37,6 @@ try {
         continue
       }
       assert.equal(initial.kind, "available", layout)
-      if (initial.kind !== "available") throw new Error(initial.reason)
       const alias = join(root, `${layout}-alias.db`)
       await symlink(path, alias)
       const aliasPath = `${alias}#${layout === "mixed-v2" ? "v2:" : ""}ses_one`
@@ -62,12 +61,10 @@ try {
       }
       assert.equal((await resumeVerdict(binding, undefined, read)).kind, "unavailable")
       assert.equal((await resumeVerdict(binding, { ...idle, probe: async () => ({ kind: "unavailable", reason: "failed" }) }, read)).kind, "unavailable")
-      if (layout !== "legacy") {
-        for (const pending of ["session_pending", "session_inbox"]) {
-          db.prepare(`INSERT INTO ${pending} VALUES (?, ?)`).run("pending", "ses_one")
-          assert.equal((await read(binding)).kind, "unavailable", "native admitted input must be reconciled before loading")
-          db.exec(`DELETE FROM ${pending}`)
-        }
+      for (const pending of ["session_pending", "session_inbox"]) {
+        db.prepare(`INSERT INTO ${pending} VALUES (?, ?)`).run("pending", "ses_one")
+        assert.equal((await read(binding)).kind, "unavailable", "native admitted input must be reconciled before loading")
+        db.exec(`DELETE FROM ${pending}`)
       }
     } finally { db.close() }
   }

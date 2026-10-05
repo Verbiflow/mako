@@ -1,6 +1,7 @@
 import type { AcpState } from "@/state/acp-state"
 import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
+import { signInPause } from "../../electron/contracts/sign-in-hold"
 
 export interface AcpPresence {
   key: string
@@ -50,9 +51,11 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
         threadId: conversation.threadId,
         sessionId: conversation.sessionId,
         // A dropped connection Mako is about to continue itself is a working
-        // row, not a failed one: the send is seconds away.
+        // row, not a failed one: the send is seconds away. Work paused on a
+        // sign-out waits on the person, as a question does.
         status:
-          conversation.permission && conversation.session.status !== "failed"
+          (conversation.permission && conversation.session.status !== "failed") ||
+          (conversation.session.status !== "running" && signInPause(conversation.requests ?? []))
             ? "needs-permission"
             : conversation.session.status === "failed" && autoContinuePending(conversation.requests)
               ? "running"

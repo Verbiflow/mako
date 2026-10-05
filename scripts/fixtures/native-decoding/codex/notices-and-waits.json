@@ -1,6 +1,10 @@
 {
   "harness": "codex",
   "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "native": {
+    "version": "0.159.0",
+    "origin": "written"
+  },
   "about": "Notices become markers once each, in Mako's words; waits start and end with their own events or the output they held.",
   "session": {
     "threadId": "thread-1"

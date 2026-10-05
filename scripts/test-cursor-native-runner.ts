@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { normalizeCursorSdkModels } from "@mako/sessions"
 import { cursorSdkNativeRunner } from "../electron/providers/cursor/sdk/native-runner.ts"
 import { CURSOR_SDK_HEADLESS, SdkHeadlessSpecSchema } from "../electron/providers/cursor/sdk/wire.ts"
-import type { NativeCommand } from "../electron/providers/native-runner.ts"
+import type { NativeCommand, NativeRunOptions } from "../electron/providers/native-runner.ts"
 
 /**
  * Cursor's headless runs start Mako's SDK child in its one-shot mode with the
@@ -44,7 +44,7 @@ assert.ok(legacy.importFrom?.identity, "the import records the thread it came fr
 
 let checked = 0
 for (const model of catalog.models) {
-  const selections = [{ model: model.id }, ...model.options.flatMap((option) =>
+  const selections: NativeRunOptions[] = [{ model: model.id }, ...model.options.flatMap((option) =>
     option.kind === "select" ? option.values.map((choice) => ({ model: model.id, options: { [option.id]: choice.value } })) : [])]
   for (const selection of selections) {
     const prepared = await runner.prepare!(selection, {})

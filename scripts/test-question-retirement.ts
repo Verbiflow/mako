@@ -9,6 +9,8 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { latestPendingQuestion, retireQuestionsForInput } from "../electron/contracts/live-questions.js"
 import { codexAsyncQuestion, codexQuestionAnswer } from "../electron/providers/codex/questions.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { LiveSessionState } from "../electron/shared.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-question-retirement-"))
@@ -20,6 +22,13 @@ try {
     let prompts = 0
     const driver: ProviderLiveDriver = {
       provider, available: () => true, canResume: true, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
+      launchEnvironment: { kind: "unavailable", reason: "Fixture" },
+      nativeIdentity: { kind: "unavailable", reason: "Fixture" },
+      nativeExclusion: NO_NATIVE_EXCLUSION,
+      nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+      planning: { via: "setting", option: "plan", proposal: "Fixture" },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
+      turnRecovery: { kind: "manual", reason: "Fixture" },
       sessionQuestions: { encodeAnswer: codexQuestionAnswer },
       start: async () => state,
       prompt: async (_id, _text, _attachments, _settings, dispatch) => {

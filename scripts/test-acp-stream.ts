@@ -49,6 +49,12 @@ console.log(
 )
 
 assert.ok(await acpSessionNotificationSchema(), "the SDK's own session/update schema loads from the installed package")
+const streamOf = <T,>(values: readonly T[]) => new ReadableStream<T>({
+  start(controller) {
+    for (const value of values) controller.enqueue(value)
+    controller.close()
+  },
+})
 const update = (value: JsonObject) => ({ jsonrpc: "2.0" as const, method: "session/update", params: { sessionId: "s", update: value } })
 const sent = [
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "kept" } }),
@@ -59,7 +65,7 @@ const sent = [
   { jsonrpc: "2.0" as const, method: "session/update", params: "not an object" },
 ]
 const refused: RefusedSessionUpdate[] = []
-const screened = await screenSessionUpdates({ readable: ReadableStream.from(sent), writable: new WritableStream() }, (value) => refused.push(value))
+const screened = await screenSessionUpdates({ readable: streamOf(sent), writable: new WritableStream() }, (value) => refused.push(value))
 const passed = await Array.fromAsync(screened.readable)
 assert.deepEqual(passed, [sent[0], sent[3], sent[4]], "valid updates, other notifications and responses reach the SDK in order")
 assert.deepEqual(refused.map(({ kind, known }) => ({ kind, known })), [
@@ -78,7 +84,7 @@ const bent = [
   update({ sessionUpdate: "tool_call", toolCallId: "u", title: "Read", kind: "read", status: "pending", content: [{ type: "content", content: { type: "text", text: "x" } }], _meta: { a: 1 } }),
 ]
 const lossy: LossySessionUpdate[] = []
-const kept = await Array.fromAsync((await screenSessionUpdates({ readable: ReadableStream.from(bent), writable: new WritableStream() }, () => assert.fail("nothing here is refused"), (value) => lossy.push(value))).readable)
+const kept = await Array.fromAsync((await screenSessionUpdates({ readable: streamOf(bent), writable: new WritableStream() }, () => assert.fail("nothing here is refused"), (value) => lossy.push(value))).readable)
 assert.deepEqual(kept, bent, "a lossy update still reaches the SDK")
 assert.deepEqual(lossy, [
   { params: bent[0]?.params, kind: "tool_call_update", paths: ["status"] },

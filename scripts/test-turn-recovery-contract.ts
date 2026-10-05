@@ -9,7 +9,12 @@ import { devinResumePolicy } from "../electron/providers/devin/resume.ts"
 import { grokAcpSource, grokSessionSource } from "../electron/providers/grok/acp.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
-import { validateLiveDriver } from "../electron/providers/live-driver.ts"
+import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+
+function codexWithout(declaration: keyof ProviderLiveDriver): ProviderLiveDriver {
+  // SAFETY: deliberately malformed input: a declaration the type requires is removed, to prove registration rejects it at runtime.
+  return { ...codexLiveDriver, [declaration]: undefined } as ProviderLiveDriver
+}
 
 // Every harness Mako installs says how a turn survives its process dying and
 // names the tests that kill the process mid-turn. Those tests exist and an npm
@@ -26,7 +31,7 @@ for (const driver of drivers) {
   }
 }
 
-assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: undefined }), /how a turn survives its process dying/,
+assert.throws(() => validateLiveDriver(codexWithout("turnRecovery")), /how a turn survives its process dying/,
   "registration rejects a harness that does not say how a turn survives its process dying")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: { kind: "continues", accepted: "On echo", exit: " ", tests: ["x"] } }), /tests that prove both/)
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: { kind: "continues", accepted: "On echo", exit: "One update", tests: [] } }), /tests that prove both/)

@@ -175,8 +175,9 @@ export class ClaudeProjection {
       if (event.delta.type === "input_json_delta") {
         const tool = this.tools.get(id)
         if (!tool || tool.input.length >= MAX_TOOL) return []
-        tool.input = (tool.input + event.delta.partial_json).slice(0, MAX_TOOL)
-        return [{ kind: "tool-update", id: tool.id, input: tool.input }]
+        const kept = event.delta.partial_json.slice(0, MAX_TOOL - tool.input.length)
+        tool.input += kept
+        return [{ kind: "tool-update", id: tool.id, inputAppend: kept }]
       }
       return []
     }

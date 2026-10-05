@@ -13,10 +13,14 @@ import { claudeProfileLoader } from "./profile.js"
 import { claudeSkillSource } from "./skills.js"
 import type { RuntimeUpdateSource } from "../update-source.js"
 import { claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
+import { claudeUsageHistory } from "./usage-history.js"
+import { claudePresentation } from "./presentation.js"
+import { CLAUDE_AUTH_LOG } from "./auth-diagnostics.js"
 
 export const installClaude: ProviderModule = (host) => installHarness(host, {
   provider: "claude",
-  presentation: { icon: { id: "claude-code", tint: "#D97757" } },
+  presentation: claudePresentation,
+  diagnostics: { sdk: "@anthropic-ai/claude-agent-sdk", signInLog: CLAUDE_AUTH_LOG },
   hooks: claudeHooks,
   commands: claudeCommands,
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -59,7 +63,7 @@ export const installClaude: ProviderModule = (host) => installHarness(host, {
     ],
   },
   utility: claudeUtilityRunner,
-  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: claudeUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
 })
 
 const claudeReleasePolicy = {

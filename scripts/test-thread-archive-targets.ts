@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
 import { railAnnouncement } from "../src/lib/rail-announcement.ts"
 import { acpStore } from "../src/state/acp-state.ts"
-import { threadGroupsStore } from "../src/state/thread-groups.ts"
+import { applyThreadGroupChange } from "../src/state/thread-groups.ts"
+import { ThreadGroupSchema } from "../electron/contracts/thread-groups.ts"
 import { wholeThreadTargets } from "../src/state/session-archive.ts"
 import { threadsStore } from "../src/state/threads.ts"
 import { archivedThread } from "../src/state/thread-lifecycle.ts"
@@ -12,16 +13,30 @@ import { threadArchiveKey, threadShownKey } from "../electron/contracts/thread-l
 // a search or filter left showing: two catalog rows and a live conversation
 // with no row yet, one of them filtered out of the rail.
 const thread = "22222222-2222-4222-8222-222222222222"
+const SHOWN = "a0000000-0000-4000-8000-000000000001"
+const FILTERED = "a0000000-0000-4000-8000-000000000002"
+const OTHER = "a0000000-0000-4000-8000-000000000003"
+const LIVE = "a0000000-0000-4000-8000-000000000004"
+const UNSENT = "a0000000-0000-4000-8000-000000000005"
 const row = (name: string, session: string): ThreadRef => ({ harness: "codex", nativeId: name, path: `/sessions/${name}.jsonl`, threadId: thread, sessionId: session })
-threadsStore.set({ threads: [row("shown", "s-shown"), row("filtered-out", "s-filtered"), row("unrelated", "s-other")] })
+threadsStore.set({ threads: [row("shown", SHOWN), row("filtered-out", FILTERED), row("unrelated", OTHER)] })
 acpStore.set({
   activeKey: null,
   conversations: {
-    "live-1": { kind: "starting", key: "live-1", draftKey: "live-1", harness: "claude", cwd: "/repo", createdAt: 1, updatedAt: 1, blocks: [], queued: [], hiddenUserPrompt: null, sessionId: "s-live", threadId: thread, settingsTarget: { kind: "new", harness: "claude", cwd: "/repo" } },
+    "live-1": { kind: "starting", key: "live-1", draftKey: "live-1", harness: "claude", cwd: "/repo", createdAt: 1, updatedAt: 1, blocks: [], queued: [], hiddenUserPrompt: null, sessionId: LIVE, threadId: thread, settingsTarget: { kind: "new", harness: "claude", cwd: "/repo" } },
   },
 })
-threadGroupsStore.set({
-  groups: { [thread]: { id: thread, sessions: [{ id: "s-shown", origin: "imported", started: true }, { id: "s-filtered", origin: "imported", started: true }, { id: "s-live", origin: "started", started: true }, { id: "s-unsent", origin: "new", started: false }] } },
+applyThreadGroupChange({
+  thread,
+  group: ThreadGroupSchema.parse({
+    id: thread,
+    sessions: [
+      { id: SHOWN, origin: "imported", started: true },
+      { id: FILTERED, origin: "imported", started: true },
+      { id: LIVE, origin: "started", started: true },
+      { id: UNSENT, origin: "new", started: false },
+    ],
+  }),
 })
 
 assert.deepEqual(wholeThreadTargets(thread), [

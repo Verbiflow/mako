@@ -50,7 +50,8 @@ export interface UsageSummary {
   days: Array<{ date: string } & UsageTotals>
   models: Array<{ model: string } & UsageTotals>
   projects: Array<{ cwd: string } & UsageTotals>
-  sources?: Array<{ source: string } & UsageTotals>
+  /** `recordedByMako` when the harness's own store keeps no counts and Mako measured the spend. */
+  sources?: Array<{ source: string; recordedByMako?: true } & UsageTotals>
   sessions: number
   /** True when older files or oversized file prefixes were left unread. */
   truncated: boolean

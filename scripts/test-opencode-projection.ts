@@ -99,7 +99,7 @@ const message = "msg_assistant"
     "the answered row keeps the answer after its form closes")
 
   const settled = content.settle(root, "cancelled", "Stopped before this call finished.")
-  assert.deepEqual(new Set(settled.map(update => update.id)), new Set([`${root}:w`, `${root}:todo`, `${root}:q`, `${root}:late`]),
+  assert.deepEqual(new Set(settled.flatMap(update => update.kind === "tool-update" ? [update.id] : [])), new Set([`${root}:w`, `${root}:todo`, `${root}:q`, `${root}:late`]),
     "settling ends every open row in the session, an unanswered question included")
   assert.ok(settled.every(update => update.kind === "tool-update" && update.status === "cancelled" && !update.unfinished))
   assert.equal(content.name(child, "t1"), "read", "settling one session leaves another's calls open")

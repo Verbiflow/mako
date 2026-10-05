@@ -19,6 +19,7 @@ import {
 } from "../../codex-app-parse.js"
 import type { ItemTracker, ThreadItem, Turn } from "../../codex-app-types.js"
 import { decoded, type Decoded } from "../../contracts/native-decoding.js"
+import { MAX_STREAMED_TOOL_OUTPUT } from "../../contracts/live-content.js"
 import type { NativeActivityObservation } from "../../contracts/native-activity.js"
 import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
 import type { LiveSessionState } from "../../contracts/providers-acp.js"
@@ -448,8 +449,9 @@ export class CodexDecoder {
     if (!notification.delta || !notification.turnId || !notification.itemId) return
     const tracker = this.tracker(notification.turnId, notification.itemId)
     const joint = this.patched.delete(tracker) && tracker.output ? "\n\n" : ""
-    tracker.output = tail(tracker.output + joint + notification.delta, MAX_TOOL_OUTPUT)
-    out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, output: tracker.output }))
+    const outputAppend = joint + notification.delta
+    tracker.output = tail(tracker.output + outputAppend, MAX_STREAMED_TOOL_OUTPUT)
+    out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, outputAppend }))
   }
 
   private replaceToolOutput(out: CodexDecoded[], notification: PatchNotification, output: string): void {

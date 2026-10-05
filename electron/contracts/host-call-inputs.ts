@@ -394,6 +394,8 @@ export const hostCallInputs = {
     z.union([z.literal("before"), z.literal("after")]).optional(),
   ]),
   "mako:live-rewind-recover": z.tuple([]),
+  "mako:live-sign-in-readiness": z.tuple([z.string()]),
+  "mako:live-sign-in-resume": z.tuple([z.string(), z.boolean()]),
   "mako:live-snapshot": z.tuple([z.string()]),
   "mako:live-start": z.tuple([
     z.string(),

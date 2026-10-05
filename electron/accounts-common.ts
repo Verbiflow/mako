@@ -138,9 +138,7 @@ export async function readSelection(provider: string): Promise<string | null> {
     }
   }
   try {
-    const selection = parseSelectionState(contents).get(provider) ?? null
-    // "@cli" chose the CLI's ordinary login when the default could follow a shell router; it is the default now.
-    return selection === "@cli" ? null : selection
+    return parseSelectionState(contents).get(provider) ?? null
   } catch {
     throw new Error("Account selection is invalid. Select the account again.")
   }

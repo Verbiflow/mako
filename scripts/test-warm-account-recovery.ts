@@ -31,7 +31,11 @@ try {
     let closes = 0
     let sends = 0
     let event: ((event: LiveDriverEvent) => void) | undefined
-    let session: LiveSessionState
+    let session: LiveSessionState | undefined
+    const opened = () => {
+      assert.ok(session, "the fixture session has opened")
+      return session
+    }
     let pending: (() => void) | undefined
     let hold = false
     let cleanupFails = false
@@ -44,7 +48,7 @@ try {
       listAccounts: async () => expected ? [{ harness: provider, name: "mismatch", email: expected, dir: root, active: true }] : [], accountEnv: async (name, base) => ({ ...base, FIXTURE_ACCOUNT: name ?? "default" }),
       selectedAccount: name => ({ name: name ?? "default", dir: root }),
       credentialRevision: async () => revision, accountUsage: async () => ({ status: "unavailable" }),
-      captureAccount: async () => {}, removeAccount: async () => {},
+      captureAccount: async () => {}, removeAccount: async () => ({}),
     })
     const host = createProviderHost()
     host.liveDrivers.register({ ...original, provider, canResume: true, available: () => true, nativeSource: undefined,
@@ -67,9 +71,13 @@ try {
             : { kind: "uncertain", reason: "simulated response loss" })
           throw new ExecutionAccountChanged("credentials")
         }
-        event!({ type: "live-session", session: { ...session, status: "running" } })
+        event!({ type: "live-session", session: { ...opened(), status: "running" } })
         dispatch.report({ kind: "accepted", source: "native-response" })
-        const finish = () => { event!({ type: "live-update", id: session.id, update: { kind: "text", text: "fixture answer" } }); event!({ type: "live-session", session }) }
+        const finish = () => {
+          const current = opened()
+          event!({ type: "live-update", id: current.id, update: { kind: "text", text: "fixture answer" } })
+          event!({ type: "live-session", session: current })
+        }
         if (hold) pending = finish
         else finish()
       },
@@ -125,7 +133,7 @@ try {
 
       // Background work keeps the old process: the input waits unsent, says
       // what for, and switches by itself once that work ends.
-      session = { ...session, backgroundTasks: 1 }
+      session = { ...opened(), backgroundTasks: 1 }
       event!({ type: "live-session", session })
       revision = "private-credential-three"
       const blocked = randomUUID()
@@ -143,7 +151,7 @@ try {
       await delay(20)
       assert.equal(sends, 5, "nothing sends under the old account while the switch waits")
       assert.equal(opens, 4)
-      session = { ...session, backgroundTasks: undefined }
+      session = { ...opened(), backgroundTasks: undefined }
       event!({ type: "live-session", session })
       await until(() => owner.snapshot(id)?.requests.find(request => request.id === behind)?.status === "completed")
       assert.equal(owner.snapshot(id)?.requests.find(request => request.id === blocked)?.status, "completed")
@@ -157,7 +165,7 @@ try {
       for (const evidence of ["accepted", "uncertain"] as const) {
         deliveryFailure = evidence
         const failed = randomUUID()
-        const before = sends
+        const before: number = sends
         owner.submit(id, failed, "retain the native delivery receipt")
         await until(() => owner.snapshot(id)?.requests.find(request => request.id === failed)?.status === "failed")
         assert.equal(owner.snapshot(id)?.requests.find(request => request.id === failed)?.nativeDelivery?.evidence.kind, evidence)
@@ -165,7 +173,7 @@ try {
         assert.equal(sends, before + 1, "accepted and unknown attempts cannot replay")
       }
       deliveryFailure = undefined
-      event!({ type: "live-session", session })
+      event!({ type: "live-session", session: opened() })
 
       // Stop while cleanup is pending removes the unsent request. No eager
       // replacement is started when the user has cancelled the queued input.

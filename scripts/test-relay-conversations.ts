@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { RelayConversations } from "../electron/relay-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
 import type { RelayCanonicalEvent } from "@mako/relay"
 
@@ -16,7 +18,14 @@ const permissions: string[] = []
 const cancellations: string[] = []
 function driver(provider: string): ProviderLiveDriver {
   return {
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
     canResume: false,
     available: () => true,
@@ -139,7 +148,7 @@ try {
     update: {
       kind: "plan",
       entries: [
-        { content: "Check the fixture", priority: "high", status: "completed" },
+        { content: "Check the fixture", status: "completed" },
       ],
     },
   })

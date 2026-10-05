@@ -41,10 +41,13 @@ assert.notEqual(records.at(-1)?.attempt, secondAttempt, "late completion retains
 assert.throws(() => second.sync("configuration", () => { throw secret }), error => error === secret)
 class MissingFolder extends Error { override name = "MissingWorkingDirectoryError" }
 assert.throws(() => second.sync("spawn", () => { throw new MissingFolder("/private/path is gone") }))
-assert.deepEqual([records.at(-1)?.state, records.at(-1)?.state === "failed" && records.at(-1)?.error], ["failed", "MissingWorkingDirectoryError"],
-  "a failed spawn says why without the message: the class")
+const missingFolder = records.at(-1)
+assert.ok(missingFolder?.state === "failed")
+assert.equal(missingFolder.error, "MissingWorkingDirectoryError", "a failed spawn says why without the message: the class")
 assert.throws(() => second.sync("spawn", () => { throw Object.assign(new Error("spawn /x ENOENT"), { code: "ENOENT" }) }))
-assert.equal(records.at(-1)?.state === "failed" && records.at(-1)?.error, "ENOENT", "or the system code")
+const missingExecutable = records.at(-1)
+assert.ok(missingExecutable?.state === "failed")
+assert.equal(missingExecutable.error, "ENOENT", "or the system code")
 assert.ok(!JSON.stringify(records).includes("/private/path"))
 
 console.log("Launch tracing: pre-spawn failure and its kind, pending work, human wait, overlapping attempts, synchronous spawn and payload exclusion passed")

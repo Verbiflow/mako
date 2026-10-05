@@ -1,4 +1,5 @@
 import type {
+  AccountRemoval,
   AccountUsage,
   AccountProviderInfo,
   HarnessAccount,
@@ -36,7 +37,8 @@ interface SelectableAccounts extends AccountCapabilityBase {
   mode: "selectable"
   /** Copy the CLI's current login into a named profile. Adapters whose logins refresh in place leave this out. */
   captureAccount?(name: string): Promise<void>
-  removeAccount(name: string): Promise<void>
+  /** Forget the profile here; a key Mako minted for it is revoked at the provider first. */
+  removeAccount(name: string): Promise<AccountRemoval>
 }
 
 /** What the person can paste back into a running sign-in. */

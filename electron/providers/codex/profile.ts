@@ -47,6 +47,10 @@ type ConfigReadParams = { includeLayers: boolean; cwd?: string }
 export const codexProfileLoader: ProviderProfileLoader = {
   provider: "codex",
   label: "Codex",
+  defaults: {
+    work: [{ model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }],
+    light: [{ model: "gpt-6-luna", options: { effort: "low", serviceTier: "default" } }],
+  },
   transport: "app-server",
   capabilities: [
     "start",

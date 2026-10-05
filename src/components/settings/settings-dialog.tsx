@@ -3,10 +3,13 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 import { ArrowLeftIcon, SearchIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useUpdates } from "@/state/updates"
+import { useThreads } from "@/state/thread-store"
 import {
   SETTINGS_GROUPS,
+  sectionKeywords,
   type SettingsSection,
 } from "@/components/settings/sections/manifest"
+import type { HarnessDescriptor } from "@/lib/types"
 import { section as agents } from "@/components/settings/sections/agents"
 import { section as models } from "@/components/settings/sections/models"
 import { section as usage } from "@/components/settings/sections/usage"
@@ -50,11 +53,11 @@ const SECTIONS: readonly SettingsSection[] = [
   about,
 ]
 
-function matches(entry: SettingsSection, term: string): boolean {
+function matches(entry: SettingsSection, term: string, harnesses: readonly HarnessDescriptor[]): boolean {
   if (!term) return true
   return (
     entry.title.toLowerCase().includes(term) ||
-    entry.keywords.some((keyword) => keyword.toLowerCase().includes(term))
+    sectionKeywords(entry, harnesses).some((keyword) => keyword.toLowerCase().includes(term))
   )
 }
 
@@ -62,10 +65,11 @@ function matches(entry: SettingsSection, term: string): boolean {
  * small chip so a hit on "daemon" under Agents is legible, not mysterious. */
 function matchedKeyword(
   entry: SettingsSection,
-  term: string
+  term: string,
+  harnesses: readonly HarnessDescriptor[]
 ): string | undefined {
   if (entry.title.toLowerCase().includes(term)) return undefined
-  return entry.keywords.find((keyword) => keyword.toLowerCase().includes(term))
+  return sectionKeywords(entry, harnesses).find((keyword) => keyword.toLowerCase().includes(term))
 }
 
 /**
@@ -91,14 +95,15 @@ export function SettingsDialog({
   const searchRef = useRef<HTMLInputElement>(null)
 
   const active = SECTIONS.find((entry) => entry.id === section || entry.aliases?.includes(section)) ?? SECTIONS[0]
+  const descriptors = useThreads((state) => state.descriptors)
   const term = query.trim().toLowerCase()
-  const shown = SECTIONS.filter((entry) => matches(entry, term))
+  const shown = SECTIONS.filter((entry) => matches(entry, term, descriptors))
 
   const search = (next: string) => {
     setQuery(next)
     const nextTerm = next.trim().toLowerCase()
     if (!nextTerm) return
-    const hits = SECTIONS.filter((entry) => matches(entry, nextTerm))
+    const hits = SECTIONS.filter((entry) => matches(entry, nextTerm, descriptors))
     const first = hits[0]
     if (first && !hits.some((entry) => entry.id === active.id))
       onSectionChange(first.id)
@@ -181,7 +186,7 @@ export function SettingsDialog({
                           {group}
                         </div>
                         {entries.map((entry) => {
-                          const chip = term ? matchedKeyword(entry, term) : undefined
+                          const chip = term ? matchedKeyword(entry, term, descriptors) : undefined
                           const selected = active.id === entry.id
                           const Icon = entry.icon
                           return (

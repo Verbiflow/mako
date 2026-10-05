@@ -19,7 +19,7 @@ import { openCodeAccountCapability as opencode } from "../electron/providers/ope
 import { cursorAccountCapability } from "../electron/providers/cursor/accounts.ts"
 import { CURSOR_ACCOUNT_ENV, CursorSdkAuth, type CursorSdkProbeClient } from "../electron/providers/cursor/sdk/auth.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
-import { CursorAccountKeys, CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential } from "../electron/providers/cursor/sdk/credentials.ts"
 import { managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
 
 /** The fake Cursor SDK child's reply per method; an unlisted method is a test failure. */
@@ -310,8 +310,79 @@ else signIn();
   assert.equal((await cursor.listAccounts(null)).find(account => account.name === "account-cursor1")?.signedOut, true, "an expired key shows as signed out")
   await assert.rejects(cursor.accountEnv("account-cursor1", {}), /expired/)
   assert.deepEqual(await cursor.accountUsage("account-cursor1"), { status: "missing-credentials" })
-  await cursor.removeAccount("account-cursor1")
+  const realFetch = globalThis.fetch
+  const cursorCalls: string[] = []
+  globalThis.fetch = async (input) => { cursorCalls.push(String(input)); throw new Error("an expired key needs no network") }
+  try {
+    assert.deepEqual(await cursor.removeAccount("account-cursor1"), {}, "an expired key is already dead at Cursor")
+  } finally { globalThis.fetch = realFetch }
+  assert.deepEqual(cursorCalls, [])
   assert.deepEqual(await cursorKeys.names(), [])
+
+  // Removing an account revokes the key Mako minted for it, found by its
+  // name, exact expiry and masked ends, and says plainly when it couldn't.
+  const mintedKey = "crsr_ab0123456789minted9xyz"
+  const mintedExpiry = Date.now() + 30 * 86_400_000
+  interface ListedKey { id: number; maskedKey: string; name: string; expiresAt?: string }
+  interface CursorFixture { exchange: number; revoke: number; offline: boolean; keys: ListedKey[]; revoked: number[]; bearers: string[] }
+  const cursorFixture: CursorFixture = { exchange: 200, revoke: 200, offline: false, keys: [], revoked: [], bearers: [] }
+  const listedKeys = (extra: ListedKey[] = []): ListedKey[] => [
+    { id: 7, maskedKey: "crsr_ab...9xyz", name: "Mako", expiresAt: String(mintedExpiry) },
+    { id: 8, maskedKey: "crsr_zz...0000", name: "Mako", expiresAt: String(mintedExpiry) },
+    { id: 9, maskedKey: "crsr_ab...9xyz", name: "Mako", expiresAt: String(mintedExpiry + 1) },
+    { id: 10, maskedKey: "crsr_ab...9xyz", name: "laptop", expiresAt: String(mintedExpiry) },
+    ...extra,
+  ]
+  const sessionJwt = `e30.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 600 })).toString("base64url")}.fixture`
+  const cursorStandIn: typeof fetch = async (input, init) => {
+    const url = new URL(String(input))
+    const bearer = new Headers(init?.headers).get("Authorization")?.replace(/^Bearer /, "") ?? ""
+    cursorFixture.bearers.push(`${url.pathname} ${bearer === mintedKey ? "key" : bearer === sessionJwt ? "session" : "other"}`)
+    if (cursorFixture.offline) throw new TypeError("fetch failed")
+    if (url.pathname === "/auth/exchange_user_api_key")
+      return cursorFixture.exchange === 200 ? Response.json({ accessToken: sessionJwt }) : new Response("{}", { status: cursorFixture.exchange })
+    if (url.pathname === "/aiserver.v1.DashboardService/ListUserApiKeys") return Response.json({ apiKeys: cursorFixture.keys })
+    if (url.pathname === "/aiserver.v1.DashboardService/RevokeUserApiKey") {
+      if (cursorFixture.revoke !== 200) return new Response("{}", { status: cursorFixture.revoke })
+      cursorFixture.revoked.push(z.object({ id: z.number() }).parse(JSON.parse(String(init?.body))).id)
+      return Response.json({})
+    }
+    return new Response("{}", { status: 404 })
+  }
+  const removeMinted = async (setup: Partial<Omit<CursorFixture, "revoked" | "bearers">>, credential: Partial<StoredCursorCredential> = {}) => {
+    Object.assign(cursorFixture, { exchange: 200, revoke: 200, offline: false, keys: listedKeys(), revoked: [], bearers: [] }, setup)
+    await cursorKeys.store("account-revoke").save({
+      version: 1, apiKey: mintedKey, method: "browser", keyName: "Mako", email: "cursor-added@example.invalid",
+      expiresAt: new Date(mintedExpiry).toISOString(), savedAt: new Date().toISOString(), ...credential,
+    })
+    globalThis.fetch = cursorStandIn
+    try {
+      const removal = await cursor.removeAccount("account-revoke")
+      assert.deepEqual(await cursorKeys.names(), [], "the account is gone here whatever Cursor said")
+      assert.ok(!JSON.stringify(removal).includes(mintedKey), "a removal never repeats the key")
+      return removal
+    } finally { globalThis.fetch = realFetch }
+  }
+  assert.deepEqual(await removeMinted({}), {})
+  assert.deepEqual(cursorFixture.revoked, [7], "only the key Mako minted is revoked: not its namesakes, not the user's own")
+  assert.deepEqual(cursorFixture.bearers, ["/auth/exchange_user_api_key key", "/aiserver.v1.DashboardService/ListUserApiKeys session", "/aiserver.v1.DashboardService/RevokeUserApiKey session"], "the key is only ever traded for a session")
+
+  assert.deepEqual(await removeMinted({ keys: listedKeys().map(key => key.id === 7 ? { ...key, maskedKey: "hidden" } : key) }), {})
+  assert.deepEqual(cursorFixture.revoked, [7], "a mask shape Mako doesn't know rules nothing out")
+
+  const refused = await removeMinted({ revoke: 500 })
+  assert.deepEqual(refused, { stillValid: { reason: "Cursor refused to revoke it (HTTP 500)", expiresAt: new Date(mintedExpiry).toISOString(), manageUrl: "https://cursor.com/dashboard?tab=integrations" } })
+  const offline = await removeMinted({ offline: true })
+  assert.match(offline.stillValid?.reason ?? "", /^Cursor couldn't be reached/)
+  assert.equal(offline.stillValid?.expiresAt, new Date(mintedExpiry).toISOString(), "the person learns when it lapses on its own")
+  assert.deepEqual((await removeMinted({ keys: listedKeys().filter(key => key.id !== 7) })).stillValid?.reason, "Cursor's key list doesn't show this key")
+  assert.deepEqual(cursorFixture.revoked, [], "a key Mako can't single out is left for the person")
+  assert.deepEqual((await removeMinted({ keys: listedKeys([{ id: 11, maskedKey: "crsr_a...xyz", name: "Mako", expiresAt: String(mintedExpiry) }]) })).stillValid?.reason, "Cursor lists more than one key that could be this one")
+  assert.deepEqual(cursorFixture.revoked, [])
+  assert.deepEqual(await removeMinted({ exchange: 401 }), {}, "a key Cursor already refuses needs no revoking")
+  assert.deepEqual(cursorFixture.bearers, ["/auth/exchange_user_api_key key"])
+  assert.deepEqual(await removeMinted({}, { method: "pasted", keyName: undefined }), {}, "a pasted key is the person's own: Mako only forgets it")
+  assert.deepEqual(cursorFixture.bearers, [], "and asks Cursor nothing")
 
   // Grok: one auth file per account folder, with who it was kept beside it.
   await writeFile(join(bin, "grok"), `#!${process.execPath}
@@ -392,10 +463,38 @@ setInterval(() => {}, 1000);
     assert.equal(devinAdded.status, "added", "a CLI that keeps running after it signs in still finishes")
     const devinName = devinAdded.status === "added" ? devinAdded.name : ""
     assert.ok(devinAdded.status === "added" && devinAdded.email === "devin@example.invalid")
-    const devinEnv = await devin.accountEnv(devinName, { ...process.env, WINDSURF_API_KEY: "wrong-api-identity" })
-    assert.equal(devinEnv.WINDSURF_API_KEY, "devin-fixture-key")
-    assert.equal(devinEnv.WINDSURF_API_SERVER_URL, devinUrl)
-    assert.equal(devinEnv.XDG_DATA_HOME, process.env.XDG_DATA_HOME, "Devin's own data folder stays shared")
+    // A Mako account's key never rides the environment `devin acp` hands its
+    // tools: Devin finds it in a data folder that is otherwise the user's.
+    const userData = process.env.XDG_DATA_HOME || join(root, ".local", "share")
+    const accountData = join(accountDir("devin", devinName), "data")
+    await mkdir(join(userData, "devin"), { recursive: true })
+    await mkdir(join(userData, "some-tool"), { recursive: true })
+    await writeFile(join(userData, "devin", "mcp-auth.json"), "{}")
+    await rm(join(accountData, "devin", "cli"), { recursive: true, force: true })
+    await mkdir(join(accountData, "devin", "cli", "logs"), { recursive: true })
+    await writeFile(join(accountData, "devin", "cli", "logs", "login.log"), "left by the sign-in")
+    const devinEnv = await devin.accountEnv(devinName, { ...process.env, WINDSURF_API_KEY: "wrong-api-identity", DEVIN_API_KEY: "wrong-api-identity" })
+    for (const key of ["WINDSURF_API_KEY", "WINDSURF_API_SERVER_URL", "DEVIN_API_KEY"]) assert.equal(devinEnv[key], undefined, `${key} must not reach the agent's tools`)
+    assert.ok(!Object.values(devinEnv).some(value => value?.includes("devin-fixture-key")), "the key rides no variable at all")
+    assert.equal(devinEnv.XDG_DATA_HOME, accountData)
+    const seen = (path: string) => realpath(join(accountData, path))
+    assert.ok((await lstat(join(accountData, "devin", "credentials.toml"))).isFile(), "Devin reads the account's own login")
+    assert.match(await readFile(join(devinEnv.XDG_DATA_HOME, "devin", "credentials.toml"), "utf8"), /devin-fixture-key/)
+    assert.equal(await seen("devin/cli"), await realpath(join(userData, "devin", "cli")), "sessions land in the user's Devin folder, where Mako finds them")
+    assert.equal(await seen("devin/mcp-auth.json"), await realpath(join(userData, "devin", "mcp-auth.json")))
+    assert.equal(await seen("some-tool"), await realpath(join(userData, "some-tool")), "other programs' data stays the user's")
+    await mkdir(join(accountData, "made-by-a-tool"))
+    await rm(join(userData, "some-tool"), { recursive: true })
+    await devin.accountEnv(devinName, process.env)
+    await assert.rejects(lstat(join(accountData, "some-tool")), { code: "ENOENT" }, "a link to a removed entry goes with it")
+    assert.ok((await lstat(join(accountData, "made-by-a-tool"))).isDirectory(), "what a tool made in the folder is kept")
+    assert.ok((await lstat(join(accountData, "devin", "cli"))).isSymbolicLink(), "a later launch keeps the same links")
+    await selectAccount("devin", devinName)
+    const devinLaunch = await resolveAccountLaunch("devin", { ...process.env, WINDSURF_API_KEY: "wrong-api-identity" })
+    assert.equal(devinLaunch.account.name, devinName)
+    assert.ok(!Object.entries(devinLaunch.env).some(([key, value]) => key === "WINDSURF_API_KEY" || value?.includes("devin-fixture-key")), "the launch Devin's ACP and headless runs share carries no key")
+    assert.equal(devinLaunch.env.XDG_DATA_HOME, accountData)
+    await selectAccount("devin", null)
     assert.equal((await devin.accountUsage(devinName)).status, "ok")
     const devinRenewal = await startAccountLogin("devin", devinName)
     submitAccountLoginCode(devinRenewal.id, "fixture-code")
@@ -403,7 +502,10 @@ setInterval(() => {}, 1000);
     await assert.rejects(lstat(join(accountDir("devin", devinName), "renewal")), { code: "ENOENT" }, "the renewal folder is gone once its login moved in")
     const devinCancelled = await startAccountLogin("devin", devinName)
     await cancelAccountLogin(devinCancelled.id)
-    assert.equal((await devin.accountEnv(devinName, process.env)).WINDSURF_API_KEY, "devin-fixture-key", "a cancelled renewal keeps the old login")
+    assert.match(await readFile(join((await devin.accountEnv(devinName, process.env)).XDG_DATA_HOME ?? "", "devin", "credentials.toml"), "utf8"), /devin-fixture-key/, "a cancelled renewal keeps the old login")
+    await devin.removeAccount(devinName)
+    assert.ok((await lstat(join(userData, "devin", "cli"))).isDirectory(), "removing an account leaves the user's Devin sessions")
+    assert.equal(await readFile(join(userData, "devin", "mcp-auth.json"), "utf8"), "{}")
   } finally {
     delete process.env.DEVIN_CLI_PATH
     await new Promise(resolve => devinServer.close(resolve))
@@ -417,7 +519,7 @@ setInterval(() => {}, 1000);
   await writeFile(join(nativeClaude, "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://fixture.invalid" } }))
   await assert.rejects(startAccountLogin("claude"), /home settings override/)
   assert.deepEqual(await managedDirs("claude"), [(await managedNames(claude))[0]], "a refused sign-in leaves no profile")
-  await assert.rejects(captureAccount("claude", "unsafe-import", "native"), /home settings override/)
+  await assert.rejects(captureAccount("claude", "unsafe-import"), /home settings override/)
   await rm(join(nativeClaude, "settings.json"))
 
   const legacyHome = join(root, "legacy-config")
@@ -446,7 +548,7 @@ setInterval(() => {}, 1000);
     }, "a denied authoritative store cannot fall back to stale file credentials or retain secret native output")
     await assert.rejects(claude.credentialRevision("personal", process.env), /Could not read macOS Keychain/, "permission failure is not a signed-out or plaintext fallback state")
     delete process.env.MAKO_FIXTURE_KEYCHAIN_DENIED
-    await captureAccount("codex", "secure", "native")
+    await captureAccount("codex", "secure")
     const config = parse(await readFile(join(accountDir("codex", "secure"), "config.toml"), "utf8"))
     assert.equal(config.cli_auth_credentials_store, "file")
     assert.equal(config.model, "fixture-model")
@@ -455,7 +557,7 @@ setInterval(() => {}, 1000);
     await writeFile(join(nativeCodex, "config.toml"), 'cli_auth_credentials_store = "keyring"\n[features]\nsecret_auth_storage = true\n')
     await assert.rejects(readCodexCredentials(nativeCodex), /backend yet/)
   }
-  console.log("PASS: in-app sign-in (cancel, failure, code entry, status check, duplicate), signing in again (in place, failed, as someone else), Cursor per-account keys, Grok per-account auth files, Devin's terminal code sign-in, hidden unfinished profiles, ordinary and inherited logins, router-free saved profiles, exact-environment revisions across six adapters, native refresh preservation, and Codex native/managed storage isolation")
+  console.log("PASS: in-app sign-in (cancel, failure, code entry, status check, duplicate), signing in again (in place, failed, as someone else), Cursor per-account keys, Grok per-account auth files, Devin's terminal code sign-in, hidden unfinished profiles, the ordinary login as default whatever the shell exported, saved profiles, exact-environment revisions across six adapters, native refresh preservation, and Codex native/managed storage isolation")
 } finally {
   for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]
   Object.assign(process.env, original)

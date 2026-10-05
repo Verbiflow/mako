@@ -19,7 +19,7 @@ const until = async (check: () => boolean, label: string) => {
   }
 }
 
-const ready = (phase: "stopped" | "starting" | "running"): ThreadAppView => ({
+const ready = (phase: "stopped" | "starting" | "running"): Extract<ThreadAppView, { kind: "ready" }> => ({
   kind: "ready",
   project: "shop",
   phase,

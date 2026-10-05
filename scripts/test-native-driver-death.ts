@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { connectMcpComputerDriver } from "../packages/control-runtime/src/computer-driver-client.js"
+import type { JsonValue } from "../packages/control-runtime/src/json.js"
 
 // The native driver process is killed from outside while an action is in
 // flight. The "app" it drives keeps its state in a file, so effects that
@@ -160,7 +161,7 @@ const server = controlSessionProbe(
   },
   {
     surface: "control",
-    browserCall: async (command) => {
+    browserCall: async (command): Promise<JsonValue> => {
       if (command.action === "observe")
         return {
           observation: `page-${pageValue || "empty"}`,
@@ -174,8 +175,8 @@ const server = controlSessionProbe(
           omitted: 0,
           truncatedTextFields: 0,
         }
-      if (command.action === "type" || command.action === "setValue") {
-        pageValue = "text" in command ? String(command.text) : String(z.object({ value: z.unknown() }).parse(command).value)
+      if (command.action === "type") {
+        pageValue = command.text
         return { typed: true }
       }
       throw new Error(`Unexpected browser call ${command.action}`)

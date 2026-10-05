@@ -9,6 +9,8 @@ import type { HostEvent } from "../electron/contracts/host-events-boot.js"
 import type { ThreadPlacement } from "../electron/contracts/thread-identity.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { LiveSessionState } from "../electron/shared.js"
 import { ThreadStore } from "../electron/thread-store.js"
 
@@ -33,6 +35,13 @@ function driver(harness: string, owner: () => LiveConversations, threads: Thread
   const sessions = new Map<string, LiveSessionState>()
   return {
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider: harness,
     canResume: true,
     available: () => true,

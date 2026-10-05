@@ -44,15 +44,27 @@ export function scopedMcpWriteArgs(
 
 export type McpReadFormat = "named-map" | "named-map-or-list" | "command-array-map"
 
+/** How a harness's JSON config holds MCP servers; Mako writes whichever format a harness declares. */
+export interface McpJsonFormat {
+  /** The key the servers sit under. */
+  root: string
+  /** A local server's command: one string with `args` beside it, or one array holding both. */
+  command: "string" | "array"
+  /** How a remote server is told apart: `type` names its transport, a `url` alone says it, or `type: "remote"`. */
+  remote: "transport" | "implicit" | "remote"
+}
+
 export interface ProviderMcpSource extends ProviderCapability {
   readFormat: McpReadFormat
   command(env: NodeJS.ProcessEnv): string | null
   userFiles(account: ProviderAccountLocation): string[]
   workspaceFiles(cwd: string): string[]
   readsCli: boolean
+  /** How long Mako waits on one of its own MCP calls the harness makes, when the harness allows longer than a minute. */
+  callWaitMs?: number
   write:
     | { kind: "none" }
-    | { kind: "file"; format: "claude" | "cursor" | "opencode" }
+    | { kind: "file"; format: McpJsonFormat }
     | {
         kind: "cli"
         scopes: "user" | "both"

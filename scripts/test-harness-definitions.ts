@@ -1,6 +1,5 @@
-import { fixtureHarnesses } from "../src/dev/harness-fixtures.ts"
 import assert from "node:assert/strict"
-import { existsSync, readdirSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { readableHarnesses } from "@mako/sessions"
 import { createProviderHost, type ProviderHost } from "../electron/providers/host.ts"
@@ -12,6 +11,7 @@ import {
 } from "../electron/providers/harness-definition.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import type { ProviderRegistry, ProviderCapability } from "../electron/providers/registry.ts"
+import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 
 /**
  * A harness is one definition that names every capability family. These
@@ -31,23 +31,26 @@ const families = {
   accounts: "accountCapabilities",
   acp: "acpSources",
   nativeRunner: "nativeRunners",
+  utility: "utilityRunners",
   processProbe: "processProbes",
   mcp: "mcpSources",
   skills: "skillSources",
   sessionEmitter: "sessionEmitters",
   connection: "connections",
   updates: "updateSources",
+  usageHistory: "usageHistories",
   artifactPreview: "artifactPreviews",
 } as const satisfies Record<HarnessFamily, Exclude<keyof ProviderHost, "harnesses">>
 
 // SAFETY: `families` satisfies a record over exactly the HarnessFamily keys.
 const familyNames = Object.keys(families) as HarnessFamily[]
 
-const registry = (family: HarnessFamily): ProviderRegistry<ProviderCapability> => providerHost[families[family]]
+type CapabilityLookup = Pick<ProviderRegistry<ProviderCapability>, "list" | "get">
+const registry = (family: HarnessFamily): CapabilityLookup => providerHost[families[family]]
 
 const harnesses = providerHost.harnesses.list()
-assert.deepEqual(new Set(fixtureHarnesses.map((entry) => entry.provider)), new Set(harnesses.map((entry) => entry.provider)), "new harnesses need explicit browser fixture evidence")
-for (const entry of harnesses) assert.deepEqual(fixtureHarnesses.find((fixture) => fixture.provider === entry.provider)?.presentation, entry.presentation)
+assert.equal(readFileSync(GENERATED_PATH, "utf8"), renderHarnessDescriptors(), "src/dev/harness-descriptors.ts is behind the definitions; run npm run harness:descriptors")
+assert.deepEqual(new Set(readableHarnesses()), new Set(harnesses.map((entry) => entry.provider)), "every installed harness has a saved-history reader in @mako/sessions, and every reader a harness")
 assert.ok(harnesses.length > 0)
 assert.equal(new Set(harnesses.map((entry) => entry.provider)).size, harnesses.length)
 
@@ -91,7 +94,8 @@ for (const harness of harnesses) {
 const host = createProviderHost()
 const definition: HarnessDefinition = {
   provider: "example",
-  presentation: { icon: { id: "codex-cloud", tint: "currentColor" } },
+  presentation: { mark: { viewBox: "0 0 24 24", paths: [{ d: "M0 0h24v24H0z" }], tint: "currentColor" } },
+  diagnostics: {},
   hooks: lacks("test"),
   commands: lacks("test"),
   toolEditing: lacks("test"),
@@ -103,15 +107,18 @@ const definition: HarnessDefinition = {
   accounts: lacks("test"),
   acp: lacks("test"),
   nativeRunner: lacks("test"),
+  utility: lacks("test"),
   processProbe: lacks("test"),
   mcp: lacks("test"),
   skills: lacks("test"),
   sessionEmitter: lacks("test"),
   connection: lacks("test"),
   updates: lacks("test"),
+  usageHistory: lacks("test"),
   artifactPreview: lacks("test"),
 }
 assert.throws(() => installHarness(host, definition), /example's live capability is filed under codex/)
+assert.throws(() => installHarness(host, { ...definition, diagnostics: { runsInSdk: true } }), /runs in an SDK it does not name/)
 assert.equal(host.harnesses.list().length, 0)
 assert.equal(host.hooks.list().length, 0)
 
@@ -143,7 +150,7 @@ for (const field of ["launchEnvironment", "nativeIdentity", "nativeExclusion", "
     ...definition,
     live: { ...definition.live, provider: "example", [field]: undefined },
     profile: { ...definition.profile, provider: "example" },
-  }), undefined, `a new harness must declare ${field}, including why it is unavailable`)
+  }), Error, `a new harness must declare ${field}, including why it is unavailable`)
   assert.equal(host.harnesses.list().length, 0)
   assert.equal(host.liveDrivers.list().length, 0)
 }

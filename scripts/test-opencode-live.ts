@@ -143,7 +143,8 @@ try {
   const accepted = pong.dispatch.reports.filter(evidence => evidence.kind === "accepted")
   assert.ok(accepted.some(evidence => evidence.kind === "accepted" && evidence.referenceId === submitted.correlationId),
     "acceptance names the inbox item the client chose")
-  assert.ok(pong.state.usage && pong.state.usage.used > 0 && pong.state.usage.size > 0, "context usage comes from the root step")
+  const usage = pong.state.usage
+  assert.ok((usage?.used ?? 0) > 0 && (usage?.size ?? 0) > 0, "context usage comes from the root step")
   report.cases.push("prompt: client-chosen inbox id is the correlation and acceptance reference; prose streams; usage reported")
 
   const shell = await turn(ask, `Use the bash tool to run exactly this command: echo ${marker}\nThen reply with the word done.`, async request => {
@@ -176,7 +177,7 @@ try {
   assert.ok(form && form.type === "live-permission")
   assert.ok(question.events.some(event => event.type === "live-permission-ended" && event.requestId === form.request.id && event.source === "native-resolution"))
   const questionRow = question.updates.find(update => update.kind === "tool" && update.toolKind === "question")
-  assert.ok(questionRow, "the question leaves a row beside its form")
+  assert.ok(questionRow?.kind === "tool", "the question leaves a row beside its form")
   assert.ok(question.updates.some(update => update.kind === "tool-update" && update.id === questionRow.id && update.status === "completed" && update.output?.includes("answered")),
     "the answered row records the answer")
   report.cases.push("question: OpenCode's form becomes a structured question, the answer is written natively and resolves it")
@@ -483,7 +484,7 @@ try {
 
   report.passed = true
 } finally {
-  for (const id of chats) await driver.close(id).catch(() => {})
+  for (const id of chats) await Promise.resolve().then(() => driver.close(id)).catch(() => {})
   await rm(root, { recursive: true, force: true })
   if (process.env.MAKO_PROOF_OUTPUT) await writeFile(process.env.MAKO_PROOF_OUTPUT, JSON.stringify(report, null, 2) + "\n")
 }

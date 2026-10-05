@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import type { Actor } from "../electron/contracts/thread-identity.js"
+import { SessionIdSchema, type Actor } from "../electron/contracts/thread-identity.js"
 import { MoveIdSchema, RuntimeIdSchema } from "../electron/contracts/thread-execution.js"
 import {
   THREAD_STORE_SCHEMA,
@@ -275,7 +275,7 @@ function threadGroups(): void {
   assert.equal(threads.group(home.thread)?.sessions.at(-1)?.started, true, "its first journal starts it")
   assert.deepEqual(threads.groups().map((group) => group.id), [home.thread])
 
-  const stray = journal({ harness: "grok", session: randomUUID() })
+  const stray = journal({ harness: "grok", session: SessionIdSchema.parse(randomUUID()) })
   assert.notEqual(threads.registerJournal(stray, migration).thread, home.thread, "a journal naming an unknown Session starts its own Thread")
   threads.close()
 

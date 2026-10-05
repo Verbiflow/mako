@@ -26,5 +26,17 @@ export interface SettingsSection {
   readonly group: SettingsGroup
   readonly icon: LucideIcon
   readonly keywords: readonly string[]
+  /** The section has a row per harness, so every harness's name finds it too. */
+  readonly perHarness?: true
   readonly Component: ComponentType
+}
+
+/** A section's search words: its own, and every harness's names when it has a row per harness. */
+export function sectionKeywords(
+  section: SettingsSection,
+  harnesses: readonly { provider: string; displayName: string }[]
+): readonly string[] {
+  return section.perHarness
+    ? [...section.keywords, ...harnesses.flatMap((harness) => [harness.displayName, harness.provider])]
+    : section.keywords
 }

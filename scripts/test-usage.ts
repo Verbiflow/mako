@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { usageSummary } from "../electron/usage.js"
+import { providerHost } from "../electron/providers/index.js"
+import { usageHarnesses, usageSummary } from "../electron/usage.js"
 import { estimateUsageCost } from "../electron/usage-pricing.js"
 
 // Fable 5.1 and Fable 5 share list prices but not cache reads, and the
@@ -129,7 +130,7 @@ try {
   )
   await putOpenCodeDatabases(homeRoot)
 
-  const summary = await usageSummary(sessionsRoot, homeRoot)
+  const summary = await usageSummary(usageHarnesses(providerHost), sessionsRoot, homeRoot)
 
   assert.equal(summary.total.messages, 11)
   assert.equal(summary.sessions, 9)
@@ -184,7 +185,7 @@ try {
 
   const grokHome = join(root, "grok-home")
   const grokSession = join(grokHome, ".grok", "sessions", encodeURIComponent("/work/grok"), "grok-1")
-  type GrokModelUsage = { inputTokens: number; outputTokens: number; cachedReadTokens: number; cacheCreationTokens: number; costUsdTicks: number }
+  type GrokModelUsage = { inputTokens: number; outputTokens: number; cachedReadTokens?: number; cacheCreationTokens?: number; costUsdTicks?: number }
   const turn = (id: string, timestamp: number, modelUsage: Record<string, GrokModelUsage>) => JSON.stringify({
     timestamp,
     method: "_x.ai/session/update",
@@ -201,7 +202,7 @@ try {
     JSON.stringify({ method: "_x.ai/session/update", params: { sessionId: "grok-1", update: { sessionUpdate: "agent_message_chunk" } } }),
   ])
   await putJsonl(join(grokSession, "chat_history.jsonl"), [turn("p2", 1_787_000_100, { "grok-build": { inputTokens: 9_999, outputTokens: 1 } })])
-  const grokSummary = await usageSummary(join(root, "no-mako-sessions"), grokHome)
+  const grokSummary = await usageSummary(usageHarnesses(providerHost), join(root, "no-mako-sessions"), grokHome)
   const grok = grokSummary.sources?.find((source) => source.source === "Grok")
   assert.equal(grok?.messages, 2, "one event per model per turn; a repeated turn and other files add nothing")
   assert.equal(grok?.input, 140, "cached input is counted apart from fresh input")

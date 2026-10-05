@@ -4,6 +4,8 @@ import {
   ToolDetailSchema,
   ProposedPlanSchema,
   MAX_PROPOSED_PLAN_LENGTH,
+  type AttachmentContent,
+  type ToolDetail,
 } from "@mako/sessions/content"
 import { NativeEventSourceSchema, sameSetupEvent } from "@mako/sessions/events"
 
@@ -73,8 +75,14 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     id: z.string(),
     title: z.string().optional(),
     status: z.string().optional(),
+    /** The whole input; it wins over `inputAppend`. */
     input: z.string().optional(),
+    /** Text that continues the input the call has. */
+    inputAppend: z.string().optional(),
+    /** The whole output; it wins over `outputAppend`. */
     output: z.string().optional(),
+    /** Text that continues the output; the call keeps its last `MAX_STREAMED_TOOL_OUTPUT` characters. */
+    outputAppend: z.string().optional(),
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
@@ -211,12 +219,16 @@ export function mergeLiveUpdates(
     next.kind === "tool-update" &&
     previous.id === next.id
   ) {
+    const input = mergeStream(previous.input, previous.inputAppend, next.input, next.inputAppend, Infinity)
+    const output = mergeStream(previous.output, previous.outputAppend, next.output, next.outputAppend, MAX_STREAMED_TOOL_OUTPUT)
     const merged: LiveUpdate = {
       ...previous,
       title: next.title ?? previous.title,
       status: next.status ?? previous.status,
-      input: next.input ?? previous.input,
-      output: next.output ?? previous.output,
+      input: input.whole,
+      inputAppend: input.append,
+      output: output.whole,
+      outputAppend: output.append,
       details: next.details ?? previous.details,
       attachments: next.attachments ?? previous.attachments,
     }
@@ -226,10 +238,258 @@ export function mergeLiveUpdates(
   return undefined
 }
 
+/** Streamed tool output a call keeps: the newest text, which is what a running command is doing. */
+export const MAX_STREAMED_TOOL_OUTPUT = 32 * 1024
+
+function tail(value: string, limit: number): string {
+  return value.length > limit ? value.slice(-limit) : value
+}
+
+/** One field of an update: its whole new value, or what continues the current one. */
+interface FieldChange {
+  whole?: string
+  append?: string
+}
+
+/** Two updates to one field as one: applying the result equals applying both in turn. */
+function mergeStream(
+  whole: string | undefined,
+  append: string | undefined,
+  nextWhole: string | undefined,
+  nextAppend: string | undefined,
+  limit: number
+): FieldChange {
+  if (nextWhole !== undefined) return { whole: nextWhole }
+  if (nextAppend === undefined) return { whole, append }
+  if (whole !== undefined) return { whole: tail(whole + nextAppend, limit) }
+  return { append: tail((append ?? "") + nextAppend, limit) }
+}
+
+/** A field's value after an update: the whole value, or the current one continued. */
+function streamed(current: string | undefined, whole: string | undefined, append: string | undefined, limit: number): string | undefined {
+  if (whole !== undefined) return whole
+  if (append === undefined) return current
+  return tail((current ?? "") + append, limit)
+}
+
+/**
+ * How a field travels when its whole value is sent again: nothing when it
+ * is unchanged, the new end when it continues the current value, the whole
+ * value otherwise. An append of output is cut to the limit, so only an
+ * output within it travels as one.
+ */
+function streamForm(current: string | undefined, whole: string | undefined, limit: number): { whole?: string; append?: string } | undefined {
+  if (whole === undefined || current === undefined || whole.length > limit) return undefined
+  if (whole === current) return {}
+  if (whole.length > current.length && whole.startsWith(current)) return { append: whole.slice(current.length) }
+  return undefined
+}
+
+/** Updates waiting for the next batch, and about how many characters they carry. */
+export interface LivePending {
+  updates: LiveUpdate[]
+  pendingCharacters: number
+}
+
+/** A batch flushes before it holds more than this many updates or characters. */
+export const LIVE_BATCH_LIMITS = { updates: 128, characters: 256_000 } as const
+
+/**
+ * Adds `update` to the batch, merged into the last update when it continues
+ * it. `full`: the batch must flush first, and `update` was not added.
+ */
+export function queueLiveUpdate(pending: LivePending, update: LiveUpdate): "queued" | "full" {
+  const last = pending.updates.at(-1)
+  const merged = mergeLiveUpdates(last, update)
+  if (last && merged) {
+    const characters = pending.pendingCharacters - liveUpdateWeight(last) + liveUpdateWeight(merged)
+    if (characters <= LIVE_BATCH_LIMITS.characters) {
+      pending.updates[pending.updates.length - 1] = merged
+      pending.pendingCharacters = characters
+      return "queued"
+    }
+  }
+  const characters = liveUpdateWeight(update)
+  if (pending.updates.length && (pending.updates.length >= LIVE_BATCH_LIMITS.updates || pending.pendingCharacters + characters > LIVE_BATCH_LIMITS.characters))
+    return "full"
+  pending.updates.push(update)
+  pending.pendingCharacters += characters
+  return "queued"
+}
+
+/** About how many characters an update adds to a batch, without serializing it. */
+export function liveUpdateWeight(update: LiveUpdate): number {
+  switch (update.kind) {
+    case "text":
+    case "thinking":
+    case "proposed-plan":
+      return 32 + update.text.length
+    case "user":
+      return 64 + update.text.length + attachmentsWeight(update.attachments)
+    case "attachment":
+      return 32 + attachmentWeight(update.attachment)
+    case "tool":
+    case "tool-update":
+      return 64 + update.id.length + (update.title?.length ?? 0) +
+        (update.input?.length ?? 0) + (update.output?.length ?? 0) +
+        (update.kind === "tool-update" ? (update.inputAppend?.length ?? 0) + (update.outputAppend?.length ?? 0) : 0) +
+        detailsWeight(update.details) + attachmentsWeight(update.attachments)
+    case "plan":
+      return 32 + planWeight(update.entries)
+    case "provider-turn":
+      return 32 + update.reason.length
+    case "event":
+      return 64 + update.label.length + (update.detail?.length ?? 0) + (update.body?.length ?? 0)
+    case "retract":
+      return 32 + update.ids.reduce((sum, id) => sum + id.length + 3, 0)
+  }
+}
+
+function planWeight(entries: readonly { content: string; status: string }[]): number {
+  return entries.reduce((sum, entry) => sum + 32 + entry.content.length + entry.status.length, 0)
+}
+
+function detailsWeight(details: readonly ToolDetail[] | undefined): number {
+  let sum = 0
+  for (const detail of details ?? []) {
+    switch (detail.type) {
+      case "diff":
+        sum += 48 + detail.path.length + (detail.oldText?.length ?? 0) + detail.newText.length
+        break
+      case "terminal":
+        sum += 32 + detail.terminalId.length
+        break
+      case "location":
+        sum += 48 + detail.path.length
+        break
+      case "plan":
+        sum += 32 + planWeight(detail.entries)
+        break
+    }
+  }
+  return sum
+}
+
+function attachmentsWeight(attachments: readonly AttachmentContent[] | undefined): number {
+  let sum = 0
+  for (const attachment of attachments ?? []) sum += attachmentWeight(attachment)
+  return sum
+}
+
+function attachmentWeight(attachment: AttachmentContent): number {
+  const base = 64 + attachment.name.length + attachment.mimeType.length + (attachment.id?.length ?? 0)
+  switch (attachment.source.kind) {
+    case "file":
+      return base + attachment.source.path.length + (attachment.source.originalPath?.length ?? 0)
+    case "url":
+      return base + attachment.source.url.length
+    case "inline":
+      return base + attachment.source.data.length
+    case "unavailable":
+      return base + attachment.source.reason.length
+  }
+}
+
+/** What a tool block gained this batch through appends alone; see `deliverLiveUpdates`. */
+export interface ToolGrowth {
+  input?: string
+  output?: string
+}
+
+export const ToolGrowthSchema = z.object({ input: z.string().optional(), output: z.string().optional() })
+
+/** The tool block after `growth`, by the rule a `tool-update` append follows. */
+export function growTool(block: Extract<LiveBlock, { type: "tool" }>, growth: ToolGrowth): Extract<LiveBlock, { type: "tool" }> {
+  return {
+    ...block,
+    input: streamed(block.input, undefined, growth.input, Infinity),
+    output: streamed(block.output, undefined, growth.output, MAX_STREAMED_TOOL_OUTPUT),
+  }
+}
+
+/** One batch as the host delivers it; see `deliverLiveUpdates`. */
+export interface LiveDelivery {
+  blocks: LiveBlock[]
+  /** The updates as they travel: each whole value that continues its block's is sent as the new end. */
+  updates: LiveUpdate[]
+  /**
+   * Tool blocks, by index, whose input and output only grew by appends and
+   * whose other fields stayed as they were, so storage can append too.
+   */
+  grown: Map<number, ToolGrowth>
+}
+
 /** The host and renderer use the same pure projection. One allocation per delivered batch. */
 export function reduceLiveUpdates(
   blocks: LiveBlock[],
   updates: LiveUpdate[]
+): LiveBlock[] {
+  return reduce(blocks, updates, undefined)
+}
+
+/**
+ * A batch reduced as the host delivers it. Whoever holds `blocks` reaches
+ * the same result from `updates` with `reduceLiveUpdates`, so a harness that
+ * sends a call's whole output again and one that streams only the new end
+ * cost a receiver the same.
+ */
+export function deliverLiveUpdates(blocks: LiveBlock[], updates: LiveUpdate[]): LiveDelivery {
+  const delivery: LiveDelivery = { blocks, updates: [], grown: new Map() }
+  delivery.blocks = reduce(blocks, updates, { delivery, rewritten: new Set() })
+  return delivery
+}
+
+interface Delivering {
+  delivery: LiveDelivery
+  /** Blocks stored whole this batch, which no later append can describe. */
+  rewritten: Set<number>
+  shifted?: boolean
+}
+
+/** A tool update as it travels against its block. */
+interface ToolDelivery {
+  update: Extract<LiveUpdate, { kind: "tool-update" }>
+  /** The update only grew the block's input or output. */
+  grows: boolean
+}
+
+/** The update as it travels against `block`, and whether it only grew the block. */
+function toolDelivery(block: Extract<LiveBlock, { type: "tool" }>, update: Extract<LiveUpdate, { kind: "tool-update" }>): ToolDelivery {
+  const input = streamForm(block.input, update.input, Infinity)
+  const output = streamForm(block.output, update.output, MAX_STREAMED_TOOL_OUTPUT)
+  const title = update.title !== undefined && update.title === block.title
+  const status = update.status !== undefined && update.status === block.status
+  let sent = update
+  if (input || output || title || status) {
+    sent = { ...update }
+    if (title) delete sent.title
+    if (status) delete sent.status
+    if (input) {
+      delete sent.input
+      if (input.append === undefined) delete sent.inputAppend
+      else sent.inputAppend = input.append
+    }
+    if (output) {
+      delete sent.output
+      if (output.append === undefined) delete sent.outputAppend
+      else sent.outputAppend = output.append
+    }
+  }
+  const grows =
+    sent.input === undefined &&
+    sent.output === undefined &&
+    sent.title === undefined &&
+    sent.status === undefined &&
+    sent.details === undefined &&
+    sent.attachments === undefined &&
+    (!sent.unfinished || block.unfinished === true)
+  return { update: sent, grows }
+}
+
+function reduce(
+  blocks: LiveBlock[],
+  updates: LiveUpdate[],
+  delivering: Delivering | undefined
 ): LiveBlock[] {
   if (!updates.length) return blocks
   const next = [...blocks]
@@ -238,6 +498,11 @@ export function reduceLiveUpdates(
     const at = index < 0 ? next.length : index
     from = Math.min(from, at)
     next[at] = block
+  }
+  const rewrite = (index: number) => {
+    if (!delivering) return
+    delivering.rewritten.add(index)
+    delivering.delivery.grown.delete(index)
   }
   const tools = new Map<string, number>()
   let turnStart = next.length - 1
@@ -251,8 +516,30 @@ export function reduceLiveUpdates(
       if (matches(next[index]!)) return index
     return -1
   }
-  for (const update of updates) {
+  for (const received of updates) {
+    let update = received
     const last = next.at(-1)
+    if (update.kind === "tool-update" && delivering) {
+      const index = tools.get(update.id) ?? -1
+      const block = next[index]
+      if (block?.type === "tool") {
+        const sent = toolDelivery(block, update)
+        update = sent.update
+        if (!sent.grows || delivering.shifted || delivering.rewritten.has(index)) rewrite(index)
+        else if (index < blocks.length) {
+          const growth = delivering.delivery.grown.get(index) ?? {}
+          if (update.inputAppend !== undefined) growth.input = (growth.input ?? "") + update.inputAppend
+          if (update.outputAppend !== undefined)
+            growth.output = tail((growth.output ?? "") + update.outputAppend, MAX_STREAMED_TOOL_OUTPUT)
+          delivering.delivery.grown.set(index, growth)
+        }
+      }
+    } else if (update.kind === "tool" && delivering) rewrite(tools.get(update.id) ?? next.length)
+    else if (update.kind === "retract" && delivering) {
+      delivering.shifted = true
+      delivering.delivery.grown.clear()
+    }
+    delivering?.delivery.updates.push(update)
     switch (update.kind) {
       case "user": {
         if (!update.steeringFor) {
@@ -344,8 +631,8 @@ export function reduceLiveUpdates(
           ...block,
           title: update.title ?? block.title,
           status: update.status ?? block.status,
-          input: update.input ?? block.input,
-          output: update.output ?? block.output,
+          input: streamed(block.input, update.input, update.inputAppend, Infinity),
+          output: streamed(block.output, update.output, update.outputAppend, MAX_STREAMED_TOOL_OUTPUT),
           details: update.details ?? block.details,
           attachments: update.attachments ?? block.attachments,
         }

@@ -27,6 +27,7 @@
  * the stable compatibility facade used by IPC and process launchers.
  */
 
+import { createHash } from "node:crypto"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import type {
@@ -35,6 +36,7 @@ import type {
   AccountProviderInfo,
   AccountHarness,
   AccountProvider,
+  AccountRemoval,
   AccountUsage,
   HarnessAccount,
   ResetCreditOutcome,
@@ -57,6 +59,7 @@ import type {
   SelectableAccountCapability,
 } from "./providers/account-capability.js"
 import { providerHost } from "./providers/index.js"
+import { hostWarn } from "./host-log.js"
 import {
   bindingWindow,
   hasReset,
@@ -71,6 +74,7 @@ export type {
   AccountProviderInfo,
   AccountHarness,
   AccountProvider,
+  AccountRemoval,
   AccountUsage,
   HarnessAccount,
   OpenCodeAuthType,
@@ -194,7 +198,7 @@ async function mutateAccount<T>(
 export async function removeAccount(
   harness: AccountHarness,
   name: string
-): Promise<void> {
+): Promise<AccountRemoval> {
   return mutateAccount(harness, async () => {
     const capability = selectableCapability(harness)
     // Removing credentials must never choose a different paying identity.
@@ -204,8 +208,9 @@ export async function removeAccount(
       throw new Error(
         "This account is selected. Choose another account before removing it."
       )
-    await capability.removeAccount(name)
+    const removal = await capability.removeAccount(name)
     forgetUsage(`${harness}:${name}`)
+    return removal
   })
 }
 
@@ -285,7 +290,8 @@ export async function finishAccountLogin(
       (account) => account.name !== name && account.email === email && !account.missing
     )
     if (existing) {
-      await capability.removeAccount(name)
+      const { stillValid } = await capability.removeAccount(name)
+      if (stillValid) hostWarn("accounts", "A duplicate sign-in's key could not be revoked", { harness, reason: stillValid.reason })
       return { status: "duplicate" as const, name: existing.name, email }
     }
     return email === undefined ? { status: "added" as const, name } : { status: "added" as const, name, email }
@@ -404,6 +410,18 @@ export async function assertAccountLaunch(provider: string, launch: AccountLaunc
     if (!capability || await capability.credentialRevision(launch.credential.name, launch.env) !== launch.credential.revision)
       throw new ExecutionAccountChanged("credentials")
   }
+}
+
+/**
+ * What a session paused on a sign-out is measured against: the account a
+ * launch would use now, and a one-way digest of `account`'s credentials. A
+ * changed digest says someone signed in; nothing can be read back from it.
+ */
+export async function signInState(provider: string, account: string): Promise<{ selected: string; credential: string }> {
+  const capability = providerHost.accountCapabilities.get(provider)
+  const selected = (capability && await capabilitySelection(capability)) ?? "default"
+  const revision = await capability?.credentialRevision(account, childProcessEnv(process.env)).catch(() => undefined)
+  return { selected, credential: createHash("sha256").update(`mako-sign-in\0${provider}\0${revision ?? ""}`).digest("hex").slice(0, 24) }
 }
 
 export async function selectedAccount(

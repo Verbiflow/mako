@@ -239,11 +239,9 @@ assert.deepEqual(
   ["apple-design", "frontend-design"],
   "a provider verified to read .agents/skills loads those itself"
 )
-assert.equal(
-  skillItems(skillsSnapshot, "cursor").items.find((item) => item.name === "repo-only")?.delivery?.path,
-  "claude:workspace/repo-only",
-  "a handover prefers the project copy"
-)
+const repoOnlyDelivery = skillItems(skillsSnapshot, "cursor").items.find((item) => item.name === "repo-only")?.delivery
+assert.equal(repoOnlyDelivery?.kind, "handover")
+assert.equal(repoOnlyDelivery.path, "claude:workspace/repo-only", "a handover prefers the project copy")
 assert.equal(
   skillItems(skillsSnapshot, "codex").items.find((item) => item.name === "apple-design")?.from,
   "agents",

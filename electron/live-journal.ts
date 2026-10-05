@@ -20,7 +20,10 @@ import { ExecutionContextSchema } from "./contracts/execution-context.js"
 import { ThreadEntrySchema, ThreadRefSchema } from "@mako/sessions"
 import {
   LiveBlockSchema,
+  ToolGrowthSchema,
   changedLiveBlockStart,
+  growTool,
+  type ToolGrowth,
 } from "./contracts/live-content.js"
 import { RunSnapshotsSchema } from "./contracts/workspace-snapshots.js"
 import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "./contracts/live-conversations.js"
@@ -81,6 +84,7 @@ export const LiveRequestSchema = z.object({
   ]),
   error: z.string().optional(),
   accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS) }).optional(),
+  signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   interruption: z
     .object({
       reason: z.enum(INTERRUPTION_REASONS),
@@ -202,6 +206,12 @@ const AppendRowSchema = z.object({
   block_id: z.number().int().nonnegative(),
   value: z.string(),
 })
+/** A text block's new end, stored as a JSON string, or what a tool block's input and output gained. */
+const AppendValueSchema = z.union([
+  z.string().transform((text) => ({ kind: "text" as const, text })),
+  ToolGrowthSchema.transform((growth) => ({ kind: "tool" as const, growth })),
+])
+type AppendValue = z.infer<typeof AppendValueSchema>
 const AppendCountSchema = z.object({
   block_id: z.number().int().nonnegative(),
   count: z.number().int().nonnegative(),
@@ -288,7 +298,7 @@ export class LiveJournal {
       .map((row) =>
         LiveBlockSchema.parse(JSON.parse(RowSchema.parse(row).value))
       )
-    const tails = new Map<number, string[]>()
+    const tails = new Map<number, AppendValue[]>()
     for (const value of this.db
       .prepare(
         "SELECT block_id, value FROM block_appends ORDER BY block_id, sequence"
@@ -296,14 +306,18 @@ export class LiveJournal {
       .all()) {
       const row = AppendRowSchema.parse(value)
       const parts = tails.get(row.block_id) ?? []
-      parts.push(z.string().parse(JSON.parse(row.value)))
+      parts.push(AppendValueSchema.parse(JSON.parse(row.value)))
       tails.set(row.block_id, parts)
     }
     for (const [index, parts] of tails) {
-      const block = blocks[index]
-      if (block?.type !== "text" && block?.type !== "thinking")
-        throw new Error("Journal text append has no matching block")
-      blocks[index] = { ...block, text: block.text + parts.join("") }
+      let block = blocks[index]
+      for (const part of parts) {
+        if (part.kind === "text" && (block?.type === "text" || block?.type === "thinking"))
+          block = { ...block, text: block.text + part.text }
+        else if (part.kind === "tool" && block?.type === "tool") block = growTool(block, part.growth)
+        else throw new Error("Journal append has no matching block")
+      }
+      if (block) blocks[index] = block
     }
     return {
       ...metadata,
@@ -320,7 +334,8 @@ export class LiveJournal {
     }
   }
 
-  commit(next: LiveSnapshot, previous?: LiveSnapshot): void {
+  /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
+  commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
     this.db.exec("BEGIN IMMEDIATE")
     try {
       const { blocks, requests, base, ...metadata } = next
@@ -352,7 +367,11 @@ export class LiveJournal {
         const before = previous?.blocks[index]
         if (block === before) continue
         const count = this.appends.get(index) ?? 0
-        if (
+        const growth = grown?.get(index)
+        if (next.session.status === "running" && count < 128 && growth && block.type === "tool" && before?.type === "tool") {
+          append.run(index, count, JSON.stringify(growth))
+          counts.set(index, count + 1)
+        } else if (
           next.session.status === "running" &&
           count < 128 &&
           (block.type === "text" || block.type === "thinking") &&

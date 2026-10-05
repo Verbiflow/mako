@@ -7,6 +7,8 @@ export const codexMcpSource: ProviderMcpSource = {
   userFiles: () => [],
   workspaceFiles: () => [],
   readsCli: true,
+  // Codex gives Mako's own servers fifteen minutes (mcp-runtime.ts).
+  callWaitMs: 10 * 60_000,
   write: {
     kind: "cli",
     scopes: "user",

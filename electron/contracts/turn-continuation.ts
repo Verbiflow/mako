@@ -18,6 +18,8 @@ export function continueTurnPrompt(reason: InterruptionReason): string {
       return "Continue where you left off. Your connection dropped before you finished the previous turn, and its last steps may not have been saved. Check the result of any command or edit you were in the middle of before repeating it."
     case "provider-exited":
       return "Continue where you left off. Your process stopped before you finished the previous turn and has been restarted; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it."
+    case "signed-out":
+      return "Continue where you left off. Your sign-in expired before you finished the previous turn and has been renewed; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it."
     case "host-quit":
     case "host-crashed":
     case "stopped":

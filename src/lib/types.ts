@@ -28,6 +28,7 @@ export type {
   AccountLogin,
   AccountLoginResult,
   AccountProvider,
+  AccountRemoval,
   AccountUsage,
   AccountProviderInfo,
   HarnessAccount,

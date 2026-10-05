@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import type { Actor, ThreadPlacement } from "../electron/contracts/thread-identity.js"
 import { MoveIdSchema, RuntimeIdSchema, type ExecutionOwner, type MoveId } from "../electron/contracts/thread-execution.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { assessProviderResume } from "../electron/provider-recovery.js"
 import { MoveNotQuietError } from "../electron/live-moves.js"
@@ -51,6 +52,11 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
       approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
       nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
       nativeExclusion: NO_NATIVE_EXCLUSION,
+      launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+      nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+      backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+      turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider: harness,
       canResume: true,
       checkpoint: async () => "checkpoint",

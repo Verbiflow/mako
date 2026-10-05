@@ -1,11 +1,14 @@
 import { randomBytes } from "node:crypto"
 import { type TableEntity } from "@azure/data-tables"
-import { relayDeviceKey } from "@mako/relay"
+import { relayDeviceKey, RelayHarnessChoiceSchema, type RelayHarnessChoice } from "@mako/relay"
+import { z } from "zod"
 import type { WorkerHeartbeat } from "./types"
 import { relayClients, statusCode } from "./storage"
 
 export interface RelayWorkerEntity extends TableEntity {
   defaultHarness: string
+  /** The Mac's harnesses as JSON, since a table column holds no arrays; absent from older workers. */
+  harnesses?: string
   defaultModel?: string
   deviceName: string
   lastSeenAt: string
@@ -115,6 +118,7 @@ export async function heartbeatWorker({
     partitionKey: `workers:${teamId}`,
     rowKey: heartbeat.deviceId,
     defaultHarness: heartbeat.defaultHarness,
+    harnesses: heartbeat.harnesses ? JSON.stringify(heartbeat.harnesses) : undefined,
     defaultModel: heartbeat.defaultModel,
     deviceName: heartbeat.deviceName,
     lastSeenAt: new Date().toISOString(),
@@ -132,6 +136,18 @@ export async function heartbeatWorker({
 export const WORKER_ONLINE_WINDOW_MS = 45_000
 
 /** A worker is online when it heartbeated within the last 45 seconds. */
+const StoredHarnessesSchema = z.array(RelayHarnessChoiceSchema)
+
+/** The harnesses a worker's Mac reported, or none for a worker too old to report them. */
+export function workerHarnesses(worker: RelayWorkerEntity | null): RelayHarnessChoice[] {
+  if (!worker?.harnesses) return []
+  try {
+    return StoredHarnessesSchema.safeParse(JSON.parse(worker.harnesses)).data ?? []
+  } catch {
+    return []
+  }
+}
+
 export function workerIsOnline(worker: RelayWorkerEntity): boolean {
   return Date.parse(worker.lastSeenAt) >= Date.now() - WORKER_ONLINE_WINDOW_MS
 }

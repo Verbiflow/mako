@@ -41,7 +41,7 @@ import { ClaudeTranscript } from "./sdk-transcript.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../../provider-startup.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
-import { claudeAuthDiagnostics } from "./auth-diagnostics.js"
+import { CLAUDE_AUTH_LOG, claudeAuthDiagnostics } from "./auth-diagnostics.js"
 import type { ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
 import { claudeCommandLifecycle } from "./sdk-message-kinds.js"
@@ -411,7 +411,7 @@ export function createClaudeSdkDriver(
       })
       hostLog("claude-sdk", "initializing", { conversation: conversationId })
       const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
-        hostWarn("claude-auth", "Native authentication failure", { conversation: conversationId, ...fields }),
+        hostWarn(CLAUDE_AUTH_LOG, "Native authentication failure", { conversation: conversationId, ...fields }),
       dependencies.inspectCredentials)
       let query: ClaudeQuery
       try { query = dependencies.query({

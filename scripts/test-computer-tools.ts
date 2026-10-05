@@ -20,6 +20,7 @@ import {
 } from "./lib/control-session-probe.ts"
 import { connectMcpComputerDriver, type ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import { canonicalDriverPath } from "../packages/control-runtime/src/computer-paths.js"
+import type { JsonValue } from "../packages/control-runtime/src/json.js"
 
 const source = `
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -1006,7 +1007,7 @@ const unifiedServer = controlSessionProbe(
   {
     surface: "control",
     onProgramCancelled: () => { programCancellations++ },
-    browserCall: async (command, signal) => {
+    browserCall: async (command, signal): Promise<JsonValue> => {
       if (command.action === "status")
         return [{ id: "fixture-browser", connection: { status: "connected" } }]
       if (command.action === "connect") {
@@ -1073,7 +1074,7 @@ const unifiedServer = controlSessionProbe(
       if (command.action === "dialog") {
         await waitingDialog.promise
         answeredDialog.resolve()
-        return { answered: { respond: command.respond } }
+        return { answered: command.respond ? { respond: command.respond } : {} }
       }
       if (command.action === "children") return { children: [], note: "fixture" }
       if (command.action === "type") {
@@ -1738,7 +1739,7 @@ return {guard:receipt.guard.status,events:events.events.map(e=>e.kind),blocked};
 }
 // No native process may be started by discovery of the public contract or page execution.
 const pageOnly = controlSessionProbe(
-  { command: "/nonexistent/mako-driver" },
+  { command: "/nonexistent/mako-driver", args: [] },
   "page-only",
   undefined,
   { surface: "control", browserCall: async () => [] }
@@ -1802,12 +1803,12 @@ try {
 }
 // Discovery names the exact next call, or the user action, for every connection state.
 const discovery = controlSessionProbe(
-  { command: "/nonexistent/mako-driver" },
+  { command: "/nonexistent/mako-driver", args: [] },
   "discovery-next",
   undefined,
   {
     surface: "control",
-    browserCall: async () => [
+    browserCall: async (): Promise<JsonValue> => [
       { id: "aside", name: "Aside", kind: "chromium", connection: { status: "disconnected" } },
       { id: "chrome", name: "Google Chrome", kind: "chromium", connection: { status: "setup-required" } },
       { id: "live", name: "Aside", kind: "chromium", connection: { status: "connected", generation: "g" } },

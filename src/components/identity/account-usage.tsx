@@ -658,7 +658,7 @@ function shortStatus(usage: AccountUsage): string {
 function accountDetail(account: ProviderAccount, density: Density, label: string): string | null {
   if (account.missing)
     return density === "menu" ? "choose another" : `New ${label} sessions won't start until you choose another account`
-  if (account.source === "opencode")
+  if (account.source === "model-provider")
     return account.email
       ? `${providerName(account.providerId ?? account.name)} ${authName(account.authType)}`
       : null

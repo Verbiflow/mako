@@ -53,6 +53,7 @@ import type {
   HarnessDescriptor,
 } from "../shared.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest } from "../shared.js"
+import type { SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { ContextBreakdown } from "./providers-acp.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { MessageAnchor } from "./message-anchor.js"
@@ -122,6 +123,7 @@ import type {
   AccountLogin,
   AccountLoginResult,
   AccountProvider,
+  AccountRemoval,
   AccountUsage,
   AccountCatalog,
   ResetCreditOutcome,
@@ -376,6 +378,10 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-edit-queued", id, input),
     liveClearQueue: (id: string) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-clear-queue", id),
+    liveSignInReadiness: (id: string) =>
+      invokeTrustedHost<SignInReadiness | null>("mako:live-sign-in-readiness", id),
+    liveSignInResume: (id: string, anyway: boolean) =>
+      invokeTrustedHost<SignInResume>("mako:live-sign-in-resume", id, anyway),
     liveEarlier: (id: string) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-earlier", id),
     liveBind: (id: string, path: string) =>
@@ -439,7 +445,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     selectAccount: (harness: AccountHarness, name: string | null) =>
       invokeTrustedHost<void>("mako:account-select", harness, name),
     removeAccount: (harness: AccountHarness, name: string) =>
-      invokeTrustedHost<void>("mako:account-remove", harness, name),
+      invokeTrustedHost<AccountRemoval>("mako:account-remove", harness, name),
     accountUsage: (harness: AccountProvider, name: string) =>
       invokeTrustedHost<AccountUsage>("mako:account-usage", harness, name),
     useResetCredit: (harness: AccountProvider, name: string, attempt: string) =>

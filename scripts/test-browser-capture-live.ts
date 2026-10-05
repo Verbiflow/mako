@@ -70,7 +70,6 @@ try {
   })
   browser = new BrowserService(
     [{ id: "scratch", name: "Scratch", endpoint: async () => endpoint }],
-    undefined,
     { focusPolicy: process.env.CAPTURE_FOCUS === "lease" ? "lease" : "action" }
   )
   const service = browser

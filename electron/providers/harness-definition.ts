@@ -15,6 +15,7 @@ import type { ProviderRegistry, ProviderCapability } from "./registry.js"
 import type { ProviderSessionEmitter } from "./session-emitter.js"
 import type { ProviderSkillSource } from "./skill-source.js"
 import type { ProviderUpdateSource } from "./update-source.js"
+import type { ProviderUsageHistory } from "./usage-history.js"
 import type { ProviderUtilityRunner } from "./utility-runner.js"
 
 /**
@@ -31,6 +32,16 @@ export const lacks = (reason: string): Absent => ({ absent: "harness", reason })
 /** The harness has one; Mako does not drive it yet. */
 export const notBuilt = (reason: string): Absent => ({ absent: "mako", reason })
 
+/** What `npm run harness:doctor` reads about a harness beyond its capabilities. */
+export interface HarnessDiagnostics {
+  /** The npm package Mako drives the harness through; the doctor compares its version with the fixtures'. */
+  sdk?: string
+  /** Sessions run inside `sdk`, so its version is the runtime's; otherwise the doctor asks the updates family's binary. */
+  runsInSdk?: true
+  /** The host-log scope the harness's sign-in writes to; the doctor shows its latest line. */
+  signInLog?: string
+}
+
 /**
  * Everything one harness supplies to Mako. Every family is named: a harness
  * gives the capability or says why it has none, so a new harness cannot leave
@@ -39,6 +50,7 @@ export const notBuilt = (reason: string): Absent => ({ absent: "mako", reason })
 export interface HarnessDefinition {
   provider: string
   presentation: HarnessPresentation
+  diagnostics: HarnessDiagnostics
   hooks: ProviderAuthoringCapability | Absent
   commands: ProviderAuthoringCapability | Absent
   toolEditing: ProviderAuthoringCapability | Absent
@@ -69,15 +81,18 @@ export interface HarnessDefinition {
   /** A sign-in Mako drives from Settings. */
   connection: ProviderConnectionCapability | Absent
   updates: ProviderUpdateSource | Absent
+  /** Spend the harness's own store records; without it, Settings › Usage shows what Mako measured. */
+  usageHistory: ProviderUsageHistory | Absent
   artifactPreview: ProviderArtifactPreview | Absent
 }
 
-export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation">
+export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation" | "diagnostics">
 
 /** What an installed harness said it has no capability for. */
 export interface HarnessRecord {
   provider: string
   presentation: HarnessPresentation
+  diagnostics: HarnessDiagnostics
   absent: Partial<Record<HarnessFamily, Absent>>
 }
 
@@ -86,11 +101,13 @@ export function isAbsent<T extends ProviderCapability>(value: T | Absent): value
 }
 
 export function installHarness(host: ProviderHost, harness: HarnessDefinition): void {
-  if (!harness.presentation.icon.id || !harness.presentation.icon.tint)
-    throw new Error(`${harness.provider} must declare its icon`)
+  const { mark } = harness.presentation
+  if (!/^-?[\d.]+ -?[\d.]+ [\d.]+ [\d.]+$/.test(mark.viewBox) || !mark.paths.length || mark.paths.some((path) => !path.d.trim()) || !mark.tint.trim())
+    throw new Error(`${harness.provider} must declare its mark: a viewBox, its paths and a tint`)
   // Validate every family before registering anything: an incomplete adapter
   // must not leave half of its capabilities installed.
-  const { provider, presentation, ...declarations } = harness
+  if (harness.diagnostics.runsInSdk && !harness.diagnostics.sdk) throw new Error(`${harness.provider} runs in an SDK it does not name`)
+  const { provider, presentation, diagnostics, ...declarations } = harness
   for (const [family, value] of Object.entries(declarations)) {
     if (!value) throw new Error(`${provider} has no ${family} declaration`)
     if (isAbsent(value)) {
@@ -142,6 +159,7 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   install(host.sessionEmitters, "sessionEmitter", harness.sessionEmitter)
   install(host.connections, "connection", harness.connection)
   install(host.updateSources, "updates", harness.updates)
+  install(host.usageHistories, "usageHistory", harness.usageHistory)
   install(host.artifactPreviews, "artifactPreview", harness.artifactPreview)
-  host.harnesses.register({ provider: harness.provider, presentation, absent })
+  host.harnesses.register({ provider: harness.provider, presentation, diagnostics, absent })
 }

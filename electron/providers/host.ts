@@ -13,6 +13,7 @@ import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderSessionEmitter } from "./session-emitter.js"
 import type { ProviderSkillSource } from "./skill-source.js"
 import type { ProviderUpdateSource } from "./update-source.js"
+import type { ProviderUsageHistory } from "./usage-history.js"
 import type { ProviderUtilityRunner } from "./utility-runner.js"
 import { ProviderRegistry } from "./registry.js"
 import { validateLiveDriver } from "./live-driver.js"
@@ -44,6 +45,8 @@ export interface ProviderHost {
   connections: ProviderRegistry<ProviderConnectionCapability>
   /** How each provider's runtime updates — and whether Mako can run it. */
   updateSources: ProviderRegistry<ProviderUpdateSource>
+  /** Each harness's own spend records, read for Settings › Usage. */
+  usageHistories: ProviderRegistry<ProviderUsageHistory>
 }
 
 export type ProviderModule = (host: ProviderHost) => void
@@ -69,6 +72,7 @@ export function createProviderHost(): ProviderHost {
     sessionEmitters: new ProviderRegistry(),
     connections: new ProviderRegistry(),
     updateSources: new ProviderRegistry(),
+    usageHistories: new ProviderRegistry(),
     accountCapabilities: new ProviderRegistry(),
   }
 }

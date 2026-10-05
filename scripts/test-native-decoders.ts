@@ -15,11 +15,11 @@ import {
 /**
  * Every harness decoder against its recorded sessions.
  *
- *   npm run test:decoders                       check every fixture
- *   npm run test:decoders -- --harness codex    one harness
- *   npm run test:decoders -- --only compaction  fixtures whose name matches
- *   npm run test:decoders -- --update           accept what decoders produce now
- *   npm run test:decoders -- --coverage         list kinds no fixture exercises
+ *   npm run test:decoders                                      check every fixture
+ *   npx tsx scripts/test-native-decoders.ts --harness codex    one harness
+ *   npx tsx scripts/test-native-decoders.ts --only compaction  fixtures whose name matches
+ *   npx tsx scripts/test-native-decoders.ts --update           accept what decoders produce now
+ *   npx tsx scripts/test-native-decoders.ts --coverage         list kinds no fixture exercises
  *
  * A step without `decoded` is new: `--update` fills it in for review. Beyond
  * the expected events, each step checks the decoder's own lists: a kind it
@@ -45,8 +45,9 @@ const sources = decoders().filter((source) => !options.harness || source.provide
 assert.ok(sources.length, options.harness ? `No decoder for ${options.harness}` : "No harness has a decoder")
 
 for (const source of sources) {
-  const files = await loadFixtures(source.provider)
-  if (!files.length) fail(source.provider, `has a decoder and no fixtures in scripts/fixtures/native-decoding/${source.provider}`)
+  const { files, invalid } = await loadFixtures(source.provider)
+  for (const file of invalid) fail(file.name, file.problem)
+  if (!files.length && !invalid.length) fail(source.provider, `has a decoder and no fixtures in scripts/fixtures/native-decoding/${source.provider}`)
   const exercised = new Set<string>()
   let checked = 0
   for (const file of files) {
@@ -89,7 +90,7 @@ for (const source of sources) {
 if (failures.length) {
   console.error(`\n${failures.join("\n\n")}\n`)
   console.error(`${failures.length} decoding fixture problem${failures.length === 1 ? "" : "s"}. ` +
-    "If a change is intended, run `npm run test:decoders -- --update` and review the fixture diff.")
+    "If a change is intended, run `npx tsx scripts/test-native-decoders.ts --update` and review the fixture diff.")
   process.exit(1)
 }
 console.log("PASS: every harness decoder matches its recorded sessions")

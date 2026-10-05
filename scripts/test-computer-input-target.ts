@@ -4,6 +4,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { verifyForegroundInput } from "../packages/control-runtime/src/computer-input-target.js"
+import { ComputerDriverResultSchema } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { JsonObject } from "../electron/codex-app-json.js"
 
 const server = new Server(
@@ -24,17 +25,18 @@ server.setRequestHandler(CallToolRequestSchema, (request) => {
     }
   assert.equal(request.params.name, "list_windows")
   windowReads++
+  const targetWindow: JsonObject = {
+    pid: windowPid,
+    window_id: 70,
+    z_index: frontWindow === 70 ? 10 : 1,
+    is_on_screen: true,
+  }
+  if (exactFocus !== undefined) targetWindow.focused = exactFocus
   return {
     content: [],
     structuredContent: {
       windows: [
-        {
-          pid: windowPid,
-          window_id: 70,
-          z_index: frontWindow === 70 ? 10 : 1,
-          focused: exactFocus,
-          is_on_screen: true,
-        },
+        targetWindow,
         {
           pid: 7,
           window_id: 71,
@@ -51,8 +53,8 @@ try {
   await server.connect(st)
   await client.connect(ct)
   const driver = {
-    callTool: (name: string, args: JsonObject) =>
-      client.callTool({ name, arguments: args }),
+    callTool: async (name: string, args: JsonObject) =>
+      ComputerDriverResultSchema.parse(await client.callTool({ name, arguments: args })),
   }
   const target = { pid: 7, window_id: 70 }
   const signal = AbortSignal.timeout(5000)

@@ -6,7 +6,9 @@ import { ENVIRONMENT_SETUP_PROMPT } from "../electron/contracts/thread-environme
 import { appSetupContext, appSetupRow } from "../src/lib/app-setup-context"
 import { firstRunAgent } from "../src/state/default-agent"
 import { setupAgent } from "../src/state/project-setup"
-import { HARNESS_ORDER } from "../electron/contracts/harness-defaults"
+
+/** Mako's order, as the host installs the harnesses. */
+const MAKO_ORDER = fixtureHarnesses.map(({ provider }) => provider)
 
 const profile = (
   id: string,
@@ -28,6 +30,7 @@ const profiles = (...list: HarnessProfile[]) =>
 const used = (harness: string, updatedAt: string): ThreadRef => ({
   path: `/history/${harness}/${updatedAt}`,
   harness,
+  nativeId: `${harness}-${updatedAt}`,
   title: "",
   updatedAt,
 })
@@ -97,7 +100,7 @@ assert.equal(
 )
 
 assert.deepEqual(
-  setupAgent(all, {}, HARNESS_ORDER),
+  setupAgent(all, {}, MAKO_ORDER),
   { harness: "claude", model: "claude model" },
   "a project is set up by the first signed-in harness in the order"
 )
@@ -107,7 +110,7 @@ assert.deepEqual(
   "the person's order decides, whatever the composer has picked"
 )
 assert.deepEqual(
-  setupAgent(profiles(profile("claude", false), profile("codex", true)), {}, HARNESS_ORDER),
+  setupAgent(profiles(profile("claude", false), profile("codex", true)), {}, MAKO_ORDER),
   { harness: "codex", model: "codex model" },
   "a harness that isn't signed in is passed over"
 )
@@ -115,13 +118,13 @@ assert.deepEqual(
   setupAgent(
     profiles({ ...profile("claude", true), models: [...profile("claude", true).models, { id: "claude-big", label: "Claude big", options: [] }] }),
     { claude: { source: "saved", settings: { model: "claude-big" } } },
-    HARNESS_ORDER
+    MAKO_ORDER
   ),
   { harness: "claude", model: "Claude big" },
   "on the model saved for new conversations"
 )
 assert.equal(
-  setupAgent(profiles(profile("claude", false)), {}, HARNESS_ORDER),
+  setupAgent(profiles(profile("claude", false)), {}, MAKO_ORDER),
   undefined,
   "nobody signed in, nobody sets it up"
 )

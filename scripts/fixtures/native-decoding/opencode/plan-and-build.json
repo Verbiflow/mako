@@ -1,6 +1,10 @@
 {
   "harness": "opencode",
   "source": "OpenCode 2.0.1 serving opencode/space-bunny-free, captured through Mako with MAKO_NATIVE_CAPTURE=opencode, 2026-10-01; ids renumbered and paths replaced",
+  "native": {
+    "version": "2.0.1",
+    "origin": "captured"
+  },
   "about": "The Plan agent reasons, streams a one-step plan and ends its turn (the plan card replaces the streamed reply); after the switch to Build, a write asks permission, is allowed, and creates the file.",
   "session": {
     "root": "ses_0001",

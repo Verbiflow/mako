@@ -30,6 +30,7 @@ providerHost.accountCapabilities.register({
     process.send?.("deleting")
     await release.promise
     await rm(join(root, name))
+    return {}
   },
 })
 try {

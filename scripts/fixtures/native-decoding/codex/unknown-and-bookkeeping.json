@@ -1,6 +1,10 @@
 {
   "harness": "codex",
   "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "native": {
+    "version": "0.159.0",
+    "origin": "written"
+  },
   "about": "Bookkeeping is known and quiet; a notification or item Mako has no meaning for is kept with its record; a broken known item names itself; another thread's turn is a subagent's; account limits go to the account.",
   "session": {
     "threadId": "thread-1"

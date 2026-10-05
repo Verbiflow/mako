@@ -18,6 +18,7 @@ import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../executable.js"
 import { scriptInstall } from "../update-source.js"
 import { electronSecretEncryption } from "../../secure-storage.js"
+import { cursorPresentation } from "./presentation.js"
 
 async function openExternal(url: string): Promise<void> {
   const { shell } = await import("electron")
@@ -44,7 +45,8 @@ export const installCursor: ProviderModule = (host) => {
   const modelCache = createCursorModelCache()
   installHarness(host, {
     provider: "cursor",
-    presentation: { icon: { id: "cursor-cube", tint: "currentColor" } },
+    presentation: cursorPresentation,
+    diagnostics: { sdk: "@cursor/sdk", runsInSdk: true },
     hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
     commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -97,6 +99,6 @@ export const installCursor: ProviderModule = (host) => {
       install: [scriptInstall("https://cursor.com/install")],
     },
     utility: notBuilt("Cursor's SDK keeps every agent it runs in a store; a one-off request would need a store of its own, removed after, which Mako doesn't build yet"),
-    artifactPreview: cursorCanvasPreview,
+    usageHistory: lacks("Cursor's SDK store keeps no token counts"),    artifactPreview: cursorCanvasPreview,
   })
 }

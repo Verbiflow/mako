@@ -2,12 +2,13 @@ import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
 import { mock } from "node:test"
 import sharp from "sharp"
-import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
-import { ControlPreviews } from "../electron/control-previews.js"
+import { BrowserService } from "@mako/control-runtime/browser"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
-} from "../packages/control-runtime/src/contracts/browser-control.js"
+  type ControlPreview,
+} from "@mako/control-runtime/contracts"
+import { ControlPreviews } from "../electron/control-previews.js"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const fixture = await browserFixture()
@@ -182,17 +183,19 @@ try {
     activity: { ...activity, updatedAt: Date.now() },
     frame: { id: "frame", image: { mimeType: "image/jpeg" as const, bytes: new Uint8Array(jpeg) }, capturedAt: 1, publishedAt: 2, sequence: 3 },
   }
-  const dimensions = async (preview: typeof full) => {
+  const dimensions = async (preview: ControlPreview) => {
+    assert.ok(preview.frame)
     const { width, height } = await sharp(preview.frame.image.bytes).metadata()
     return [preview.frame.id, width, height]
   }
   const card = await previews.sized(full, { width: 576, height: 324 })
   assert.deepEqual(await dimensions(card), ["frame:576x324", 576, 324],
     "A 576-pixel viewer gets exactly the pixels it displays")
-  assert.ok(card.frame!.image.bytes.byteLength < jpeg.byteLength / 3, "The scaled frame is a fraction of the capture's bytes")
-  assert.deepEqual([card.frame!.capturedAt, card.frame!.publishedAt, card.frame!.sequence, card.activity], [1, 2, 3, full.activity],
+  assert.ok(card.frame)
+  assert.ok(card.frame.image.bytes.byteLength < jpeg.byteLength / 3, "The scaled frame is a fraction of the capture's bytes")
+  assert.deepEqual([card.frame.capturedAt, card.frame.publishedAt, card.frame.sequence, card.activity], [1, 2, 3, full.activity],
     "Scaling keeps the frame's timing, sequence and activity")
-  assert.equal((await previews.sized(full, { width: 576, height: 324 })).frame!.image.bytes, card.frame!.image.bytes,
+  assert.equal((await previews.sized(full, { width: 576, height: 324 })).frame?.image.bytes, card.frame.image.bytes,
     "Viewers of one frame share one scaling")
   assert.deepEqual(await dimensions(await previews.sized(full, { width: 576, height: 100 })), ["frame:178x100", 178, 100],
     "A wide, short viewer is fitted by height, as the viewer fits it")

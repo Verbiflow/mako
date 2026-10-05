@@ -67,26 +67,22 @@ const receipt = {
   scope: "Native auth status with each adapter-resolved environment; no global selection changes or model prompts. Metadata proof only, not authenticated requests or in-flight switching.",
   totalAccounts: accounts.length, testedAccounts: results.length, results,
 }
-// Compare the inherited route to the ordinary CLI home without changing the
-// user's selection or removing any credentials. Keep only public booleans.
+// The SDK's runtime and the terminal's `claude` must see the same ordinary
+// login under the default account's environment. Status only; public booleans.
 const contexts = []
-const inherited = childProcessEnv(process.env)
-const ordinary = { ...inherited }
-delete ordinary.CLAUDE_CONFIG_DIR
-delete ordinary.CLAUDE_SECURESTORAGE_CONFIG_DIR
-const terminal = terminalClaudeExecutable(inherited)
+const ordinary = await claudeAccountCapability.accountEnv(null, childProcessEnv(process.env))
+const terminal = terminalClaudeExecutable(ordinary)
 for (const candidate of [
-  { label: "sdk-inherited", executable: runtime.executable, env: inherited },
-  { label: "sdk-ordinary-home", executable: runtime.executable, env: ordinary },
-  ...(terminal ? [{ label: "terminal-ordinary-home", executable: terminal, env: ordinary }] : []),
+  { label: "sdk", executable: runtime.executable },
+  ...(terminal ? [{ label: "terminal", executable: terminal }] : []),
 ]) {
   try {
-    const output = await execute(candidate.executable, ["auth", "status", "--json"], { env: candidate.env, timeout: 15_000, maxBuffer: 64 * 1024 })
+    const output = await execute(candidate.executable, ["auth", "status", "--json"], { env: ordinary, timeout: 15_000, maxBuffer: 64 * 1024 })
       .then(value => ({ stdout: value.stdout, code: 0 }))
       .catch(error => { const status = SignedOutExit.safeParse(error); if (status.success) return status.data; throw error })
     const native = Status.parse(JSON.parse(output.stdout))
     if (output.code !== 0 && native.loggedIn) throw new Error("Inconsistent native status")
-    contexts.push({ label: candidate.label, loggedIn: native.loggedIn, configuredHomeIsOrdinary: (candidate.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")) === join(homedir(), ".claude"), secureStorageOverride: Boolean(candidate.env.CLAUDE_SECURESTORAGE_CONFIG_DIR), reportsPrincipal: Boolean(native.email), method: /^[a-zA-Z0-9_.-]{1,40}$/.test(native.authMethod) ? native.authMethod : "unrecognized" })
+    contexts.push({ label: candidate.label, loggedIn: native.loggedIn, configuredHomeIsOrdinary: native.configDirectory ? native.configDirectory === join(homedir(), ".claude") : undefined, reportsPrincipal: Boolean(native.email), method: /^[a-zA-Z0-9_.-]{1,40}$/.test(native.authMethod) ? native.authMethod : "unrecognized" })
   } catch (error) { contexts.push({ label: candidate.label, error: error instanceof Error ? error.name : "unknown" }) }
 }
 await writeFile(join(directory, "native-claude-identity.json"), JSON.stringify({ ...receipt, contexts }, null, 2) + "\n", { mode: 0o600 })

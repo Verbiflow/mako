@@ -41,7 +41,7 @@ function fakePage(previewId: string, log: string[]) {
     id: `desk-${previewId.slice(0, 8)}`,
     url: () => url,
     title: () => "Mako",
-    async send(method, params) {
+    async send(method, params): Promise<JsonObject> {
       log.push(method)
       switch (method) {
         case "Accessibility.getFullAXTree":
@@ -474,6 +474,7 @@ const runtimeDirectory = join(runtimeRoot, "runtime")
 const rendererRegistry = join(runtimeRoot, "registrations")
 await mkdir(runtimeDirectory)
 let observedRenderer: DevRendererRegistration | null = null
+const renderer = () => observedRenderer
 const stopWatching = watchDevRendererRegistration(
   runtimeDirectory,
   { profile: "dev", sourceRoot: runtimeRoot },
@@ -513,9 +514,9 @@ try {
     "http://127.0.0.1:5173",
     "host runtime-directory replacement preserves the launcher registration"
   )
-  for (let attempt = 0; attempt < 500 && !observedRenderer; attempt++)
+  for (let attempt = 0; attempt < 500 && !renderer(); attempt++)
     await new Promise((resolve) => setTimeout(resolve, 10))
-  assert.equal(observedRenderer?.url, "http://127.0.0.1:5173")
+  assert.equal(renderer()?.url, "http://127.0.0.1:5173")
   const otherLauncher = spawn(process.execPath, [
     "-e",
     "setInterval(() => {}, 1000)",
@@ -536,21 +537,21 @@ try {
     )
     for (
       let attempt = 0;
-      attempt < 500 && observedRenderer?.url !== "http://127.0.0.1:5174";
+      attempt < 500 && renderer()?.url !== "http://127.0.0.1:5174";
       attempt++
     )
       await new Promise((resolve) => setTimeout(resolve, 10))
-    assert.equal(observedRenderer?.url, "http://127.0.0.1:5174")
+    assert.equal(renderer()?.url, "http://127.0.0.1:5174")
     removeOtherRenderer()
     removeOtherRenderer = undefined
     for (
       let attempt = 0;
-      attempt < 500 && observedRenderer?.url !== "http://127.0.0.1:5173";
+      attempt < 500 && renderer()?.url !== "http://127.0.0.1:5173";
       attempt++
     )
       await new Promise((resolve) => setTimeout(resolve, 10))
     assert.equal(
-      observedRenderer?.url,
+      renderer()?.url,
       "http://127.0.0.1:5173",
       "closing the newest launcher restores the older live renderer"
     )
@@ -559,9 +560,9 @@ try {
     otherLauncher.kill()
   }
   removeRenderer()
-  for (let attempt = 0; attempt < 500 && observedRenderer; attempt++)
+  for (let attempt = 0; attempt < 500 && renderer(); attempt++)
     await new Promise((resolve) => setTimeout(resolve, 10))
-  assert.equal(observedRenderer, null)
+  assert.equal(renderer(), null)
 } finally {
   removeRenderer()
   stopWatching()

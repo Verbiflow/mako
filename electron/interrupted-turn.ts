@@ -165,6 +165,8 @@ function cause(reason: Interruption["reason"]): string {
       return "your process stopped"
     case "connection-lost":
       return "the connection to your runtime dropped"
+    case "signed-out":
+      return "your sign-in expired"
     case "host-crashed":
       return "Mako closed unexpectedly"
     case "host-quit":

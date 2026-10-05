@@ -31,11 +31,13 @@ const requests: Array<{
 let listener: ((event: TerminalEvent) => void) | undefined
 let hostListener: ((event: HostEvent) => void) | undefined
 let lists = 0
+/** Replies reach the bridge decoded from JSON, as the web transport's do, typed only by the bridge method that asked. */
+const overWire = (reply: TerminalSession | TerminalSession[] | TerminalSnapshot) => JSON.parse(JSON.stringify(reply))
 const bridge = createMakoBridge({
   invoke: async (channel, ...args) => {
     if (channel === "mako:terminal-list") {
       lists++
-      return sessions
+      return overWire(sessions)
     }
     if (channel === "mako:terminal-create") {
       const session = {
@@ -44,12 +46,12 @@ const bridge = createMakoBridge({
         createdAt: sessions.length,
       }
       sessions.push(session)
-      return session
+      return overWire(session)
     }
     if (channel === "mako:terminal-attach") {
       const deferred = Promise.withResolvers<TerminalSnapshot>()
       requests.push({ id: String(args[0]), deferred })
-      return deferred.promise
+      return overWire(await deferred.promise)
     }
     return undefined
   },

@@ -40,6 +40,7 @@ import {
   appendOptimisticReply,
   removeOptimisticReply,
 } from "../src/state/thread-queue.ts"
+import { viewedThread } from "../src/state/thread-viewing.ts"
 import {
   groupThreadFolders,
   orderThreadFolders,
@@ -133,7 +134,7 @@ const motionLayers = new Set([
 ])
 // Loops that exist only while work is in flight. Each names what stops it
 // under reduced motion: a rule of its own, or the global one-iteration rule.
-const stateFeedback = new Map([
+const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "global" }>([
   ["[data-commit-box][data-busy]:not([data-drafting]) .commit-editor::after", { animation: "git-progress", reduced: /\[data-commit-box\]\[data-busy\] \.commit-editor::after[^{]*\{\s*animation:\s*none;/ }],
   ['[data-push-state="pushing"] > svg', { animation: "git-upload", reduced: /\[data-push-state="pushing"\] > svg[^{]*\{\s*animation:\s*none;/ }],
   [".skeleton::after", { animation: "mako-skeleton-glint", reduced: "global" }],
@@ -486,7 +487,7 @@ assert.deepEqual(
   const [cutOff] = pairTools(acpBlocksToMessages([
     { type: "user", text: "Research" },
     { type: "tool", id: "sub", title: "Research Tembo", toolKind: "task", status: "failed", output: "never returned", unfinished: true },
-  ]).messages.flatMap((message) => message.blocks))
+  ], false).messages.flatMap((message) => message.blocks))
   assert.equal(cutOff?.isCutOff, true)
   assert.equal(cutOff?.isError, false, "a call the turn's end cut off did not fail")
   assert.equal(cutOff?.pending, false)
@@ -682,12 +683,9 @@ applyPermission({
   title: "Run tests",
   options: [{ optionId: "allow", name: "Allow" }],
 })
-assert.equal(
-  acpStore.get().conversations[backgroundA.key]?.kind === "live"
-    ? acpStore.get().conversations[backgroundA.key]?.permission?.id
-    : undefined,
-  "permission-a"
-)
+const askingA = acpStore.get().conversations[backgroundA.key]
+assert.ok(askingA?.kind === "live")
+assert.equal(askingA.permission?.id, "permission-a")
 assert.equal(
   threadsStore.get().attention["/background-a"]?.kind,
   "needs-permission"
@@ -772,12 +770,9 @@ assert.equal(
     : 0,
   2
 )
-assert.equal(
-  interleavedSections[1]?.kind === "prose"
-    ? interleavedSections[1].message.blocks[0]?.text
-    : undefined,
-  "The catalog is healthy."
-)
+const proseSection = interleavedSections[1]
+const proseLead = proseSection?.kind === "prose" ? proseSection.message.blocks[0] : undefined
+assert.equal(proseLead?.type === "text" ? proseLead.text : undefined, "The catalog is healthy.")
 assert.equal(
   interleavedSections[2]?.kind === "work"
     ? interleavedSections[2].messages.length
@@ -833,15 +828,7 @@ const folderRefs = [
   },
 ] satisfies ThreadRef[]
 assert.equal(threadFolderKey(folderRefs[0]), "/repo")
-assert.equal(
-  threadFolderKey({
-    harness: "claude",
-    nativeId: "temp",
-    path: "/temp",
-    cwd: "/private/tmp/session",
-  }),
-  ""
-)
+assert.equal(threadFolderKey({ cwd: "/private/tmp/session" }), "")
 const homeRef = {
   harness: "claude",
   nativeId: "home",
@@ -1176,7 +1163,7 @@ const backgroundRef = {
   path: "/background",
 } satisfies ThreadRef
 threadsStore.set({
-  viewing: { ref: openCodeRef, entries: [] },
+  viewing: viewedThread({ ref: openCodeRef, entries: [] }),
   attention: {},
   working: {},
 })
@@ -1199,7 +1186,7 @@ assert.equal(
 markThreadReviewed(backgroundRef.path)
 assert.equal(threadsStore.get().attention[backgroundRef.path], undefined)
 threadsStore.set({
-  viewing: { ref: backgroundRef, entries: [] },
+  viewing: viewedThread({ ref: backgroundRef, entries: [] }),
   attention: {},
 })
 applyThreadRun({
@@ -1214,7 +1201,7 @@ const queuedRef = {
   nativeId: "queued",
   path: "/queued",
 } satisfies ThreadRef
-threadsStore.set({ viewing: { ref: queuedRef, entries: [] } })
+threadsStore.set({ viewing: viewedThread({ ref: queuedRef, entries: [] }) })
 assert.equal(appendOptimisticReply(queuedRef, "move now"), true)
 assert.equal(threadsStore.get().viewing?.entries.length, 1)
 removeOptimisticReply(queuedRef, "move now")
@@ -1526,7 +1513,7 @@ console.log(
   }
   acpStore.set({ activeKey: null, conversations: {} })
   threadsStore.set({
-    viewing: { ref: workingRef, entries: [] },
+    viewing: viewedThread({ ref: workingRef, entries: [] }),
     attention: {},
     working: {},
   })
@@ -1544,7 +1531,7 @@ console.log(
     "idle",
     "opening a natively failed thread acknowledges the failure"
   )
-  threadsStore.set({ viewing: { ref: nativeRef, entries: [] } })
+  threadsStore.set({ viewing: viewedThread({ ref: nativeRef, entries: [] }) })
   applyThreadRun({ path: nativeRef.path, harness: "codex", status: "running" })
   applyThreadRun({
     path: nativeRef.path,

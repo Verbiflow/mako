@@ -37,7 +37,7 @@ import {
 
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { stat, rm } from "node:fs/promises"
 import {
   clip,
@@ -437,8 +437,8 @@ export class ClaudeProvider implements SessionProvider {
    * `configDir` is the `CLAUDE_CONFIG_DIR` this provider honours. The
    * process's own is read only for the default home: a provider built on
    * another home is an isolated world (a fixture, a mirror), and a shell
-   * inside Claude Code or a router sets the variable for its own store,
-   * whose sessions would otherwise be listed among the fixture's.
+   * inside Claude Code sets the variable for its own store, whose sessions
+   * would otherwise be listed among the fixture's.
    */
   constructor(
     home?: string,
@@ -452,23 +452,19 @@ export class ClaudeProvider implements SessionProvider {
   }
 
   /**
-   * Claude does not always live in ~/.claude. A CLAUDE_CONFIG_DIR moves the
-   * whole store; router setups (subrouter and friends) fan Claude out into
-   * per-profile homes like ~/.subrouter/<x>/claude/<id>/projects — sessions
-   * as real as any, invisible to a provider that only knows the default
-   * path. Roots therefore are: the default, the env override, anything
-   * declared in ~/.mako/roots.json ({"claude": ["/abs/projects", …]}), and
-   * auto-discovered subrouter profiles. Discovery is a couple of readdirs,
-   * cached briefly — roots() is called on every watch/scan setup.
+   * Claude does not always live in ~/.claude: a CLAUDE_CONFIG_DIR moves the
+   * whole store. Roots therefore are: the default, the env override, and
+   * anything declared in ~/.mako/roots.json ({"claude": ["/abs/projects", …]}).
+   * Cached briefly — roots() is called on every watch/scan setup.
    */
   roots(): string[] {
     if (this.extraRoots && Date.now() - this.extraRoots.at < 60_000) {
       return [this.root, ...this.extraRoots.value]
     }
     const extras: string[] = []
-    // Identity is the *real* path: router setups symlink their per-profile
-    // projects dirs straight back at ~/.claude/projects, and scanning the
-    // same store through five names lists every session five times.
+    // Identity is the *real* path: account homes symlink their projects dir
+    // straight back at ~/.claude/projects, and scanning the same store
+    // through several names lists every session several times.
     const seen = new Set<string>()
     const realOf = (dir: string): string => {
       try {
@@ -493,18 +489,6 @@ export class ClaudeProvider implements SessionProvider {
       for (const dir of declared) push(dir)
     } catch {
       // No declaration file: nothing declared.
-    }
-    try {
-      const subrouter = join(this.home, ".subrouter")
-      for (const group of readdirSync(subrouter)) {
-        const claudeDir = join(subrouter, group, "claude")
-        if (!existsSync(claudeDir)) continue
-        for (const profile of readdirSync(claudeDir)) {
-          push(join(claudeDir, profile, "projects"))
-        }
-      }
-    } catch {
-      // No subrouter: the common case.
     }
     this.extraRoots = { at: Date.now(), value: extras }
     return [this.root, ...extras]

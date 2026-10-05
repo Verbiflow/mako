@@ -7,6 +7,8 @@ import { ThreadArchives } from "../electron/thread-archives.ts"
 import { ThreadLifecycle } from "../electron/thread-lifecycle.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState, ThreadRef } from "../electron/shared.ts"
 import { archivedByKeys, threadArchiveKey, threadShownKey, type ThreadArchiveSnapshot } from "../electron/contracts/thread-lifecycle.ts"
 import { followNativeArchives } from "../electron/thread-lifecycle.ts"
@@ -20,6 +22,13 @@ const sent: string[] = []
 let cancellations = 0
 const driver: ProviderLiveDriver = {
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture", canResume: true, available: () => true,
   async start(cwd, options) {
     const state: LiveSessionState = { id:options.conversationId, nativeId:options.conversationId, nativePath:join(root,`${options.conversationId}.json`), harness:"fixture", cwd, status:"ready", connection:"connected", modes:[], currentMode:null, configOptions:[] }

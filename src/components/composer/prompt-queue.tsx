@@ -40,6 +40,7 @@ export function PromptQueue() {
           item.id === right[index]?.id &&
           item.text === right[index]?.text &&
           item.status === right[index]?.status &&
+          item.signIn === right[index]?.signIn &&
           item.attachments === right[index]?.attachments
       )
   )
@@ -110,9 +111,11 @@ export function PromptQueue() {
           {delivery.length} {delivery.length === 1 ? "message" : "messages"}
         </span>
         <span className="ml-auto truncate">
-          {delivery[0]?.status === "held"
-            ? "Paused"
-            : "After this turn"}
+          {delivery[0] && "signIn" in delivery[0] && delivery[0].signIn
+            ? "Sends after Resume"
+            : delivery[0]?.status === "held"
+              ? "Paused"
+              : "After this turn"}
         </span>
       </div>
       <div className="min-h-0 overflow-y-auto">
@@ -313,7 +316,7 @@ function QueueRow({
             {body || `${request.attachments.length} attachments`}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
-            {request.status === "held" ? <button type="button" aria-label="Resume queued message" disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">Resume</button> : null}
+            {request.status === "held" && !request.signIn ? <button type="button" aria-label="Resume queued message" disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">Resume</button> : null}
             {canSteer ? (
               <button
                 type="button"
@@ -350,7 +353,7 @@ function QueueRow({
           </div>
         </div>
       )}
-      {request.status === "held" && !editing ? (
+      {request.status === "held" && !editing && !request.signIn ? (
         <p className="mt-1 text-label text-faint">Paused until you resume or edit this message</p>
       ) : null}
       {request.attachments.length ? (

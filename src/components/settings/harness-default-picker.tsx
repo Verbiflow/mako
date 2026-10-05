@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils"
 import type { HarnessProfile } from "@/lib/types"
 import { harnessDefaults, resetHarnessDefaults, saveHarnessDefaults } from "@/state/composer-settings"
 import { usePrefs } from "@/state/prefs"
+import { harnessDefaultsFor } from "@/state/descriptors"
+import { useThreads } from "@/state/thread-store"
 
 /**
  * What a harness's new conversations and project setups start on, chosen
@@ -17,7 +19,8 @@ import { usePrefs } from "@/state/prefs"
 export function HarnessDefaultPicker({ harness, profile }: { harness: string; profile: HarnessProfile }) {
   const preference = usePrefs((prefs) => prefs.providerSettings[harness])
   const { resolved, model, options } = harnessDefaults(harness, profile, preference)
-  const recommended = workDefault(harness, profile.models) ? "Mako's recommendation" : `${harnessLabel(harness)}'s own default`
+  const defaults = useThreads((state) => harnessDefaultsFor(state, harness))
+  const recommended = workDefault(defaults, profile.models) ? "Mako's recommendation" : `${harnessLabel(harness)}'s own default`
   const save = (settings: SessionSettings) => saveHarnessDefaults(harness, settings, profile)
   const choice: ModelChoice = {
     harness,

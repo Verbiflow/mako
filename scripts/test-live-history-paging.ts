@@ -7,6 +7,7 @@ import { LiveHistoryReader } from "../electron/live-history-reader"
 import { historyJsonChunks } from "../electron/live-history-json"
 import type { LiveSnapshot } from "../electron/contracts/live-conversations"
 import type { LiveHistoryRead, LiveHistoryPage } from "../electron/contracts/live-history"
+import type { MakoBridge } from "../electron/contracts/renderer-bridge"
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
 
 const samples: unknown[] = [null, false, 0, "", [undefined, undefined, null], { no: undefined, yes: ["a\n\"\\\t", "\ud800", "😀東京"] }]
@@ -131,11 +132,12 @@ const id = source.session.id
 const reader = new LiveHistoryReader()
 let gate: Promise<void> | undefined
 let arrived = () => {}
-const bridge = mock.method(getMako(), "liveRead", async (_id, input) => {
+const liveRead: MakoBridge["liveRead"] = async (_id, input) => {
   const result = await reader.read(id, input, async () => source)
   if (input.kind === "earlier" && gate) { arrived(); await gate }
   return result
-})
+}
+const bridge = mock.method(getMako(), "liveRead", liveRead)
 try {
   assert.equal(await hydrateLive(id), true)
   acpStore.set({ activeKey: id })
@@ -159,8 +161,10 @@ try {
   let current = acpStore.get().conversations[id]!
   assert.equal(current.revision, 2, "Earlier page cannot rewind current control revision")
   assert.equal(current.requests!.at(-1)!.id, auditId(999), "Earlier page cannot erase a newer prompt receipt")
+  assert.ok(current.kind === "live")
   assert.deepEqual(current.permission, newApproval, "Earlier page cannot clear a newer approval")
-  assert.ok(current.blocks.at(-1)?.type === "text" && current.blocks.at(-1)!.text.endsWith(" APPENDED"))
+  const appended = current.blocks.at(-1)
+  assert.ok(appended?.type === "text" && appended.text.endsWith(" APPENDED"))
   assert.equal(current.projection!.messages.at(-1)!.id, stableLastMessage)
   const preview = current.blocks.find(block => block.type === "tool" && block.historyRest)
   assert.ok(preview?.type === "tool" && preview.historyRest)

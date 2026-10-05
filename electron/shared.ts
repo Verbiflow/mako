@@ -42,6 +42,7 @@ export type {
   AccountProviderInfo,
   AccountHarness,
   AccountProvider,
+  AccountRemoval,
   AccountUsage,
   HarnessAccount,
   UsageBalance,

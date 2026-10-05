@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises"
 import { setTimeout as delay } from "node:timers/promises"
 import { ControlSessions } from "../electron/control-sessions.js"
 import { startControlService } from "../electron/control-service.js"
-import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
+import { BrowserService } from "@mako/control-runtime/browser"
 import { browserFixture } from "./browser-control-fixture.js"
 import {
   applyControlEnvironment,

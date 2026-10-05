@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { z } from "zod"
 import { optionAccepts, type SessionModel, type SettingValue } from "@mako/sessions/settings"
 import type { JsonSchema, ProviderUtilityRunner } from "./providers/utility-runner.js"
-import { harnessOrder, lightDefault, lightOptions } from "./contracts/harness-defaults.js"
+import { harnessOrder, lightDefault, lightOptions, type HarnessDefaults } from "./contracts/harness-defaults.js"
 import {
   AUTOMATIC,
   agentModelId,
@@ -25,6 +25,8 @@ export interface UtilityAgent {
   models: readonly SessionModel[]
   /** The model the harness itself starts on. */
   defaultModel?: string
+  /** Mako's model choices for the harness. */
+  defaults?: HarnessDefaults
   runner: ProviderUtilityRunner
 }
 
@@ -59,7 +61,7 @@ export interface UtilityWorkOptions {
   models: Pick<UtilityModelStore, "choices" | "choose" | "harnessOrder" | "saveHarnessOrder" | "settings" | "load">
   /** Signed-in harnesses that can do small work, in any order. */
   agents(): Promise<UtilityAgent[]>
-  /** Every harness Mako can do small work through, signed in or not. */
+  /** Every harness Mako can do small work through, signed in or not, in Mako's order. */
   runners(): readonly string[]
   now?: () => number
 }
@@ -139,12 +141,12 @@ export class UtilityWork {
 
   private async available(): Promise<Available> {
     const [found, settings, saved] = await Promise.all([this.agents(), this.options.models.settings(), this.options.models.harnessOrder()])
-    const order = harnessOrder(saved, found.map((agent) => agent.harness))
+    const order = harnessOrder(saved, [...this.options.runners(), ...found.map((agent) => agent.harness)])
     const agents = order.flatMap((harness) => found.filter((agent) => agent.harness === harness))
     const connections = settings.connections.filter((connection) => !settings.issues.some(({ provider }) => provider === connection.provider))
     const list: UtilityModelOption[] = []
     for (const agent of agents) {
-      const light = lightDefault(agent.harness, agent.models, agent.defaultModel)?.model
+      const light = lightDefault(agent.defaults, agent.models, agent.defaultModel)?.model
       for (const model of light ? [light, ...agent.models.filter((entry) => entry !== light)] : agent.models)
         list.push({ id: agentModelId(agent.harness, model.id), label: model.label, via: agent.label, kind: "agent", source: agent.harness, light: model === light || undefined })
     }
@@ -156,7 +158,7 @@ export class UtilityWork {
   private async find(task: UtilityTask, choice: string, available: Available): Promise<Found> {
     if (choice === AUTOMATIC) {
       for (const agent of available.agents) {
-        const light = lightDefault(agent.harness, agent.models, agent.defaultModel)
+        const light = lightDefault(agent.defaults, agent.models, agent.defaultModel)
         if (light) return this.agentModel(agent, light.model, light.options, available)
       }
       const connection = available.connections[0]

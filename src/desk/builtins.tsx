@@ -3,6 +3,7 @@ import { ControlPreviewOverlay } from "@/components/inspector/control-preview-ov
 import { AppshotButton } from "@/components/composer/appshot-button"
 import { ProviderConnectionNotice } from "@/components/composer/connection-notice"
 import { AccountSwitchNotice } from "@/components/composer/account-notice"
+import { SignInRecovery } from "@/components/composer/sign-in-recovery"
 import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
 import {
@@ -86,6 +87,7 @@ export function installBuiltins(): () => void {
     registerSlot("control-preview", "transcript.overlay", ControlPreviewOverlay),
     registerSlot("appshot", "composer.controls", AppshotButton, -10),
     registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
+    registerSlot("sign-in-recovery", "composer.above", SignInRecovery),
     registerSlot("account-switch", "composer.above", AccountSwitchNotice),
     registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
 

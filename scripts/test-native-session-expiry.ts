@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { CallToolResultSchema, type Tool } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
-import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
+import type { ComputerDriverClient, ComputerDriverResult } from "../packages/control-runtime/src/computer-driver-client.js"
 
 // The driver ends a named session after five idle minutes and refuses later
 // calls naming it before running the tool (serve.rs resurrection guard).
@@ -17,7 +17,7 @@ const driver: ComputerDriverClient = {
   async listTools() {
     return ["get_window_state", "set_agent_cursor_enabled", "set_agent_cursor_motion"].map(sessionTool)
   },
-  async callTool(name, args) {
+  async callTool(name, args): Promise<ComputerDriverResult> {
     const session = z.string().optional().safeParse(args.session).data
     calls.push({ name, session })
     if (session && ended.has(session))
@@ -61,8 +61,9 @@ async function read() {
 const reads = () => calls.filter((call) => call.name === "get_window_state")
 try {
   assert.deepEqual(await read(), { ok: true })
-  const first = reads()[0]!.session
-  assert.ok(first?.startsWith("mako-native-session-expiry-"), JSON.stringify(calls))
+  const first = reads()[0]?.session
+  assert.ok(first, JSON.stringify(calls))
+  assert.ok(first.startsWith("mako-native-session-expiry-"), JSON.stringify(calls))
 
   ended.add(first)
   calls.length = 0

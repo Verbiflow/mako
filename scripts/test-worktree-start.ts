@@ -258,7 +258,7 @@ await assert.rejects(service.update(up.path), /Commit or stash|Finish or abort t
 git(up.path, "merge", "--abort")
 
 // The mark and the tip say the same thing in a glyph and in words.
-const opened = { path: "/w", into: "main", ahead: 3, changes: 2, landing: { kind: "open", into: "main", commits: 3 }, pull: null } satisfies WorktreeSummary
+const opened = { path: "/w", into: "main", ahead: 3, changes: 2, landing: { kind: "open", into: "main", commits: 3 }, pull: null, behind: null } satisfies WorktreeSummary
 const worktree = { path: "/w", thread: ThreadIdSchema.parse(randomUUID()), repoRoot: "/r", project: "/r", branch: "mako/x", base: "abc", createdAt: 0, start: { from: "main", adopted: false, tookMs: 400, copied: 0, spare: true } }
 assert.deepEqual(worktreeMark(undefined), { kind: "branch" })
 assert.deepEqual(worktreeMark(opened), { kind: "ahead", ahead: 3 })

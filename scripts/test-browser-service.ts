@@ -1,15 +1,16 @@
 import assert from "node:assert/strict"
 import { z } from "zod"
 import { PageObservationNodeSchema, pageOutlineLines } from "@mako/control/browser"
-import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
+import { BrowserService } from "@mako/control-runtime/browser"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
   BrowserFault,
-} from "../packages/control-runtime/src/contracts/browser-control.js"
+} from "@mako/control-runtime/contracts"
 import { startControlService } from "../electron/control-service.js"
-import { browserControlClient } from "../packages/control-runtime/src/browser-control-client.js"
+import { browserControlClient } from "@mako/control-runtime/host"
 import { browserFixture } from "./browser-control-fixture.js"
+import type { JsonValue } from "../electron/codex-app-json.js"
 
 const discovered = [
   {
@@ -334,7 +335,9 @@ try {
     assert.ok(count < 100)
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
-  fixture.emit(fixture.sessionFor(doomed.tab), "Target.targetDestroyed", {
+  const doomedSession = fixture.sessionFor(doomed.tab)
+  assert.ok(doomedSession, "the doomed tab has a CDP session")
+  fixture.emit(doomedSession, "Target.targetDestroyed", {
     targetId: doomed.tab,
   })
   fixture.completeDelayed()
@@ -681,7 +684,7 @@ try {
   await failedDestination({ action: "status" }, new AbortController().signal)
   const failedDestinationTarget = BrowserTargetSchema.parse(
     await failedDestination(
-      { action: "open", browser: "fixture" },
+      BrowserCommandSchema.parse({ action: "open", browser: "fixture" }),
       new AbortController().signal
     )
   )
@@ -927,7 +930,7 @@ try {
       value,
       sources: [{ type: "relatedElement", value: { value }, nativeSourceValue: { relatedNodes: [{ backendDOMNodeId: label }] } }],
     })
-    type AxName = { value: string; sources?: unknown[] }
+    type AxName = { value: string; sources?: JsonValue[] }
     type AxProperties = Array<{ name: string; value: { value: string } }>
     type AxNode = { nodeId: string; parentId?: string; ignored: boolean; backendDOMNodeId: number; role: { value: string }; name?: AxName; properties?: AxProperties }
     const ax = (nodeId: number, parentId: number | undefined, role: string, name?: string | AxName, properties?: AxProperties) => {

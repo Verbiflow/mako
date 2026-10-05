@@ -1,6 +1,14 @@
 {
   "harness": "cursor",
   "source": "Written from the child's wire schemas (electron/providers/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, following the cases scripts/test-cursor-sdk.ts drives; not captured, because a short real turn produced none of these",
+  "native": {
+    "version": "1.0.31",
+    "sdk": {
+      "name": "@cursor/sdk",
+      "version": "1.0.31"
+    },
+    "origin": "written"
+  },
   "about": "A turn that reports its model, thinks, starts a subagent that finishes, runs a shell whose output streams, compacts with the summary after the completion, meets an update kind the child does not know, and fails with the shell still running. The next turn compacts and ends before any summary arrives, which is still marked.",
   "session": {
     "settings": {
@@ -251,7 +259,7 @@
           "update": {
             "kind": "tool-update",
             "id": "call-2",
-            "output": "PASS parser\n"
+            "outputAppend": "PASS parser\n"
           }
         }
       ]

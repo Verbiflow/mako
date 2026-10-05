@@ -4,24 +4,28 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ModelOption, SessionModel } from "@mako/sessions/settings"
 import { agentOrder, harnessesByRecency } from "../electron/contracts/agent-order.ts"
-import { HARNESS_ORDER, harnessOrder, isDefaultOrder, lightDefault, lightModel, lightOptions, workDefault } from "../electron/contracts/harness-defaults.ts"
+import { harnessOrder, isDefaultOrder, lightDefault, lightModel, lightOptions, workDefault } from "../electron/contracts/harness-defaults.ts"
 import type { UtilityConnection, UtilityModelSettings } from "../electron/contracts/utility-models.ts"
 import type { UtilityTask, UtilityWorkChoices } from "../electron/contracts/utility-work.ts"
+import { providerHost } from "../electron/providers/index.ts"
 import type { UtilityCompletion } from "../electron/providers/utility-runner.ts"
 import { UtilityModelStore } from "../electron/utility-model-store.ts"
-import { utilityProviders } from "../electron/utility-models.ts"
+import { parseConnection, utilityProviders } from "../electron/utility-models.ts"
 import { UtilityWork, type UtilityAgent } from "../electron/utility-work.ts"
 
-// One harness order for setup and commits: the person's, then Mako's.
-assert.deepEqual([...HARNESS_ORDER], ["claude", "codex", "cursor", "opencode", "grok", "devin"])
-assert.deepEqual(harnessOrder(undefined, ["devin", "codex", "claude"]), ["claude", "codex", "devin"], "Mako's order over the harnesses Mako has")
-assert.deepEqual(harnessOrder(["grok", "codex"], ["claude", "codex", "grok", "pi"]), ["grok", "codex", "claude", "pi"], "the saved order first, then Mako's, then any other")
+// One harness order for setup and commits: the person's, then Mako's, which is the order harnesses install in.
+const MAKO_ORDER = providerHost.harnesses.list().map(({ provider }) => provider)
+const defaults = (harness: string) => providerHost.profiles.get(harness)?.defaults
+assert.deepEqual(MAKO_ORDER, ["claude", "codex", "cursor", "opencode", "grok", "devin"])
+assert.deepEqual(harnessOrder(undefined, MAKO_ORDER), MAKO_ORDER, "Mako's order until the person saves one")
+assert.deepEqual(harnessOrder(["grok", "codex"], ["claude", "codex", "grok", "pi"]), ["grok", "codex", "claude", "pi"], "the saved order first, then Mako's")
 assert.deepEqual(harnessOrder(["gone", "codex"], ["claude", "codex"]), ["codex", "claude"], "a harness that went away is dropped")
-assert.equal(isDefaultOrder(["claude", "codex", "grok"]), true)
-assert.equal(isDefaultOrder(["codex", "claude"]), false)
-assert.deepEqual(agentOrder({ signedIn: ["codex", "claude"], order: HARNESS_ORDER }), ["claude", "codex"])
+assert.equal(isDefaultOrder(["claude", "codex", "grok"], ["claude", "codex", "grok"]), true)
+assert.equal(isDefaultOrder(["codex", "claude"], ["claude", "codex"]), false)
+assert.equal(isDefaultOrder(["claude"], ["claude", "codex"]), false, "an order missing a harness is not Mako's")
+assert.deepEqual(agentOrder({ signedIn: ["codex", "claude"], order: MAKO_ORDER }), ["claude", "codex"])
 assert.deepEqual(agentOrder({ signedIn: ["codex", "claude"], order: ["codex", "claude"] }), ["codex", "claude"])
-assert.deepEqual(agentOrder({ signedIn: ["codex", "claude"], order: HARNESS_ORDER, recent: ["cursor", "codex"] }), ["codex", "claude"], "a recent harness that isn't signed in is skipped")
+assert.deepEqual(agentOrder({ signedIn: ["codex", "claude"], order: MAKO_ORDER, recent: ["cursor", "codex"] }), ["codex", "claude"], "a recent harness that isn't signed in is skipped")
 assert.deepEqual(harnessesByRecency([
   { harness: "claude", updatedAt: "2026-10-01T00:00:00Z" },
   { harness: "codex", updatedAt: "2026-10-03T00:00:00Z" },
@@ -46,38 +50,38 @@ const codexModels = [
   model("gpt-6-astra", "GPT-6 Astra", [effort(levels, "medium"), tier]),
   model("gpt-6-luna", "GPT-6 Luna", [effort(levels, "medium"), tier]),
 ]
-assert.deepEqual(workDefault("claude", claudeModels), { model: "claude-opus-5-5", options: { effort: "high", fast: false } }, "new conversations and setup start on Opus 5.5 at high, not Fable")
-assert.deepEqual(workDefault("codex", codexModels), { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }, "not the Astra a config file pins")
-assert.equal(workDefault("codex", [model("gpt-5.5", "GPT-5.5")]), undefined, "a catalog without Mako's pick keeps the harness's own default")
-assert.equal(workDefault("pi", claudeModels), undefined, "a harness Mako has no defaults for keeps its own")
+assert.deepEqual(workDefault(defaults("claude"), claudeModels), { model: "claude-opus-5-5", options: { effort: "high", fast: false } }, "new conversations and setup start on Opus 5.5 at high, not Fable")
+assert.deepEqual(workDefault(defaults("codex"), codexModels), { model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }, "not the Astra a config file pins")
+assert.equal(workDefault(defaults("codex"), [model("gpt-5.5", "GPT-5.5")]), undefined, "a catalog without Mako's pick keeps the harness's own default")
+assert.equal(workDefault(defaults("pi"), claudeModels), undefined, "a harness Mako has no defaults for keeps its own")
 const cursorFast: ModelOption = { id: "fast", label: "Fast", role: "speed", kind: "select", values: [{ value: "false", label: "Off" }, { value: "true", label: "On" }] }
 const cursorModels = [
   model("auto-smart", "Auto"),
   model("grok-4.7", "Grok 4.7", [effort(["low", "medium", "high", "xhigh"]), cursorFast]),
   model("claude-opus-5-5", "Claude Opus 5.5", [effort(levels), cursorFast]),
 ]
-assert.deepEqual(workDefault("cursor", cursorModels), { model: "claude-opus-5-5", options: { effort: "high", fast: "false" } }, "Cursor works on Opus 5.5, not Auto")
-assert.deepEqual(lightDefault("cursor", cursorModels), { model: cursorModels[1], options: { effort: "low", fast: "false" } }, "and names things with Grok 4.7 at low")
+assert.deepEqual(workDefault(defaults("cursor"), cursorModels), { model: "claude-opus-5-5", options: { effort: "high", fast: "false" } }, "Cursor works on Opus 5.5, not Auto")
+assert.deepEqual(lightDefault(defaults("cursor"), cursorModels), { model: cursorModels[1], options: { effort: "low", fast: "false" } }, "and names things with Grok 4.7 at low")
 const openCodeModels = [
   model("openai/gpt-6.1-sol", "GPT-6.1 Sol", [effort(levels)]),
   model("opencode/muse-spark-1.3-contributor-free", "Muse Spark 1.3 Free", [effort(["minimal", "low", "medium", "high", "xhigh"])]),
 ]
-assert.equal(workDefault("opencode", openCodeModels), undefined, "OpenCode keeps its own default, the free model it changes itself")
-assert.deepEqual(lightDefault("opencode", openCodeModels, "opencode/muse-spark-1.3-contributor-free"), { model: openCodeModels[1], options: { effort: "low" } }, "and its own default runs light at low")
+assert.equal(workDefault(defaults("opencode"), openCodeModels), undefined, "OpenCode keeps its own default, the free model it changes itself")
+assert.deepEqual(lightDefault(defaults("opencode"), openCodeModels, "opencode/muse-spark-1.3-contributor-free"), { model: openCodeModels[1], options: { effort: "low" } }, "and its own default runs light at low")
 
-const claudeLight = lightDefault("claude", claudeModels)
+const claudeLight = lightDefault(defaults("claude"), claudeModels)
 assert.equal(claudeLight?.model.id, "claude-haiku-4-5-20251001", "a dated id matches the pick it was released as")
 assert.deepEqual(claudeLight?.options, { fast: false }, "Haiku has no reasoning level; its fast lane stays off")
-assert.deepEqual(lightDefault("codex", codexModels)?.options, { effort: "low", serviceTier: "default" }, "Luna at low reasoning, standard lane")
-assert.equal(lightDefault("grok", [model("grok-4.7", "Grok 4.7", [effort(["xhigh", "high", "medium", "low"])]), model("grok-4.7-build-fast", "Build fast")])?.model.id, "grok-4.7", "Grok's own model at low, not the pricier fast build")
-assert.deepEqual(lightDefault("grok", [model("grok-4.7", "Grok 4.7", [effort(["xhigh", "high", "medium", "low"])])])?.options, { effort: "low" })
-assert.deepEqual(lightDefault("devin", [model("gemini-3.8-flash", "Gemini 3.8 Flash", [effort(["low", "medium", "high"], "high")])])?.options, { effort: "low" }, "the next pick when the first isn't offered")
+assert.deepEqual(lightDefault(defaults("codex"), codexModels)?.options, { effort: "low", serviceTier: "default" }, "Luna at low reasoning, standard lane")
+assert.equal(lightDefault(defaults("grok"), [model("grok-4.7", "Grok 4.7", [effort(["xhigh", "high", "medium", "low"])]), model("grok-4.7-build-fast", "Build fast")])?.model.id, "grok-4.7", "Grok's own model at low, not the pricier fast build")
+assert.deepEqual(lightDefault(defaults("grok"), [model("grok-4.7", "Grok 4.7", [effort(["xhigh", "high", "medium", "low"])])])?.options, { effort: "low" })
+assert.deepEqual(lightDefault(defaults("devin"), [model("gemini-3.8-flash", "Gemini 3.8 Flash", [effort(["low", "medium", "high"], "high")])])?.options, { effort: "low" }, "the next pick when the first isn't offered")
 
 // Without a pick, the catalog's own fast or cheap model, at its lowest sensible level.
 assert.equal(lightModel([model("big", "Big", [], "Most capable"), model("luna", "Luna", [], "Fast and affordable")])?.id, "luna")
 assert.equal(lightModel([model("old-mini", "Old mini", [], "Fast. Older model"), model("lite", "Lite")])?.id, "lite")
 assert.equal(lightModel([model("big", "Big", [], "Most capable")]), undefined, "a catalog that offers no light model offers none")
-assert.deepEqual(lightDefault("pi", [model("pi-mini", "Pi mini", [effort(["minimal", "medium", "high"]), tier])])?.options, { effort: "minimal", serviceTier: "default" })
+assert.deepEqual(lightDefault(defaults("pi"), [model("pi-mini", "Pi mini", [effort(["minimal", "medium", "high"]), tier])])?.options, { effort: "minimal", serviceTier: "default" })
 assert.deepEqual(lightOptions(model("x", "X", [effort(["none", "low", "high"]), { id: "fast", label: "Fast", role: "speed", kind: "select", values: [{ value: "false", label: "Off" }, { value: "true", label: "On" }] }])), { effort: "low", fast: "false" })
 
 const calls: Array<UtilityCompletion & { harness: string }> = []
@@ -85,6 +89,7 @@ const agent = (harness: string, label: string, models: SessionModel[]): UtilityA
   harness,
   label,
   models,
+  defaults: defaults(harness),
   runner: {
     provider: harness,
     complete: async (request) => {
@@ -97,7 +102,7 @@ const claude = agent("claude", "Claude Code", claudeModels)
 const codex = agent("codex", "Codex", codexModels)
 const heavyOnly = agent("devin", "Devin", [model("adaptive", "Adaptive")])
 
-const connection: UtilityConnection = { provider: "google", model: "gemini-flash", contextTokens: 1_000_000 }
+const connection = parseConnection({ provider: "google", model: "gemini-flash", contextTokens: 1_000_000 })
 let agents: UtilityAgent[] = []
 let connections: UtilityConnection[] = []
 let issues: UtilityModelSettings["issues"] = []

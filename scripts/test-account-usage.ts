@@ -290,7 +290,7 @@ assert.deepEqual(discovered, [
     accountId: "account-fixture",
     dir: "/fixture/opencode/auth.json",
     active: true,
-    source: "opencode",
+    source: "model-provider",
   },
   {
     harness: "opencode",
@@ -299,7 +299,7 @@ assert.deepEqual(discovered, [
     authType: "api",
     dir: "/fixture/opencode/auth.json",
     active: true,
-    source: "opencode",
+    source: "model-provider",
   },
 ])
 const serialized = JSON.stringify(discovered)

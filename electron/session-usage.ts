@@ -43,9 +43,9 @@ export class SessionUsage {
 
   /** The new reading, or `undefined` when these observations changed nothing. */
   observe(...observations: UsageObservation[]): LiveSessionUsage | undefined {
-    const before = JSON.stringify(this.reading)
+    const before = this.reading
     for (const observation of observations) this.apply(observation)
-    return JSON.stringify(this.reading) === before ? undefined : this.reading
+    return sameUsage(before, this.reading) ? undefined : this.reading
   }
 
   private apply(observation: UsageObservation): void {
@@ -96,6 +96,24 @@ export class SessionUsage {
     }
     this.reading = next
   }
+}
+
+function sameUsage(left: LiveSessionUsage, right: LiveSessionUsage): boolean {
+  return left.used === right.used &&
+    left.size === right.size &&
+    left.compacted === right.compacted &&
+    left.cost?.amount === right.cost?.amount &&
+    left.cost?.currency === right.cost?.currency &&
+    sameTokens(left.tokens, right.tokens)
+}
+
+function sameTokens(left: TokenCounts | undefined, right: TokenCounts | undefined): boolean {
+  if (!left || !right) return left === right
+  return left.input === right.input &&
+    left.cacheRead === right.cacheRead &&
+    left.cacheWrite === right.cacheWrite &&
+    left.output === right.output &&
+    left.reasoning === right.reasoning
 }
 
 /**

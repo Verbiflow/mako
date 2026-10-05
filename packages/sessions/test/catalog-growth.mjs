@@ -118,7 +118,7 @@ try {
     claudeLine({ type: "user", sessionId: "62362b25", cwd: "/Users/dev/app", timestamp: "2026-09-11T07:00:00Z", message: { role: "user", content: "Fix the reply rate on the Together AI sequence" } }) +
       claudeLine({ type: "assistant", sessionId: "62362b25", timestamp: "2026-09-11T07:00:05Z", message: { role: "assistant", model: "claude-fable-5", content: [{ type: "text", text: "On it." }] } })
   )
-  // A shell inside Claude Code or a router sets CLAUDE_CONFIG_DIR for its own
+  // A shell inside Claude Code sets CLAUDE_CONFIG_DIR for its own
   // store; a provider built on a fixture home must not list that store's
   // sessions among the fixture's. This test once scanned the developer's real
   // sessions and asserted on one of their titles.

@@ -47,6 +47,7 @@ import {
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import type { NativeRunner } from "../electron/providers/native-runner.ts"
+import type { HarnessProfile } from "../electron/contracts/providers-acp.ts"
 import { ProviderRegistry } from "../electron/providers/registry.ts"
 
 async function waitFor(check: () => boolean): Promise<void> {
@@ -473,9 +474,9 @@ assert.deepEqual(
     ["claude", "selectable"],
     ["codex", "selectable"],
     ["cursor", "selectable"],
+    ["opencode", "observed"],
     ["grok", "selectable"],
     ["devin", "selectable"],
-    ["opencode", "observed"],
   ]
 )
 assert.equal(
@@ -603,8 +604,10 @@ const runner: NativeRunner = {
   launchCredentials: { kind: "unavailable", reason: "Fixture credentials" },
   available: () => true,
   fastMode: "supported",
+  carries: [],
   resume: () => ({ command: "fixture", args: [] }),
   fresh: () => ({ command: "fixture", args: [] }),
+  describe: () => ({}),
 }
 const dispose = registry.register(runner)
 assert.equal(registry.get("fixture"), runner)

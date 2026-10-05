@@ -31,11 +31,12 @@ const state = join(root, "github.json")
 const ghPath = join(root, "gh")
 writeFileSync(ghPath, `#!/usr/bin/env node
 const { execFileSync } = require("node:child_process")
-const { readFileSync, writeFileSync } = require("node:fs")
+const { readFileSync, renameSync, writeFileSync } = require("node:fs")
 const file = ${JSON.stringify(state)}
 const db = JSON.parse(readFileSync(file, "utf8"))
 const args = process.argv.slice(2)
-const save = () => writeFileSync(file, JSON.stringify(db, null, 2))
+// Mako reads several runs' logs at once; another gh mid-write must never see half a file.
+const save = () => { writeFileSync(file + "." + process.pid, JSON.stringify(db, null, 2)); renameSync(file + "." + process.pid, file) }
 const out = (value) => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value))
 const fail = (message) => { process.stderr.write(message + "\\n"); process.exit(1) }
 const flag = (name) => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1] }

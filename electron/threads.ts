@@ -190,6 +190,7 @@ export function rememberThreadMode(path: string, modeId: string): ThreadRef | nu
   return refreshed
 }
 import { ProviderActivityEngine } from "./provider-activity-engine.js"
+import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import type { ProviderActivitySession } from "./providers/process-probe.js"
 import {
@@ -1195,30 +1196,15 @@ export function unfollowThread(): void {
   followedReader = null
 }
 
-const HARNESS_NAMES = {
-  codex: "Codex",
-  claude: "Claude Code",
-  cursor: "Cursor",
-  grok: "Grok",
-  devin: "Devin",
-  opencode: "OpenCode",
-} satisfies Partial<Record<ThreadRef["harness"], string>>
-
 function transcriptOptions(
   harness: ThreadRef["harness"],
   instruction: string | undefined
 ): TranscriptOptions {
   const options: TranscriptOptions = {
-    from: isNamedHarness(harness) ? HARNESS_NAMES[harness] : harness,
+    from: harnessLabel(providerHost, harness),
   }
   if (instruction) options.instruction = instruction
   return options
-}
-
-function isNamedHarness(
-  harness: ThreadRef["harness"]
-): harness is keyof typeof HARNESS_NAMES {
-  return Object.hasOwn(HARNESS_NAMES, harness)
 }
 
 /**

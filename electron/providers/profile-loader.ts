@@ -2,7 +2,7 @@ import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import type { HarnessProfile } from "../shared.js"
 import type { ProviderCapability } from "./registry.js"
 import { hostWarn } from "../host-log.js"
-import { workDefault } from "../contracts/harness-defaults.js"
+import { workDefault, type HarnessDefaults } from "../contracts/harness-defaults.js"
 
 /** This query's owner, independent of a session's native execution authority.
  * Stop only this query's process on cancellation and await cleanup. A waiter
@@ -12,7 +12,10 @@ export interface ProfileLoadContext {
 }
 
 export interface ProviderProfileLoader extends ProviderCapability {
+  /** The harness's name wherever Mako shows it. */
   label: string
+  /** Mako's model choices for this harness until the person makes their own. */
+  defaults: HarnessDefaults
   transport: HarnessProfile["transport"]
   capabilities: string[]
   nativeModelIds?: true
@@ -33,7 +36,7 @@ export function availableProviderProfile(
     models: catalog.models,
     capabilities: loader.capabilities,
   }
-  const settings = workDefault(loader.provider, catalog.models) ?? catalog.settings
+  const settings = workDefault(loader.defaults, catalog.models) ?? catalog.settings
   if (settings) profile.settings = settings
   if (catalog.configurationError)
     profile.configurationError = catalog.configurationError
@@ -43,12 +46,12 @@ export function availableProviderProfile(
 }
 
 /**
- * A profile with Mako's model for new conversations (`harness-defaults.ts`)
- * where its catalog offers it. A snapshot saved by an earlier release keeps
- * the defaults it was saved with; this gives it the current ones.
+ * A profile with Mako's model for new conversations where its catalog offers
+ * it. A snapshot saved by an earlier release keeps the defaults it was saved
+ * with; this gives it the current ones.
  */
-export function withWorkDefault(profile: HarnessProfile): HarnessProfile {
-  const settings = profile.available ? workDefault(profile.id, profile.models) : undefined
+export function withWorkDefault(profile: HarnessProfile, defaults: HarnessDefaults): HarnessProfile {
+  const settings = profile.available ? workDefault(defaults, profile.models) : undefined
   return settings ? { ...profile, settings } : profile
 }
 

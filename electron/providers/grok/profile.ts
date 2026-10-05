@@ -14,6 +14,10 @@ import { readJson, runDiscovery } from "../profile-transport.js"
 export const grokProfileLoader: ProviderProfileLoader = {
   provider: "grok",
   label: "Grok",
+  defaults: {
+    work: [{ model: "grok-4.7", options: { effort: "high" } }],
+    light: [{ model: "grok-4.7", options: { effort: "low" } }],
+  },
   transport: "acp",
   capabilities: [
     "start",

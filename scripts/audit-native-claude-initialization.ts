@@ -39,7 +39,7 @@ try {
   const selected = accounts.find(account => account.active)
   const configuration = await traceProviderLaunch("claude", id, trace => claudeSdkOptions(cwd, {
     conversationId: id, accountLaunch: launch,
-    mcpSnapshot: async () => ({ servers: [], issues: [], sources: [] }),
+    mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
   }, trace))
   await assertAccountLaunch("claude", launch)
   const native = query({ prompt: input, options: {

@@ -2,11 +2,11 @@ import type {
   SDKAssistantMessage,
   SDKMessage,
   SDKModelRefusalFallbackMessage,
+  SDKPartialAssistantMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import assert from "node:assert/strict"
-import { randomUUID } from "node:crypto"
+import { randomUUID, type UUID } from "node:crypto"
 import { mock } from "node:test"
-import type { JsonObject } from "../electron/codex-app-json.ts"
 import {
   reduceLiveUpdates,
   type LiveUpdate,
@@ -19,6 +19,9 @@ import {
 } from "../electron/providers/claude/sdk-projection.ts"
 import { ClaudeNotices } from "../electron/providers/claude/sdk-notices.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+
+type AssistantReply = SDKAssistantMessage["message"]
+type StreamEvent = SDKPartialAssistantMessage["event"]
 
 function session() {
   const events: LiveDriverEvent[] = []
@@ -209,66 +212,72 @@ try {
 
 {
   const projection = new ClaudeProjection()
+  const reply = (
+    id: string,
+    content: AssistantReply["content"],
+    stop_reason: AssistantReply["stop_reason"]
+  ): AssistantReply => ({
+    id,
+    type: "message",
+    role: "assistant",
+    model: "fixture",
+    content,
+    container: null,
+    context_management: null,
+    diagnostics: null,
+    stop_details: null,
+    stop_reason,
+    stop_sequence: null,
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation: null,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      fallback_credit: null,
+      inference_geo: null,
+      iterations: null,
+      output_tokens_details: null,
+      server_tool_use: null,
+      service_tier: null,
+      speed: null,
+    },
+  })
   const message = (
-    uuid: string,
+    uuid: UUID,
     id: string,
     text: string,
-    supersedes?: string[]
+    supersedes?: UUID[]
   ): SDKAssistantMessage => ({
     type: "assistant",
     parent_tool_use_id: null,
     uuid,
     session_id: "fixture",
     ...(supersedes && { supersedes }),
-    message: {
-      id,
-      type: "message",
-      role: "assistant",
-      model: "fixture",
-      content: [
-        { type: "text", text, citations: null },
-        { type: "tool_use", id: `${id}-tool`, name: "Read", input: {} },
-      ],
-      container: null,
-      context_management: null,
-      diagnostics: null,
-      stop_details: null,
-      stop_reason: "end_turn",
-      stop_sequence: null,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation: null,
-        cache_creation_input_tokens: null,
-        cache_read_input_tokens: null,
-        fallback_credit: null,
-        inference_geo: null,
-        iterations: null,
-        output_tokens_details: null,
-        server_tool_use: null,
-        service_tier: null,
-        speed: null,
-      },
-    },
+    message: reply(id, [
+      { type: "text", text, citations: null },
+      { type: "tool_use", id: `${id}-tool`, name: "Read", input: {} },
+    ], "end_turn"),
   })
+  const refusedUuid = randomUUID()
   const refused = message(
-    "uuid-refused",
+    refusedUuid,
     "msg-refused",
     "I can't help with that."
   )
   const shown = projection.project(refused)
   const fallback = message(
-    "uuid-fallback",
+    randomUUID(),
     "msg-fallback",
     "Here is the parser.",
-    ["uuid-refused"]
+    [refusedUuid]
   )
-  assert.deepEqual(claudeRetracted(fallback), ["uuid-refused"])
+  assert.deepEqual(claudeRetracted(fallback), [refusedUuid])
   assert.deepEqual(projection.retract(claudeRetracted(fallback)), [
     { kind: "retract", ids: ["msg-refused:0", "msg-refused-tool"] },
   ])
   assert.deepEqual(
-    projection.retract(["uuid-refused"]),
+    projection.retract([refusedUuid]),
     [],
     "a message is withdrawn once"
   )
@@ -290,33 +299,31 @@ try {
     "PASS: Claude's retraction of a refused reply removes the blocks that reply put in the transcript"
   )
 
-  // SAFETY: each fixture spells out the stream-event fields the projection reads for its `type`.
-  const stream = (event: JsonObject) =>
-    ({
-      type: "stream_event",
-      parent_tool_use_id: null,
-      uuid: randomUUID(),
-      session_id: "fixture",
-      event,
-    }) as SDKMessage
+  const stream = (event: StreamEvent): SDKMessage => ({
+    type: "stream_event",
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+    session_id: "fixture",
+    event,
+  })
   const streamed = new ClaudeProjection()
   const refusedStream = [
-    stream({ type: "message_start", message: { id: "msg-cut" } }),
+    stream({ type: "message_start", message: reply("msg-cut", [], null) }),
     stream({
       type: "content_block_start",
       index: 0,
-      content_block: { type: "text", text: "" },
+      content_block: { type: "text", text: "", citations: null },
     }),
     stream({
       type: "content_block_delta",
       index: 0,
       delta: { type: "text_delta", text: "I can't" },
     }),
-    stream({ type: "message_start", message: { id: "msg-retry" } }),
+    stream({ type: "message_start", message: reply("msg-retry", [], null) }),
     stream({
       type: "content_block_start",
       index: 0,
-      content_block: { type: "text", text: "" },
+      content_block: { type: "text", text: "", citations: null },
     }),
     stream({
       type: "content_block_delta",
@@ -324,7 +331,7 @@ try {
       delta: { type: "text_delta", text: "Here is" },
     }),
   ].flatMap((event) => streamed.project(event))
-  const retry = message("uuid-retry", "msg-retry", "Here is the parser.", [])
+  const retry = message(randomUUID(), "msg-retry", "Here is the parser.", [])
   const withdrawn = streamed.withdraw(retry)
   assert.deepEqual(
     withdrawn,
@@ -359,7 +366,7 @@ try {
     "the turn-end notice finds nothing left to withdraw"
   )
   assert.deepEqual(
-    streamed.withdraw(message("uuid-plain", "msg-plain", "Hi")),
+    streamed.withdraw(message(randomUUID(), "msg-plain", "Hi")),
     [],
     "an ordinary reply withdraws nothing"
   )

@@ -10,7 +10,7 @@ const haiku: UtilityModelOption = { id: "agent:claude/haiku", label: "Haiku", vi
 const base: UtilityModelSettings = { providers: [], connections: [], issues: [], secureStorage: true }
 const withCommit = (commit: UtilityTaskState): UtilityModelSettings => ({
   ...base,
-  work: { title: { choice: "auto", options: [] }, commit },
+  work: { commit, harnessOrder: [], runners: [] },
 })
 
 assert.deepEqual(resolveCommitModel(null), { model: undefined, label: undefined, status: { kind: "unknown" } }, "before the host answers nothing is claimed")

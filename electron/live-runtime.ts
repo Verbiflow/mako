@@ -27,6 +27,7 @@ import type { ThreadEnvironment } from "./contracts/thread-environments.js"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { PlanBuild } from "./contracts/plan-builds.js"
+import type { SignInResume } from "./contracts/live-conversations.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
   session: LiveSessionState
@@ -66,6 +67,8 @@ export interface Resident {
   accountRefreshRequest?: string
   /** Set while an input waiting for an account switch retires and reopens this session. */
   accountSwitching?: boolean
+  /** The Resume of work paused on a sign-out while it runs; a second press shares it. */
+  signInResume?: Promise<SignInResume>
   retireWhenIdle?: boolean
   /** The scheduled continuation of a turn that ended on a dropped connection, while it is pending. */
   autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }

@@ -10,8 +10,10 @@ import type {
   PromptAttachment,
 } from "../src/lib/types.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import type { PlanningCapability, ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { elicitationQuestion, elicitationContent } from "../electron/acp-elicitation.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 
 // Native enum titles may be blank. Display the value without changing its wire identity.
 for (const type of ["string", "array"] as const) {
@@ -35,14 +37,15 @@ for (const type of ["string", "array"] as const) {
 // An ACP provider contributes encoding through the same capability as a direct SDK driver.
 const nativeEncoding = () => "a".repeat(64)
 const nativePromptIdentity = { kind: "accepted-message-id", evidence: "Future ACP fixture with a proven message receipt" } as const
+const planning: PlanningCapability = { via: "setting", option: "plan", proposal: "Fixture" }
 assert.equal(acpLiveDriver({
-  nativePromptIdentity,
+  nativePromptIdentity, planning,
   provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   approvalAnswerDigest: nativeEncoding, canResume: false, available: () => true, launch: async () => null,
 }).approvalAnswerDigest, nativeEncoding)
 assert.equal(acpLiveDriver({
-  provider: "future", nativePromptIdentity, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
+  provider: "future", nativePromptIdentity, planning, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   canResume: false, available: () => true, launch: async () => null,
 }).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
@@ -52,8 +55,14 @@ const sent: Array<{ id: string; text: string }> = []
 const sessions = new Map<string, LiveSessionState>()
 let receive: (event: HostEvent) => void = () => {}
 const driver: ProviderLiveDriver = {
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   canResume: true,
   provider: "test",
   available: () => true,
@@ -179,11 +188,9 @@ try {
       options: [{ optionId: "allow", name: "Allow" }],
     },
   })
-  assert.equal(
-    acpStore.get().conversations[a.key]?.kind === "live" &&
-      acpStore.get().conversations[a.key]?.permission?.origin?.nativeRequestId,
-    "permission-a"
-  )
+  const permitted = acpStore.get().conversations[a.key]
+  assert.ok(permitted?.kind === "live")
+  assert.equal(permitted.permission?.origin?.nativeRequestId, "permission-a")
   assert.equal(await acp.send("queued B"), true)
   assert.equal(activeLiveAcp(acpStore.get())?.queued[0]?.text, "queued B")
   assert.equal(sent.length, 2)

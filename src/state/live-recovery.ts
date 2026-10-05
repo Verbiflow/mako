@@ -6,6 +6,7 @@ import { acpStore, carriedFailureSeen, replaceAcpConversation, updateAcpConversa
 import { syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "../../electron/contracts/live-content"
+import { requestsAfter } from "../../electron/contracts/live-conversations"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
@@ -191,7 +192,7 @@ function batchNativeActivity(batch: LiveBatch, current: { nativeActivity?: LiveS
 }
 
 export function applyLiveBatch(batch: LiveBatch): void {
-  for (const request of batch.requests ?? []) settleMessage(request.id, true)
+  for (const request of batch.requests ?? batch.requestChanges ?? []) settleMessage(request.id, true)
   for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
   const current = acpStore.get().conversations[batch.id]
   if (current?.kind === "live" && sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
@@ -204,6 +205,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
   ) {
     if (sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
     const session = batch.session ?? current.session
+    const requests = requestsAfter(current.requests, batch)
     const next = {
       ...current,
       session,
@@ -217,7 +219,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
           )
         : current.nativePaths,
       nativeAgents: batch.nativeAgents ?? current.nativeAgents,
-      requests: batch.requests ?? current.requests,
+      requests: requests ?? current.requests,
       permission: batch.permissions
         ? (batch.permissions[0] ?? null)
         : current.permission,
@@ -232,8 +234,8 @@ export function applyLiveBatch(batch: LiveBatch): void {
       failureSeen: carriedFailureSeen(current, session),
     }
     replaceAcpConversation(batch.id, next)
-    notifyCompletion(current.requests, batch.requests)
-    if (batch.session || batch.permissions || batch.requests)
+    notifyCompletion(current.requests, requests)
+    if (batch.session || batch.permissions || requests)
       syncThreadStatus(next, current.session.status, current.threadPath)
     return
   }
@@ -265,8 +267,9 @@ export function applyLiveBatch(batch: LiveBatch): void {
     blockEnd: batch.blockCount ?? current.history.blockStart + blocks.length } : undefined
   const base = batch.base === undefined ? (current.base ?? null) : batch.base
   const baseCoveredBlocks = batch.baseCoveredBlocks ?? current.baseCoveredBlocks
-  const requests = batch.requests ?? current.requests
-  const pendingPrompts = batch.requests || batch.control
+  const changedRequests = requestsAfter(current.requests, batch)
+  const requests = changedRequests ?? current.requests
+  const pendingPrompts = changedRequests || batch.control
     ? current.pendingPrompts?.filter(
         (prompt) => !requests?.some((request) => request.id === prompt.id) &&
           !(batch.control ?? current.control)?.transfers.some((transfer) => transfer.input.id === prompt.id)
@@ -303,8 +306,8 @@ export function applyLiveBatch(batch: LiveBatch): void {
     permission: batch.permissions
       ? (batch.permissions[0] ?? null)
       : current.permission,
-    queued: batch.requests
-      ? batch.requests.filter(
+    queued: changedRequests
+      ? changedRequests.filter(
           (request) => request.status === "queued" || request.status === "held"
         )
       : current.queued,
@@ -327,12 +330,12 @@ export function applyLiveBatch(batch: LiveBatch): void {
     updatedAt: Date.now(),
     failureSeen: carriedFailureSeen(current, session),
   })
-  notifyCompletion(current.requests, batch.requests)
+  notifyCompletion(current.requests, changedRequests)
   const next = acpStore.get().conversations[batch.id]
   if (next && batch.session?.settings) acknowledgeComposerSettings(next)
   if (
     next?.kind === "live" &&
-    (batch.session || batch.permissions || batch.requests)
+    (batch.session || batch.permissions || changedRequests)
   )
     syncThreadStatus(next, current.session.status, current.threadPath)
 }

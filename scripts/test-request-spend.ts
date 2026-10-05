@@ -5,9 +5,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
 import { spendBetween } from "../electron/session-usage.ts"
-import { usageSummary } from "../electron/usage.ts"
+import { providerHost } from "../electron/providers/index.ts"
+import { usageHarnesses, usageSummary } from "../electron/usage.ts"
 
 // Cursor's and Devin's stores keep no token counts, so what Mako measured
 // while a request ran is the record the usage summary reads for them.
@@ -22,11 +25,19 @@ const conversations = join(root, "conversations")
 const emitters = new Map<string, (event: LiveDriverEvent) => void>()
 const sessions = new Map<string, LiveSessionState>()
 const driver: ProviderLiveDriver = {
+  launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+  nativeExclusion: NO_NATIVE_EXCLUSION,
+  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+  turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "cursor",
   canResume: true,
   available: () => true,
   async start(cwd, options) {
+    assert.ok(options.emit, "the host gives every driver an event sink")
     emitters.set(options.conversationId, options.emit)
     const session: LiveSessionState = {
       id: options.conversationId,
@@ -89,8 +100,9 @@ try {
   assert.deepEqual(request.spend?.tokens, tokens(60, 40, 15))
   await owner.close(id)
 
-  const summary = await usageSummary(join(root, "no-sessions"), join(root, "home"), conversations)
+  const summary = await usageSummary(usageHarnesses(providerHost), join(root, "no-sessions"), join(root, "home"), conversations)
   const cursor = summary.sources?.find((source) => source.source === "Cursor")
+  assert.equal(cursor?.recordedByMako, true)
   assert.equal(cursor?.messages, 1)
   assert.equal(cursor?.input, 60)
   assert.equal(cursor?.cacheRead, 40)

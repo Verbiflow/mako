@@ -1,26 +1,25 @@
 import assert from "node:assert/strict"
-import { LineAssembler } from "@mako/sessions"
-import { spawn } from "node:child_process"
-import { once } from "node:events"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { z } from "zod"
 import type {
   SDKAssistantMessage,
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk"
+import type { JsonValue } from "../electron/codex-app-json.js"
 import { ClaudeProjection } from "../electron/providers/claude/sdk-projection.js"
 import {
-  consumeStdout,
-  MAX_STDOUT_BUFFER,
-  type ProtocolContext,
-  CodexDecoder,
-} from "../electron/codex-app-protocol.js"
-import {
+  deliverLiveUpdates,
   reduceLiveUpdates,
+  type LiveBlock,
   type LiveUpdate,
 } from "../electron/contracts/live-content.js"
-import { auditId, auditSnapshot } from "./performance-audit-fixtures.js"
+import { decoderFor, loadFixtures } from "./native-decoding.js"
+import { auditId } from "./performance-audit-fixtures.js"
+
+/** Input and output characters a growing call may send per character it gains: only the new ones. */
+const MAX_AMPLIFICATION = 1
 
 const assistant: SDKAssistantMessage = {
   type: "assistant",
@@ -68,87 +67,71 @@ function streamed(
 }
 const chunks = 64,
   chunk = "x".repeat(256)
-const claude = new ClaudeProjection()
-claude.project(streamed({ type: "message_start", message: assistant.message }))
-claude.project(
-  streamed({
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "tool_use", id: "tool", name: "Write", input: {} },
-  })
-)
-let claudeBytes = 0
-for (let index = 0; index < chunks; index++) {
-  const updates = claude.project(
-    streamed({
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "input_json_delta", partial_json: chunk },
-    })
-  )
-  for (const update of updates)
-    if (update.kind === "tool-update")
-      claudeBytes += Buffer.byteLength(update.input ?? "")
+const { files } = await loadFixtures()
+
+/**
+ * A call that grows by `chunks` frames, each in its own batch, through the
+ * harness's decoder and the host's delivery. `content` is the input and
+ * output characters sent per character the call gained; `framing` what each
+ * delivered frame adds around them. `open` steps of the fixture start the call.
+ */
+/** Content characters sent per new character, and the characters of framing each frame adds. */
+interface Amplification {
+  content: number
+  framing: number
 }
-const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-  stdio: ["pipe", "pipe", "pipe"],
-})
-const exited = once(child, "exit")
-const updates: LiveUpdate[] = []
-const state = auditSnapshot(1, "codex").session
-const context: ProtocolContext = {
-  child,
-  threadId: "thread",
-  currentTurnId: "turn",
-  state,
-  nextRequestId: 0,
-  pending: new Map(),
-  decoder: new CodexDecoder({ threadId: "thread", state }),
-  background: { running: new Set() },
-  stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
-  exited: false,
-  protocol: {
-    observeAgents() {},
-    handleFatal(message) {
-      throw new Error(message)
-    },
-    updateState(patch) {
-      Object.assign(state, patch)
-    },
-    emitUpdate(update) {
-      updates.push(update)
-    },
-    handleServerRequest() {},
-    resolveServerRequest() {},
-    clearTurnServerRequests() {},
-  },
-}
-let codexBytes = 0
-try {
+
+function amplification(fixtureName: string, open: number, frame: (index: number) => JsonValue): Amplification {
+  const file = files.find((candidate) => candidate.name === fixtureName)
+  assert.ok(file, `No fixture ${fixtureName}`)
+  const decoder = decoderFor(file.fixture.harness).open(file.fixture.session)
+  const updatesOf = (message: JsonValue): LiveUpdate[] =>
+    decoder.decode(message).flatMap((item) => (item.kind === "update" ? [item.update] : []))
+  let blocks: LiveBlock[] = []
+  for (const step of file.fixture.steps.slice(0, open)) blocks = reduceLiveUpdates(blocks, updatesOf(step.message))
+  let sent = 0
+  let content = 0
   for (let index = 0; index < chunks; index++) {
-    consumeStdout(
-      context,
-      Buffer.from(
-        JSON.stringify({
-          method: "item/commandExecution/outputDelta",
-          params: {
-            threadId: "thread",
-            turnId: "turn",
-            itemId: "item",
-            delta: chunk,
-          },
-        }) + "\n"
-      )
-    )
+    const delivery = deliverLiveUpdates(blocks, updatesOf(frame(index)))
+    assert.ok(delivery.updates.length, `${fixtureName}: frame ${index} delivered nothing`)
+    blocks = delivery.blocks
+    for (const update of delivery.updates) {
+      sent += JSON.stringify(update).length
+      if (update.kind === "tool-update")
+        content += (update.input?.length ?? 0) + (update.inputAppend?.length ?? 0) + (update.output?.length ?? 0) + (update.outputAppend?.length ?? 0)
+    }
   }
-  assert.equal(updates.length, chunks)
-  for (const update of updates)
-    if (update.kind === "tool-update")
-      codexBytes += Buffer.byteLength(update.output ?? "")
-} finally {
-  child.kill("SIGTERM")
-  await exited
+  return { content: content / (chunks * chunk.length), framing: Math.round((sent - content) / chunks) }
 }
+const AcpStep = z.object({ params: z.object({ sessionId: z.string(), update: z.object({ toolCallId: z.string() }) }) })
+function acpWhole(fixtureName: string, step: number) {
+  const file = files.find((candidate) => candidate.name === fixtureName)
+  const { params } = AcpStep.parse(file?.fixture.steps[step]?.message)
+  return (index: number): JsonValue => ({
+    method: "session/update",
+    params: { sessionId: params.sessionId, update: {
+      sessionUpdate: "tool_call_update", toolCallId: params.update.toolCallId, status: "in_progress",
+      content: [{ type: "content", content: { type: "text", text: chunk.repeat(index + 1) } }],
+    } },
+  })
+}
+const harnessAmplification = {
+  claude: amplification("claude/plan-turn", 16, () => ({
+    type: "stream_event", session_id: "uuid-3", parent_tool_use_id: null, uuid: "uuid-19",
+    event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: chunk } },
+  })),
+  codex: amplification("codex/turn-lifecycle", 9, () => ({
+    method: "item/commandExecution/outputDelta",
+    params: { threadId: "thread-1", turnId: "turn-1", itemId: "cmd-1", delta: chunk },
+  })),
+  cursor: amplification("cursor/thinking-agents-compaction", 8, () => ({
+    event: "delta", turn: "turn-1", delta: { type: "shell-output", text: chunk },
+  })),
+  grok: amplification("grok/plan-mode", 2, acpWhole("grok/plan-mode", 2)),
+  devin: amplification("devin/plan-approved", 7, acpWhole("devin/plan-approved", 7)),
+}
+for (const [harness, { content }] of Object.entries(harnessAmplification))
+  assert.ok(content <= MAX_AMPLIFICATION, `${harness}: a growing call sends ${content.toFixed(2)} characters of its input or output per new one; the budget is ${MAX_AMPLIFICATION}`)
 const text = "x".repeat(200_000)
 const long = new ClaudeProjection()
 long.project(streamed({ type: "message_start", message: assistant.message }))
@@ -230,9 +213,8 @@ const report = {
     "Actual SDK/app-server projection functions with synthetic protocol frames; no provider prompt sent",
   chunks,
   incomingTextBytes: chunks * chunk.length,
-  claudeToolInputBytes: claudeBytes,
-  codexToolOutputBytes: codexBytes,
-  amplification: codexBytes / (chunks * chunk.length),
+  /** Per streaming harness; OpenCode reports a call's output once, when it ends. */
+  amplification: harnessAmplification,
   claudeLongAnswer: {
     streamedChars: streamedText.text.length,
     finalChars: finalText.text.length,

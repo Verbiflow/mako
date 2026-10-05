@@ -12,10 +12,12 @@ import { devinProfileLoader } from "./profile.js"
 import { devinSkillSource } from "./skills.js"
 import { devinExecutable } from "./executable.js"
 import { scriptInstall } from "../update-source.js"
+import { devinPresentation } from "./presentation.js"
 
 export const installDevin: ProviderModule = (host) => installHarness(host, {
   provider: "devin",
-  presentation: { icon: { id: "devin-mark", tint: "#4E8DF6" } },
+  presentation: devinPresentation,
+  diagnostics: { sdk: "@agentclientprotocol/sdk" },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -44,5 +46,5 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
     install: [scriptInstall("https://cli.devin.ai/install.sh")],
   },
   utility: notBuilt("Devin's agent keeps each session it opens in Devin's history; a one-off request that leaves none behind isn't built yet"),
-  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: lacks("Devin's CLI database keeps no token counts"),  artifactPreview: lacks("Writes no artifact Mako previews"),
 })

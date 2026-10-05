@@ -33,9 +33,11 @@ const connection: CaptureConnection = {
     return () => {}
   },
 }
+let eventSequence = 0
 const emit = (data = jpeg) => {
   for (const listener of listeners)
     listener({
+      cursor: ++eventSequence,
       method: "Page.screencastFrame",
       sessionId: "session",
       params: {

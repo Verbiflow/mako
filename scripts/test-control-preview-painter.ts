@@ -48,11 +48,13 @@ Object.defineProperties(globalThis, {
     value: (id: number) => callbacks.delete(id),
   },
 })
+type PreviewCanvas = Parameters<typeof createControlPreviewPainter>[0]
 const painted: FakeImage[] = []
-const canvas = {
+const canvas: PreviewCanvas = {
   width: 300,
   height: 150,
   getContext: () => ({
+    imageSmoothingQuality: "low",
     drawImage: (image: CanvasImageSource) => {
       assert.ok(image instanceof FakeImage)
       painted.push(image)
@@ -240,7 +242,7 @@ try {
   }
   Object.defineProperty(globalThis, "ImageDecoder", { configurable: true, value: FakeDecoder })
   const videoPaints: FakeVideoFrame[] = []
-  const videoCanvas = { width: 0, height: 0, getContext: () => ({ drawImage: (value: CanvasImageSource) => {
+  const videoCanvas: PreviewCanvas = { width: 0, height: 0, getContext: () => ({ imageSmoothingQuality: "low", drawImage: (value: CanvasImageSource) => {
     assert.ok(value instanceof FakeVideoFrame)
     assert.equal(value.closed, false, "Draw before closing the frame")
     videoPaints.push(value)
@@ -307,7 +309,7 @@ try {
     "Small sources are never enlarged")
 
   const sized = () => {
-    const draws: { image: CanvasImageSource; width?: number; height?: number; quality: ImageSmoothingQuality }[] = []
+    const draws: { image: unknown; width?: number; height?: number; quality: ImageSmoothingQuality }[] = []
     const context: Pick<CanvasRenderingContext2D, "imageSmoothingQuality" | "drawImage"> = {
       imageSmoothingQuality: "low",
       drawImage: (image: CanvasImageSource, _x: number, _y: number, width?: number, height?: number) => {

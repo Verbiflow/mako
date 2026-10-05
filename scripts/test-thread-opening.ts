@@ -19,25 +19,28 @@ const pending = new Map<
 >()
 const follows: string[] = []
 const blockAsks: unknown[] = []
+/** Replies reach the bridge decoded from JSON, as the web transport's do, typed only by the bridge method that asked. */
+const overWire = <Value>(value: Value) => JSON.parse(JSON.stringify(value))
 const bridge = createMakoBridge({
   invoke: async (channel, ...args) => {
     if (channel === "mako:thread-block") {
       blockAsks.push(args)
       await new Promise((resolve) => setTimeout(resolve, 5))
-      return { type: "tool", name: "exec", input: "cat big", output: "whole" }
+      return overWire({ type: "tool", name: "exec", input: "cat big", output: "whole" })
     }
     if (channel === "mako:thread-page") {
       const key = String(args[0])
       const request = Promise.withResolvers<ThreadPage | null>()
       pending.set(key, request)
-      return request.promise
+      return overWire(await request.promise)
     }
     if (channel === "mako:thread-follow") follows.push(String(args[0]))
-    return null
+    return overWire(null)
   },
   onEvent: () => () => {},
   onTerminalEvent: () => () => {},
   pathForFile: () => null,
+  resolveFileUrl: (url) => url,
 })
 Object.assign(globalThis, { window: { mako: bridge } })
 const first: ThreadRef = { harness: "claude", nativeId: "one", path: "/one" }

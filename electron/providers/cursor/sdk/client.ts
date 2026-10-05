@@ -19,6 +19,19 @@ import {
   type SdkResult,
   type SdkWireError,
 } from "./wire.js"
+import { z } from "zod"
+
+/** Which line a refused one was, read without its content. */
+const LineEnvelopeSchema = z.object({
+  event: z.string().optional(),
+  message: z.object({ type: z.string() }).optional(),
+})
+
+/** Where the wire refused a line: a field path, never its value. */
+function refusedField(error: z.ZodError): string {
+  const issue = error.issues[0]
+  return issue ? `${issue.path.join(".") || "line"}: ${issue.code}` : "line"
+}
 
 /** A failure the child reported, carrying the SDK's own classification. */
 export class CursorSdkError extends Error {
@@ -247,7 +260,12 @@ export class CursorSdkClient {
       }
       const parsed = SdkChildLineSchema.safeParse(raw)
       if (!parsed.success) {
-        hostWarn("cursor-sdk", "dropped a child line the wire does not describe", { owner: this.options.owner })
+        const envelope = LineEnvelopeSchema.safeParse(raw)
+        hostWarn("cursor-sdk", "dropped a child line the wire does not describe", {
+          owner: this.options.owner,
+          line: envelope.success ? [envelope.data.event, envelope.data.message?.type].filter(Boolean).join("/") || "response" : "unknown",
+          field: refusedField(parsed.error),
+        })
         continue
       }
       const message = parsed.data

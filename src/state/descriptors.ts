@@ -1,4 +1,5 @@
 import type { HarnessDescriptor } from "@/lib/types"
+import type { HarnessDefaults } from "../../electron/contracts/harness-defaults"
 import type { ThreadsState } from "@/state/thread-state"
 
 type WithDescriptors = Pick<ThreadsState, "descriptors">
@@ -10,6 +11,14 @@ export function descriptorFor(
 ): HarnessDescriptor | undefined {
   if (!harness) return undefined
   return state.descriptors.find((item) => item.provider === harness)
+}
+
+/** Mako's model choices for a harness, as the host declared them. */
+export function harnessDefaultsFor(
+  state: WithDescriptors,
+  harness: string | null | undefined
+): HarnessDefaults | undefined {
+  return descriptorFor(state, harness)?.defaults
 }
 
 /**

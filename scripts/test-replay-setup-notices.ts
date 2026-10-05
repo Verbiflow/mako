@@ -8,6 +8,8 @@ import { mcpServerFailedEvent } from "@mako/sessions/events"
 import { LiveConversations } from "../electron/live-conversations.js"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 
 // Waking a conversation streams the provider's saved history back, which the
 // host drops. A setup notice said while waking is about this launch, so it
@@ -27,6 +29,13 @@ try {
   })
   const driver: ProviderLiveDriver = {
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+    launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+    turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     canResume: true, provider: "test-provider", available: () => true,
     start: async (_cwd, options) => {
       starts++
