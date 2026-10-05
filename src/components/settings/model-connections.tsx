@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { CheckIcon, ChevronDownIcon, EllipsisIcon, KeyRoundIcon, PlusIcon } from "lucide-react"
 import { Action, IconAction } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -19,6 +19,7 @@ export function CommitKeys() {
   const { settings, error } = useCommitModelSettings()
   const [editing, setEditing] = useState<{ provider: UtilityProviderInfo; connection?: UtilityConnection } | null>(null)
   const [removing, setRemoving] = useState<UtilityProvider | null>(null)
+  const confirming = useRef(false)
   const [failure, setFailure] = useState<string | null>(null)
 
   const run = async (work: () => Promise<void>, fallback: string) => {
@@ -107,9 +108,25 @@ export function CommitKeys() {
                       <EllipsisIcon />
                     </IconAction>
                   </MenuTrigger>
-                  <MenuContent align="end" className="min-w-48">
+                  <MenuContent
+                    align="end"
+                    className="min-w-48"
+                    onCloseAutoFocus={(event) => {
+                      if (!confirming.current) return
+                      confirming.current = false
+                      event.preventDefault()
+                    }}
+                  >
                     <MenuItem disabled={locked || !provider} onSelect={() => provider && setEditing({ provider, connection })}>Change model or key…</MenuItem>
-                    <MenuItem className="text-negative" onSelect={() => setRemoving(connection.provider)}>Remove key</MenuItem>
+                    <MenuItem
+                      className="text-negative"
+                      onSelect={() => {
+                        confirming.current = true
+                        setRemoving(connection.provider)
+                      }}
+                    >
+                      Remove key
+                    </MenuItem>
                   </MenuContent>
                 </Menu>
               </div>
@@ -117,7 +134,8 @@ export function CommitKeys() {
               {removing === connection.provider ? (
                 <div className="flex flex-wrap items-center gap-2 pr-2.5 pb-2.5 pl-14 text-label text-muted-foreground">
                   <span className="flex-1">Remove this key from this Mac?</span>
-                  <Action size="xs" onClick={() => setRemoving(null)}>Keep</Action>
+                  {/* Focus lands on Keep, not back on the ⋯ button, whose tooltip would cover these answers. */}
+                  <Action size="xs" autoFocus onClick={() => setRemoving(null)}>Keep</Action>
                   <Action
                     size="xs"
                     tone="danger"
