@@ -283,36 +283,12 @@ function readStringRecord(value: StoredValue): PreferenceStringMap {
   return record
 }
 
-function readTuningOptions(
-  value: StoredValue
-): Record<string, string | boolean> | undefined {
-  if (!isJsonObject(value)) return undefined
-  const options: Record<string, string | boolean> = {}
-  for (const [key, entry] of Object.entries(value)) {
-    if (isJsonString(entry) || isJsonBoolean(entry)) options[key] = entry
-  }
-  return options
-}
-
-function readProviderSettings(value: StoredValue, legacy: StoredValue): Prefs["providerSettings"] {
+function readProviderSettings(value: StoredValue): Prefs["providerSettings"] {
   const result: Prefs["providerSettings"] = {}
-  if (isJsonObject(value)) {
-    for (const [key, entry] of Object.entries(value)) {
-      const parsed = SettingsPreferenceSchema.safeParse(entry)
-      if (parsed.success) result[key] = parsed.data
-    }
-    return result
-  }
-  if (!isJsonObject(legacy)) return result
-  for (const [key, entry] of Object.entries(legacy)) {
-    if (!isJsonObject(entry)) continue
-    const options = readTuningOptions(entry.options) ?? {}
-    const effort = readOptionalString(entry.effort)
-    if (effort !== undefined && options.effort === undefined) options.effort = effort
-    if (isJsonBoolean(entry.fast) && options.fast === undefined && options.serviceTier === undefined) {
-      options.fast = entry.fast
-    }
-    result[key] = { source: "legacy", settings: { model: readOptionalString(entry.model), options } }
+  if (!isJsonObject(value)) return result
+  for (const [key, entry] of Object.entries(value)) {
+    const parsed = SettingsPreferenceSchema.safeParse(entry)
+    if (parsed.success) result[key] = parsed.data
   }
   return result
 }
@@ -425,7 +401,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     removeLandedOnArchive: readBoolean(value.removeLandedOnArchive, defaults.removeLandedOnArchive),
     providerModes: readStringRecord(value.providerModes),
     steerOnEnter: readBoolean(value.steerOnEnter, defaults.steerOnEnter),
-    providerSettings: readProviderSettings(value.providerSettings, value.composerTuning),
+    providerSettings: readProviderSettings(value.providerSettings),
     settingsOverrides: readSettingsOverrides(value.settingsOverrides),
     modelSettings: Object.fromEntries(Object.entries(readSettingsOverrides(value.modelSettings)).slice(-256)),
     keybindings: readStringRecord(value.keybindings),

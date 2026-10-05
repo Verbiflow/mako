@@ -75,12 +75,12 @@ export const SessionModelSchema = z.object({
 export type SessionModel = z.infer<typeof SessionModelSchema>
 
 export type SettingSource =
-  "override" | "saved" | "legacy" | "session" | "provider" | "model-default"
+  "override" | "saved" | "session" | "provider" | "model-default"
 export type ResolvedSetting<T extends SettingValue = SettingValue> =
   { kind: "known"; value: T; source: SettingSource } | { kind: "unknown" }
 
 export const SettingsPreferenceSchema = z.object({
-  source: z.enum(["saved", "legacy"]),
+  source: z.literal("saved"),
   settings: SessionSettingsSchema,
 })
 export type SettingsPreference = z.infer<typeof SettingsPreferenceSchema>
@@ -159,41 +159,6 @@ export function settingsWithVariant(
     if (choice) options[option.id] = choice.value
   }
   return Object.keys(options).length ? { ...settings, options } : settings
-}
-
-/** Old preferences had duplicated effort/fast fields. Only migration understands them. */
-export function migrateSettingsPreference(
-  preference: SettingsPreference | undefined,
-  models: readonly SessionModel[]
-): SettingsPreference | undefined {
-  if (!preference || preference.source !== "legacy") return preference
-  const model = modelByIdentity(models, preference.settings.model)
-  if (!model) return preference
-  const options = { ...preference.settings.options }
-  for (const option of model.options) {
-    if (
-      option.role === "reasoning" &&
-      option.id !== "effort" &&
-      options.effort !== undefined
-    ) {
-      options[option.id] ??= options.effort
-      delete options.effort
-    }
-    if (
-      option.role === "speed" &&
-      option.kind === "select" &&
-      option.booleanValues
-    ) {
-      const fast = options.fast
-      if (fast === true || fast === false) {
-        options[option.id] ??= fast
-          ? option.booleanValues.on
-          : option.booleanValues.off
-        delete options.fast
-      }
-    }
-  }
-  return { source: "legacy", settings: { ...preference.settings, options } }
 }
 
 export {

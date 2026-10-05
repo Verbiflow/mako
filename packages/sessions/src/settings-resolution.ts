@@ -92,7 +92,7 @@ export function resolveSessionSettings(
     const selected = applicable.find((layer) => {
       const value = layer.settings.options?.[id]
       if (value === undefined) return false
-      if (!model || (layer.source !== "saved" && layer.source !== "legacy")) return true
+      if (!model || layer.source !== "saved") return true
       return option !== undefined && !option.disabledReason && optionAccepts(option, value)
     })
     const explicit = selected?.settings.options?.[id]

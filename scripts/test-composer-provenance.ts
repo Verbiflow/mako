@@ -14,14 +14,7 @@ globalThis.localStorage = {
   setItem: (key, value) => void storage.set(key, value),
 }
 
-storage.set(
-  "mako.prefs.v1",
-  JSON.stringify({
-    composerTuning: { codex: { model: "a", effort: "high", fast: true } },
-    providerTuningImported: ["codex"],
-    harnessDefaultsReset: true,
-  })
-)
+storage.set("mako.prefs.v1", JSON.stringify({ harnessDefaultsReset: true }))
 const { prefsStore, setPref } = await import("../src/state/prefs.ts")
 const { providerStore, providerProfileKey, providers } =
   await import("../src/state/providers.ts")
@@ -67,35 +60,24 @@ providerStore.set({
   contexts: { [providerProfileKey("codex", "/workspace")]: profile },
 })
 const draft = { kind: "new" as const, harness: "codex", cwd: "/workspace" }
-assert.equal(prefsStore.get().providerSettings.codex.source, "legacy")
-const migrated = resolveComposerSettings(draft)
-assert.equal(migrated.model.kind === "known" && migrated.model.value, "a")
-assert.equal(migrated.settings.options?.serviceTier, "priority")
-assert.equal(migrated.settings.options?.fast, undefined)
-assert.deepEqual(await settingsForSend(draft), migrated.settings)
+assert.deepEqual(prefsStore.get().providerSettings, {})
+const following = resolveComposerSettings(draft)
+assert.equal(following.model.kind === "known" && following.model.source, "provider", "with nothing saved, a new draft follows the provider's configuration")
+assert.equal(following.settings.model, "b")
+assert.deepEqual(await settingsForSend(draft), following.settings)
 
+// Sending while the provider is still being discovered doesn't wait on it.
 providerStore.set({ contexts: {} })
-const legacyGate = Promise.withResolvers<void>()
-const legacyDiscovery = mock.method(providers, "load", async () => {
-  await legacyGate.promise
-  providerStore.set({
-    contexts: { [providerProfileKey("codex", "/workspace")]: profile },
-  })
+const discoveryGate = Promise.withResolvers<void>()
+const discovery = mock.method(providers, "load", async () => {
+  await discoveryGate.promise
 })
-let legacyResolved = false
-const migrating = settingsForSend(draft).then((settings) => {
-  legacyResolved = true
-  return settings
+assert.deepEqual(await settingsForSend(draft), {})
+discoveryGate.resolve()
+discovery.mock.restore()
+providerStore.set({
+  contexts: { [providerProfileKey("codex", "/workspace")]: profile },
 })
-await Promise.resolve()
-assert.equal(
-  legacyResolved,
-  false,
-  "Legacy option names still require authoritative migration metadata"
-)
-legacyGate.resolve()
-assert.deepEqual(await migrating, migrated.settings)
-legacyDiscovery.mock.restore()
 
 resetComposerSettings(draft)
 assert.equal(resolveComposerSettings(draft).settings.model, "b")
@@ -292,7 +274,7 @@ assert.equal(
 )
 acpStore.set({ conversations: {}, activeKey: null })
 console.log(
-  "Settings migration, live provenance, scoped edits, acknowledgements, and display/dispatch parity passed"
+  "Provider-following drafts, live provenance, scoped edits, acknowledgements, and display/dispatch parity passed"
 )
 
 assert.deepEqual(

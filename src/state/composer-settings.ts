@@ -1,6 +1,5 @@
 import {
   modelByIdentity,
-  migrateSettingsPreference,
   optionDefault,
   resolveSessionSettings,
   type SessionSettings,
@@ -243,7 +242,7 @@ export function resolveComposerSettingsInput(input: ComposerSettingsInput) {
     context: target.kind === "new" ? "new" : "existing",
     phase: live ? "turn" : "launch",
     overrides: input.overrides,
-    preference: migrateSettingsPreference(input.preference, models),
+    preference: input.preference,
     defaults: profile?.settings,
     session,
   })
@@ -298,15 +297,8 @@ export async function settingsForSend(
       : undefined
   const cached =
     providerStore.get().contexts[providerProfileKey(target.harness, target.cwd)]
-  if (!cached?.available || cached.configurationError) {
-    const discovery = providers.load(target.harness, false, target.cwd)
-    if (
-      target.kind === "new" &&
-      prefs.providerSettings[target.harness]?.source === "legacy"
-    )
-      await discovery
-    else void discovery.catch(() => {})
-  }
+  if (!cached?.available || cached.configurationError)
+    void providers.load(target.harness, false, target.cwd).catch(() => {})
   const profile =
     providerStore.get().contexts[providerProfileKey(target.harness, target.cwd)]
   const { resolved } = resolveComposerSettingsInput({
