@@ -79,6 +79,7 @@ export const hostCallInputs = {
   "mako:git-commit-diff-all": z.tuple([z.string()]),
   "mako:git-commit-file-diff": z.tuple([z.string(), z.string()]),
   "mako:git-commit-files": z.tuple([z.string()]),
+  "mako:git-default-branch": z.tuple([]),
   "mako:git-diff": z.tuple([z.string()]),
   "mako:git-diff-all": z.tuple([]),
   "mako:git-discard": z.tuple([z.array(z.string())]),
@@ -498,6 +499,8 @@ export const hostCallInputs = {
       carry: z.union([z.literal("native"), z.literal("transcript")]).optional(),
     }),
   ]),
+  "mako:live-turn-changes": z.tuple([z.string(), z.string()]),
+  "mako:live-turn-diff": z.tuple([z.string(), z.string(), z.string()]),
   "mako:mcp-discover": z.tuple([]),
   "mako:mcp-sync-apply": z.tuple([
     z.string(),

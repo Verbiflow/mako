@@ -49,6 +49,11 @@ export const git = {
     return getMako().gitChangedSince(ref)
   },
 
+  /** The branch work lands on, from the repository alone, for when GitHub can't say. */
+  defaultBranch(): Promise<string | null> {
+    return getMako().gitDefaultBranch()
+  },
+
   sinceDiff(base: string, path: string): Promise<GitDiff> {
     return getMako().gitSinceDiff(base, path)
   },

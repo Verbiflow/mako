@@ -1867,6 +1867,12 @@ function bindIpc() {
     (_event, id: string, requestId: string, position?: "before" | "after") =>
       liveConversations.previewRewind(id, requestId, position)
   )
+  handle("mako:live-turn-changes", (_event, id: string, requestId: string) =>
+    liveConversations.turnChanges(id, requestId)
+  )
+  handle("mako:live-turn-diff", (_event, id: string, requestId: string, path: string) =>
+    liveConversations.turnDiff(id, requestId, path)
+  )
   handle("mako:live-rewind", (_event, id: string, input: RewindInput) =>
     liveConversations.rewind(id, input)
   )

@@ -34,10 +34,13 @@ export class ObjectReader {
   private body: { info: ObjectInfo; pending: Pending } | undefined
   private idle: NodeJS.Timeout | undefined
   private readonly root: string
+  private readonly env: Readonly<Record<string, string | undefined>> | undefined
   private batched: Promise<boolean> | undefined
 
-  constructor(root: string) {
+  /** `env` reaches every Git process it starts, such as alternate object stores to read from. */
+  constructor(root: string, env?: Readonly<Record<string, string | undefined>>) {
     this.root = root
+    this.env = env
   }
 
   info(name: string): Promise<ObjectInfo | null> {
@@ -71,11 +74,11 @@ export class ObjectReader {
   }
 
   private async single(name: string, contents: boolean): Promise<ObjectContents | ObjectInfo | null> {
-    const check = await run({ cwd: this.root, args: ["cat-file", "--batch-check"], input: `${name.replace(/\n/g, "")}\n`, read: true }).catch(() => null)
+    const check = await run({ cwd: this.root, args: ["cat-file", "--batch-check"], input: `${name.replace(/\n/g, "")}\n`, env: this.env, read: true }).catch(() => null)
     const info = check ? parseHeader(check.stdout.toString("utf8").split("\n")[0] ?? "") : null
     if (!info) return null
     if (!contents) return info
-    const blob = await run({ cwd: this.root, args: ["cat-file", info.type, info.oid], read: true })
+    const blob = await run({ cwd: this.root, args: ["cat-file", info.type, info.oid], env: this.env, read: true })
     return { ...info, data: blob.stdout }
   }
 
@@ -83,7 +86,7 @@ export class ObjectReader {
     if (this.child) return this.child
     const child = spawn(gitExecutable(), ["--no-optional-locks", "cat-file", "--batch-command"], {
       cwd: this.root,
-      env: gitEnvironment(),
+      env: this.env ? { ...gitEnvironment(), ...this.env } : gitEnvironment(),
       stdio: ["pipe", "pipe", "ignore"],
       windowsHide: true,
     })

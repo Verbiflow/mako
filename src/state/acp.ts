@@ -25,6 +25,8 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import type {
   ContextBreakdown,
   ContinuationResolution,
+  GitDiff,
+  GitFile,
   MessageAnchor,
   PromptAttachment,
   ThreadRef,
@@ -536,6 +538,22 @@ export const acp = {
    * moved along; `changed` counts them for the announcement. The Local
    * session stays in the Thread as it was.
    */
+  /** What one finished turn changed, from the checkpoints either side of it. */
+  turnChanges(
+    conversation: string,
+    requestId: string
+  ): Promise<{ root: string; files: GitFile[] }> {
+    return getMako().liveTurnChanges(conversation, requestId)
+  },
+
+  turnDiff(
+    conversation: string,
+    requestId: string,
+    path: string
+  ): Promise<GitDiff> {
+    return getMako().liveTurnDiff(conversation, requestId, path)
+  },
+
   async previewRewind(
     requestId: string,
     position: "before" | "after"

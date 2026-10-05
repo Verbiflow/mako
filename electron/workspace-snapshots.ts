@@ -105,6 +105,14 @@ function parseLock(path: string): z.infer<typeof LockSchema> | null {
  * Restoring never moves HEAD. A retry completes the same fork, or refuses any edits
  * made since the interrupted operation. Native provider history is never rolled back.
  */
+/** Two checkpoints' trees in their workspace, and the object stores that hold them. */
+export interface CheckpointTrees {
+  scope: string
+  from: string
+  to: string
+  stores: string[]
+}
+
 export class WorkspaceSnapshots {
   private readonly db: DatabaseSync
   private readonly busy = new Set<string>()
@@ -314,6 +322,19 @@ export class WorkspaceSnapshots {
         stagingChanged: target.indexDigest !== current.indexDigest,
       }
     })
+  }
+
+  /**
+   * Two checkpoints of one workspace, to compare: their trees and the object
+   * stores that hold them. Both are kept past the next prune while read.
+   */
+  trees(fromId: string, toId: string): CheckpointTrees {
+    const from = this.get(fromId)
+    const to = this.get(toId)
+    if (from.scope !== to.scope) throw new Error("These checkpoints belong to different workspaces")
+    this.retain(from)
+    this.retain(to)
+    return { scope: from.scope, from: from.tree, to: to.tree, stores: this.objects(from, to).read }
   }
 
   async restore(input: RewindPlan, complete: () => void): Promise<void> {

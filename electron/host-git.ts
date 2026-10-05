@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs"
 import { join, relative, sep } from "node:path"
-import { changedSince, commitFiles, GitError, grep, knownRepository, listFiles, log, openRepository, push, remote, within, type BinarySide, type Comparison, type Preview, type Repository, type RepositoryStatus, type StatusEntry } from "@mako/git"
+import { changedSince, commitFiles, defaultBranch, GitError, grep, knownRepository, listFiles, log, openRepository, push, remote, within, type BinarySide, type Comparison, type LineCount, type Preview, type TreeComparison, type Repository, type RepositoryStatus, type StatusEntry } from "@mako/git"
 import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
 import { QUIET_FOLDERS } from "./tree-watcher.js"
 import type { GitBinarySide, GitRemoteInput, GitRemoteResult, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "./shared.js"
@@ -25,8 +25,25 @@ function fileStatus(entry: StatusEntry): GitFileStatus {
   return entry.index === "added" ? "added" : "modified"
 }
 
-function gitFiles(status: RepositoryStatus): GitFile[] {
-  return status.entries.map((entry) => ({ path: entry.path, status: fileStatus(entry), staged: entry.index !== null || entry.conflicted, insertions: null, deletions: null, binary: false }))
+function gitFiles(status: RepositoryStatus, counts: ReadonlyMap<string, LineCount> | null | undefined): GitFile[] {
+  return status.entries.map((entry) => ({ path: entry.path, status: fileStatus(entry), staged: entry.index !== null || entry.conflicted, ...lines(counts?.get(entry.path)), binary: counts?.get(entry.path) === null }))
+}
+
+/** A count as the window shows it; unknown and binary both show none. */
+function lines(count: LineCount | undefined): { insertions: number | null; deletions: number | null } {
+  return count ? count : { insertions: null, deletions: null }
+}
+
+/** How long a status waits for its line counts; slower ones follow in another push. */
+const COUNT_WAIT_MS = 120
+
+/** What changed between two trees, as the Changes panel lists files. */
+export async function treeFiles(comparison: TreeComparison): Promise<GitFile[]> {
+  return (await comparison.files()).map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", staged: false, ...lines(file.lines), binary: file.lines === null }))
+}
+
+export async function treeDiff(comparison: TreeComparison, path: string): Promise<GitDiff> {
+  return gitDiff(path, await comparison.preview(path))
 }
 
 function gitDiff(path: string, preview: Preview): GitDiff {
@@ -51,7 +68,7 @@ function diffBytes(diff: GitDiff): number {
 const PREVIEW_SET = { files: 25, bytes: 512 * 1024, ms: 5_000, concurrency: 4 }
 
 /** As many previews of `paths`, in order, as fit 25 files, 512 KB and five seconds. */
-async function previewSet(repository: Repository, paths: readonly string[], comparison: Comparison): Promise<{ diffs: GitDiff[]; truncated: number }> {
+async function previewSet(repository: Repository, paths: readonly string[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
   const deadline = Date.now() + PREVIEW_SET.ms
   const diffs: GitDiff[] = []
   let bytes = 0
@@ -91,7 +108,11 @@ export class WorkspaceGit {
   /** The repository being kept current, and where it sits in the workspace (`""` at its top). */
   private watched: { repository: Repository; prefix: string; release: () => void } | undefined
 
-  constructor(cwd: string) {
+  /** Runs when line counts a status went without arrive later. */
+  private readonly counted: (() => void) | undefined
+
+  constructor(cwd: string, counted?: () => void) {
+    this.counted = counted
     this.cwdValue = cwd
     this.realCwd = real(cwd)
   }
@@ -137,7 +158,7 @@ export class WorkspaceGit {
     }
     const summaries = this.summaries
     if (!summaries) return !watched
-    const absolute = join(this.cwdValue, path)
+    const absolute = join(this.realCwd, path)
     const root = this.repositoryRoots.find((candidate) => absolute === candidate || absolute.startsWith(candidate + sep))
     if (root) {
       summaries.delete(root)
@@ -222,10 +243,11 @@ export class WorkspaceGit {
       this.selectedRoot = repository.root
       this.summaries = null
       this.watch(repository)
-      return this.describe(cwd, await repository.status())
+      return this.describe(cwd, repository, await repository.status())
     }
     if (!this.discovery || this.discovery.cwd !== cwd || this.discovery.expires < Date.now()) {
-      this.discovery = { cwd, expires: Date.now() + 5000, value: discoverRepositories(cwd) }
+      // Resolved, as Git resolves every root it reports: `/tmp` and a symlinked projects folder name the same repositories.
+      this.discovery = { cwd, expires: Date.now() + 5000, value: discoverRepositories(this.realCwd) }
     }
     const discovery = await this.discovery.value
     const summaries = this.tracking ? (this.summaries ??= new Map()) : null
@@ -237,12 +259,12 @@ export class WorkspaceGit {
         let summary: RepositorySummary
         try {
           const child = await openRepository(root)
-          if (!child) summary = { root, label: relative(cwd, root), unavailable: true }
+          if (!child) summary = { root, label: relative(this.realCwd, root), unavailable: true }
           else {
             const status = await child.status()
-            summary = { root, label: relative(cwd, root), branch: status.head.branch ?? undefined, changes: status.entries.length }
+            summary = { root, label: relative(this.realCwd, root), branch: status.head.branch ?? undefined, changes: status.entries.length }
           }
-        } catch { summary = { root, label: relative(cwd, root), unavailable: true } }
+        } catch { summary = { root, label: relative(this.realCwd, root), unavailable: true } }
         summaries?.set(root, summary)
         return summary
       })))
@@ -254,7 +276,7 @@ export class WorkspaceGit {
     const selected = this.selectedRoot ? await openRepository(this.selectedRoot) : null
     if (selected) this.watch(selected)
     else this.unwatch()
-    const status = selected ? this.describe(cwd, await selected.status()) : undefined
+    const status = selected ? await this.describe(cwd, selected, await selected.status()) : undefined
     const index = repositories.findIndex((repository) => repository.root === this.selectedRoot)
     if (status && index >= 0) {
       repositories[index] = { ...repositories[index]!, branch: status.branch, changes: status.files.length }
@@ -263,7 +285,10 @@ export class WorkspaceGit {
     return { cwd, ahead: 0, behind: 0, files: [], ...status, repositories, discoveryLimited: discovery.limited }
   }
 
-  private describe(cwd: string, status: RepositoryStatus): GitStatus {
+  private async describe(cwd: string, repository: Repository, status: RepositoryStatus): Promise<GitStatus> {
+    const counting = repository.lineCounts(status)
+    const counts = await Promise.race([counting, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), COUNT_WAIT_MS))]).catch(() => null)
+    if (counts === undefined) void counting.then(() => this.counted?.(), () => undefined)
     return {
       cwd,
       root: status.root,
@@ -272,7 +297,7 @@ export class WorkspaceGit {
       upstream: status.head.upstream ?? undefined,
       ahead: status.head.ahead,
       behind: status.head.behind,
-      files: gitFiles(status),
+      files: gitFiles(status, counts),
       operation: status.operation ?? undefined,
     }
   }
@@ -309,7 +334,12 @@ export class WorkspaceGit {
     const repository = await this.repository()
     const since = await changedSince(repository.root, ref) ?? (ref.startsWith("origin/") ? null : await changedSince(repository.root, `origin/${ref}`))
     if (!since) return null
-    return { base: since.base, files: since.files.map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", staged: false, insertions: null, deletions: null, binary: false })) }
+    return { base: since.base, files: since.files.map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", staged: false, ...lines(file.lines), binary: file.lines === null })) }
+  }
+
+  async defaultBranch(): Promise<string | null> {
+    const repository = await openRepository(this.target)
+    return repository ? defaultBranch(repository.root) : null
   }
 
   async sinceDiff(base: string, path: string): Promise<GitDiff> {
@@ -341,7 +371,7 @@ export class WorkspaceGit {
       await remote(repository, input.action, { branch: input.branch, head: input.head ?? null })
     } catch (error) { failure = error }
     const status = await repository.status()
-    const described = this.describe(input.cwd, status)
+    const described = await this.describe(input.cwd, repository, status)
     const detail = failure instanceof Error ? failure.message : failure ? String(failure) : undefined
     const kind = failure instanceof GitError ? failure.kind : undefined
     if (status.entries.some((entry) => entry.conflicted)) return { status: described, problem: { kind: "conflicts", message: status.operation ? "Resolve and stage the conflicted files, then continue." : input.action === "merge_autostash" && !failure ? "Incoming commits are merged, but restoring your edits caused conflicts. Git kept a stash backup. Resolve and stage the files before committing." : "Resolve and stage the remaining conflicts before committing.", detail } }
@@ -368,7 +398,7 @@ export class WorkspaceGit {
 
   async commitFiles(oid: string): Promise<GitCommitFile[]> {
     const repository = await this.repository()
-    return (await commitFiles(repository.root, oid)).map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", insertions: null, deletions: null, binary: false }))
+    return (await commitFiles(repository.root, oid)).map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", ...lines(file.lines), binary: file.lines === null }))
   }
 
   async hasStagedChanges(): Promise<boolean> { return (await this.status()).files.some((file) => file.staged) }

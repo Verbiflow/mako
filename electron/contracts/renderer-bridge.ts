@@ -364,6 +364,10 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveAction>(input.kind === "steer-queued" ? "mako:live-steer-queued" : "mako:live-action", id, input),
     liveAcknowledgeAction: (id: string, actionId: string) =>
       invokeTrustedHost<void>("mako:live-action-acknowledge", id, actionId),
+    liveTurnChanges: (id: string, requestId: string) =>
+      invokeTrustedHost<{ root: string; files: GitFile[] }>("mako:live-turn-changes", id, requestId),
+    liveTurnDiff: (id: string, requestId: string, path: string) =>
+      invokeTrustedHost<GitDiff>("mako:live-turn-diff", id, requestId, path),
     liveRewind: (id: string, input: RewindInput) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-rewind", id, input),
     liveRecoverRewinds: () =>
@@ -671,6 +675,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:git-restore-discarded", stash),
     gitChangedSince: (ref: string) =>
       invokeTrustedHost<{ base: string; files: GitFile[] } | null>("mako:git-changed-since", ref),
+    gitDefaultBranch: () =>
+      invokeTrustedHost<string | null>("mako:git-default-branch"),
     gitSinceDiff: (base: string, path: string) =>
       invokeTrustedHost<GitDiff>("mako:git-since-diff", base, path),
     gitStageAll: () => invokeTrustedHost<void>("mako:git-stage-all"),

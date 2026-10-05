@@ -17,8 +17,8 @@ export type Preview =
   | { kind: "patch"; patch: string; limited: boolean }
   | { kind: "unavailable"; reason: string }
 
-/** HEAD against the working tree, a commit against the working tree, or a commit against its first parent. */
-export type Comparison = { kind: "worktree" } | { kind: "since"; oid: string } | { kind: "commit"; oid: string }
+/** HEAD against the working tree, a commit against the working tree, a commit against its first parent, or one tree against another. */
+export type Comparison = { kind: "worktree" } | { kind: "since"; oid: string } | { kind: "commit"; oid: string } | { kind: "trees"; from: string; to: string }
 
 /** Sides read in full up to this size; larger ones are compared as a patch. */
 const INLINE_BYTES = 64 * 1024
@@ -56,6 +56,8 @@ export interface PreviewContext {
   objects: ObjectReader
   /** `HEAD`, or the empty tree on a branch with no commits. */
   base(): Promise<string>
+  /** Added to every Git process, as `objects` was given it. */
+  env?: Readonly<Record<string, string | undefined>>
 }
 
 export async function readPreview(context: PreviewContext, path: string, comparison: Comparison): Promise<Preview> {
@@ -64,7 +66,9 @@ export async function readPreview(context: PreviewContext, path: string, compari
   const limit = mime ? IMAGE_BYTES : INLINE_BYTES
   const [before, after] = comparison.kind === "commit"
     ? await Promise.all([blob(context.objects, `${comparison.oid}^:${path}`, limit), blob(context.objects, `${comparison.oid}:${path}`, limit)])
-    : await Promise.all([blob(context.objects, `${comparison.kind === "since" ? comparison.oid : "HEAD"}:${path}`, limit), worktree(context.root, path, limit)])
+    : comparison.kind === "trees"
+      ? await Promise.all([blob(context.objects, `${comparison.from}:${path}`, limit), blob(context.objects, `${comparison.to}:${path}`, limit)])
+      : await Promise.all([blob(context.objects, `${comparison.kind === "since" ? comparison.oid : "HEAD"}:${path}`, limit), worktree(context.root, path, limit)])
   const sides = [before, after]
   if (mime && sides.every((side) => side.kind !== "special")) return { kind: "binary", mime, before: binarySide(before, true), after: binarySide(after, true) }
   if (sides.some((side) => side.kind === "large" && side.size > SOURCE_BYTES))
@@ -77,13 +81,15 @@ export async function readPreview(context: PreviewContext, path: string, compari
   let codes: number[] = []
   if (comparison.kind === "commit") {
     args = ["diff-tree", "-p", "--no-commit-id", "--root", "-m", "--first-parent", ...DIFF_FLAGS, comparison.oid, "--", literal]
+  } else if (comparison.kind === "trees") {
+    args = ["diff-tree", "-p", "-r", ...DIFF_FLAGS, comparison.from, comparison.to, "--", literal]
   } else if (before.kind === "missing" && !(await context.objects.info(`:${path}`))) {
     args = ["diff", "--no-index", ...DIFF_FLAGS, "--", "/dev/null", path]
     codes = [1]
   } else {
     args = ["diff", ...DIFF_FLAGS, comparison.kind === "since" ? comparison.oid : await context.base(), "--", literal]
   }
-  const result = await run({ cwd: context.root, args, codes, maxBytes: PATCH_BYTES, read: true })
+  const result = await run({ cwd: context.root, args, codes, env: context.env, maxBytes: PATCH_BYTES, read: true })
   const patch = result.stdout.toString("utf8")
   if (/^Binary files .* differ$/m.test(patch) || /^GIT binary patch$/m.test(patch)) return { kind: "binary", mime: null, before: binarySide(before, false), after: binarySide(after, false) }
   return limitPatch(patch, result.truncated)

@@ -16,6 +16,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { importSnapshotObjects } from "../electron/workspace-snapshot-git.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
+import { TreeComparison } from "@mako/git"
 import {
   RewindPlanSchema,
   type RewindPlan,
@@ -78,6 +79,21 @@ try {
   // Only the private checkpoint index retains the earlier staged bytes now.
   // Git must still consider those objects reachable after the live index changes.
   git("gc", "--prune=now")
+  const turnEnd = await store.capture(cwd)
+  const turn = store.trees(original.id, turnEnd.id)
+  assert.equal(turn.scope, original.scope)
+  const compared = new TreeComparison({ root: turn.scope, from: turn.from, to: turn.to, stores: turn.stores })
+  try {
+    assert.deepEqual(await compared.files(), [
+      { path: "created", change: "added", lines: { insertions: 1, deletions: 0 } },
+      { path: "tracked", change: "modified", lines: { insertions: 1, deletions: 1 } },
+      { path: "untracked", change: "deleted", lines: { insertions: 0, deletions: 1 } },
+    ])
+    assert.deepEqual(await compared.preview("tracked"), { kind: "files", before: "unstaged\n", after: "agent changed\n" })
+  } finally {
+    compared.close()
+  }
+  console.log("PASS: a turn's changes compare its two checkpoints through their private stores")
   const preview = await store.preview(original.id)
   assert.equal(preview.changedFileCount, 3)
   let completed = 0

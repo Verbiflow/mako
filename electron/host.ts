@@ -62,7 +62,7 @@ export class AgentHost {
     const cwd = homedir()
     this.id = id
     this.emit = (event) => emit({ ...event, tabId: id })
-    this.workspaceGit = new WorkspaceGit(cwd)
+    this.workspaceGit = new WorkspaceGit(cwd, () => { if (this.foreground) void this.pushGit() })
     this.workspaceFiles = new WorkspaceFiles(cwd, this.workspaceGit)
   }
 
@@ -388,6 +388,10 @@ export class AgentHost {
 
   async gitChangedSince(ref: string): Promise<{ base: string; files: GitFile[] } | null> {
     return this.workspaceGit.changedSince(ref)
+  }
+
+  async gitDefaultBranch(): Promise<string | null> {
+    return this.workspaceGit.defaultBranch()
   }
 
   async gitSinceDiff(base: string, path: string): Promise<GitDiff> {

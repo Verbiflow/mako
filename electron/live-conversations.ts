@@ -2480,6 +2480,14 @@ export class LiveConversations {
     return this.checkpoints.preview(id, requestId, position)
   }
 
+  turnChanges(id: string, requestId: string) {
+    return this.checkpoints.turnChanges(id, requestId)
+  }
+
+  turnDiff(id: string, requestId: string, path: string) {
+    return this.checkpoints.turnDiff(id, requestId, path)
+  }
+
   rewind(id: string, input: RewindInput) {
     assertLifecycleAdmission()
     if (this.actions.blocks(this.require(id)))

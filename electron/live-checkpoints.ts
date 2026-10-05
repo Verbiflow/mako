@@ -6,13 +6,20 @@ import {
   type RewindPreview,
   type RunSnapshots,
 } from "./contracts/workspace-snapshots.js"
-import type { LiveRequest, LiveSnapshot } from "./shared.js"
+import { TreeComparison } from "@mako/git"
+import { treeDiff, treeFiles } from "./host-git.js"
+import type { GitDiff, GitFile, LiveRequest, LiveSnapshot } from "./shared.js"
 import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"
+
+/** Turns kept open for reading their files; each holds one object reader. */
+const OPEN_TURNS = 4
 
 /** Captures run boundaries before dispatch/queue drain; rewind creates an idle
  * historical fork so no irreversible provider rollback participates in recovery. */
 export class LiveCheckpoints {
   private readonly preparing = new Set<string>()
+  /** The turns last read, newest last, by their two checkpoints. */
+  private readonly turns = new Map<string, TreeComparison>()
   private readonly host: LiveAccess
   private readonly fork: (id: string, input: ForkInput) => LiveSnapshot
   constructor(
@@ -184,6 +191,42 @@ export class LiveCheckpoints {
     if (!snapshots) throw new Error("Workspace checkpoints are unavailable")
     const { snapshot } = this.target(id, requestId, position)
     return snapshots.preview(snapshot.id)
+  }
+
+  /** What one finished turn changed in its workspace, from the checkpoints either side of it. */
+  async turnChanges(id: string, requestId: string): Promise<{ root: string; files: GitFile[] }> {
+    const turn = this.turn(id, requestId)
+    return { root: turn.root, files: await treeFiles(turn) }
+  }
+
+  async turnDiff(id: string, requestId: string, path: string): Promise<GitDiff> {
+    return treeDiff(this.turn(id, requestId), path)
+  }
+
+  private turn(id: string, requestId: string): TreeComparison {
+    const snapshots = this.host.dependencies.workspaceSnapshots
+    if (!snapshots) throw new Error("Workspace checkpoints are unavailable")
+    const request = this.host.require(id).snapshot.requests.find((item) => item.id === requestId)
+    const before = request?.snapshots?.before
+    const after = request?.snapshots?.after
+    if (before?.kind !== "ready" || after?.kind !== "ready") throw new Error("This turn has no checkpoints to compare")
+    const key = `${before.snapshot.id}:${after.snapshot.id}`
+    // Each read keeps both checkpoints past the next prune, so reading never finds a store gone.
+    const trees = snapshots.trees(before.snapshot.id, after.snapshot.id)
+    const open = this.turns.get(key)
+    if (open) {
+      this.turns.delete(key)
+      this.turns.set(key, open)
+      return open
+    }
+    const turn = new TreeComparison({ root: trees.scope, from: trees.from, to: trees.to, stores: trees.stores })
+    this.turns.set(key, turn)
+    for (const [oldest, kept] of this.turns) {
+      if (this.turns.size <= OPEN_TURNS) break
+      kept.close()
+      this.turns.delete(oldest)
+    }
+    return turn
   }
 
   async rewind(id: string, input: RewindInput): Promise<LiveSnapshot> {

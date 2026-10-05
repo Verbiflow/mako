@@ -61,6 +61,9 @@ export function installGitIpc(context: GitIpcContext): void {
   registerIpc("mako:git-changed-since", (_event, ref: string) =>
     withHost((host) => host.gitChangedSince(ref))
   )
+  registerIpc("mako:git-default-branch", () =>
+    withHost((host) => host.gitDefaultBranch())
+  )
   registerIpc("mako:git-since-diff", (_event, base: string, path: string) =>
     withHost((host) => host.gitSinceDiff(base, path))
   )

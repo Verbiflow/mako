@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { lstat, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { GitError } from "./errors.js"
+import { untrackedLines, worktreeLines, type LineCount } from "./lines.js"
 import { ObjectReader } from "./objects.js"
 import { previewBytes, readPreview, type Comparison, type Preview } from "./preview.js"
 import { previewCacheBytes, PreviewShelf } from "./preview-cache.js"
@@ -57,6 +58,8 @@ const PARTIAL_LIMIT = 500
 const REREAD_LIMIT = 64
 /** The most `ls-files` output read to find tracked files in unheard folders. */
 const TRACKED_BYTES = 1024 * 1024
+/** Past this many changed files, lines aren't counted. */
+export const LINE_COUNT_LIMIT = 2_000
 /** Files that change what every path's status means. */
 const GLOBAL_FILES = new Set([".gitignore", ".gitattributes", ".gitmodules"])
 const EMPTY_RAW: ReadonlyMap<string, Buffer> = new Map()
@@ -107,6 +110,11 @@ export class Repository {
   /** Why the next read is a full one, and why and when the last one was. */
   private fullReason = "first read"
   private lastFull: { reason: string; at: number } | null = null
+  /** Each changed file's lines against `base`, kept like status: only what changed is counted again. */
+  private lines: { base: string; counts: Map<string, LineCount> } | undefined
+  /** Paths to count again, or every one. */
+  private linesStale: string[] | "all" = "all"
+  private counting: Promise<unknown> = Promise.resolve()
 
   constructor(location: RepositoryLocation) {
     this.root = location.root
@@ -163,7 +171,7 @@ export class Repository {
       const path = reported.endsWith("/") ? reported.replace(/\/+$/, "") : reported
       if (path === ".git" || path.startsWith(".git/")) {
         if (gitNoise(path.slice(5))) continue
-        this.changedAll(`${path} changed`)
+        this.changedAll(`${path} changed`, { files: false })
         return true
       }
       const name = path.slice(path.lastIndexOf("/") + 1)
@@ -173,6 +181,10 @@ export class Repository {
       }
       moved = true
       this.dirty.add(path)
+      if (this.linesStale !== "all") {
+        if (this.linesStale.length >= PARTIAL_LIMIT) this.linesStale = "all"
+        else this.linesStale.push(path)
+      }
       this.forgetPreviews(path)
     }
     if (!moved) return false
@@ -184,9 +196,14 @@ export class Repository {
     return true
   }
 
-  /** Anything may have changed: HEAD, the index, or files a watcher missed. `reason` is for `git:doctor`. */
-  changedAll(reason: string): void {
+  /**
+   * Anything may have changed: HEAD, the index, or files a watcher missed.
+   * `reason` is for `git:doctor`; `files: false` says no file's contents
+   * did, as after staging or committing.
+   */
+  changedAll(reason: string, { files = true }: { files?: boolean } = {}): void {
     this.fullReason = reason
+    if (files) this.linesStale = "all"
     this.everything = true
     this.dirty.clear()
     this.version += 1
@@ -202,6 +219,7 @@ export class Repository {
         this.dirty.add(folder)
         this.forgetPreviews(folder)
       }
+      if (this.linesStale !== "all") this.linesStale = this.linesStale.length + this.rereads.length > PARTIAL_LIMIT ? "all" : [...this.linesStale, ...this.rereads]
       this.version += 1
     }
     const wanted = this.version
@@ -346,7 +364,7 @@ export class Repository {
     return path
   }
 
-  async preview(path: string, comparison: Comparison): Promise<Preview> {
+  async preview(path: string, comparison: Exclude<Comparison, { kind: "trees" }>): Promise<Preview> {
     this.path(path)
     if (this.raw.has(path)) return { kind: "unavailable", reason: "This file's name isn't valid UTF-8, so Mako can't show it. Staging and commits still include it." }
     if (comparison.kind !== "worktree" && (comparison.oid.startsWith("-") || !/^[\w./^~@{}-]+$/.test(comparison.oid)))
@@ -365,6 +383,47 @@ export class Repository {
     })
     if (cacheable && (!worktree || version === this.version)) this.previews.keep(key, { preview, bytes: previewBytes(preview), path, worktree })
     return preview
+  }
+
+  /**
+   * The lines each file in `status` adds and removes against HEAD, staged and
+   * not together; an untracked file's are all added. Null past
+   * `LINE_COUNT_LIMIT` files, where counting would cost more than it tells.
+   */
+  async lineCounts(status: RepositoryStatus): Promise<ReadonlyMap<string, LineCount> | null> {
+    if (status.entries.length > LINE_COUNT_LIMIT) return null
+    const counted = this.counting.then(() => this.count(status), () => this.count(status))
+    this.counting = counted.catch(() => undefined)
+    return counted
+  }
+
+  private async count(status: RepositoryStatus): Promise<ReadonlyMap<string, LineCount>> {
+    const base = status.head.oid ?? await this.emptyTree()
+    let stale = this.linesStale
+    this.linesStale = []
+    if (this.lines?.base !== base || !this.watched) stale = "all"
+    const counts = stale === "all" ? new Map<string, LineCount>() : this.lines!.counts
+    if (stale !== "all" && stale.length > 0) for (const path of counts.keys()) if (stale.some((scope) => within(path, scope))) counts.delete(path)
+    const live = new Set(status.entries.map((entry) => entry.path))
+    for (const path of counts.keys()) if (!live.has(path)) counts.delete(path)
+    const missing = status.entries.filter((entry) => !counts.has(entry.path))
+    try {
+      const tracked = missing.filter((entry) => !entry.untracked && !entry.raw).map((entry) => entry.path)
+      const untracked = missing.filter((entry) => entry.untracked && !entry.raw).map((entry) => entry.path)
+      const [diffed, read] = await Promise.all([
+        tracked.length === 0 ? new Map<string, LineCount>() : worktreeLines(this.root, base, tracked.length > PARTIAL_LIMIT ? undefined : tracked),
+        untrackedLines(this.root, untracked),
+      ])
+      // A tracked file with no line changes, such as a mode change or a staged edit undone on disk.
+      for (const path of tracked) counts.set(path, diffed.has(path) ? diffed.get(path)! : { insertions: 0, deletions: 0 })
+      for (const [path, count] of read) counts.set(path, count)
+      for (const entry of missing) if (entry.raw) counts.set(entry.path, null)
+    } catch (error) {
+      this.linesStale = "all"
+      throw error
+    }
+    this.lines = { base, counts }
+    return counts
   }
 
   private forgetPreviews(scope: string): void {
@@ -439,7 +498,7 @@ export class Repository {
       try {
         await run({ cwd: this.root, args: ["add", "-A"] })
       } finally {
-        this.changedAll("staged everything")
+        this.changedAll("staged everything", { files: false })
       }
     })
   }
@@ -450,7 +509,7 @@ export class Repository {
         const born = (await this.head()).oid !== null
         await run({ cwd: this.root, args: born ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "."], codes: [1] })
       } finally {
-        this.changedAll("unstaged everything")
+        this.changedAll("unstaged everything", { files: false })
       }
     })
   }
@@ -514,7 +573,7 @@ export class Repository {
         if (!input.amend && !(await this.status()).entries.some(staged)) await run({ cwd: this.root, args: ["add", "-A"] })
         await run({ cwd: this.root, args: ["commit", ...(input.amend ? ["--amend"] : []), "--cleanup=whitespace", "--file=-"], input: message, timeoutMs: COMMIT_TIMEOUT_MS, signal: input.signal })
       } finally {
-        this.changedAll("committed")
+        this.changedAll("committed", { files: false })
       }
     })
   }

@@ -1,5 +1,9 @@
 import type { Change } from "./status.js"
+import { commitLines, untrackedLines, worktreeLines, type LineCount } from "./lines.js"
 import { run } from "./run.js"
+
+/** Past this many files, a commit's or a comparison's lines aren't counted. */
+const COUNTED_FILES = 2_000
 
 export interface CommitEntry {
   oid: string
@@ -13,6 +17,8 @@ export interface CommitEntry {
 export interface CommitFile {
   path: string
   change: Change
+  /** Undefined when there were too many files to count. */
+  lines?: LineCount
 }
 
 /** The newest `limit` commits reachable from HEAD; none before the first commit. */
@@ -31,8 +37,20 @@ const CHANGES = new Map<string, Change>([["A", "added"], ["D", "deleted"], ["T",
 
 /** What `oid` changed against its first parent. */
 export async function commitFiles(root: string, oid: string): Promise<CommitFile[]> {
-  const result = await run({ cwd: root, args: ["diff-tree", "--root", "--no-commit-id", "--name-status", "--no-renames", "-r", "-m", "--first-parent", "-z", oid, "--"], read: true })
-  const fields = result.stdout.toString("utf8").split("\0")
+  const [result, lines] = await Promise.all([
+    run({ cwd: root, args: ["diff-tree", "--root", "--no-commit-id", "--name-status", "--no-renames", "-r", "-m", "--first-parent", "-z", oid, "--"], read: true }),
+    commitLines(root, oid),
+  ])
+  return nameStatus(result.stdout).map((file) => ({ ...file, lines: counted(lines, file.path) }))
+}
+
+/** A path's count; one Git lists no lines for changed only its mode. */
+function counted(lines: ReadonlyMap<string, LineCount>, path: string): LineCount {
+  return lines.has(path) ? lines.get(path)! : { insertions: 0, deletions: 0 }
+}
+
+function nameStatus(output: Buffer): CommitFile[] {
+  const fields = output.toString("utf8").split("\0")
   const files: CommitFile[] = []
   for (let at = 0; at + 1 < fields.length; at += 2) {
     const code = fields[at]!.trim()
@@ -56,16 +74,32 @@ export async function changedSince(root: string, ref: string): Promise<{ base: s
     run({ cwd: root, args: ["diff", "--name-status", "--no-renames", "-z", base, "--"], read: true }),
     run({ cwd: root, args: ["ls-files", "-z", "--others", "--exclude-standard"], read: true }),
   ])
-  const fields = tracked.stdout.toString("utf8").split("\0")
-  const files: CommitFile[] = []
-  for (let at = 0; at + 1 < fields.length; at += 2) {
-    const code = fields[at]!.trim()
-    if (!code) continue
-    files.push({ path: fields[at + 1]!, change: CHANGES.get(code[0]!) ?? "modified" })
-  }
-  for (const path of untracked.stdout.toString("utf8").split("\0")) if (path) files.push({ path, change: "added" })
+  const files = nameStatus(tracked.stdout)
+  const added = untracked.stdout.toString("utf8").split("\0").filter(Boolean)
+  if (files.length + added.length <= COUNTED_FILES) {
+    const [diffed, read] = await Promise.all([worktreeLines(root, base), untrackedLines(root, added)])
+    for (const file of files) file.lines = counted(diffed, file.path)
+    for (const path of added) files.push({ path, change: "added", lines: counted(read, path) })
+  } else for (const path of added) files.push({ path, change: "added" })
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
   return { base, files }
+}
+
+/**
+ * The branch work here lands on, read without a host: the one origin's HEAD
+ * names, else `init.defaultBranch`, main or master, whichever exists here or
+ * on origin. Null when none does.
+ */
+export async function defaultBranch(root: string): Promise<string | null> {
+  const origin = await run({ cwd: root, args: ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], codes: [1, 128], read: true })
+  const named = origin.code === 0 ? origin.stdout.toString("utf8").trim().replace(/^origin\//, "") : ""
+  if (named) return named
+  const configured = await run({ cwd: root, args: ["config", "--get", "init.defaultBranch"], codes: [1], read: true })
+  const candidates = [...new Set([configured.stdout.toString("utf8").trim(), "main", "master"].filter(Boolean))]
+  const refs = candidates.flatMap((name) => [`refs/heads/${name}`, `refs/remotes/origin/${name}`])
+  const listed = await run({ cwd: root, args: ["for-each-ref", "--format=%(refname)", ...refs], read: true })
+  const present = new Set(listed.stdout.toString("utf8").split("\n").filter(Boolean))
+  return candidates.find((name) => present.has(`refs/heads/${name}`) || present.has(`refs/remotes/origin/${name}`)) ?? null
 }
 
 /** Tracked files, and untracked ones Git doesn't ignore. */
