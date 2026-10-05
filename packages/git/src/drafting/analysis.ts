@@ -33,7 +33,7 @@ interface Analysis {
   rootIds: string[]
 }
 
-const CONCURRENCY = 3
+const CONCURRENCY = 8
 const FAN_IN = 12
 const strict = new TextDecoder("utf-8", { fatal: true })
 

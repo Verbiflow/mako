@@ -17,7 +17,7 @@ const CATALOG_EVENTS = new Set<OpenCodeEvent["type"]>(["catalog.updated", "agent
 export const openCodeProfileLoader: ProviderProfileLoader = {
   provider: "opencode",
   label: "OpenCode",
-  defaults: { work: [], light: "own" },
+  defaults: { work: [] },
   transport: "sdk",
   capabilities: [
     "start",

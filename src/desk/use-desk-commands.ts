@@ -300,12 +300,12 @@ const DESK_COMMANDS: DeskCommand[] = [
     title: "Draft a commit message",
     section: "Workspace",
     keys: "mod+shift+g",
-    hint: "From the diff, using your drafting model",
+    hint: "From the diff, with your API key",
     run: async () => {
       stage.open("changes")
       const { model, status } = await currentCommitModel()
       if (!model || status.kind === "disconnected") {
-        window.dispatchEvent(new CustomEvent("mako:settings", { detail: "git" }))
+        window.dispatchEvent(new CustomEvent("mako:settings", { detail: "git#commit-messages" }))
         return
       }
       const cwd = draftRepository(store.get())

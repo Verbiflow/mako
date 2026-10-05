@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { commitDraft, draftCommit, knownRepository, openRepository, type CommitDraft, type DraftOptions } from "@mako/git"
 import type { CommitGenerationInput, CommitGenerationResult } from "./shared.js"
-import { parseAgentModelId, utilityModelName } from "./contracts/utility-work.js"
+import { utilityModelName } from "./contracts/utility-work.js"
 import { UtilityModelError } from "./utility-model-error.js"
 import type { UtilityModel, UtilityWork } from "./utility-work.js"
 import { hostWarn } from "./host-log.js"
@@ -9,21 +9,17 @@ import { hostWarn } from "./host-log.js"
 const mode = z.enum(["fast", "deep"]).default("fast")
 const commitInput = z.object({ mode, requestId: z.string().uuid(), cwd: z.string().min(1).max(4_096), prompt: z.string().max(12_000).optional(), model: z.string().max(400).optional() })
 
-/** A model connection answers each request in seconds. */
-const CONNECTION_TIMEOUT_MS = 120_000
-/** A harness starts a process for each request, so the same work takes longer. */
-const AGENT_TIMEOUT_MS = 300_000
+/** A whole draft, every summary and inspection round included. */
+const DRAFT_TIMEOUT_MS = 120_000
 
 function draftKey(client: string, cwd: string): string {
   return JSON.stringify([client, cwd])
 }
 
 /**
- * Commit messages and pull request descriptions, written by the model Mako's
- * model system picks for them (`UtilityWork`, task `commit`): the same
- * choice, harness order and connections as every other small job. One draft
- * at a time per window; a commit message draft is kept so that committing
- * it commits exactly what it describes.
+ * Commit messages, written by the API connection `UtilityWork` picks for
+ * task `commit`. One draft at a time per window; a draft is kept so that
+ * committing it commits exactly what it describes.
  */
 export class GitDrafting {
   private readonly active = new Map<string, { id: string; controller: AbortController }>()
@@ -44,7 +40,7 @@ export class GitDrafting {
       const resolved = await this.work.resolve("commit", requested)
       if (resolved.kind === "unavailable") throw new Error(resolved.reason)
       model = resolved.model
-      signal = AbortSignal.any([controller.signal, AbortSignal.timeout(parseAgentModelId(model.id) ? AGENT_TIMEOUT_MS : CONNECTION_TIMEOUT_MS)])
+      signal = AbortSignal.any([controller.signal, AbortSignal.timeout(DRAFT_TIMEOUT_MS)])
       return await write(model, { signal, tooLong: (error) => error instanceof UtilityModelError && error.kind === "context" })
     } catch (error) {
       if (controller.signal.aborted) throw new UtilityModelError("timeout", "Generation cancelled.")

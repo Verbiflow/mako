@@ -123,7 +123,7 @@ export function installGitIpc(context: GitIpcContext): void {
   })
   registerIpc("mako:harness-order-saved", () => models.harnessOrder())
   registerIpc("mako:harness-order", (_event, order: string[]) =>
-    work.saveHarnessOrder(HarnessOrderSchema.parse(order))
+    models.saveHarnessOrder(HarnessOrderSchema.parse(order))
   )
   registerIpc(
     "mako:utility-model-catalog",

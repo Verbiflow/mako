@@ -252,7 +252,7 @@ export async function completeUtilityText(
       )
         throw new UtilityModelError(
           "auth",
-          "The provider rejected this API key. Check the key and its model access in Settings › Models."
+          "The provider rejected this API key. Check the key and its model access in Settings › Git."
         )
       if (status === 429)
         throw new UtilityModelError(
@@ -262,7 +262,7 @@ export async function completeUtilityText(
       if (status === 404)
         throw new UtilityModelError(
           "request",
-          "This model or endpoint was not found. Check the model ID and base URL in Settings › Models."
+          "This model or endpoint was not found. Check the model ID and base URL in Settings › Git."
         )
       throw new UtilityModelError(
         "request",

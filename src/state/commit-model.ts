@@ -7,13 +7,12 @@ import { utilityModelName } from "../../electron/contracts/utility-work"
 /**
  * Which model drafts commits, and whether it can.
  *
- * The host decides, for every window and with every other small task
- * (`UtilityWork`): Automatic is a light model from the first signed-in harness
- * in the person's harness order, on the person's own account, or else the first model connection; a
- * model chosen in Settings is used while it's there and is otherwise
- * `disconnected` with the host's reason, so the toolbar offers Settings
- * instead of a Generate that cannot work. Windows once kept their own choice
- * in the `commitModel` preference; the first read hands it to the host.
+ * The host decides, for every window (`UtilityWork`): one of the person's
+ * API connections, Automatic being the first. A connection chosen in
+ * Settings is used while it's there and is otherwise `disconnected` with the
+ * host's reason, so the toolbar offers Settings instead of a Generate that
+ * cannot work. Windows once kept their own choice in the `commitModel`
+ * preference; the first read hands it to the host.
  */
 export type CommitModelStatus =
   | { kind: "unknown" }
@@ -41,7 +40,7 @@ export function refreshCommitModel(): Promise<void> {
     .then(() => utilityModels.settings())
     .then(adoptWindowChoice)
     .then((settings) => snapshot.set({ settings, error: null }))
-    .catch((caught: unknown) => snapshot.set({ settings: null, error: caught instanceof Error ? caught.message : "Models could not be loaded." }))
+    .catch((caught) => snapshot.set({ settings: null, error: caught instanceof Error ? caught.message : "Models could not be loaded." }))
     .finally(() => {
       inflight = null
     })
@@ -71,7 +70,7 @@ export function resolveCommitModel(settings: UtilityModelSettings | null): Resol
 export const useResolvedCommitModel = () =>
   useSnapshot((state) => resolveCommitModel(state.settings))
 
-/** The host's drafting settings and why they couldn't be read, for Settings › Models and Settings › Git alike. */
+/** The host's drafting settings and why they couldn't be read, for Settings › Git. */
 export const useCommitModelSettings = () => useSnapshot((state) => state)
 
 /** Choose what drafts commit messages, for every window; the snapshot follows. */

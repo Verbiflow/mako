@@ -239,7 +239,7 @@ function CommitEditor({
           </Notice>
         ) : draftState.error && !disconnected ? (
           // A failure whose cause is a lost connection is not a notice: the
-          // toolbar has already turned Generate into Reconnect model.
+          // toolbar has already turned Generate into Reconnect key.
           <Notice
             role="alert"
             tone="negative"
@@ -268,8 +268,8 @@ function CommitEditor({
           </Notice>
         ) : null}
         {/* One row, never wrapping: Generate's word and the shortcut hint go
-            before the primary action does. Which model drafts, and how hard
-            it reads, are Settings › Models; the row holds only the two
+            before the primary action does. Which key drafts, and how hard
+            it reads, are Settings › Git; the row holds only the two
             actions, Generate in the quiet foreground and Commit lit. */}
         <div className="@container/commit flex items-center gap-2 px-1.5 pb-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-1">
@@ -287,12 +287,12 @@ function CommitEditor({
               <Action
                 size="xs"
                 tone="quiet"
-                aria-label="Choose a commit model"
+                aria-label="Reconnect the API key that writes commit messages"
                 title={connection.reason}
                 onClick={openModelSettings}
               >
                 <DraftMark />
-                Choose model
+                Reconnect key
               </Action>
             ) : hasModel ? (
               <Action
@@ -310,11 +310,12 @@ function CommitEditor({
               <Action
                 size="xs"
                 tone="quiet"
-                aria-label="Connect commit model"
+                aria-label="Connect an API key to generate commit messages"
+                title="Generate writes with your own API key. Connect one in Settings › Git."
                 onClick={openModelSettings}
               >
                 <DraftMark />
-                Connect model
+                Connect API key
               </Action>
             )}
           </div>
@@ -420,7 +421,7 @@ function Notice({
  * and under reduced motion.
  */
 const openModelSettings = () =>
-  window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))
+  window.dispatchEvent(new CustomEvent("mako:settings", { detail: "git#commit-messages" }))
 
 function DraftMark({ active = false }: { active?: boolean }) {
   return (

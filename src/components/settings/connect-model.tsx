@@ -170,7 +170,7 @@ export function ConnectModel({
                 : `Connect ${provider.name}`}
             </DialogTitle>
             <p className="mt-1 text-label text-faint">
-              For commit messages and pull request descriptions. Your agent accounts stay unchanged.
+              Writes your commit messages. Your agents and their subscriptions stay as they are.
             </p>
           </div>
           <IconAction

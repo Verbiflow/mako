@@ -27,14 +27,6 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
             "fast": false
           }
         }
-      ],
-      "light": [
-        {
-          "model": "claude-haiku-4-5",
-          "options": {
-            "fast": false
-          }
-        }
       ]
     },
     "resumable": true
@@ -77,15 +69,6 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
             "serviceTier": "default"
           }
         }
-      ],
-      "light": [
-        {
-          "model": "gpt-6-luna",
-          "options": {
-            "effort": "low",
-            "serviceTier": "default"
-          }
-        }
       ]
     },
     "resumable": true
@@ -114,15 +97,6 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
             "fast": "false"
           }
         }
-      ],
-      "light": [
-        {
-          "model": "grok-4.7",
-          "options": {
-            "effort": "low",
-            "fast": "false"
-          }
-        }
       ]
     },
     "resumable": true
@@ -142,8 +116,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       }
     },
     "defaults": {
-      "work": [],
-      "light": "own"
+      "work": []
     },
     "resumable": true
   },
@@ -168,14 +141,6 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "model": "grok-4.7",
           "options": {
             "effort": "high"
-          }
-        }
-      ],
-      "light": [
-        {
-          "model": "grok-4.7",
-          "options": {
-            "effort": "low"
           }
         }
       ]
@@ -211,21 +176,6 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "model": "swe-2",
           "options": {
             "effort": "high"
-          }
-        }
-      ],
-      "light": [
-        {
-          "model": "gpt-6-luna",
-          "options": {
-            "effort": "low",
-            "fast": false
-          }
-        },
-        {
-          "model": "gemini-3.8-flash",
-          "options": {
-            "effort": "low"
           }
         }
       ]

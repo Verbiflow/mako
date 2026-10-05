@@ -143,7 +143,7 @@ try {
   await run("git", ["init", "-q"], { cwd: root })
   await writeFile(join(root, ".gitignore"), "connections/\n")
   await writeFile(join(root, "feature.ts"), "New feature for the commit\n")
-  const service = new GitDrafting(new UtilityWork({ models: store, agents: async () => [], runners: () => [] }))
+  const service = new GitDrafting(new UtilityWork({ models: store }))
   const generation = {
     requestId: randomUUID(),
     cwd: root,

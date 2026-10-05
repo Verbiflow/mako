@@ -3,18 +3,20 @@ import { RotateCcwIcon } from "lucide-react"
 import { Action, Keys, ListCard, Segmented, SettingRow, Toggle } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
 import { cn } from "@/lib/utils"
+import type { CommitAnalysisMode } from "@/lib/types"
 import type { Prefs } from "@/state/prefs"
 import { setPref, usePrefs } from "@/state/prefs"
 import { git } from "@/state/git"
-import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
+import { refreshCommitModel } from "@/state/commit-model"
+import { CommitKeys } from "./model-connections"
 import { WorktreesSection } from "./worktrees-section"
 
-/** Settings › Git: how Changes looks, what commit messages are written by, and worktrees. */
+/** Settings › Git: how Changes looks, what writes commit messages, and worktrees. */
 export function GitSection() {
   return (
     <div className="flex flex-col gap-8">
       <ChangesView />
-      <CommitInstructions />
+      <CommitMessages />
       <section className="flex flex-col gap-3">
         <h3 className="text-ui font-medium">Worktrees</h3>
         <WorktreesSection />
@@ -155,14 +157,20 @@ function FilesPicture() {
   )
 }
 
+const DEPTH_TEXT = {
+  fast: "Reads the diff in one request when it fits, or in summarized pieces when it doesn't, at low reasoning.",
+  deep: "Reasons harder, and may reread parts of the original diff before writing. Slower, and more requests.",
+} satisfies Record<CommitAnalysisMode, string>
+
 /**
- * What a drafted commit message is written by: the person's instructions,
- * and a line naming the model that writes it, which Settings › Models chooses.
+ * Everything about Generate in one place: the API key that writes the
+ * message, how hard it reads, and the person's instructions. Harnesses never
+ * draft, so nothing here depends on an agent's sign-in.
  */
-function CommitInstructions() {
+function CommitMessages() {
   const stored = usePrefs((prefs) => prefs.commitPrompt)
+  const depth = usePrefs((prefs) => prefs.commitAnalysis)
   const draftKeys = usePrefs((prefs) => prefs.keybindings["workspace.generate-commit"] ?? "mod+shift+g")
-  const { model, label } = useResolvedCommitModel()
   const [fallback, setFallback] = useState("")
   const [draft, setDraft] = useState<string | null>(null)
   useEffect(() => {
@@ -172,25 +180,34 @@ function CommitInstructions() {
   const value = draft ?? stored ?? fallback
   const customized = Boolean(stored && stored !== fallback)
   return (
-    <section className="flex flex-col gap-3">
-      <div>
-        <h3 className="text-ui font-medium">Commit messages</h3>
-        <p className="mt-0.5 text-label text-muted-foreground">
-          Generate drafts one from the exact diff, following these instructions, and names the sensitive files it
-          leaves out. {model ? `Drafted by ${label ?? model}` : "No model can draft one yet"}; choose another in{" "}
-          <button type="button" className="pressable underline decoration-faint/50 underline-offset-2 hover:text-foreground" onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "models" }))}>
-            Models
-          </button>
-          .
-        </p>
+    <section id="commit-messages" className="flex scroll-mt-9 flex-col gap-3">
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <h3 className="text-ui font-medium">Commit messages</h3>
+          <p className="mt-0.5 text-label text-muted-foreground">
+            Generate writes one from the exact diff with your own API key, and names any file that looks like a secret
+            and was left out. Your agents' subscriptions aren't used.
+          </p>
+        </div>
+        <span className="mt-0.5 flex shrink-0 items-center gap-1 text-label text-faint">
+          <Keys keys={formatChord(draftKeys)} /> Generate
+        </span>
       </div>
+      <CommitKeys />
+      <ListCard>
+        <SettingRow title="Depth" description={DEPTH_TEXT[depth]}>
+          <Segmented
+            label="Depth"
+            value={depth}
+            options={[{ value: "fast", label: "Fast" }, { value: "deep", label: "Deep" }]}
+            onChange={(next) => setPref("commitAnalysis", next)}
+          />
+        </SettingRow>
+      </ListCard>
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <label htmlFor="commit-instructions" className="text-ui font-medium">Instructions</label>
           <span className="text-label text-faint">{customized ? "Customized" : "Default"}</span>
-          <span className="ml-auto flex items-center gap-1 text-label text-faint">
-            <Keys keys={formatChord(draftKeys)} /> drafts
-          </span>
         </div>
         <textarea
           id="commit-instructions"

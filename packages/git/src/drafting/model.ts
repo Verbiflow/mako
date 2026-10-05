@@ -2,9 +2,8 @@ import type { z } from "zod"
 import { jsonSchema, parseReply, type JsonSchema } from "./replies.js"
 
 /**
- * A model that writes from Git evidence. The host's model system supplies it,
- * whether a harness's light model or a connection's; this package never
- * chooses one.
+ * A model that writes from Git evidence. The host supplies it from one of
+ * the person's API connections; this package never chooses one.
  */
 export interface DraftingModel {
   /** What the model reads at once; requests are cut to fit. */

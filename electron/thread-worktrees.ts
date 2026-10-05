@@ -75,7 +75,7 @@ type Member = { repoRoot: string; path: string; base: string; from?: string }
 
 /** The worktrees a receipt made: one, or one per repository of a project folder. */
 const membersOf = (receipt: Receipt): Member[] =>
-  receipt.members ?? [{ repoRoot: receipt.repoRoot, path: receipt.path, base: receipt.base, ...(receipt.from ? { from: receipt.from } : {}) }]
+  receipt.members ?? [{ repoRoot: receipt.repoRoot, path: receipt.path, base: receipt.base, from: receipt.from }]
 
 /** A Thread's checkout on this device: the folder it works in, the project folder it mirrors, and a worktree per repository. */
 export interface ThreadCheckout {

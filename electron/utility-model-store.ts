@@ -116,7 +116,8 @@ export class UtilityModelStore {
   async choices(): Promise<UtilityWorkChoices> {
     await this.ready
     const stored = await readSmallJson(this.choicesPath(), choicesSchema)
-    return { commit: stored?.commit ?? AUTOMATIC }
+    // Older builds could choose a harness's model (`agent:<harness>/<model>`); drafts no longer run on one.
+    return { commit: !stored?.commit || stored.commit.startsWith("agent:") ? AUTOMATIC : stored.commit }
   }
 
   async choose(task: UtilityTask, choice: string): Promise<void> {
@@ -170,7 +171,7 @@ export class UtilityModelStore {
         return null
       throw new UtilityModelError(
         "auth",
-        "The saved model connection could not be opened. Unlock your system keychain or reconnect the provider in Settings › Models."
+        "The saved model connection could not be opened. Unlock your system keychain or reconnect the provider in Settings › Git."
       )
     }
   }

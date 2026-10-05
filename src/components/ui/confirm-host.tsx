@@ -41,7 +41,7 @@ export function ConfirmHost() {
         onOpenAutoFocus={(event) => {
           // The dialog takes focus itself: a ring on either answer before anyone pressed a key reads as a choice made for them.
           event.preventDefault()
-          ;(event.currentTarget as HTMLElement | null)?.focus()
+          if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
         }}
       >
         <div className="flex gap-2.5 px-5 pt-4.5">

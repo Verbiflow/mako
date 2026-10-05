@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 import { ArrowLeftIcon, SearchIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -94,7 +94,14 @@ export function SettingsDialog({
   const version = useUpdates((state) => state.version)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const active = SECTIONS.find((entry) => entry.id === section || entry.aliases?.includes(section)) ?? SECTIONS[0]
+  // A deep link may name a group within its section, as `git#commit-messages`.
+  const [sectionId = "", anchor] = section.split("#")
+  const active = SECTIONS.find((entry) => entry.id === sectionId || entry.aliases?.includes(sectionId)) ?? SECTIONS[0]
+  useEffect(() => {
+    if (!open || !anchor) return
+    const frame = requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }))
+    return () => cancelAnimationFrame(frame)
+  }, [open, anchor])
   const descriptors = useThreads((state) => state.descriptors)
   const term = query.trim().toLowerCase()
   const shown = SECTIONS.filter((entry) => matches(entry, term, descriptors))

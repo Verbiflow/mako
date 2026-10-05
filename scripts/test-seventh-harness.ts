@@ -33,7 +33,7 @@ const mark = {
   tint: "#2F6F4E",
   gradient: [{ offset: 0, color: "#2F6F4E" }, { offset: 1, color: "#9BD3B5" }],
 }
-const defaults = { work: [{ model: "seven-large", options: { effort: "high" } }], light: [{ model: "seven-small" }] }
+const defaults = { work: [{ model: "seven-large", options: { effort: "high" } }] }
 const seventh: HarnessDefinition = {
   provider: "seventh",
   presentation: { mark },
@@ -49,7 +49,6 @@ const seventh: HarnessDefinition = {
   accounts: lacks("synthetic"),
   acp: lacks("synthetic"),
   nativeRunner: lacks("synthetic"),
-  utility: lacks("synthetic"),
   processProbe: lacks("synthetic"),
   mcp: lacks("synthetic"),
   skills: lacks("synthetic"),

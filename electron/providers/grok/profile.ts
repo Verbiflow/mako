@@ -16,7 +16,6 @@ export const grokProfileLoader: ProviderProfileLoader = {
   label: "Grok",
   defaults: {
     work: [{ model: "grok-4.7", options: { effort: "high" } }],
-    light: [{ model: "grok-4.7", options: { effort: "low" } }],
   },
   transport: "acp",
   capabilities: [

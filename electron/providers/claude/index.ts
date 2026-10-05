@@ -1,6 +1,5 @@
 import { emitClaudeSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
-import { claudeUtilityRunner } from "./utility.js"
 import { claudeHooks, claudeCommands } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { claudeLiveDriver } from "./live-driver.js"
@@ -62,7 +61,6 @@ export const installClaude: ProviderModule = (host) => installHarness(host, {
       },
     ],
   },
-  utility: claudeUtilityRunner,
   usageHistory: claudeUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
 })
 

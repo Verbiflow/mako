@@ -223,7 +223,7 @@ export function ComposePull({
     if (!branch) return
     void handGitAction({ kind: "pr", branch, base: selectedBase, draft }, where)
       .then(onDone)
-      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
+      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
   }
 
   const create = useCallback(async function createPullRequest() {

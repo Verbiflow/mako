@@ -31,7 +31,7 @@ const HOST_KINDS_SHOWN = 6
 /** Every family a `HarnessDefinition` names; a new one fails the type check here. */
 const FAMILY_LIST = {
   live: true, profile: true, decoder: true, acp: true, accounts: true, connection: true, updates: true,
-  nativeRunner: true, utility: true, processProbe: true, mcp: true, skills: true, sessionEmitter: true, usageHistory: true,
+  nativeRunner: true, processProbe: true, mcp: true, skills: true, sessionEmitter: true, usageHistory: true,
   hooks: true, commands: true, toolEditing: true, skillEditing: true, mcpEditing: true, artifactPreview: true,
 } satisfies Record<HarnessFamily, true>
 // SAFETY: `satisfies` holds the literal's keys to exactly the families.

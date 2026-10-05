@@ -16,8 +16,6 @@ import type { ProviderSessionEmitter } from "./session-emitter.js"
 import type { ProviderSkillSource } from "./skill-source.js"
 import type { ProviderUpdateSource } from "./update-source.js"
 import type { ProviderUsageHistory } from "./usage-history.js"
-import type { ProviderUtilityRunner } from "./utility-runner.js"
-
 /**
  * Why a harness has no capability for a family: the harness itself has no
  * such thing, or it has one Mako does not drive yet. The second is a gap.
@@ -70,8 +68,6 @@ export interface HarnessDefinition {
   acp: ProviderAcpSource | Absent
   /** Headless runs outside a live conversation. */
   nativeRunner: NativeRunner | Absent
-  /** Small requests on a light model that leave nothing in the app's history, such as commit messages. */
-  utility: ProviderUtilityRunner | Absent
   /** Matches the harness's own processes to its sessions. */
   processProbe: ProviderProcessProbe | Absent
   mcp: ProviderMcpSource | Absent
@@ -152,7 +148,6 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   install(host.accountCapabilities, "accounts", harness.accounts)
   install(host.acpSources, "acp", harness.acp)
   install(host.nativeRunners, "nativeRunner", harness.nativeRunner)
-  install(host.utilityRunners, "utility", harness.utility)
   install(host.processProbes, "processProbe", harness.processProbe)
   install(host.mcpSources, "mcp", harness.mcp)
   install(host.skillSources, "skills", harness.skills)

@@ -45,7 +45,7 @@ try {
       completed++
       return profile
     }
-    unregister.push(providerHost.profiles.register({ provider, label: family, transport: "sdk", defaults: { work: [], light: [] }, capabilities: [], cacheKey: () => "fixture", load, loadForSend: load }))
+    unregister.push(providerHost.profiles.register({ provider, label: family, transport: "sdk", defaults: { work: [] }, capabilities: [], cacheKey: () => "fixture", load, loadForSend: load }))
     rejected.push(assert.rejects(harnessProfile(provider, true, root), /superseded|shutting down/))
     await until(() => entered === signals.length && signals.length === families.indexOf(family) * 3 + 1)
     // Supersession removes the old public loading entry. Its native owner

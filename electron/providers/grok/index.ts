@@ -59,7 +59,6 @@ export const installGrok: ProviderModule = (host) => installHarness(host, {
       npmInstall("@xai-official/grok"),
     ],
   },
-  utility: notBuilt("Grok's agent keeps each session it opens in Grok's history; a one-off request that leaves none behind isn't built yet"),
   usageHistory: grokUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
 })
 

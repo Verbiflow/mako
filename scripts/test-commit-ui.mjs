@@ -450,22 +450,17 @@ async function check() {
     await assertPalette("light")
     await capture("file-light.png")
     await setTheme("dark")
-    // A signed-in agent account drafts automatically, and a temporary
-    // MAKO_DATA_ROOT cannot hide one, so the setup prompt shows only without.
-    const automatic = await evaluate(
-      "!document.querySelector('[aria-label=\"Connect commit model\"]')"
+    // Generate runs on an API key only, never a signed-in harness, so a
+    // fresh MAKO_DATA_ROOT offers to connect one, in the input's footer.
+    const layout = await evaluate(`(() => {
+      const field = document.querySelector('[aria-label="Commit message"]');
+      const button = document.querySelector('[aria-label="Connect an API key to generate commit messages"]');
+      return { inputBottom: field.getBoundingClientRect().bottom, controlTop: button.getBoundingClientRect().top };
+    })()`)
+    assert.ok(
+      layout.controlTop >= layout.inputBottom,
+      "Key setup belongs in the input footer, not in a banner above it"
     )
-    if (!automatic) {
-      const layout = await evaluate(`(() => {
-        const field = document.querySelector('[aria-label="Commit message"]');
-        const button = document.querySelector('[aria-label="Connect commit model"]');
-        return { inputBottom: field.getBoundingClientRect().bottom, controlTop: button.getBoundingClientRect().top };
-      })()`)
-      assert.ok(
-        layout.controlTop >= layout.inputBottom,
-        "Model setup belongs in the input footer, not in a banner above it"
-      )
-    }
     await fill(
       '[aria-label="Commit message"]',
       "A handwritten message without any model"
@@ -488,13 +483,16 @@ async function check() {
       "The commit controls must not overflow"
     )
     window.setSize(1280, 960)
-    if (automatic) await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'models' })); void 0")
-    else await click('[aria-label="Connect commit model"]')
+    await click('[aria-label="Connect an API key to generate commit messages"]')
     await until(
-      "Boolean(document.querySelector('[aria-label=\"Connect Google\"]'))"
+      "Boolean(document.querySelector('[aria-label=\"Connect API key\"]'))"
     )
     await capture("model-connections.png")
-    await click('[aria-label="Connect Google"]')
+    const connectWith = async (provider) => {
+      await click('[aria-label="Connect API key"]')
+      await click("[role=menuitem]", provider)
+    }
+    await connectWith("Google")
     await until("Boolean(document.querySelector('input[type=password]'))")
     assert.equal(
       await evaluate("document.querySelector('input[type=password]').value"),
@@ -563,7 +561,7 @@ async function check() {
       { name: "OpenAI", id: "gpt-6-astra", model: "GPT-6 Astra" },
       { name: "Anthropic", id: "claude-fable-5-1", model: "Claude Fable 5.1" },
     ]) {
-      await click(`[aria-label="Connect ${provider.name}"]`)
+      await connectWith(provider.name)
       await until("document.body.textContent.includes('models.dev catalog')")
       await click('[aria-label="Choose model"]')
       await fill('[aria-label="Search models or enter an ID"]', provider.id)
@@ -579,7 +577,7 @@ async function check() {
       await click("[role=option]", provider.model)
       await click('[aria-label="Close connection"]')
     }
-    await click('[aria-label="Connect OpenAI-compatible"]')
+    await connectWith("OpenAI-compatible")
     await until("Boolean(document.querySelector('input[type=url]'))")
     await fill("input[type=password]", "wrong-synthetic-key")
     await fill("input[type=url]", `http://127.0.0.1:${address.port}/v1`)
@@ -645,7 +643,7 @@ async function check() {
     )
     await click("button[type=submit]")
     await until(
-      "!document.querySelector('input[type=password]') && document.body.textContent.includes('Drafts commit messages')"
+      "!document.querySelector('input[type=password]') && document.body.textContent.includes('Writes commit messages')"
     )
     connected = true
     const snapshot = await evaluate(
@@ -675,21 +673,21 @@ async function check() {
       /sensitive file[s]? left out of the draft/
     )
     await capture("generated-commit.png")
-    // The card holds Generate and Commit only; which model drafts and how
-    // hard it reads are one saved choice in Settings › Models.
+    // The card holds Generate and Commit only; which key drafts and how
+    // hard it reads are one saved choice in Settings › Git.
     assert.equal(
       await evaluate(`[...document.querySelectorAll('[data-commit-box] button')].map(button => button.getAttribute('aria-label') ?? button.textContent.trim()).filter(name => /model|analysis|deep|fast/i.test(name)).join()`),
       "",
       "Drafting settings belong in Settings, not on the commit card"
     )
-    await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'models' })); void 0")
-    await until(`document.querySelector('[aria-label="Drafting depth"]')`)
-    assert.equal(await evaluate(`document.querySelector('[aria-label="Drafting depth"] button[aria-pressed="true"]')?.textContent.trim()`), "Fast")
-    await click('[aria-label="Drafting depth"] button', "Deep")
-    await until(`document.querySelector('[aria-label="Drafting depth"] button[aria-pressed="true"]')?.textContent.trim() === "Deep"`)
+    await evaluate("window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'git#commit-messages' })); void 0")
+    await until(`document.querySelector('[aria-label="Depth"]')`)
+    assert.equal(await evaluate(`document.querySelector('[aria-label="Depth"] button[aria-pressed="true"]')?.textContent.trim()`), "Fast")
+    await click('[aria-label="Depth"] button', "Deep")
+    await until(`document.querySelector('[aria-label="Depth"] button[aria-pressed="true"]')?.textContent.trim() === "Deep"`)
     assert.equal(await evaluate("import('/src/state/prefs.ts').then(({ prefsStore }) => prefsStore.get().commitAnalysis)"), "deep")
     await capture("drafting-settings.png")
-    await click('[aria-label="Drafting depth"] button', "Fast")
+    await click('[aria-label="Depth"] button', "Fast")
     await escape()
     await until("!document.querySelector('[role=dialog]')")
     delay = 1_000

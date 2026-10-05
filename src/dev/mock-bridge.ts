@@ -1,6 +1,6 @@
 import { fixtureHarnesses } from "./harness-fixtures"
 import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
-import { harnessOrder, workDefault } from "../../electron/contracts/harness-defaults.ts"
+import { workDefault } from "../../electron/contracts/harness-defaults.ts"
 import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
 import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
@@ -12,7 +12,7 @@ import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
 import type { ForkInput, TransferInput } from "../../electron/shared"
-import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest } from "@/lib/types"
+import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import type { ExecutionContext } from "../../electron/contracts/execution-context"
 import type { AccountRemovalOutcome, AccountRemovalWait } from "../../electron/account-types"
@@ -128,12 +128,16 @@ async function mockThreadContexts(
 const STAGED_TEXT = new Map<string, string>()
 
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
-const MOCK_UTILITY_OPTIONS: UtilityModelOption[] = [
-  { id: "agent:claude/claude-haiku-4-5", label: "Haiku 4.5", via: "Claude Code", kind: "agent", source: "claude", light: true },
-  { id: "agent:claude/claude-sonnet-5", label: "Sonnet 5", via: "Claude Code", kind: "agent", source: "claude" },
-  { id: "agent:codex/gpt-6-luna", label: "GPT-6 Luna", via: "Codex", kind: "agent", source: "codex", light: true },
-  { id: "google/gemini-3.8-flash", label: "gemini-3.8-flash", via: "Google", kind: "connection", source: "google" },
+const MOCK_PROVIDERS: UtilityProviderInfo[] = [
+  { id: "google", name: "Google", description: "Gemini with a Google AI Studio API key" },
+  { id: "openai", name: "OpenAI", description: "GPT models with an OpenAI API key" },
+  { id: "anthropic", name: "Anthropic", description: "Claude with an Anthropic API key" },
+  { id: "openai-compatible", name: "OpenAI-compatible", description: "OpenRouter, local models, or your own endpoint" },
 ]
+// The mock drafts a message, so it starts with the key it drafts with; `?mock&keys=0` starts with none.
+let mockConnections: UtilityConnection[] = new URLSearchParams(globalThis.location?.search).get("keys") === "0"
+  ? []
+  : [{ provider: "google", model: "gemini-3.8-flash", contextTokens: 1_048_576 }]
 
 let mockHarnessOrder: string[] = []
 /** `harness:name` of fixture accounts signed in again, whose usage reads again. */
@@ -145,17 +149,20 @@ if ("addEventListener" in globalThis)
     const harness = z.string().safeParse(event instanceof CustomEvent ? event.detail : undefined)
     if (harness.success) mockSignedInAt.set(`${harness.data}:default`, Date.now())
   })
-const MOCK_RUNNERS = ["claude", "codex"]
-
-/** Automatic resolves to the first harness's light model in the saved order, as the host's `UtilityWork` does. */
+/** Automatic resolves to the first connection, as the host's `UtilityWork` does. */
 function mockUtilityWork(): UtilityWorkSettings {
-  const first = harnessOrder(mockHarnessOrder, MOCK_RUNNERS)[0]
+  const options: UtilityModelOption[] = mockConnections.map((connection) => ({
+    id: `${connection.provider}/${connection.model}`,
+    label: connection.model,
+    via: MOCK_PROVIDERS.find((provider) => provider.id === connection.provider)?.name ?? connection.provider,
+    source: connection.provider,
+  }))
   const state = (task: UtilityTask): UtilityTaskState => {
     const choice = utilityChoices[task]
-    const resolved = MOCK_UTILITY_OPTIONS.find((option) => choice === "auto" ? option.source === first && option.light : option.id === choice)
-    return { choice, options: MOCK_UTILITY_OPTIONS, resolved }
+    const resolved = choice === "auto" ? options[0] : options.find((option) => option.id === choice)
+    return { choice, options, resolved, reason: resolved ? undefined : "Connect an API key in Settings › Git to generate commit messages." }
   }
-  return { commit: state("commit"), harnessOrder: mockHarnessOrder, runners: MOCK_RUNNERS }
+  return { commit: state("commit") }
 }
 
 export function installMockBridge() {
@@ -799,22 +806,8 @@ export function installMockBridge() {
     },
     savedHarnessOrder: async () => [...mockHarnessOrder],
     utilityModelSettings: async () => ({
-      providers: [
-        {
-          id: "google",
-          name: "Google",
-          description: "Gemini with a Google AI Studio API key",
-        },
-        {
-          id: "openai-compatible",
-          name: "OpenAI-compatible",
-          description: "Local models or your own endpoint",
-        },
-      ],
-      // The mock drafts a message, so the model it drafts with is connected.
-      connections: [
-        { provider: "google", model: "gemini-3.8-flash", contextTokens: 1_048_576 },
-      ],
+      providers: MOCK_PROVIDERS,
+      connections: [...mockConnections],
       issues: [],
       secureStorage: true,
       work: mockUtilityWork(),
@@ -831,13 +824,16 @@ export function installMockBridge() {
       fetchedAt: Date.now(),
       stale: false,
     }),
-    connectUtilityModel: async (input) => ({
-      provider: input.provider,
-      model: input.model,
-      baseUrl: input.baseUrl,
-      contextTokens: input.contextTokens,
-    }),
-    disconnectUtilityModel: async () => {},
+    connectUtilityModel: async (input) => {
+      const connection: UtilityConnection = { provider: input.provider, model: input.model, baseUrl: input.baseUrl, contextTokens: input.contextTokens }
+      mockConnections = [...mockConnections.filter((entry) => entry.provider !== input.provider), connection]
+        .sort((a, b) => MOCK_PROVIDERS.findIndex(({ id }) => id === a.provider) - MOCK_PROVIDERS.findIndex(({ id }) => id === b.provider))
+      return connection
+    },
+    disconnectUtilityModel: async (provider) => {
+      mockConnections = mockConnections.filter((entry) => entry.provider !== provider)
+      if (utilityChoices.commit.startsWith(`${provider}/`)) utilityChoices.commit = "auto"
+    },
 
     stageFile: async (name: string, data: string) => {
       const path = `/tmp/mako-attachments/${name}`

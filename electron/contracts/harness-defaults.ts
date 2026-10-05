@@ -1,7 +1,6 @@
 import {
   modelByIdentity,
   optionAccepts,
-  type ModelOption,
   type SessionModel,
   type SessionSettings,
   type SettingValue,
@@ -26,14 +25,6 @@ export interface ModelPick {
 export interface HarnessDefaults {
   /** What a new conversation and a project's setup start on. Without a match, the harness's own default. */
   work: readonly ModelPick[]
-  /**
-   * What drafts commit messages: a small model at low reasoning, never the
-   * fast lane's surcharge. Without a match, the catalog's first model it
-   * describes as fast or cheap. `"own"` runs the harness's own default model
-   * at low reasoning, for a harness such as OpenCode whose default is a free
-   * model it changes itself.
-   */
-  light: readonly ModelPick[] | "own"
 }
 
 /** A model's option values by the catalog's option ids. */
@@ -69,50 +60,6 @@ export function workDefault(defaults: HarnessDefaults | undefined, models: reado
   return pick ? { model: pick.model.id, options: pick.options } : undefined
 }
 
-/**
- * The model that drafts commit messages through this harness, at low
- * reasoning. `ownDefault` is the model the harness itself
- * starts on, from its catalog.
- */
-export function lightDefault(defaults: HarnessDefaults | undefined, models: readonly SessionModel[], ownDefault?: string): HarnessPick | undefined {
-  const light = defaults?.light ?? []
-  const pick = light === "own" ? undefined : firstPick(light, models)
-  if (pick) return { model: pick.model, options: { ...lightOptions(pick.model), ...pick.options } }
-  const model = (light === "own" && ownDefault ? catalogModel(models, ownDefault) : undefined) ?? lightModel(models)
-  return model ? { model, options: lightOptions(model) } : undefined
-}
-
-/**
- * The options that keep a model quick and cheap for small work: its lowest
- * sensible reasoning level and its fast lane off. A model chosen by hand for
- * titles or commits runs with these too.
- */
-export function lightOptions(model: SessionModel): ModelOptions {
-  return Object.fromEntries(
-    model.options.flatMap((option) => {
-      const value = option.role === "reasoning" ? lowReasoning(option) : option.role === "speed" ? speedOff(option) : undefined
-      return value === undefined ? [] : [[option.id, value]]
-    })
-  )
-}
-
-/** Words a catalog uses for its fast, inexpensive models, and for the ones it has replaced. */
-const LIGHT = /\b(fast(est)?|affordable|cheap(est)?|lightweight|quick(est)?|small(est)?|mini|nano|lite|flash)\b/i
-const RETIRED = /\b(older|legacy|previous|deprecated|retired)\b/i
-
-/**
- * The first model a catalog describes as fast or inexpensive, read from its
- * own ids, names and descriptions, for a harness Mako's defaults don't name
- * or whose named models are gone. Catalogs list their newest models first;
- * one the catalog calls older or legacy is passed over while a current one
- * qualifies.
- */
-export function lightModel(models: readonly SessionModel[]): SessionModel | undefined {
-  const text = (model: SessionModel) => [model.id, model.label, model.description ?? "", ...(model.aliases ?? [])].join(" ")
-  const light = models.filter((model) => LIGHT.test(text(model)))
-  return light.find((model) => !RETIRED.test(text(model))) ?? light[0]
-}
-
 function firstPick(picks: readonly ModelPick[], models: readonly SessionModel[]): HarnessPick | undefined {
   for (const pick of picks) {
     const model = catalogModel(models, pick.model)
@@ -130,17 +77,4 @@ function firstPick(picks: readonly ModelPick[], models: readonly SessionModel[])
 /** A catalog's model by id or alias, or by a dated id such as `claude-haiku-4-5-20251001`. */
 function catalogModel(models: readonly SessionModel[], id: string): SessionModel | undefined {
   return modelByIdentity(models, id) ?? models.find((model) => model.id.startsWith(`${id}-`) && /^\d{8}$/.test(model.id.slice(id.length + 1)))
-}
-
-const LOW_REASONING = ["low", "minimal"]
-
-function lowReasoning(option: ModelOption): SettingValue | undefined {
-  if (option.kind !== "select") return undefined
-  return LOW_REASONING.find((value) => option.values.some((choice) => choice.value === value))
-}
-
-function speedOff(option: ModelOption): SettingValue | undefined {
-  if (option.kind === "boolean") return false
-  if (option.booleanValues) return option.booleanValues.off
-  return ["false", "default", "off"].find((value) => option.values.some((choice) => choice.value === value))
 }

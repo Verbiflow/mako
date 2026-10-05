@@ -38,7 +38,7 @@ const profile: HarnessProfile = {
 providerHost.profiles.register({
   provider: profile.id,
   label: "Test",
-  defaults: { work: [], light: [] },
+  defaults: { work: [] },
   transport: "sdk",
   capabilities: [],
   cacheKey: () => account,
@@ -367,7 +367,7 @@ try {
     const newest = { ...profile, id, models: [{ id: "new-runtime", label: "New", options: [] }] }
     const obsolete = { ...newest, models: [{ id: "old-runtime", label: "Old", options: [] }] }
     const unregister = providerHost.profiles.register({
-      provider: id, label: family, transport: "sdk", defaults: { work: [], light: [] }, capabilities: [],
+      provider: id, label: family, transport: "sdk", defaults: { work: [] }, capabilities: [],
       cacheKey: () => accountScope,
       load: async (_env, _cwd, context) => {
         assert.ok(context)

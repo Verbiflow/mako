@@ -1,33 +1,23 @@
 import { useEffect, useState, type DragEvent, type KeyboardEvent } from "react"
 import { toast } from "sonner"
 import { GripVerticalIcon } from "lucide-react"
-import { Action, Chip, ListCard, Segmented, SettingRow } from "@/components/ui/kit"
+import { Action, Chip, ListCard } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import type { CommitAnalysisMode, HarnessProfile } from "@/lib/types"
-import { chooseCommitModel, refreshCommitModel, useCommitModelSettings } from "@/state/commit-model"
+import type { HarnessProfile } from "@/lib/types"
 import { loadHarnessOrder, saveHarnessOrder, useHarnessOrder, useSavedHarnessOrder } from "@/state/harness-order"
-import { setPref, usePrefs } from "@/state/prefs"
 import { useSetupAgent } from "@/state/project-setup"
 import { useProviders } from "@/state/providers"
 import { HarnessDefaultPicker } from "./harness-default-picker"
-import { ModelConnections } from "./model-connections"
-import { UtilityModelPicker } from "./utility-model-picker"
 
 const DRAG_TYPE = "application/x-mako-harness"
-
-const DEPTH_TEXT = {
-  fast: "Reads the whole diff in one pass, with low reasoning effort.",
-  deep: "Reads the diff with more effort, and the source files where the diff alone is unclear.",
-} satisfies Record<CommitAnalysisMode, string>
 
 /**
  * The harnesses in the order Mako tries them when it picks one itself, each
  * with the model it starts on and the work Mako gives it: setting a project
- * up, and drafting commit messages. Drafting's model, its depth and the API
- * keys it can run on instead sit under the list, beside the harnesses they
- * choose between.
+ * up. Commit messages aren't harness work; they run on an API key, in
+ * Settings › Git.
  */
 export function HarnessOrderSection() {
   useHarnessIdentity()
@@ -35,22 +25,15 @@ export function HarnessOrderSection() {
   const custom = useSavedHarnessOrder().length > 0
   const profiles = useProviders((state) => state.profiles)
   const setup = useSetupAgent()?.harness
-  const { settings } = useCommitModelSettings()
-  const drafter = settings?.work?.commit.resolved
   const [dragging, setDragging] = useState<string | null>(null)
   const [over, setOver] = useState<number | null>(null)
 
   useEffect(() => {
     void loadHarnessOrder()
-    void refreshCommitModel()
-    const focus = () => void refreshCommitModel()
-    window.addEventListener("focus", focus)
-    return () => window.removeEventListener("focus", focus)
   }, [])
 
   const save = (next: string[]) =>
     void saveHarnessOrder(next)
-      .then(() => refreshCommitModel())
       .catch((caught: Error) => toast.error(caught.message || "The order could not be saved. Try again."))
   const move = (from: number, to: number) => {
     if (from < 0 || to < 0 || to >= order.length || from === to) return
@@ -60,31 +43,27 @@ export function HarnessOrderSection() {
     next.splice(to, 0, harness)
     save(next)
   }
-  const roles = (harness: string) => [
-    setup === harness ? "Setup" : undefined,
-    drafter?.kind === "agent" && drafter.source === harness ? "Drafting" : undefined,
-  ].filter((role) => role !== undefined)
+  const roles = (harness: string) => (setup === harness ? ["Setup"] : [])
 
   return (
-    <>
-      <section className="flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-6">
-          <div>
-            <h3 className="text-ui font-medium">Harnesses</h3>
-            <p className="mt-0.5 text-label text-muted-foreground">
-              Each starts new conversations and project setups on the model at the right: Mako's recommendation until
-              you pick another, marked with a dot. When Mako picks a harness itself, for a setup or an Automatic draft,
-              it takes the first one here you're signed in to. Drag to reorder.
-            </p>
-          </div>
-          {custom ? (
-            <Action size="xs" onClick={() => save([])}>
-              Reset
-            </Action>
-          ) : null}
+    <section className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <h3 className="text-ui font-medium">Harnesses</h3>
+          <p className="mt-0.5 text-label text-muted-foreground">
+            Each starts new conversations and project setups on the model at the right: Mako's recommendation until
+            you pick another, marked with a dot. When Mako picks a harness itself, to set a project up, it takes the
+            first one here you're signed in to. Drag to reorder.
+          </p>
         </div>
-        <ListCard className="px-1.5 py-1.5">
-          <div role="list" aria-label="Harness order">
+        {custom ? (
+          <Action size="xs" onClick={() => save([])}>
+            Reset
+          </Action>
+        ) : null}
+      </div>
+      <ListCard className="px-1.5 py-1.5">
+        <div role="list" aria-label="Harness order">
           {order.map((harness, index) => (
             <HarnessOrderRow
               key={harness}
@@ -118,47 +97,8 @@ export function HarnessOrderSection() {
               onMove={(by) => move(index, index + by)}
             />
           ))}
-          </div>
-        </ListCard>
-      </section>
-      <Drafting />
-    </>
-  )
-}
-
-/** What writes a commit message when Generate is pressed, and how hard it reads. */
-function Drafting() {
-  const { settings, error } = useCommitModelSettings()
-  const commit = settings?.work?.commit
-  const depth = usePrefs((prefs) => prefs.commitAnalysis)
-  const writer = error ?? (!commit ? "Loading models…" : commit.resolved ? `${commit.resolved.label} · ${commit.resolved.via}` : commit.reason)
-  return (
-    <section aria-label="Drafting" className="flex flex-col gap-3">
-      <div>
-        <h3 className="text-ui font-medium">Drafting</h3>
-        <p className="mt-0.5 text-label text-muted-foreground">
-          What writes a commit message from the exact diff when you press Generate. Automatic runs the first harness
-          above that can, on its light model and your own subscription. Its instructions are in{" "}
-          <button type="button" className="pressable underline decoration-faint/50 underline-offset-2 hover:text-foreground" onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "git" }))}>
-            Git
-          </button>
-          .
-        </p>
-      </div>
-      <ListCard>
-        <SettingRow title="Commit messages" description={writer}>
-          <UtilityModelPicker state={commit} label="Model that drafts commit messages" className="w-56 max-w-full" onChoose={(choice) => void chooseCommitModel(choice)} />
-        </SettingRow>
-        <SettingRow title="Depth" description={DEPTH_TEXT[depth]}>
-          <Segmented
-            label="Drafting depth"
-            value={depth}
-            options={[{ value: "fast", label: "Fast" }, { value: "deep", label: "Deep" }]}
-            onChange={(next) => setPref("commitAnalysis", next)}
-          />
-        </SettingRow>
+        </div>
       </ListCard>
-      <ModelConnections settings={settings} refresh={refreshCommitModel} choose={chooseCommitModel} />
     </section>
   )
 }

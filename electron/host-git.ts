@@ -85,12 +85,11 @@ export async function previewDiffs(root: string, files: readonly PreviewPath[], 
 }
 
 /** As many previews of `files`, in order, as fit 25 files, 512 KB and five seconds. */
-async function previewSet(repository: Repository, files: readonly (string | PreviewPath)[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
+async function previewSet(repository: Repository, files: readonly PreviewPath[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
   const deadline = Date.now() + PREVIEW_SET.ms
   const diffs: GitDiff[] = []
   let bytes = 0
-  const read = async (file: string | PreviewPath) => {
-    const { path, from } = typeof file === "string" ? { path: file, from: undefined } : file
+  const read = async ({ path, from }: PreviewPath) => {
     const diff = gitDiff(path, await repository.preview(path, comparison, from))
     if (from && diff.oldFile) diff.oldFile = { ...diff.oldFile, name: from }
     return diff
@@ -345,7 +344,7 @@ export class WorkspaceGit {
 
   async diffAll(): Promise<{ diffs: GitDiff[]; truncated: number }> {
     const repository = await this.repository()
-    return previewSet(repository, (await repository.status()).entries.map((entry) => entry.path), { kind: "worktree" })
+    return previewSet(repository, (await repository.status()).entries.map((entry) => ({ path: entry.path })), { kind: "worktree" })
   }
 
   /**
@@ -371,7 +370,7 @@ export class WorkspaceGit {
 
   async commitDiffAll(oid: string): Promise<{ diffs: GitDiff[]; truncated: number }> {
     const repository = await this.repository()
-    return previewSet(repository, (await commitFiles(repository.root, oid)).map((file) => file.path), { kind: "commit", oid })
+    return previewSet(repository, (await commitFiles(repository.root, oid)).map((file) => ({ path: file.path })), { kind: "commit", oid })
   }
 
   // Writes start through an open repository without awaiting, so each joins the queue in the order it arrived.

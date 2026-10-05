@@ -75,7 +75,6 @@ import { installThreadLifecycleIpc } from "./ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "./ipc/thread-groups.js"
 import { installThreadTitlesIpc } from "./ipc/thread-titles.js"
 import { UtilityWork } from "./utility-work.js"
-import { utilityAgents, utilityRunners } from "./utility-agents.js"
 import { installThreadWorktreesIpc } from "./ipc/thread-worktrees.js"
 import { installChatFoldersIpc } from "./ipc/chat-folders.js"
 import { installWorkspaceMovesIpc } from "./ipc/workspace-moves.js"
@@ -408,7 +407,7 @@ installThreadStore(threadStore)
 const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event) => emit(event)) : () => {}
 const utilityModels = openUtilityModels()
 /** Which model drafts commit messages. */
-const utilityWork = new UtilityWork({ models: utilityModels, agents: utilityAgents, runners: utilityRunners })
+const utilityWork = new UtilityWork({ models: utilityModels })
 const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
 /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
 const conversationsIn = (path: string, status: (value: string) => boolean) => liveConversations

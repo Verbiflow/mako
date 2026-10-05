@@ -198,7 +198,7 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
           continue
         }
         return toolText({
-          ...(lines.length ? { done: lines } : {}),
+          done: lines.length ? lines : undefined,
           stopped: `The merge is in progress in ${worktree.path}.`,
           conflicts: result.files,
           next: `${gitActionPrompt({ kind: "resolve", branch: worktree.branch, from: result.from, files: result.files })} \`git merge --abort\` puts the branch back as it was.${checkout.worktrees.length > 1 ? " Call worktree_update again afterwards for the other repositories." : ""}`,
