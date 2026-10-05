@@ -127,7 +127,7 @@ accountsStore.set({
       name: "anthropic",
       providerId: "anthropic",
       authType: "api",
-      source: "opencode",
+      source: "model-provider",
       active: false,
     },
     {
@@ -136,7 +136,7 @@ accountsStore.set({
       email: "developer@company.com",
       providerId: "openai",
       authType: "oauth",
-      source: "opencode",
+      source: "model-provider",
       active: false,
     },
   ],

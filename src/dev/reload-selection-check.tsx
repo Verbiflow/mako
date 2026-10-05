@@ -7,12 +7,13 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { acp, useAcp } from "@/state/acp"
 import { hydrateLiveSummaries } from "@/state/live-recovery"
 import { store } from "@/state/session"
+import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
 import type { LiveSnapshot } from "@/lib/types"
 import "../index.css"
 
 const mock = installMockBridge()
-const harnesses = ["claude", "codex", "cursor", "grok", "devin", "opencode"]
+const harnesses = fixtureHarnesses.map(({ provider }) => provider)
 const snapshots: LiveSnapshot[] = harnesses.map((harness, index) => ({
   session: {
     id: `019d0011-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,

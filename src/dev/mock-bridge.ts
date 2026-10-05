@@ -15,6 +15,9 @@ import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import type { ExecutionContext } from "../../electron/contracts/execution-context"
+import type { SignInHold, SignInReadiness } from "../../electron/contracts/live-conversations"
+import { continueTurnPrompt } from "../../electron/contracts/turn-continuation"
+import { z } from "zod"
 import { confirmAccount } from "../../electron/execution-context"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
@@ -132,6 +135,13 @@ const MOCK_UTILITY_OPTIONS: UtilityModelOption[] = [
 let mockHarnessOrder: string[] = []
 /** `harness:name` of fixture accounts signed in again, whose usage reads again. */
 const mockRenewed = new Set<string>()
+/** When each `harness:name` login was last signed in: Mako's own sign-in, or the fixture event standing in for a terminal's. */
+const mockSignedInAt = new Map<string, number>()
+if ("addEventListener" in globalThis)
+  window.addEventListener("mako:fixture-terminal-login", (event) => {
+    const harness = z.string().safeParse(event instanceof CustomEvent ? event.detail : undefined)
+    if (harness.success) mockSignedInAt.set(`${harness.data}:default`, Date.now())
+  })
 const MOCK_RUNNERS = ["claude", "codex"]
 
 /** Automatic resolves to the first harness's light model in the saved order, as the host's `UtilityWork` does. */
@@ -196,12 +206,26 @@ export function installMockBridge() {
 
   const nativeRequests: NativeRequest[] = []
   const liveSnapshots = new Map<string, LiveSnapshot>()
+  /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
+  const signInPauses = new Map<string, SignInHold>()
+  const emitRequests = (id: string, next: LiveSnapshot, updates: LiveUpdate[] = []) => {
+    liveSnapshots.set(id, next)
+    acpSessions.set(id, next.session)
+    emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session: next.session, requests: next.requests } })
+  }
+  const signInReadiness = (id: string): SignInReadiness | null => {
+    const hold = signInPauses.get(id)
+    if (!hold) return null
+    const selected = fixtureAccounts().find((account) => account.harness === hold.harness && account.active && !account.missing)
+    if (selected && selected.name !== hold.account) return "ready"
+    return (mockSignedInAt.get(`${hold.harness}:${hold.account}`) ?? 0) > hold.at ? "ready" : "signed-out"
+  }
   /** The fixture's logins, read by live sessions to launch and switch accounts as the host does. */
   let fixtureAccounts: () => HarnessAccount[] = () => []
   /** What a session launched now runs as: the harness's selected login, confirmed where the harness reports one. */
   const accountContext = (harness: string): ExecutionContext | undefined => {
     const selected = fixtureAccounts().find((account) => account.harness === harness && account.active && !account.missing)
-    if (!selected || selected.source === "opencode") return undefined
+    if (!selected || selected.source === "model-provider") return undefined
     const reports = harness === "claude" || harness === "codex" || harness === "cursor"
     // The Claude login named "account-team" stays signed in natively as someone
     // else, so the fixture can show a session refusing to run as the wrong person.
@@ -322,7 +346,7 @@ export function installMockBridge() {
   let railRunsSent = false
   // The host gives every profile Mako's default for new conversations.
   const profiles = () =>
-    MOCK_PROFILES.map((profile) => ({ ...profile, settings: workDefault(profile.id, profile.models) ?? profile.settings })).map((profile) =>
+    MOCK_PROFILES.map((profile) => ({ ...profile, settings: workDefault(fixtureHarnesses.find((entry) => entry.provider === profile.id)?.defaults, profile.models) ?? profile.settings })).map((profile) =>
       scene === "setup-fallback" && profile.id === "codex" ? { ...profile, available: false, error: "Not signed in" } : profile
     )
   /** A scripted turn's next updates, delivered the way the host batches them. */
@@ -1206,7 +1230,7 @@ export function installMockBridge() {
           accountId: "account-example",
           dir: "~/.local/share/opencode/opencode.db",
           active: true,
-          source: "opencode",
+          source: "model-provider",
         },
         {
           harness: "opencode",
@@ -1215,7 +1239,7 @@ export function installMockBridge() {
           authType: "api",
           dir: "~/.local/share/opencode/opencode.db",
           active: true,
-          source: "opencode",
+          source: "model-provider",
         },
       ]
       const logins = new Map<string, { login: AccountLogin; finish: (result: AccountLoginResult) => void; result: Promise<AccountLoginResult> }>()
@@ -1232,6 +1256,7 @@ export function installMockBridge() {
             return signedIn
           })
           mockRenewed.add(`${harness}:${renew}`)
+          mockSignedInAt.set(`${harness}:${renew}`, Date.now())
           const email = list.find((account) => account.harness === harness && account.name === renew)?.email
           running.finish(email === undefined ? { status: "renewed", name: renew } : { status: "renewed", name: renew, email })
           return
@@ -1254,6 +1279,7 @@ export function installMockBridge() {
         },
         removeAccount: async (harness: string, name: string) => {
           list = list.filter((account) => account.harness !== harness || account.name !== name)
+          return {}
         },
         startAccountLogin: async (harness: string, renew?: string): Promise<AccountLogin> => {
           await new Promise((resolve) => setTimeout(resolve, 700))
@@ -1835,13 +1861,13 @@ export function installMockBridge() {
             throw new Error("This message has already started")
           switch (input.change.kind) {
             case "edit":
-              return { ...request, status: "queued", text: input.change.text }
+              return { ...request, status: request.signIn ? "held" : "queued", text: input.change.text }
             case "pause":
               return { ...request, status: "held" }
             case "resume":
-              return { ...request, status: "queued" }
+              return { ...request, status: request.signIn ? "held" : "queued" }
             case "remove":
-              return { ...request, status: "canceled" }
+              return { ...request, status: "canceled", signIn: undefined }
           }
         }),
       }
@@ -1852,6 +1878,49 @@ export function installMockBridge() {
       const snapshot = liveSnapshots.get(id)
       if (!snapshot) throw new Error("Missing mock session")
       return snapshot
+    },
+    liveSignInReadiness: async (id: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      return signInReadiness(id)
+    },
+    liveSignInResume: async (id: string, anyway: boolean) => {
+      const snapshot = liveSnapshots.get(id)
+      const hold = signInPauses.get(id)
+      if (!snapshot || !hold) return "resumed"
+      if (!anyway && signInReadiness(id) !== "ready") return "signed-out"
+      signInPauses.delete(id)
+      await new Promise((resolve) => setTimeout(resolve, 900))
+      const cut = snapshot.requests.find((request) => request.signIn && request.status === "interrupted")
+      const updates: LiveUpdate[] = []
+      const continuation: LiveRequest[] = []
+      if (cut) {
+        const request: LiveRequest = {
+          id: crypto.randomUUID(), text: continueTurnPrompt("signed-out"), attachments: [], status: "completed",
+          continues: { requestId: cut.id, reason: "signed-out", auto: true },
+        }
+        continuation.push(request)
+        updates.push({ kind: "user", requestId: request.id, text: request.text },
+          { kind: "text", text: "Picking up where I stopped: the sync worker now uses the shared retry policy, and its tests pass." })
+      }
+      const released = snapshot.requests.map((request): LiveRequest => {
+        if (!request.signIn) return request
+        const rest = { ...request }
+        delete rest.signIn
+        if (request.status !== "held") return rest
+        updates.push(...mockReply(snapshot.session, request, snapshot.session.settings).updates)
+        return { ...rest, status: "completed" }
+      })
+      const first = snapshot.requests.findIndex((request) => request.status === "held" && request.signIn)
+      const requests = first === -1 ? [...released, ...continuation] : [...released.slice(0, first), ...continuation, ...released.slice(first)]
+      const next: LiveSnapshot = {
+        ...snapshot,
+        session: { ...snapshot.session, status: "ready", error: undefined },
+        revision: snapshot.revision + 1,
+        requests,
+        blocks: reduceLiveUpdates(snapshot.blocks, updates),
+      }
+      emitRequests(id, next, updates)
+      return "resumed"
     },
     liveEarlier: async (id: string) => {
       const snapshot = liveSnapshots.get(id)
@@ -1932,6 +2001,39 @@ export function installMockBridge() {
         acpSessions.set(id, next.session)
         emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], session: next.session, requests: next.requests } })
         return refused
+      }
+      // As the host does: while the account is signed out, new messages join the paused work.
+      const paused = signInPauses.get(id)
+      if (paused) {
+        const waiting: LiveRequest = { id: requestId, text, attachments, status: "held", signIn: paused }
+        emitRequests(id, { ...snapshot, revision: snapshot.revision + 1, requests: [...snapshot.requests, waiting] })
+        return waiting
+      }
+      // A message that mentions signing out plays an account that signs out
+      // partway through the turn, after the provider accepted it.
+      if (/sign(?:s|ed)? out/i.test(text)) {
+        const at = Date.now()
+        const account = snapshot.session.executionContext?.account
+        const hold: SignInHold = { harness: snapshot.session.harness, account: account?.kind === "configured" ? account.name : "default", credential: "fixture", at }
+        signInPauses.set(id, hold)
+        const error = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        const cut: LiveRequest = {
+          id: requestId, text, attachments, status: "interrupted", failure: "auth", error, signIn: hold,
+          interruption: { reason: "signed-out", at },
+          nativeDelivery: { attemptId: crypto.randomUUID(), bindingId: id, ownerEpoch: "fixture", evidence: { kind: "accepted", source: "native-response" } },
+        }
+        const updates: LiveUpdate[] = [
+          { kind: "user", requestId, text },
+          { kind: "text", text: "Moved the retry policy into `src/net/retry.ts` and switched the fetch client and the upload queue over to it. Next: the sync worker and its tests." },
+        ]
+        emitRequests(id, {
+          ...snapshot,
+          session: { ...snapshot.session, status: "failed", error },
+          revision: snapshot.revision + 1,
+          requests: [...snapshot.requests, cut],
+          blocks: reduceLiveUpdates(snapshot.blocks, updates),
+        }, updates)
+        return cut
       }
       const request: LiveRequest = {
         id: requestId,

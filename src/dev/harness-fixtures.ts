@@ -1,13 +1,5 @@
 import type { HarnessDescriptor } from "@/lib/types"
+import { harnessDescriptors } from "./harness-descriptors"
 
-/** Explicit native fixture inventory; conformance compares this with the host. */
-const fixtures = [
-  { provider: "claude", displayName: "Claude Code", presentation: { icon: { id: "claude-code", tint: "#D97757" } } },
-  { provider: "codex", displayName: "Codex", presentation: { icon: { id: "codex-cloud", tint: "currentColor" } } },
-  { provider: "cursor", displayName: "Cursor", presentation: { icon: { id: "cursor-cube", tint: "currentColor" } } },
-  { provider: "opencode", displayName: "OpenCode", presentation: { icon: { id: "opencode-mark", tint: "currentColor" } } },
-  { provider: "grok", displayName: "Grok", presentation: { icon: { id: "grok-ring", tint: "currentColor" } } },
-  { provider: "devin", displayName: "Devin", presentation: { icon: { id: "devin-mark", tint: "#4E8DF6" } } },
-] satisfies Omit<HarnessDescriptor, "resumable" | "live" | "canResume">[]
-
-export const fixtureHarnesses: HarnessDescriptor[] = fixtures.map((entry) => ({ ...entry, resumable: entry.provider !== "opencode", live: true, canResume: true }))
+/** Every harness the host installs, live and resumable as on a Mac with each signed in. */
+export const fixtureHarnesses: HarnessDescriptor[] = harnessDescriptors.map((entry) => ({ ...entry, live: true, canResume: true }))
