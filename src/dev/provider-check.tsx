@@ -8,12 +8,15 @@ import {
   providerConnections,
 } from "@/state/provider-connections"
 import { prefsStore, bindTheme } from "@/state/prefs"
+import { threadsStore } from "@/state/thread-store"
+import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
 import { getMako } from "@/lib/bridge"
 import type { HarnessUpdates } from "../../electron/contracts/harness-updates"
 import "../index.css"
 
 installMockBridge()
+threadsStore.set({ descriptors: fixtureHarnesses })
 providers.loadAll = async () => {}
 providers.loadStatus = async () => {}
 providers.refreshAccount = async () => {}

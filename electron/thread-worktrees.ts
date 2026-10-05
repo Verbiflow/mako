@@ -10,7 +10,7 @@ import type { GitDiff } from "./contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
-import { git, GitError, mergesWithoutCheckout, PARALLEL_CHECKOUT, run, succeeds } from "@mako/git"
+import { git, GitError, mergesWithoutCheckout, numstatEntries, PARALLEL_CHECKOUT, run, succeeds, untrackedLines } from "@mako/git"
 import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 
@@ -82,32 +82,6 @@ const REVIEW_FILE_BYTES = 256 * 1024
 /** Untracked files whose lines a review counts; past this they are listed uncounted. */
 const COUNTED_UNTRACKED = 200
 
-/** `git diff --numstat -z -M`: a rename's record has an empty path, then the old and new paths. */
-function parseNumstat(output: string): WorktreeReviewFile[] {
-  const files: WorktreeReviewFile[] = []
-  const fields = output.split("\0")[Symbol.iterator]()
-  const count = (value: string) => value === "-" ? null : Number(value)
-  for (const field of fields) {
-    const match = /^(-|\d+)\t(-|\d+)\t(.*)$/s.exec(field)
-    if (!match) continue
-    const [, added = "-", removed = "-", named = ""] = match
-    const from = named ? undefined : fields.next().value
-    const path = named || (fields.next().value ?? "")
-    const file: WorktreeReviewFile = { path, insertions: count(added), deletions: count(removed) }
-    if (from) file.from = from
-    files.push(file)
-  }
-  return files
-}
-
-/** A text file's lines, or null for a binary or very large one. */
-async function textLines(path: string): Promise<number | null> {
-  const bytes = await readFile(path).catch(() => null)
-  if (!bytes || bytes.length > REVIEW_FILE_BYTES * 4 || bytes.subarray(0, 8000).includes(0)) return null
-  let lines = 0
-  for (const byte of bytes) if (byte === 10) lines += 1
-  return bytes.length && bytes.at(-1) !== 10 ? lines + 1 : lines
-}
 
 /** A file as Git has it at `revision`, byte for byte, or null when it isn't there. */
 async function shown(cwd: string, revision: string, path: string): Promise<string | null> {
@@ -500,20 +474,24 @@ export class ThreadWorktreeService {
     const worktree = this.known(path)
     const into = await git(worktree.repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "") || null
     const base = into ? await git(path, ["merge-base", into, "HEAD"]).catch(() => worktree.base) : worktree.base
-    const [commits, numstat, untracked, status, behind] = await Promise.all([
+    const [commits, diffed, untracked, status, behind] = await Promise.all([
       git(path, ["rev-list", "--count", `${base}..HEAD`]).then(Number),
-      git(path, ["diff", "--numstat", "-z", "-M", base]),
+      run({ cwd: path, args: ["diff", "--numstat", "-z", "-M", "--no-ext-diff", base, "--"], read: true }).then((result) => numstatEntries(result.stdout)),
       git(path, ["ls-files", "--others", "--exclude-standard", "-z"]),
       git(path, ["status", "--porcelain", "--untracked-files=normal"]),
       this.behind(worktree.repoRoot, path, false),
     ])
-    const files = parseNumstat(numstat)
-    const added = untracked.split("\0").filter(Boolean)
-    const counted = await mapLimited(added.slice(0, COUNTED_UNTRACKED), 8, (file) => textLines(join(path, file)))
-    added.forEach((file, index) => {
-      const lines = counted[index] ?? null
-      files.push({ path: file, insertions: lines, deletions: lines === null ? null : 0 })
+    const files = diffed.map(({ path: file, from, lines }) => {
+      const entry: WorktreeReviewFile = { path: file, insertions: lines?.insertions ?? null, deletions: lines?.deletions ?? null }
+      if (from) entry.from = from
+      return entry
     })
+    const added = untracked.split("\0").filter(Boolean)
+    const counted = await untrackedLines(path, added.slice(0, COUNTED_UNTRACKED))
+    for (const file of added) {
+      const lines = counted.get(file) ?? null
+      files.push({ path: file, insertions: lines?.insertions ?? null, deletions: lines ? 0 : null })
+    }
     return {
       path, branch: worktree.branch, into, base, commits, files,
       merge: await this.mergeCheck(worktree, into, commits, status !== ""),

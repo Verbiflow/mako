@@ -2,14 +2,18 @@ import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { setImmediate as tick } from "node:timers/promises"
+import { join, resolve } from "node:path"
+import { setImmediate as tick, setTimeout as delay } from "node:timers/promises"
 import { WorkspaceClients } from "../electron/workspace-clients.ts"
 import { WorkspaceGit } from "../electron/host-git.ts"
 import type { BootPayload, GitStatus, HostEvent } from "../electron/shared.ts"
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-window-boot-")))
 const originalCwd = process.cwd()
+// The file watcher's child runs under tsx too, from the folder this test moves into.
+if (process.env.TSX_TSCONFIG_PATH) process.env.TSX_TSCONFIG_PATH = resolve(process.env.TSX_TSCONFIG_PATH)
+/** Starting a host waits for its file watcher, which takes a process; held Git never resolves at all. */
+const held = (what: string) => delay(10_000, undefined, { ref: false }).then(() => { throw new Error(what) })
 const git = Promise.withResolvers<GitStatus>()
 const gitRoot = Promise.withResolvers<string | null>()
 mock.method(WorkspaceGit.prototype, "root", () => gitRoot.promise)
@@ -21,7 +25,7 @@ try {
   // Held Git promises reproduce the live failure without touching a real repo.
   const pool = await Promise.race([
     clients.ready("fixture"),
-    tick().then(() => { throw new Error("Window startup waited for Git discovery") }),
+    held("Window startup waited for Git discovery"),
   ])
   payload = {
     tabs: pool.snapshots(), activeTabId: pool.activeId,
@@ -31,12 +35,12 @@ try {
   assert.equal(payload.tabs[0]?.session.meta.cwd, root)
   const opened = await Promise.race([
     pool.open({ cwd: root }),
-    tick().then(() => { throw new Error("Opening another tab waited for Git status") }),
+    held("Opening another tab waited for Git status"),
   ])
   assert.equal(opened.git, undefined, "An unfinished Git read must not become a clean worktree")
   await Promise.race([
     pool.active.setCwd(root),
-    tick().then(() => { throw new Error("Workspace restoration waited for Git status") }),
+    held("Workspace restoration waited for Git status"),
   ])
 } finally {
   await clients.dispose()

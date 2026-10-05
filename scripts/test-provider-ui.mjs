@@ -152,7 +152,7 @@ async function review() {
   await evaluate(
     `document.querySelector('[aria-label="Manage OpenCode"]').click()`
   )
-  await until("document.body.textContent.includes('OpenCode credentials')")
+  await until("document.body.textContent.includes('OpenCode accounts')")
   assert.equal(
     await evaluate("document.querySelectorAll('[role=list]').length"),
     1

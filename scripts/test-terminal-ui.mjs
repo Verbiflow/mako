@@ -92,7 +92,7 @@ async function check() {
     await capture("dark.png")
     const beforeResize = await call("return f.metrics.resizes")
     await evaluate(
-      "document.querySelector('.terminal-viewport').style.paddingRight = '13px'"
+      "(() => { const viewport = document.querySelector('.terminal-viewport'); viewport.style.paddingRight = `${parseFloat(getComputedStyle(viewport).paddingRight) + 1}px` })()"
     )
     await new Promise((resolve) => setTimeout(resolve, 80))
     assert.equal(
@@ -126,7 +126,7 @@ async function check() {
       "document.querySelector('.xterm-rows')?.textContent.includes('RECOVERED_INPUT')"
     )
     await evaluate(
-      "document.querySelector('[aria-label=\"Search terminal\"]').click()"
+      "window.dispatchEvent(new CustomEvent('mako:terminal-search'))"
     )
     await until(
       "document.activeElement?.getAttribute('aria-label') === 'Find in terminal'"

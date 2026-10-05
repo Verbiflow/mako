@@ -11,11 +11,11 @@ assert.deepEqual(hostCallInputs["mako:account-select"].parse(["codex", null]), [
   "codex",
   null,
 ])
-assert.deepEqual(hostCallInputs["mako:account-capture"].parse(["claude", "work", "native"]), ["claude", "work", "native"])
 assert.deepEqual(hostCallInputs["mako:account-capture"].parse(["codex", "work"]), ["codex", "work"])
-assert.throws(() => hostCallInputs["mako:account-capture"].parse(["claude", "work", "unknown"]))
+assert.throws(() => hostCallInputs["mako:account-capture"].parse(["claude", "work", "native"]), "capture takes no source")
 assert.deepEqual(hostCallInputs["mako:account-login-start"].parse(["claude"]), ["claude"])
-assert.throws(() => hostCallInputs["mako:account-login-start"].parse(["claude", "work"]))
+assert.deepEqual(hostCallInputs["mako:account-login-start"].parse(["claude", "work"]), ["claude", "work"], "a sign-in may renew a named account")
+assert.throws(() => hostCallInputs["mako:account-login-start"].parse(["claude", 1]))
 assert.throws(() => hostCallInputs["mako:account-login-code"].parse(["login"]))
 assert.equal(hostCallReplay("mako:account-login-start"), "never", "a second sign-in must not start after an uncertain disconnect")
 assert.equal(hostCallReplay("mako:account-login-code"), "never", "a sign-in code is single-use")

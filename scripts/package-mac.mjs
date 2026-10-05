@@ -249,7 +249,7 @@ try {
     )
       continue
     const target = file.path.replace(
-      /^packages\/(sessions|relay|control|control-runtime)\//,
+      /^packages\/(sessions|git|relay|control|control-runtime)\//,
       "node_modules/@mako/$1/"
     )
     assert.equal(
