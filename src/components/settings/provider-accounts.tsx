@@ -64,7 +64,7 @@ export function ProviderAccounts({
           group={group}
           heading={false}
           actions={(account) =>
-            selectable && account.source === "mako" && !account.missing ? (
+            selectable && account.source === "mako" && !account.missing && !account.removing ? (
               <AccountActions account={account} renewable={addable} />
             ) : null
           }
@@ -103,8 +103,8 @@ export function ProviderAccounts({
       ) : null}
       {selectable && several ? (
         <p className="text-label leading-relaxed text-faint">
-          New sessions use the selected account. Sessions already running keep
-          theirs.
+          Sessions switch to the selected account with their next message,
+          or when the work they're doing ends.
         </p>
       ) : null}
     </div>
