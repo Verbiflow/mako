@@ -110,6 +110,10 @@ function discover(
 export const claudeProfileLoader: ProviderProfileLoader = {
   provider: "claude",
   label: "Claude Code",
+  defaults: {
+    work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: false } }],
+    light: [{ model: "claude-haiku-4-5", options: { fast: false } }],
+  },
   transport: "sdk",
   nativeModelIds: true,
   capabilities: [

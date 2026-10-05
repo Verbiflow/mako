@@ -11,5 +11,7 @@ export const claudeMcpSource: ProviderMcpSource = {
   ],
   workspaceFiles: (cwd) => [join(cwd, ".mcp.json")],
   readsCli: false,
-  write: { kind: "file", format: "claude" },
+  // Claude bounds an MCP call by nothing by default.
+  callWaitMs: 10 * 60_000,
+  write: { kind: "file", format: { root: "mcpServers", command: "string", remote: "transport" } },
 }
