@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
@@ -206,34 +206,38 @@ export function useWorktreeAhead(path: string | undefined, head: string | undefi
 /** After a status change, the branch review waits this long before reading again: an agent's edits come in bursts. */
 const REVIEW_SETTLE_MS = 400
 
+const reviewStore = createStore<{ byPath: Readonly<Record<string, WorktreeReview>> }>({ byPath: {} })
+const useReviewStore = createHook(reviewStore)
+/** The status each worktree's last read was asked for, so every panel watching it shares one read. */
+const reviewReads = new Map<string, { status: GitStatus | null | undefined; timer: ReturnType<typeof setTimeout> }>()
+
+function readReviewFor(path: string, status: GitStatus | null | undefined, again: boolean): void {
+  const last = reviewReads.get(path)
+  if (last && last.status === status && !again) return
+  if (last) clearTimeout(last.timer)
+  const timer = setTimeout(() => {
+    void getMako().worktreeReview(path).then(
+      (next) => reviewStore.set((current) => ({ byPath: { ...current.byPath, [path]: next } })),
+      () => {}
+    )
+  }, reviewStore.get().byPath[path] ? REVIEW_SETTLE_MS : 0)
+  reviewReads.set(path, { status, timer })
+}
+
 /**
  * The worktree at `path`'s work since it branched, read again once `status`
  * (the Git status the Changes watcher already keeps) settles, or on `reread`.
+ * Panels that show it share one read and one copy.
  */
 export function useWorktreeReview(path: string | undefined, status: GitStatus | null | undefined) {
-  const [review, setReview] = useState<WorktreeReview>()
-  const [asked, setAsked] = useState(0)
-  const shownFor = useRef<string>(undefined)
+  const review = useReviewStore((state) => (path ? state.byPath[path] : undefined))
   useEffect(() => {
-    if (!path || !hasBridge()) return
-    let current = true
-    const timer = setTimeout(() => {
-      void getMako().worktreeReview(path).then(
-        (next) => {
-          if (!current) return
-          shownFor.current = path
-          setReview(next)
-        },
-        () => {}
-      )
-    }, shownFor.current === path ? REVIEW_SETTLE_MS : 0)
-    return () => {
-      current = false
-      clearTimeout(timer)
-    }
-  }, [path, status, asked])
-  const reread = useCallback(() => setAsked((count) => count + 1), [])
-  return { review: review?.path === path ? review : undefined, reread } satisfies { review: WorktreeReview | undefined; reread: () => void }
+    if (path && hasBridge()) readReviewFor(path, status, false)
+  }, [path, status])
+  const reread = useCallback(() => {
+    if (path && hasBridge()) readReviewFor(path, status, true)
+  }, [path, status])
+  return { review, reread } satisfies { review: WorktreeReview | undefined; reread: () => void }
 }
 
 export function readWorktreeReview(path: string): Promise<WorktreeReview> {

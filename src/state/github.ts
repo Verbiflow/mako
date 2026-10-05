@@ -35,6 +35,24 @@ let statusGeneration = 0
 let pullGeneration = 0
 let statusLoad: Promise<void> | null = null
 let statusLoadRoot: string | undefined
+/** Pull request reads in flight by repository and branch, so every panel that asks shares one. */
+const refreshing = new Map<string, Promise<void>>()
+
+async function readPull(root: string, branch?: string) {
+  if (!hasBridge()) return
+  await github.ensureStatus(root)
+  const status = githubStore.get()
+  if (status.root !== root || status.statusRoot !== root) return
+  if (!status.status?.authenticated || !status.status.repo) {
+    githubStore.set({ pull: null, loading: false, branch, root })
+    return
+  }
+  const mine = ++pullGeneration
+  githubStore.set({ loading: true })
+  const pull = await getMako().pullRequest().catch(() => null)
+  if (mine !== pullGeneration || githubStore.get().root !== root) return
+  githubStore.set({ pull, loading: false, branch, root })
+}
 
 export const github = {
   async ensureStatus(root?: string) {
@@ -93,20 +111,13 @@ export const github = {
     if (avatar) githubStore.set({ userAvatar: avatar })
   },
 
-  async refresh(root: string, branch?: string) {
-    if (!hasBridge()) return
-    await github.ensureStatus(root)
-    const status = githubStore.get()
-    if (status.root !== root || status.statusRoot !== root) return
-    if (!status.status?.authenticated || !status.status.repo) {
-      githubStore.set({ pull: null, loading: false, branch, root })
-      return
-    }
-    const mine = ++pullGeneration
-    githubStore.set({ loading: true })
-    const pull = await getMako().pullRequest().catch(() => null)
-    if (mine !== pullGeneration || githubStore.get().root !== root) return
-    githubStore.set({ pull, loading: false, branch, root })
+  refresh(root: string, branch?: string): Promise<void> {
+    const key = JSON.stringify([root, branch ?? null])
+    const running = refreshing.get(key)
+    if (running) return running
+    const next = readPull(root, branch).finally(() => refreshing.delete(key))
+    refreshing.set(key, next)
+    return next
   },
 
   listBranches(): Promise<string[]> {
@@ -162,4 +173,21 @@ export function useBranchPull(): BranchPull | null {
   }, [branch, cached, cachedRoot, root, statusRoot])
   if (!root || cachedRoot !== root || statusRoot !== root || cached !== branch || !status) return null
   return { status, pull: pull ?? null, loading, branch, root }
+}
+
+const composerStore = createStore<{ root: string | null }>({ root: null })
+const useComposerStore = createHook(composerStore)
+
+/** The pull request form, opened by the Git control or by Commit and open pull request, for one repository at a time. */
+export const pullComposer = {
+  open(root: string) {
+    composerStore.set({ root })
+  },
+  close() {
+    composerStore.set({ root: null })
+  },
+}
+
+export function usePullComposer(root: string | undefined): boolean {
+  return useComposerStore((state) => Boolean(root) && state.root === root)
 }

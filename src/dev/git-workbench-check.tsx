@@ -1,5 +1,6 @@
 import { runGitRemote } from "@/state/git-push"
 import { createRoot } from "react-dom/client"
+import { toast } from "sonner"
 import { GitWorkbenchFixture } from "./git-workbench-fixture"
 import { actions, store } from "@/state/session"
 import { prefsStore, bindTheme } from "@/state/prefs"
@@ -20,7 +21,8 @@ const switches = new Map<string, (snapshot: TabSnapshot) => void>()
 const projects = new Map<string, GitStatus>()
 const histories = new Map<string, Array<(commits: GitCommitEntry[]) => void>>()
 const pushes = new Map<string, { resolve: () => void; reject: (error: Error) => void }>()
-export const calls = { selections: 0, pushes: 0, stages: 0, commits: 0, diffs: 0, copied: "", copiedHtml: "", context: "", remoteAction: "" }
+const discarded: string[] = []
+export const calls = { selections: 0, pushes: 0, stages: 0, commits: 0, diffs: 0, copied: "", copiedHtml: "", context: "", remoteAction: "", discarded, restored: "" }
 Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
   write: async (items: ClipboardItem[]) => { calls.copied = await (await items[0].getType("text/plain")).text(); calls.copiedHtml = await (await items[0].getType("text/html")).text() },
 } })
@@ -48,6 +50,38 @@ export function selectMultiRepositoryProject() {
   ] }
   projects.set(cwd, snapshot)
   store.set({ git: snapshot })
+}
+
+export function dismissToasts() {
+  toast.dismiss()
+}
+
+/** A small feature branch, not yet published: an image, a source file and a new note. */
+export function selectMediaProject() {
+  selectProject("/fixture/media")
+  const snapshot: GitStatus = { ...projects.get(cwd)!, branch: "feature/logo", upstream: undefined, ahead: 0, files: [
+    { path: "assets/logo.png", status: "modified", staged: false, insertions: null, deletions: null, binary: true },
+    { path: "src/app.ts", status: "modified", staged: false, insertions: 3, deletions: 1, binary: false },
+    { path: "notes.md", status: "untracked", staged: false, insertions: null, deletions: null, binary: false },
+  ] }
+  projects.set(cwd, snapshot)
+  store.set({ git: snapshot })
+  githubStore.set({ branch: "feature/logo" })
+}
+
+/** A square of `color` with a lighter disc, as a PNG data URL. */
+function swatch(color: string, size: number): string {
+  const canvas = document.createElement("canvas")
+  canvas.width = size
+  canvas.height = size
+  const context = canvas.getContext("2d")!
+  context.fillStyle = color
+  context.fillRect(0, 0, size, size)
+  context.fillStyle = "rgba(255,255,255,0.7)"
+  context.beginPath()
+  context.arc(size / 2, size / 2, size / 3, 0, Math.PI * 2)
+  context.fill()
+  return canvas.toDataURL("image/png")
 }
 
 export function startSwitch(path: string) {
@@ -164,7 +198,17 @@ window.mako = {
     return { status }
   },
   gitCommit: async () => { calls.commits += 1; await new Promise((resolve) => setTimeout(resolve, 80)); const value = projects.get(cwd); if (value) projects.set(cwd, { ...value, head: "c".repeat(40), files: [], ahead: value.ahead + 1 }) },
-  gitDiff: async (path) => { calls.diffs += 1; return { path, binary: false, oldFile: null, newFile: null, preview: { kind: "patch", contents: "diff --git a/large.ts b/large.ts\n@@ -1 +1 @@\n-old\n+new\n", limited: true } } },
+  gitDiscard: async (paths) => {
+    calls.discarded = paths
+    const value = projects.get(cwd)
+    if (value) projects.set(cwd, { ...value, files: value.files.filter((file) => !paths.includes(file.path)) })
+    return { stash: "d".repeat(40) }
+  },
+  gitRestoreDiscarded: async (stash) => { calls.restored = stash },
+  gitDiff: async (path) => {
+    calls.diffs += 1
+    if (path.endsWith(".png")) return { path, binary: true, oldFile: null, newFile: null, before: { bytes: 18_204, image: swatch("#2563eb", 96) }, after: { bytes: 21_877, image: swatch("#16a34a", 128) } }
+    return { path, binary: false, oldFile: null, newFile: null, preview: { kind: "patch", contents: "diff --git a/large.ts b/large.ts\n@@ -1 +1 @@\n-old\n+new\n", limited: true } } },
 }
 
 prefsStore.set({ theme: "dark", autoOpenDiff: false, changesLayout: "files" })

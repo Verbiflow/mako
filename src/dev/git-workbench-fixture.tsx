@@ -2,6 +2,7 @@ import { ChangesPanel } from "@/components/inspector/changes-panel"
 import { GitLog } from "@/components/inspector/git-log"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
+import { ConfirmHost } from "@/components/ui/confirm-host"
 import { WorkspaceFocusContext } from "@/components/stage/workspace-focus-context"
 import { useSession } from "@/state/session"
 
@@ -15,5 +16,6 @@ export function GitWorkbenchFixture() {
     {/* The desk mounts its toasts top-right (App.tsx); a bottom-right default
         would cover the push row this fixture drives. */}
     <Toaster position="top-right" />
+    <ConfirmHost />
   </WorkspaceFocusContext.Provider></TooltipProvider>
 }

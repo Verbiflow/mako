@@ -69,7 +69,10 @@ async function check() {
     evaluate(
       `import('/src/dev/git-workbench-check.tsx').then(m => { ${code} })`
     )
+  // Menus and dialogs fade in; a screenshot waits for every animation that ends.
+  const settled = "document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity)"
   const capture = async (name, sidebar = false) => {
+    await until(settled)
     await evaluate(
       "document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))"
     )
@@ -423,6 +426,65 @@ async function check() {
     await capture("review-stream-light.png", true)
     await evaluate("import('/src/state/prefs.ts').then(m => { m.setPref('theme', 'dark'); m.setPref('changesLayout', 'files') })")
     console.log(`Review: 5,000 files in one stream, ${screenDiffs} diffs read for the first screen and ${endDiffs} after jumping to the end, j moves between files, worst frame ${Math.round(reviewFrames)}ms`)
+
+    const escape = async () => {
+      for (const type of ["keyDown", "keyUp"])
+        await page.debugger.sendCommand("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+      await until("!document.querySelector('[role=menu]')")
+    }
+    const menuItem = (text) => `[...document.querySelectorAll('[role=menuitem],[role=menuitemradio]')].find(node => node.textContent.includes(${JSON.stringify(text)}))`
+    await fixture("m.dismissToasts()")
+    await fixture("m.selectMediaProject()")
+    await until("document.body.textContent.includes('logo.png') && document.querySelector('[data-git-next]')?.dataset.gitNext === 'open-pull'")
+    assert.equal(await evaluate("document.querySelectorAll('[data-push-control] button[aria-label=\"Push to feature/logo\"]').length"), 0, "Publishing isn't a second button beside Open pull request")
+    await click('[aria-label="More Git actions"]')
+    await until(`Boolean(${menuItem("Publish feature/logo")})`)
+    await capture("git-control-menu.png", true)
+    await escape()
+    await click("[data-git-next] button")
+    await until("Boolean(document.querySelector('[aria-label=\"Pull request base branch\"]'))")
+    await capture("pull-request-form.png", true)
+    await click('[aria-label="Cancel"]')
+    await until("!document.querySelector('[aria-label=\"Pull request base branch\"]')")
+    console.log("Git control: a feature branch opens its pull request, with Publish behind the chevron; the form opens from the control")
+
+    await evaluate("import('/src/state/commit-drafts.ts').then(m => m.commitDrafts.edit('/fixture/media', 'Refresh the logo'))")
+    await until("document.querySelector('[aria-label=\"More ways to commit\"]')?.disabled === false")
+    await click('[aria-label="More ways to commit"]')
+    await until(`Boolean(${menuItem("Commit and open pull request")}) && Boolean(${menuItem("Commit and push")})`)
+    await capture("commit-menu.png", true)
+    await escape()
+    await evaluate("import('/src/state/commit-drafts.ts').then(m => m.commitDrafts.edit('/fixture/media', ''))")
+
+    await evaluate("document.querySelector('[aria-label^=\"Discard changes to\"][aria-label$=\"app.ts\"]').click()")
+    await until("document.querySelector('[data-confirm-dialog]')?.textContent.includes('Discard changes to app.ts?')")
+    assert.ok(await evaluate("document.querySelector('[data-confirm-dialog]').textContent.includes('git stash pop')"), "The dialog says where discarded work goes")
+    await capture("discard-confirm.png")
+    await click("[data-confirm-action]")
+    await until("import('/src/dev/git-workbench-check.tsx').then(m => m.calls.discarded.join() === 'src/app.ts')")
+    await until("document.body.textContent.includes('Kept in Git')")
+    await capture("discard-undo.png")
+    await evaluate("[...document.querySelectorAll('[data-sonner-toast] button')].find(node => node.textContent === 'Undo').click()")
+    await until(`import('/src/dev/git-workbench-check.tsx').then(m => m.calls.restored === ${JSON.stringify("d".repeat(40))})`)
+    await fixture("m.dismissToasts()")
+    await until("!document.querySelector('[data-sonner-toast]')")
+    console.log("Discard: confirms with the files and where they go, stashes exactly those, and Undo restores that stash")
+
+    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('changesLayout', 'review'))")
+    await until("Boolean(document.querySelector('[data-review-file=\"assets/logo.png\"] img'))")
+    assert.ok(await evaluate("document.querySelector('[data-review-file=\"assets/logo.png\"]').textContent.includes('→')"), "An image's header shows both sizes")
+    await capture("review-image.png", true)
+    await click('[aria-label^="Showing: "]')
+    await until(`Boolean(${menuItem("Uncommitted")})`)
+    await fixture("m.resolveHistory('/fixture/media')")
+    await until(`Boolean(${menuItem("Commit from /fixture/media")}) && Boolean(${menuItem("Since main")})`)
+    await capture("review-scope-menu.png", true)
+    await evaluate(`${menuItem("Commit from /fixture/media")}.setAttribute('data-pick', ''); void 0`)
+    await click("[data-pick]")
+    await until("Boolean(document.querySelector('[aria-label^=\"Showing: commit bbbbbbb\"]')) && document.querySelectorAll('[data-review-file]').length > 0")
+    await capture("review-commit-scope.png", true)
+    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('changesLayout', 'files'))")
+    console.log("Review: image thumbnails and sizes in the header; the scope picker lists Since main and recent commits and shows one commit")
     console.log(
       "Git UI: 13,000 files with bounded DOM, last-file staging, frame responsiveness, one Push control, pending/success/failure with counts, pull/merge/conflicts, project isolation, history skeletons, commit feedback and reduced motion passed; fixture transport only, no remote pushes"
     )

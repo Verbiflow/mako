@@ -1,3 +1,4 @@
+import { GitActionControl } from "@/components/inspector/git-action-control"
 import { CopyGitContextButton, GitConflictFooter, GitDetailsButton } from "@/components/inspector/git-conflict-footer"
 import {
   useCallback,
@@ -8,7 +9,8 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { Action, IconAction, Keys, Segmented } from "@/components/ui/kit"
+import { Action, Keys, Segmented } from "@/components/ui/kit"
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { Notice as SharedNotice } from "@/components/ui/notice"
 import { formatChord } from "@/extend/commands"
 import { git } from "@/state/git"
@@ -16,7 +18,7 @@ import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, draftRepository, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowDownIcon, ArrowUpIcon, RefreshCwIcon, CheckIcon, ChevronDownIcon, Settings2Icon } from "lucide-react"
+import { ArrowUpIcon, ChevronDownIcon, GitPullRequestIcon, Settings2Icon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { BorderBeam } from "border-beam"
@@ -27,6 +29,9 @@ import {
 } from "@/components/ui/popover"
 import type { CommitAnalysisMode } from "@/lib/types"
 import { useGitPush } from "@/state/git-push"
+import { pullComposer, useBranchPull } from "@/state/github"
+import { pullSetupReason } from "@/lib/pull-requests"
+import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 
@@ -54,7 +59,7 @@ export function CommitBox({ staged, total }: { staged: number; total: number }) 
     {root && status.branch ? <>
       <div data-git-actions data-repository={root} className="flex min-h-8 items-center gap-2 px-2.5">
         <span className="min-w-0 flex-1 truncate text-label text-muted-foreground" title={`${root} · ${status.branch}`}>{root.split("/").filter(Boolean).at(-1)}</span>
-        {status.head ? <PushControl cwd={root} branch={status.branch} ahead={status.ahead} upstream={status.upstream} /> : null}
+        {status.head ? <GitActionControl cwd={root} branch={status.branch} /> : null}
       </div>
       {!resolving ? <GitRemoteNotice cwd={root} branch={status.branch} /> : null}
     </> : null}
@@ -89,6 +94,14 @@ function CommitEditor({
   const operation = useSession((state) => state.git?.operation)
   const files = useSession((state) => state.git?.files)
   const conflicts = useMemo(() => files?.filter((file) => file.status === "conflicted") ?? [], [files])
+  const root = useSession((state) => state.git?.root)
+  const inWorktree = useWorktrees((state) => Boolean(worktreeAt(state.worktrees, cwd)))
+  const branchPull = useBranchPull()
+  // Why "Commit and open pull request" can't, or null when it can.
+  const pullBlocked = !branchPull ? "Checking GitHub…"
+    : pullSetupReason(branchPull.status)
+      ?? (branchPull.pull?.state === "open" ? `#${branchPull.pull.number} is already open; Commit and push updates it.` : null)
+      ?? (!inWorktree && branchPull.status.defaultBranch === branch ? `Pull requests come from a branch other than ${branch}.` : null)
 
   useLayoutEffect(() => {
     const node = field.current
@@ -121,7 +134,7 @@ function CommitEditor({
   )
 
   const commit = useCallback(
-    async function commitChanges() {
+    async function commitChanges(then?: "push" | "pull") {
       if (operation || conflicts.length || pushState.kind === "syncing" || !message.trim() || committing.current || busy || drafting) return
       committing.current = true
       setBusy(true)
@@ -129,6 +142,8 @@ function CommitEditor({
         await git.commit(message.trim())
         commitDrafts.committed(cwd, draftState.revision)
         await actions.refreshGit()
+        if (then === "push") void git.push()
+        else if (then === "pull" && root) pullComposer.open(root)
       } catch (error) {
         toast.error("Check commit status before trying again", {
           duration: ACTION_TOAST_MS,
@@ -140,7 +155,7 @@ function CommitEditor({
         setBusy(false)
       }
     },
-    [busy, message, drafting, cwd, draftState.revision, operation, conflicts.length, pushState.kind]
+    [busy, message, drafting, cwd, draftState.revision, operation, conflicts.length, pushState.kind, root]
   )
 
   // The button says only what changes the commit's meaning. With something
@@ -324,18 +339,48 @@ function CommitEditor({
               pill. The caps sit 3px from the top and bottom, so the right
               edge is 4px, not the word's 8px; when the row is too narrow
               for the chord the padding evens back out. */}
-          <Action
-            tone={armed ? "solid" : "ghost"}
-            size="xs"
-            disabled={!armed || busy || drafting || total === 0}
-            onClick={() => void commit()}
-            className="gap-1.5 pl-2 pr-1 tabular @max-[26rem]/commit:pr-2"
-          >
-            {commitLabel}
-            <span className="contents @max-[26rem]/commit:hidden">
-              <Keys keys={formatChord("mod+enter")} inverted={armed} />
-            </span>
-          </Action>
+          {/* Commit, and behind its chevron the two motions that follow it
+              most: push, or open the pull request form. */}
+          <span className="flex items-stretch">
+            <Action
+              tone={armed ? "solid" : "ghost"}
+              size="xs"
+              disabled={!armed || busy || drafting || total === 0}
+              onClick={() => void commit()}
+              className="gap-1.5 rounded-r-none pl-2 pr-1 tabular @max-[26rem]/commit:pr-2"
+            >
+              {commitLabel}
+              <span className="contents @max-[26rem]/commit:hidden">
+                <Keys keys={formatChord("mod+enter")} inverted={armed} />
+              </span>
+            </Action>
+            <Menu modal={false}>
+              <MenuTrigger asChild>
+                <Action
+                  tone={armed ? "solid" : "ghost"}
+                  size="xs"
+                  aria-label="More ways to commit"
+                  disabled={!armed || busy || drafting || total === 0}
+                  className={`rounded-l-none border-l px-1 [&_svg]:size-3 ${armed ? "border-background/20" : "border-hairline"}`}
+                >
+                  <ChevronDownIcon />
+                </Action>
+              </MenuTrigger>
+              <MenuContent align="end" side="top" className="min-w-56">
+                <MenuItem onSelect={() => void commit("push")}>
+                  <ArrowUpIcon className="size-3.5 text-faint" />
+                  Commit and push
+                </MenuItem>
+                <MenuItem disabled={Boolean(pullBlocked)} onSelect={() => void commit("pull")}>
+                  <GitPullRequestIcon className="size-3.5 text-faint" />
+                  <span className="min-w-0 flex-1">
+                    Commit and open pull request
+                    {pullBlocked ? <span className="block text-label text-faint">{pullBlocked}</span> : null}
+                  </span>
+                </MenuItem>
+              </MenuContent>
+            </Menu>
+          </span>
         </div>
       </div>
       </BorderBeam>
@@ -464,31 +509,6 @@ function GenerationSettings({
       </PopoverContent>
     </Popover>
   )
-}
-
-/** Remote actions follow the selected repository above the shared commit editor. */
-export function PushControl({ cwd, branch, ahead, upstream }: { cwd: string; branch: string; ahead: number; upstream?: string }) {
-  const state = useGitPush(cwd, branch)
-  const behind = useSession(s => s.git?.behind ?? 0)
-  const operation = useSession(s => s.git?.operation)
-  const conflicts = useSession(s => s.git?.files.some(file => file.status === "conflicted") ?? false)
-  const pending = state.kind === "pushing" || state.kind === "syncing"
-  const keepEdits = state.kind === "failed" && state.reason === "dirty"
-  const style = "h-6 gap-1 px-1.5 text-label font-normal tabular text-faint hover:text-foreground disabled:opacity-50 [&_svg]:size-3"
-  if (operation) return <span data-push-control className="flex shrink-0 items-center gap-1">
-    <Action size="xs" className={style} disabled={pending} onClick={() => void git.remote("abort")}>Abort {operation}</Action>
-    <Action size="xs" className={style} disabled={pending || conflicts} onClick={() => void git.remote("continue")}>{state.kind === "syncing" ? "Working…" : `Continue ${operation}`}</Action>
-  </span>
-  return <span data-push-control className="flex shrink-0 items-center gap-1">
-    <IconAction size="xs" label="Fetch remote changes" disabled={pending} onClick={() => void git.remote("fetch")}><RefreshCwIcon className={state.kind === "syncing" && state.action === "fetch" ? "animate-spin motion-reduce:animate-none" : ""} /></IconAction>
-    {behind > 0 ? <Action size="xs" className={style} disabled={pending || conflicts} aria-label={keepEdits ? `Pull ${behind} incoming commits with stash` : ahead > 0 ? `Pull and merge ${behind} incoming commits` : `Pull ${behind} incoming commits`} title={keepEdits ? "Temporarily stash your edits, pull, then restore them. Restoring may cause conflicts; staged edits return unstaged." : ahead > 0 ? "Merge incoming commits into this branch, preserving both histories" : "Pull incoming commits"} onClick={() => void git.remote(keepEdits ? "merge_autostash" : ahead > 0 ? "merge" : "pull")}>
-      <ArrowDownIcon />{state.kind === "syncing" ? "Pulling…" : keepEdits ? `Pull with stash ${behind}` : ahead > 0 ? `Pull & merge ${behind}` : `Pull ${behind}`}
-    </Action> : null}
-    {behind === 0 && (ahead > 0 || !upstream || state.kind === "pushed" || state.kind === "pushing") ? <Action size="xs" className={style} data-push-state={state.kind} aria-label={`Push to ${branch}`} aria-busy={state.kind === "pushing"} disabled={pending || state.kind === "pushed" || behind > 0 || conflicts} title={behind > 0 ? "Pull incoming commits before pushing" : upstream ? `Push ${ahead} commits to ${upstream}` : `Publish ${branch} to origin`} onClick={() => void git.push()}>
-      {state.kind === "pushed" ? <CheckIcon /> : <ArrowUpIcon />}
-      <span role="status" className="git-action-label" key={state.kind}>{state.kind === "pushing" ? `Pushing ${ahead}…` : state.kind === "pushed" ? "Pushed" : upstream ? `Push ${ahead}` : "Publish branch"}</span>
-    </Action> : null}
-  </span>
 }
 
 export function GitRemoteNotice({ cwd, branch }: { cwd: string; branch: string }) {

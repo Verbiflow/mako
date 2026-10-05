@@ -4,27 +4,21 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { harnessLabels } from "@/lib/harness-label"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { stageGitAction } from "@/state/git-actions"
-import { pullBaseFor, type MergeMethod } from "../../../electron/contracts/git-actions"
+import { pullBaseFor } from "../../../electron/contracts/git-actions"
 import { SearchSelect } from "@/components/ui/search-select"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
 import { desktop } from "@/state/desktop"
 import { git } from "@/state/git"
-import { github, useBranchPull, useGitHub } from "@/state/github"
+import { github, pullComposer, useBranchPull, usePullComposer } from "@/state/github"
 import { currentCommitModel } from "@/state/commit-model"
 import { useSession } from "@/state/session"
-import { useWorktrees, worktreeAt } from "@/state/worktrees"
-import { pullMergeReason, summarizeChecks } from "@/lib/pull-requests"
+import { prefsStore, setPref } from "@/state/prefs"
+import { refreshWorktreeSummaries, useWorktrees, worktreeAt } from "@/state/worktrees"
+import { summarizeChecks } from "@/lib/pull-requests"
 import { cn } from "@/lib/utils"
 import type { GitHubStatus, PullRequest as Pull } from "@/lib/types"
 import {
   CheckIcon,
-  ChevronDownIcon,
   ExternalLinkIcon,
-  GitMergeIcon,
   GitPullRequestIcon,
   MessageSquareTextIcon,
   RefreshCwIcon,
@@ -40,8 +34,9 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
  * Under the commit box rather than in a tab of its own, because it is the end
  * of one continuous motion — stage, commit, push, open — and splitting the last
  * step into separate chrome would make it read as a different activity than it
- * is. It appears only when there is something to say: a PR that exists, or a
- * branch with commits that could become one.
+ * is. The Git control above opens the form and acts on the pull request; this
+ * card is the form, what GitHub says about the open one, and how to set GitHub
+ * up where that's missing.
  */
 export function PullRequestCard() {
   const branchPull = useBranchPull()
@@ -49,12 +44,26 @@ export function PullRequestCard() {
   const upstream = useSession((state) => state.git?.upstream)
   const behind = useSession((state) => state.git?.behind ?? 0)
   const cwd = useSession((state) => state.git?.cwd)
-  // A Thread's own worktree lands its branch from Since main, above the changes.
-  const inWorktree = useWorktrees((state) => Boolean(worktreeAt(state.worktrees, cwd)))
-  const [composing, setComposing] = useState(false)
+  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
+  const composing = usePullComposer(branchPull?.root)
 
-  if (!branchPull || inWorktree) return null
-  const { status, pull, loading, branch } = branchPull
+  if (!branchPull) return null
+  const { status, pull, loading, branch, root } = branchPull
+
+  if (composing) {
+    return <ComposePull
+      base={status.defaultBranch}
+      startedFrom={worktree?.start?.from}
+      branch={branch}
+      onOpened={worktree ? () => {
+        setPref("landWith", { ...prefsStore.get().landWith, [worktree.repoRoot]: "pull" })
+        void refreshWorktreeSummaries().catch(() => {})
+      } : undefined}
+      onDone={pullComposer.close}
+    />
+  }
+  // A Thread's own worktree shows its branch in Since main, above the changes.
+  if (worktree) return null
 
   const onDefault = Boolean(status.defaultBranch && branch === status.defaultBranch)
   const unpublished = Boolean(branch) && !upstream
@@ -68,34 +77,9 @@ export function PullRequestCard() {
     return <GitHubSetup status={status} />
   }
 
-  if (composing) {
-    return <ComposePull base={status.defaultBranch} branch={branch} onDone={() => setComposing(false)} />
-  }
-
-  if (pull) return <PullSummary pull={pull} loading={loading} />
-  if (onDefault || !hasWork) return null
-  if (behind > 0) {
-    return <BehindBranch behind={behind} upstream={upstream} />
-  }
-
-  const commits = unpublished && ahead === 0 ? "unpushed" : `${ahead} ${ahead === 1 ? "commit" : "commits"}`
-
-  return (
-    <div className="shrink-0 border-t border-hairline px-2.5 py-2">
-      <button
-        type="button"
-        onClick={() => setComposing(true)}
-        className={cn(
-          "pressable flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
-          "text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-        )}
-      >
-        <GitPullRequestIcon className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">Open a pull request for {branch}</span>
-        <span className="tabular shrink-0 text-label text-faint">{commits}</span>
-      </button>
-    </div>
-  )
+  if (pull) return <PullSummary pull={pull} loading={loading} root={root} />
+  if (!onDefault && hasWork && behind > 0) return <BehindBranch behind={behind} upstream={upstream} />
+  return null
 }
 
 /**
@@ -360,37 +344,9 @@ export function ComposePull({
   )
 }
 
-/** An open pull request, in one line plus whatever CI has to say. */
-function PullSummary({ pull, loading }: { pull: Pull; loading: boolean }) {
-  const root = useGitHub((state) => state.root)
-  const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
-  const agent = (harness && harnessLabels()[harness]) || "the agent"
+/** An open pull request, in one line plus whatever CI has to say; the Git control above merges it or hands failing checks to the agent. */
+function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; root: string }) {
   const checks = useMemo(() => summarizeChecks(pull.checks), [pull.checks])
-  const [merging, setMerging] = useState(false)
-  const mergeReason = pullMergeReason(pull)
-  const mergeBlocked = mergeReason !== undefined
-
-  const merge = useCallback(async function mergePullRequest(
-    strategy: MergeMethod
-  ) {
-    if (merging) return
-    setMerging(true)
-    try {
-      const next = await github.merge(strategy)
-      toast.success(next?.state === "merged" ? `Merged #${next.number}` : "Pull request merged")
-    } catch (error) {
-      toast.error("Pull request was not merged", {
-        duration: ACTION_TOAST_MS,
-        description: error instanceof Error ? error.message : String(error),
-        action: {
-          label: "Retry",
-          onClick: () => void mergePullRequest(strategy),
-        },
-      })
-    } finally {
-      setMerging(false)
-    }
-  }, [merging])
 
   return (
     <div className="shrink-0 border-t border-hairline px-2.5 py-2">
@@ -419,17 +375,11 @@ function PullSummary({ pull, loading }: { pull: Pull; loading: boolean }) {
         <IconAction
           label="Refresh"
           size="xs"
-          onClick={() => root && void github.refresh(root, pull.head)}
+          onClick={() => void github.refresh(root, pull.head)}
           data-on={loading || undefined}
         >
           <RefreshCwIcon className={loading ? "animate-spin" : undefined} />
         </IconAction>
-        <MergeMenu
-          disabled={mergeBlocked}
-          reason={mergeReason}
-          merging={merging}
-          onMerge={(strategy) => void merge(strategy)}
-        />
         <IconAction label="Open on GitHub" size="xs" onClick={() => void desktop.openUrl(pull.url)}>
           <ExternalLinkIcon />
         </IconAction>
@@ -473,74 +423,7 @@ function PullSummary({ pull, loading }: { pull: Pull; loading: boolean }) {
         ) : null}
 
         {pull.mergeable === "conflicting" ? <span className="text-removed">conflicts</span> : null}
-
-        {checks.failed > 0 ? (
-          <span className="ml-auto flex items-center gap-1">
-            <button
-              type="button"
-              title={`Puts a message in your composer asking ${agent} to read why they fail, fix it and push`}
-              onClick={() => stageGitAction({ kind: "fix-checks", number: pull.number, failing: pull.checks.filter((check) => check.state === "failed").map((check) => check.name) })}
-              className="pressable rounded px-1 text-faint hover:text-foreground"
-            >
-              Ask {agent} to fix
-            </button>
-            <button
-              type="button"
-              onClick={() => void github.rerun()}
-              className="pressable rounded px-1 text-faint hover:text-foreground"
-            >
-              Re-run failed
-            </button>
-          </span>
-        ) : null}
       </div>
     </div>
-  )
-}
-
-function MergeMenu({
-  disabled,
-  reason,
-  merging,
-  onMerge,
-}: {
-  disabled: boolean
-  reason?: string
-  merging: boolean
-  onMerge: (strategy: "merge" | "squash" | "rebase") => void
-}) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled || merging}
-          title={reason ?? "Merge pull request"}
-          className="pressable flex h-6 items-center gap-0.5 rounded px-1.5 text-label text-faint hover:bg-fill-hover hover:text-foreground disabled:opacity-40"
-        >
-          <GitMergeIcon className="size-3" />
-          {merging ? "Merging…" : "Merge"}
-          <ChevronDownIcon className="size-2.5" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" side="bottom" sideOffset={6} className="w-48 p-1">
-        <p className="px-2 py-1 text-label text-faint">Merge strategy</p>
-        {([
-          ["squash", "Squash and merge"],
-          ["merge", "Create merge commit"],
-          ["rebase", "Rebase and merge"],
-        ] as const).map(([strategy, label]) => (
-          <button
-            key={strategy}
-            type="button"
-            onClick={() => onMerge(strategy)}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui text-foreground/90 hover:bg-fill-hover"
-          >
-            <GitMergeIcon className="size-3.5 text-faint" />
-            {label}
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
   )
 }
