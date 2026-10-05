@@ -227,23 +227,16 @@ async function listAccounts(
   selection: string | null
 ): Promise<HarnessAccount[]> {
   const accounts: HarnessAccount[] = []
-  const defaultDir = defaultHome()
+  const home = join(homedir(), HOME)
   accounts.push({
     harness: "claude",
     name: "default",
-    email: AUTH_ENV.some(key => process.env[key]) ? undefined : await accountEmail(process.env.CLAUDE_CONFIG_DIR ? defaultDir : identityDir(defaultDir)),
-    dir: defaultDir,
+    email: await accountEmail(identityDir(home)),
+    dir: home,
     active: !selection,
     source: "cli",
-    route: process.env.CLAUDE_CONFIG_DIR || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key]) ? "inherited" : "native",
+    route: "native",
   })
-  if (selection === NATIVE_ACCOUNT || process.env.CLAUDE_CONFIG_DIR || [...AUTH_ENV, ...ROUTING_ENV].some(key => process.env[key])) {
-    // The ordinary home is only worth a row when it is signed in or chosen.
-    const email = await accountEmail(homedir())
-    if (email || selection === NATIVE_ACCOUNT)
-      accounts.push({ harness: "claude", name: NATIVE_ACCOUNT, email, dir: join(homedir(), HOME),
-        active: selection === NATIVE_ACCOUNT, source: "cli", route: "native" })
-  }
   try {
     for (const name of await readdir(join(accountsRoot(), "claude"))) {
       if (name.startsWith(".")) continue
@@ -376,12 +369,10 @@ export async function claudeCredentialState(env: NodeJS.ProcessEnv): Promise<Cla
  * Capture the CLI's current login as a named account. Credentials are copied,
  * never invented; browser OAuth remains the CLI's job.
  */
-async function captureAccount(name: string, source: AccountCaptureSource = "inherited"): Promise<void> {
+async function captureAccount(name: string): Promise<void> {
   const clean = cleanAccountName(name)
-  const env = source === "native" ? nativeEnv(process.env) : process.env
-  if (AUTH_ENV.some(key => env[key]))
-    throw new Error("This profile uses an environment token or API key. Choose Ordinary CLI login to save the native subscription login; environment credentials are not captured as a different account.")
-  const realHome = defaultHome(env)
+  const env = nativeEnv(process.env)
+  const realHome = join(homedir(), HOME)
   await assertProfileSettings(realHome)
   const dir = accountDir("claude", clean)
   await mkdir(join(accountsRoot(), "claude"), { recursive: true, mode: 0o700 })
@@ -408,9 +399,7 @@ async function captureAccount(name: string, source: AccountCaptureSource = "inhe
 
     // The CLI's onboarding/config state is copied, not linked: it embeds
     // account state and prevents first-time setup from running again.
-    const config = env.CLAUDE_CONFIG_DIR
-      ? join(realHome, ".claude.json")
-      : join(homedir(), ".claude.json")
+    const config = join(homedir(), ".claude.json")
     if (existsSync(config)) await copyFile(config, join(dir, ".claude.json"))
 
     if (!captured) {
@@ -468,7 +457,7 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
 }
 
 async function removeAccount(name: string): Promise<void> {
-  if (name === "default" || name === NATIVE_ACCOUNT)
+  if (name === "default")
     throw new Error("The default account is the CLI's own login")
   const dir = accountDir("claude", name)
   await deleteKeychain(scopedService(dir))
@@ -479,25 +468,20 @@ async function accountEnv(
   selection: string | null,
   base: NodeJS.ProcessEnv
 ): Promise<NodeJS.ProcessEnv> {
-  const env = { ...base }
-  if (!selection) return env
-  if (selection === NATIVE_ACCOUNT) return nativeEnv(base)
-  for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
-
+  if (!selection) return nativeEnv(base)
+  const env = nativeEnv(base)
   const dir = accountDir("claude", selection)
   if (!existsSync(dir))
     throw new Error(
       "The selected Claude Code account no longer exists. Choose another account in Settings → Agents."
     )
-  // An explicit account owns its credential home, including secure storage.
-  delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
   env.CLAUDE_CONFIG_DIR = dir
   const credentials = await readCredentials(env)
   if (!credentials || !hasCredentials(credentials))
     throw new Error(
       "The selected Claude Code account is signed out. Sign in again in Settings → Agents."
     )
-  await ensureSharedLinks(await managedAccountHome(dir, defaultHome(base), "projects"), dir, SHARED_LINKS)
+  await ensureSharedLinks(await managedAccountHome(dir, join(homedir(), HOME), "projects"), dir, SHARED_LINKS)
   await assertProfileSettings(dir)
   return env
 }
@@ -554,11 +538,8 @@ export async function claudeOAuthUsage(
 }
 
 async function usageEnv(name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
-  if (name === "default") return base
-  if (name === NATIVE_ACCOUNT) return nativeEnv(base)
-  const env: NodeJS.ProcessEnv = { ...base, CLAUDE_CONFIG_DIR: accountDir("claude", name) }
-  for (const key of [...AUTH_ENV, ...ROUTING_ENV]) delete env[key]
-  delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR
+  const env = nativeEnv(base)
+  if (name !== "default") env.CLAUDE_CONFIG_DIR = accountDir("claude", name)
   return env
 }
 
