@@ -1,6 +1,14 @@
 {
   "harness": "opencode",
   "source": "Composed from @opencode/client 2.0.1's event types (shell events as recorded in test-opencode-background), 2026-10-01",
+  "native": {
+    "version": "2.0.1",
+    "sdk": {
+      "name": "@opencode/client",
+      "version": "2.0.1"
+    },
+    "origin": "written"
+  },
   "about": "Catalog, MCP and model changes; a retry; a subagent session whose open read is settled when it fails; a failed root call with progress; a call that moves its shell to the background until it exits; automatic compaction after a step's usage, then a failed one; a cancelled inbox item, an interrupt, a form; and two kinds newer than 2.0.1.",
   "session": {
     "root": "ses_root",
