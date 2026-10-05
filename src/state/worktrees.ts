@@ -3,10 +3,10 @@ import { toast } from "sonner"
 import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "../../electron/contracts/checkout-heads.ts"
 import type { GitDiff } from "../../electron/contracts/git-workspace-search.ts"
 import type { GitStatus, ThreadRef } from "@/lib/types"
-import type { ThreadWorktree, WorktreeBranch, WorktreeDetail, WorktreeInventory, WorktreePull, WorktreeRemoval, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeRemoval, WorktreeReview, WorktreeStart, WorktreeStartPoint, WorktreeSummary, WorktreeUpdate } from "../../electron/contracts/thread-worktrees.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import { landedFor, removedNote } from "@/lib/worktree-removal"
+import { landedFor, removable, removedNote, type CheckoutDetail } from "@/lib/worktree-removal"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
 import { pathInside, plainPath, projectFolder, worktreeAt } from "@/lib/worktree-paths"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
@@ -435,17 +435,23 @@ export async function readWorktreeInventory(): Promise<WorktreeInventory> {
   return getMako().worktreeInventory()
 }
 
-/** Nothing would be lost and nothing stopped: its work is on the main checkout's branch, or it never had any. */
-export function removable(worktree: WorktreeDetail): boolean {
-  return !worktree.held && worktree.users.length === 0 && (worktree.landing.kind === "merged" || worktree.landing.kind === "empty")
+/** One of its worktrees: removing any removes the checkout whole. */
+function removalOf(checkout: CheckoutDetail): RemovableWorktree {
+  return { path: checkout.worktrees[0]!.path, branch: checkout.branch }
 }
 
-/** Remove every worktree whose work landed or never started, as one toast with one Undo; their branches stay. */
-export function removeLandedWorktrees(worktrees: readonly WorktreeDetail[]): void {
-  const going = worktrees.filter((worktree) => removable(worktree) && !leavingWorktrees.get().byPath[worktree.path])
-  const [only] = going
+/** Remove a checkout, every repository's worktree in it; one that would lose work stays and says why. */
+export function removeCheckout(checkout: CheckoutDetail): Promise<void> {
+  return removeWorktree(removalOf(checkout))
+}
+
+/** Remove every checkout whose work landed or never started, as one toast with one Undo; their branches stay. */
+export function removeLandedWorktrees(checkouts: readonly CheckoutDetail[]): void {
+  const landed = checkouts.filter((checkout) => removable(checkout) && !leavingWorktrees.get().byPath[removalOf(checkout).path])
+  const [only] = landed
   if (!only) return
-  if (going.length === 1) removeAfterUndo(going, "Worktree removed", removedNote(only.branch, only.landing, worktreeSummariesStore.get().byPath[only.path]))
+  const going = landed.map(removalOf)
+  if (going.length === 1) removeAfterUndo(going, "Worktree removed", removedNote(only.branch, only.landing, worktreeSummariesStore.get().byPath[going[0]!.path]))
   else removeAfterUndo(going, `${going.length} worktrees removed`, "Their branches are kept, with every commit made there")
 }
 

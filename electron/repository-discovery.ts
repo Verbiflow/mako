@@ -1,10 +1,17 @@
 import { opendir, lstat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { join, resolve, sep } from "node:path"
+import { basename, join, resolve, sep } from "node:path"
+import { git } from "@mako/git"
 import { chatsRoot } from "./chat-folders.js"
 
-const excluded = new Set([".git", "node_modules", "vendor", "target", "dist", "build", ".next", ".cache", ".venv", "venv"])
+const excluded = new Set([
+  ".git", "node_modules", "vendor", "target", "dist", "build", ".next", ".cache", ".venv", "venv",
+  ".turbo", ".gradle", "Pods", "DerivedData", "coverage", "__pycache__", ".pnpm-store", ".terraform", ".tox",
+])
 export interface RepositoryDiscovery { roots: string[]; limited: boolean }
+
+/** A project folder of more repositories than this reads as a folder of projects. */
+export const MAX_PROJECT_REPOSITORIES = 12
 
 /** Workspace discovery, not Git's upward lookup. Never walk a repository's
  * contents or follow symlinks into unrelated trees. Worktree .git files count. */
@@ -41,4 +48,34 @@ export async function discoverRepositories(root: string, options: { maxDirectori
     } catch { limited = true }
   }
   return { roots: roots.sort(), limited }
+}
+
+export type ProjectRepositories = { roots: string[] } | { refusal: string }
+
+/**
+ * The repositories a project folder that isn't one holds, as its Threads'
+ * checkouts mirror them: those `discoverRepositories` finds (a folder with
+ * a `.git`, never one inside another repository), less a linked worktree
+ * of one already listed, since Git keeps the Thread's branch in one checkout
+ * at a time. None, too many, or a folder too large to look through is
+ * refused with what to do instead.
+ */
+export async function projectRepositories(source: string): Promise<ProjectRepositories> {
+  const found = await discoverRepositories(source)
+  const name = basename(source)
+  if (!found.roots.length)
+    return { refusal: `${name} isn't in a Git repository and holds none, so it can't have a worktree. Choose Project folder to work in the folder itself.` }
+  if (found.limited)
+    return { refusal: `${name} holds more folders than Mako looks through, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.` }
+  const kept = new Map<string, { root: string; main: boolean }>()
+  for (const root of found.roots) {
+    const common = await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => root)
+    const main = Boolean((await lstat(join(root, ".git")).catch(() => undefined))?.isDirectory())
+    const held = kept.get(common)
+    if (!held || (main && !held.main)) kept.set(common, { root, main })
+  }
+  const roots = [...kept.values()].map(({ root }) => root).sort()
+  if (roots.length > MAX_PROJECT_REPOSITORIES)
+    return { refusal: `${name} holds ${roots.length} repositories, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.` }
+  return { roots }
 }

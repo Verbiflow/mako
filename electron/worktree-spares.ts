@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { lstat, mkdir, open, readFile, readdir, readlink, rename, rm, stat, statfs, symlink, unlink, writeFile } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { basename, isAbsolute, join, relative } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { AppKeySchema } from "./contracts/thread-environments.js"
+import { PROJECT_CHECKOUT_FILE } from "./contracts/thread-worktrees.js"
+import { projectRepositories } from "./repository-discovery.js"
 import { folderApp } from "./thread-environment.js"
 import { CARRYING, CARRYING_STALE_MS, carryOutputs, isSpareCheckout, removeBelowAgents, SPARE_PREFIX, type CheckoutSetup } from "./worktree-carry.js"
 import { git, PARALLEL_CHECKOUT } from "@mako/git"
@@ -29,8 +31,10 @@ const SpareSchema = z.object({
   id: z.string().uuid(),
   repoRoot: z.string(),
   path: z.string(),
-  /** The commit checked out. */
+  /** The commit checked out; empty for a project folder's, whose `members` each name theirs. */
   base: z.string(),
+  /** A project folder of several repositories: each one's worktree, at its place inside `path` as in the folder, and the commit there. */
+  members: z.array(z.object({ repoRoot: z.string(), base: z.string() })).optional(),
   state: z.enum(["preparing", "ready"]),
   pid: z.number(),
   createdAt: z.number(),
@@ -49,6 +53,22 @@ const SpareSchema = z.object({
   }).optional(),
 })
 export type Spare = z.infer<typeof SpareSchema>
+
+/** The commit a start wants a repository's worktree at. */
+export interface SpareTarget { repoRoot: string; base: string }
+
+/** The spare's worktrees as they are at `path`: the one of its repository, or one per repository of its project folder. */
+function worktreesOf(spare: Pick<Spare, "repoRoot" | "path" | "base" | "members">, path = spare.path): Array<SpareTarget & { path: string }> {
+  if (!spare.members) return [{ repoRoot: spare.repoRoot, base: spare.base, path }]
+  return spare.members.map((member) => ({ ...member, path: join(path, relative(spare.repoRoot, member.repoRoot)) }))
+}
+
+/** Whether the spare mirrors what a start needs: one repository, or the same repositories of a project folder. */
+function fits(spare: Spare, repositories: readonly string[] | undefined): boolean {
+  if (!repositories || !spare.members) return !repositories && !spare.members
+  const held = spare.members.map((member) => member.repoRoot).sort()
+  return held.length === repositories.length && [...repositories].sort().every((repoRoot, index) => repoRoot === held[index])
+}
 
 /**
  * Ready spares in the order a claim takes them: installed or needing none,
@@ -80,7 +100,9 @@ function alive(pid: number): boolean {
  *
  * A spare is a detached, locked worktree beside the project's Thread
  * worktrees (`.spare-…`), checked out and given the outputs of the recipe's
- * install steps in the background band. Hooks don't run while it's prepared;
+ * install steps in the background band. A project folder of several
+ * repositories gets a folder mirroring it, with one such worktree of each
+ * repository at its place. Hooks don't run while it's prepared;
  * the claim's `git checkout -b` runs them, as a fresh worktree would. Records
  * live in `spares/`, one file each, so the installed app and a development
  * host sharing this root see one pool: a claim renames the record, which
@@ -130,9 +152,13 @@ export class WorktreeSpares {
     }
   }
 
-  /** Take a ready spare of `repoRoot`, or none. Only one caller anywhere gets a given spare. */
-  async claim(repoRoot: string): Promise<Spare | undefined> {
-    const ready = (await this.list()).filter((spare) => spare.repoRoot === repoRoot && spare.state === "ready")
+  /**
+   * Take a ready spare of `repoRoot`, or none; of a project folder, one
+   * holding `repositories`, no more and no fewer. Only one caller anywhere
+   * gets a given spare.
+   */
+  async claim(repoRoot: string, repositories?: readonly string[]): Promise<Spare | undefined> {
+    const ready = (await this.list()).filter((spare) => spare.repoRoot === repoRoot && spare.state === "ready" && fits(spare, repositories))
       .sort((a, b) => claimOrder(a, this.queued.has(a.id)) - claimOrder(b, this.queued.has(b.id)) || a.createdAt - b.createdAt)
     for (const spare of ready) {
       const taken = await this.holding(spare.id, () => rename(this.file(spare.id), this.file(spare.id, "claimed")).then(() => true, () => false))
@@ -145,17 +171,17 @@ export class WorktreeSpares {
   }
 
   /**
-   * Turn a claimed spare into the worktree at `path` on `branch`, with its
-   * install record. An install still running goes with it, unless the
-   * claim's commit changes what it reads; then it stops, and the Thread's
-   * start installs.
+   * Turn a claimed spare into the checkout at `path` on `branch`, each
+   * worktree at its target's commit, with its install record. An install
+   * still running goes with it, unless the claim's commits change what it
+   * reads; then it stops, and the Thread's start installs.
    */
-  async place(spare: Spare, path: string, branch: string, base: string): Promise<void> {
+  async place(spare: Spare, path: string, branch: string, targets: readonly SpareTarget[]): Promise<void> {
     const installer = this.setup?.spareInstall
     await this.holding(spare.id, async () => {
       const install = spare.install
       let running = Boolean(install && installer && (await installer.settle(spare.path)) === "running")
-      if (running && install && installer && spare.base !== base && !(await sameInputs(spare.repoRoot, spare.base, base, install.inputs))) {
+      if (running && install && installer && !(await sameInputs(spare, targets, install.inputs))) {
         await installer.stop(install.app)
         await installer.settle(spare.path)
         running = false
@@ -172,7 +198,7 @@ export class WorktreeSpares {
           })
         : undefined
       try {
-        await placeSpare(spare, path, branch, base, handOver)
+        await placeSpare(spare, path, branch, targets, handOver)
       } catch (error) {
         // Never moved: the start checks out afresh at `path`, which the record doesn't describe.
         if (!existsSync(path)) await this.setup?.forgetPrepared?.(path)
@@ -252,24 +278,37 @@ export class WorktreeSpares {
       await installer.settle(spare.path).catch(() => {})
     }
     await this.setup?.forgetPrepared?.(spare.path).catch(() => {})
-    if (existsSync(spare.path)) await setAside(spare.repoRoot, spare.path, this.trash)
-    else await git(spare.repoRoot, ["worktree", "prune"]).catch(() => {})
+    if (!existsSync(spare.path)) {
+      for (const worktree of worktreesOf(spare)) await git(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
+    } else if (spare.members) await setAsideFolder(spare, this.trash)
+    else await setAside(spare.repoRoot, spare.path, this.trash)
   }
 
+  /**
+   * `repoRoot` is a repository's top folder, or a project folder that isn't
+   * one; a project's spare holds a worktree of each repository in it.
+   */
   private async fill(repoRoot: string): Promise<void> {
-    if (existsSync(join(repoRoot, ".gitmodules"))) return
+    const project = existsSync(join(repoRoot, ".git")) ? undefined : await projectRepositories(repoRoot)
+    if (project && "refusal" in project) return
+    const repositories = project?.roots
+    if ((repositories ?? [repoRoot]).some((repository) => existsSync(join(repository, ".gitmodules")))) return
     const release = await this.lockFilling(repoRoot)
     if (!release) return
     try {
       for (;;) {
-        const spares = await this.sweep()
+        let spares = await this.sweep()
+        // A project folder whose repositories changed since its spares were made: they mirror what it was. One claimed meanwhile is a Thread's.
+        const stale = spares.filter((spare) => spare.repoRoot === repoRoot && spare.state === "ready" && !fits(spare, repositories))
+        for (const spare of stale) await this.holding(spare.id, async () => { if (await this.read(spare.id)) await this.discard(spare) })
+        spares = spares.filter((spare) => !stale.includes(spare))
         // Installs given up on while the machine was busy, stopped to make room, or never started by a host that stopped, go again.
         for (const spare of spares)
           if (spare.repoRoot === repoRoot && spare.state === "ready" && (!spare.install || spare.install.state === "stopped")) this.queue(spare.id, () => this.install(spare.id))
         if (spares.filter((spare) => spare.repoRoot === repoRoot).length >= SPARES_PER_PROJECT || spares.length >= MAX_SPARES) return
         const space = await statfs(this.projectFolder(repoRoot)).catch(() => statfs(repoRoot))
         if (space.bavail * space.bsize < MIN_FREE_BYTES) return
-        await this.prepare(repoRoot)
+        await this.prepare(repoRoot, repositories)
       }
     } finally {
       await release()
@@ -392,17 +431,19 @@ export class WorktreeSpares {
     }
   }
 
-  private async prepare(repoRoot: string): Promise<void> {
+  private async prepare(repoRoot: string, repositories: readonly string[] | undefined): Promise<void> {
     const began = performance.now()
     const id = randomUUID()
-    const base = await git(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+    const head = (repository: string) => git(repository, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+    const members = repositories && await Promise.all(repositories.map(async (repository) => ({ repoRoot: repository, base: await head(repository) })))
     const folder = this.projectFolder(repoRoot)
     await mkdir(folder, { recursive: true, mode: 0o700 })
     let spare: Spare = {
       id,
       repoRoot,
       path: join(folder, `${SPARE_PREFIX}${id.slice(0, 8)}`),
-      base,
+      base: members ? "" : await head(repoRoot),
+      ...(members && { members }),
       state: "preparing",
       pid: process.pid,
       createdAt: Date.now(),
@@ -410,9 +451,16 @@ export class WorktreeSpares {
     }
     await this.save(spare)
     try {
-      await git(repoRoot, ["worktree", "add", "--detach", "--no-checkout", spare.path, base], true)
-      await git(repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, spare.path])
-      await git(spare.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", base], true)
+      if (members) {
+        await mkdir(spare.path, { mode: 0o700 })
+        // Names the project, so the spare reads its recipe as a Thread's checkout of it does.
+        await writeFile(join(spare.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: repoRoot })}\n`, { mode: 0o600 })
+      }
+      for (const worktree of worktreesOf(spare)) {
+        await git(worktree.repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree.path, worktree.base], true)
+        await git(worktree.repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, worktree.path])
+        await git(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", worktree.base], true)
+      }
       const written = Date.now()
       // The record goes with the spare to its Thread's path (`place`).
       const recipe = await this.setup?.recipe(spare.path)
@@ -423,7 +471,7 @@ export class WorktreeSpares {
       // second has passed moves the cost here, off the send.
       const pastSecond = Math.ceil((written + 1) / 1000) * 1000 - Date.now()
       if (pastSecond > 0) await delay(pastSecond)
-      await git(spare.path, ["update-index", "-q", "--refresh"], true).catch(() => {})
+      for (const worktree of worktreesOf(spare)) await git(worktree.path, ["update-index", "-q", "--refresh"], true).catch(() => {})
       spare = { ...spare, state: "ready", outputs: carried, tookMs: Math.round(performance.now() - began) }
       await this.save(spare)
     } catch (error) {
@@ -518,22 +566,70 @@ export async function setAside(repoRoot: string, path: string, trash: string): P
 }
 
 /**
- * Turn a claimed spare into the worktree at `path` on `branch`, which the
- * start has already created at `base`. The reset writes only what changed
- * since the spare was made. `around` wraps the move, for an install that
- * goes on running through it.
+ * A project folder's spare: its folder moved into `trash` whole, each
+ * repository told where its worktree went and that it's no longer kept,
+ * then removed in the background band.
  */
-export async function placeSpare(spare: Spare, path: string, branch: string, base: string, around?: (move: () => Promise<void>) => Promise<void>): Promise<void> {
-  if (spare.base !== base) await git(spare.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", base])
-  const move = async () => {
-    await git(spare.repoRoot, ["worktree", "move", "-f", "-f", spare.path, path])
+async function setAsideFolder(spare: Spare, trash: string): Promise<void> {
+  await mkdir(trash, { recursive: true, mode: 0o700 })
+  const aside = join(trash, randomUUID())
+  await rename(spare.path, aside)
+  const worktrees = worktreesOf(spare, aside)
+  for (const worktree of worktrees) {
+    await git(worktree.repoRoot, ["worktree", "repair", worktree.path]).catch(() => {})
+    await git(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {})
   }
-  await (around ? around(move) : move())
-  await Promise.all([git(spare.repoRoot, ["worktree", "unlock", path]).catch(() => {}), git(path, ["checkout", "-q", branch])])
+  emptying.add(aside)
+  void Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "remove", "-f", "-f", worktree.path], true).catch(() => {})))
+    .then(() => removeBelowAgents(aside))
+    .then(() => Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "prune"]))))
+    .catch(() => {})
+    .finally(() => emptying.delete(aside))
 }
 
-/** Whether `inputs` are the same at two commits, so a reset from one to the other leaves them as they are. */
-async function sameInputs(repoRoot: string, from: string, to: string, inputs: readonly string[]): Promise<boolean> {
-  if (!inputs.length) return true
-  return git(repoRoot, ["diff", "--quiet", from, to, "--", ...inputs]).then(() => true, () => false)
+/**
+ * Turn a claimed spare into the checkout at `path` on `branch`, which the
+ * start has already created in each repository at its target's commit. The
+ * reset writes only what changed since the spare was made. A project
+ * folder's spare moves as one folder, each repository then told where its
+ * worktree is. `around` wraps the move, for an install that goes on
+ * running through it.
+ */
+export async function placeSpare(spare: Spare, path: string, branch: string, targets: readonly SpareTarget[], around?: (move: () => Promise<void>) => Promise<void>): Promise<void> {
+  await Promise.all(worktreesOf(spare).map(async (worktree) => {
+    const base = targets.find((target) => target.repoRoot === worktree.repoRoot)?.base
+    if (!base) throw new Error(`${basename(worktree.repoRoot)} isn't one of the repositories this checkout starts`)
+    if (worktree.base !== base) await git(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", base])
+  }))
+  const placed = worktreesOf(spare, path)
+  const move = async () => {
+    if (!spare.members) {
+      await git(spare.repoRoot, ["worktree", "move", "-f", "-f", spare.path, path])
+      return
+    }
+    await rename(spare.path, path)
+    for (const worktree of placed) await git(worktree.repoRoot, ["worktree", "repair", worktree.path])
+  }
+  await (around ? around(move) : move())
+  await Promise.all(placed.flatMap((worktree) => [
+    git(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {}),
+    git(worktree.path, ["checkout", "-q", branch]),
+  ]))
+}
+
+/** Whether `inputs` are the same at the spare's commits and the targets', so the resets leave them as they are. */
+async function sameInputs(spare: Spare, targets: readonly SpareTarget[], inputs: readonly string[]): Promise<boolean> {
+  for (const worktree of worktreesOf(spare)) {
+    const base = targets.find((target) => target.repoRoot === worktree.repoRoot)?.base
+    if (!base) return false
+    if (base === worktree.base) continue
+    // A project folder's inputs are named by their place in it; each repository compares its own.
+    const inside = relative(spare.repoRoot, worktree.repoRoot)
+    const own = inputs.flatMap((input) => {
+      const at = relative(inside, input)
+      return at.startsWith("..") || isAbsolute(at) ? [] : [at || "."]
+    })
+    if (own.length && !(await git(worktree.repoRoot, ["diff", "--quiet", worktree.base, base, "--", ...own]).then(() => true, () => false))) return false
+  }
+  return true
 }

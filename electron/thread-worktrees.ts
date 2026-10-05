@@ -9,7 +9,7 @@ import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, worktre
 import type { GitDiff } from "./contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
-import { discoverRepositories } from "./repository-discovery.js"
+import { projectRepositories } from "./repository-discovery.js"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, mergesWithoutCheckout, numstatEntries, PARALLEL_CHECKOUT, run, succeeds, untrackedLines } from "@mako/git"
 import { previewDiffs } from "./host-git.js"
@@ -22,8 +22,6 @@ const UNDER_WAY: readonly (readonly [string, string])[] = [
   ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["BISECT_LOG", "bisect"],
 ]
 const MAX_REMEMBERED_CARRIES = 64
-/** A project folder holding more repositories than this is a folder of projects, not one project. */
-const MAX_PROJECT_REPOSITORIES = 12
 /** A new Thread's branch search lists this many branches, the most recently committed. */
 const LISTED_BRANCHES = 200
 const BRANCH_PULLS_EVERY_MS = 60_000
@@ -343,11 +341,18 @@ export class ThreadWorktreeService {
   /**
    * The folder's project is about to start a worktree Thread (its composer
    * is set to Worktree): keep spares of it ready. Returns once recorded.
-   * A project folder of several repositories takes none: its Threads check out fresh.
+   * A project folder of several repositories keeps spares of all of them together.
    */
   async want(cwd: string): Promise<void> {
-    const repoRoot = await git(await realpath(cwd), ["rev-parse", "--show-toplevel"]).catch(() => "")
-    if (repoRoot && await succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])) await this.spares.want(repoRoot)
+    const folder = await realpath(cwd)
+    const repoRoot = await git(folder, ["rev-parse", "--show-toplevel"]).catch(() => "")
+    if (repoRoot) {
+      if (await succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])) await this.spares.want(repoRoot)
+      return
+    }
+    const found = await projectRepositories(folder)
+    if ("roots" in found && (await Promise.all(found.roots.map((root) => succeeds(root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])))).every(Boolean))
+      await this.spares.want(folder)
   }
 
   /** At start: give back spares that are idle or were half-made by a host that died, and empty the trash. */
@@ -940,9 +945,7 @@ export class ThreadWorktreeService {
     if (spare) ready.spare = true
     await this.save(ready)
     this.carryOutputs(conversationId, ready.repoRoot, ready.path, recipe?.prepare ?? [])
-    const wanted = this.spares.want(ready.repoRoot).catch(() => {})
-    this.wanting.add(wanted)
-    void wanted.finally(() => this.wanting.delete(wanted))
+    this.wantSpares(ready.repoRoot)
     return ready
   }
 
@@ -956,11 +959,8 @@ export class ThreadWorktreeService {
   private async createProject(conversationId: string, source: string, name: string | undefined, from: WorktreeFrom, began: number, onStep?: (step: WorktreeStep) => void, existing?: Receipt): Promise<Receipt> {
     let receipt = existing
     if (!receipt) {
-      const found = await discoverRepositories(source)
-      if (!found.roots.length)
-        throw new Error(`${basename(source)} isn't in a Git repository and holds none, so it can't have a worktree. Choose Project folder to work in the folder itself.`)
-      if (found.limited || found.roots.length > MAX_PROJECT_REPOSITORIES)
-        throw new Error(`${basename(source)} holds ${found.limited ? "more folders than Mako looks through" : `${found.roots.length} repositories`}, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.`)
+      const found = await projectRepositories(source)
+      if ("refusal" in found) throw new Error(found.refusal)
       if (from.kind !== "newest" && from.kind !== "head")
         throw new Error(`${basename(source)} holds several repositories, so its Threads start each one on a new branch. Starting from a branch you choose is for a project of one repository.`)
       const started = await Promise.all(found.roots.map(async (repoRoot) => {
@@ -988,12 +988,20 @@ export class ThreadWorktreeService {
     }
     onStep?.("checkout")
     const { branch } = receipt
-    await mkdir(receipt.path, { recursive: true, mode: 0o700 })
-    await writeFile(join(receipt.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: source })}\n`, { mode: 0o600 })
     await mapLimited(membersOf(receipt), 4, async (member) => {
       if (!(await succeeds(member.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])))
         await git(member.repoRoot, ["branch", "--no-track", branch, member.base])
+    })
+    const spare = existsSync(receipt.path) ? undefined : await this.fromSpare(receipt)
+    await mkdir(receipt.path, { recursive: true, mode: 0o700 })
+    await writeFile(join(receipt.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: source })}\n`, { mode: 0o600 })
+    await mapLimited(membersOf(receipt), 4, async (member) => {
       if (existsSync(join(member.path, ".git"))) {
+        // A start cut short while placing a spare: its repository may still have the worktree where the spare was, and kept.
+        if (!spare) {
+          await git(member.repoRoot, ["worktree", "repair", member.path]).catch(() => {})
+          await git(member.repoRoot, ["worktree", "unlock", member.path]).catch(() => {})
+        }
         if (!(await succeeds(member.path, ["symbolic-ref", "-q", "HEAD"]))) await git(member.path, ["checkout", "-q", branch])
         return
       }
@@ -1008,22 +1016,35 @@ export class ThreadWorktreeService {
     if (recipe?.carry?.length) onStep?.("carry")
     const copied = await carryFiles(source, receipt.path, recipe?.carry ?? [])
     const ready: Receipt = { ...receipt, state: "ready", copied, tookMs: Math.round(performance.now() - began) }
+    if (spare) ready.spare = true
     await this.save(ready)
     this.carryOutputs(conversationId, source, ready.path, recipe?.prepare ?? [])
+    this.wantSpares(source)
     return ready
+  }
+
+  private wantSpares(repoRoot: string): void {
+    const wanted = this.spares.want(repoRoot).catch(() => {})
+    this.wanting.add(wanted)
+    void wanted.finally(() => this.wanting.delete(wanted))
   }
 
   /** A spare placed at the receipt's path and branched, or none; a spare that fails is given back and the send checks out fresh. */
   private async fromSpare(receipt: Receipt): Promise<Spare | undefined> {
-    const spare = await this.spares.claim(receipt.repoRoot)
+    const members = membersOf(receipt)
+    const spare = await this.spares.claim(receipt.repoRoot, receipt.members?.map((member) => member.repoRoot))
     if (!spare) return undefined
     try {
-      await this.spares.place(spare, receipt.path, receipt.branch, receipt.base)
+      await this.spares.place(spare, receipt.path, receipt.branch, members.map(({ repoRoot, base }) => ({ repoRoot, base })))
     } catch {
       await this.spares.discard(spare)
       if (!existsSync(receipt.path)) return undefined
-      // Moved but not on its branch: check it out here rather than leave it detached.
-      if (!(await succeeds(receipt.path, ["symbolic-ref", "-q", "HEAD"]))) await git(receipt.path, ["checkout", "-q", receipt.branch])
+      // Moved but not done: each repository told where its worktree is, no longer kept, and on its branch rather than detached.
+      for (const member of members) {
+        await git(member.repoRoot, ["worktree", "repair", member.path]).catch(() => {})
+        await git(member.repoRoot, ["worktree", "unlock", member.path]).catch(() => {})
+        if (!(await succeeds(member.path, ["symbolic-ref", "-q", "HEAD"]))) await git(member.path, ["checkout", "-q", receipt.branch])
+      }
     }
     await this.spares.used(spare)
     // A warmed spare must obey the current recipe as well as the current inputs.

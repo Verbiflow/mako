@@ -6,7 +6,7 @@ import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts
 import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
 import { ThreadIdSchema, type ThreadId } from "../../electron/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "../../electron/contracts/thread-worktrees"
-import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railRef } from "./mock-rail-worktrees"
+import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
@@ -437,6 +437,8 @@ export function installMockBridge() {
       throw new Error("The mock desk runs no apps; ?app=<scenario> shows one.")
     },
     worktreeRemoval: async (path: string) => {
+      const suite = scene === "rail" ? railSuiteRemoval(path) : undefined
+      if (suite) return suite
       const summary = RAIL_SUMMARIES.find((candidate) => candidate.path === path)
       if (!summary && path !== sinceWorktree?.path) throw new Error("Mako didn't make this worktree, so it won't remove it.")
       const folder = path.split("/").at(-1)
@@ -489,7 +491,7 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
-    worktreeInventory: async () => ({ worktrees: [], spares: { count: 0, bytes: null } }),
+    worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),
     worktreeReview: async (path: string): Promise<WorktreeReview> => {
       if (!sinceWorktree || path !== sinceWorktree.path) throw new Error("Worktrees are unavailable in the mock bridge")
       return {

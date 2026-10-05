@@ -1,63 +1,76 @@
 import { useCallback, useEffect, useState } from "react"
 import { FolderOpenIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
-import type { WorktreeDetail, WorktreeInventory } from "../../../electron/contracts/thread-worktrees.ts"
+import type { WorktreeInventory } from "../../../electron/contracts/thread-worktrees.ts"
 import { Action, Blank, Chip, IconAction, ListCard, ListCardRow, SettingRow, Toggle } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { formatBytes, formatRelative } from "@/lib/format"
 import { desktop } from "@/state/desktop"
 import { togglePref, usePrefs } from "@/state/prefs"
 import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
-import { leavingWorktrees, readWorktreeInventory, removable, removeLandedWorktrees, removeWorktree, useLeavingWorktrees } from "@/state/worktrees"
+import { removable, worktreeCheckouts, type CheckoutDetail } from "@/lib/worktree-removal"
+import { leavingWorktrees, readWorktreeInventory, removeCheckout, removeLandedWorktrees, useLeavingWorktrees } from "@/state/worktrees"
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
 const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
 
-function Landing({ worktree }: { worktree: WorktreeDetail }) {
-  const { landing } = worktree
+function Landing({ checkout }: { checkout: CheckoutDetail }) {
+  const { landing } = checkout
   if (landing.kind === "merged") return <Chip tone="positive">Merged into {landing.into}</Chip>
-  if (landing.kind === "empty") return worktree.changes ? null : <Chip>No commits</Chip>
-  if (landing.kind === "open") return <Chip>{plural(landing.commits, "commit")} not on {landing.into}</Chip>
-  return null
+  if (landing.kind === "empty") return checkout.changes ? null : <Chip>No commits</Chip>
+  if (landing.kind !== "open") return null
+  if (checkout.worktrees.length === 1) return <Chip>{plural(landing.commits, "commit")} not on {landing.into}</Chip>
+  // Each repository's branch lands on its own, into a branch that may be named differently.
+  return checkout.worktrees.map((worktree) => worktree.landing.kind === "open" ? (
+    <Chip key={worktree.path}>{plural(worktree.landing.commits, "commit")} not on {worktree.landing.into} in {folderName(worktree.repoRoot)}</Chip>
+  ) : null)
 }
 
 /** Why the Remove button is off, or what it does. */
-function removeHint(worktree: WorktreeDetail): string {
-  if (worktree.users.length) return `In use by ${worktree.users.join(", ")}`
-  if (worktree.held) return worktree.held
-  return `Remove the folder; ${worktree.branch} keeps its commits`
+function removeHint(checkout: CheckoutDetail): string {
+  if (checkout.users.length) return `In use by ${checkout.users.join(", ")}`
+  if (checkout.held) return checkout.held
+  if (checkout.worktrees.length > 1) return `Remove the folder and its ${checkout.worktrees.length} worktrees; ${checkout.branch} keeps its commits in each repository`
+  return `Remove the folder; ${checkout.branch} keeps its commits`
 }
 
-function WorktreeRow({ worktree, onRemove }: { worktree: WorktreeDetail; onRemove: (worktree: WorktreeDetail) => void }) {
-  const place = worktree.project === worktree.repoRoot
-    ? folderName(worktree.repoRoot)
-    : `${folderName(worktree.repoRoot)}/${worktree.project.slice(worktree.repoRoot.length + 1)}`
-  const age = formatRelative(worktree.createdAt)
+/** The project and, in a project folder of several repositories, which ones. */
+function placeOf(checkout: CheckoutDetail): string {
+  const [only, ...others] = checkout.worktrees
+  if (!only) return folderName(checkout.project)
+  if (others.length) return `${folderName(checkout.project)}: ${checkout.worktrees.map((worktree) => worktree.repoRoot.slice(checkout.project.length + 1)).join(", ")}`
+  return only.project === only.repoRoot
+    ? folderName(only.repoRoot)
+    : `${folderName(only.repoRoot)}/${only.project.slice(only.repoRoot.length + 1)}`
+}
+
+function WorktreeRow({ checkout, onRemove }: { checkout: CheckoutDetail; onRemove: (checkout: CheckoutDetail) => void }) {
+  const age = formatRelative(checkout.createdAt)
   return (
     <ListCardRow className="flex items-center gap-3">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="truncate font-mono text-ui text-foreground">{worktree.branch}</span>
-          <Landing worktree={worktree} />
-          {worktree.changes ? <Chip tone="caution">{worktree.changes} uncommitted</Chip> : null}
-          {worktree.held && !worktree.changes ? <Chip tone="caution">Work under way</Chip> : null}
-          {worktree.users.length ? <Chip tone="caution">In use</Chip> : null}
-          {worktree.thread ? null : <Chip>No Thread</Chip>}
+          <span className="truncate font-mono text-ui text-foreground">{checkout.branch}</span>
+          <Landing checkout={checkout} />
+          {checkout.changes ? <Chip tone="caution">{checkout.changes} uncommitted</Chip> : null}
+          {checkout.held && !checkout.changes ? <Chip tone="caution">Work under way</Chip> : null}
+          {checkout.users.length ? <Chip tone="caution">In use</Chip> : null}
+          {checkout.thread ? null : <Chip>No Thread</Chip>}
         </div>
         <div className="mt-0.5 truncate text-label text-faint">
-          {place}
+          {placeOf(checkout)}
           {age ? ` · made ${age === "now" ? "just now" : `${age} ago`}` : ""}
-          {worktree.bytes !== null ? ` · ${formatBytes(worktree.bytes)}` : ""}
+          {checkout.bytes !== null ? ` · ${formatBytes(checkout.bytes)}` : ""}
         </div>
       </div>
-      <IconAction label="Show the folder" size="xs" onClick={() => void desktop.revealPath(worktree.path)}>
+      <IconAction label="Show the folder" size="xs" onClick={() => void desktop.revealPath(checkout.path)}>
         <FolderOpenIcon />
       </IconAction>
       <IconAction
-        label={removeHint(worktree)}
+        label={removeHint(checkout)}
         size="xs"
         className="hover:not-disabled:bg-negative/12 hover:not-disabled:text-negative"
-        disabled={Boolean(worktree.held) || worktree.users.length > 0}
-        onClick={() => onRemove(worktree)}
+        disabled={Boolean(checkout.held) || checkout.users.length > 0}
+        onClick={() => onRemove(checkout)}
       >
         <Trash2Icon />
       </IconAction>
@@ -87,9 +100,9 @@ export function WorktreesSection() {
     }
   }
 
-  const worktrees = (inventory?.worktrees ?? []).filter((worktree) => !leaving[worktree.path]).sort((a, b) => b.createdAt - a.createdAt)
+  const worktrees = worktreeCheckouts(inventory?.worktrees ?? []).filter((checkout) => !checkout.worktrees.some((worktree) => leaving[worktree.path]))
   const landed = worktrees.filter(removable)
-  const measured = worktrees.reduce((sum, worktree) => sum + (worktree.bytes ?? 0), 0)
+  const measured = worktrees.reduce((sum, checkout) => sum + (checkout.bytes ?? 0), 0)
   const spares = inventory?.spares
 
   return (
@@ -130,8 +143,8 @@ export function WorktreesSection() {
 
             {worktrees.length ? (
               <ListCard>
-                {worktrees.map((worktree) => (
-                  <WorktreeRow key={worktree.path} worktree={worktree} onRemove={(one) => void act(() => removeWorktree(one))} />
+                {worktrees.map((checkout) => (
+                  <WorktreeRow key={checkout.path} checkout={checkout} onRemove={(one) => void act(() => removeCheckout(one))} />
                 ))}
               </ListCard>
             ) : (

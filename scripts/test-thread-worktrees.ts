@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "../electron/contracts/thread-identity.js"
 import type { Prepared } from "../electron/thread-processes.js"
 import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, type Recipe } from "../electron/thread-recipe.js"
+import { projectRepositories } from "../electron/repository-discovery.js"
 import { ThreadStore } from "../electron/thread-store.js"
 import { worktreeCheckout, worktreeSlug } from "../electron/contracts/thread-worktrees.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
@@ -641,6 +642,39 @@ assert.equal(await mirroredProject(suiteCheckout.path), suite, "the checkout nam
 assert.equal(await projectRoot(suiteCheckout.path), suite)
 assert.equal(await recipePath(join(root, "recipes"), suiteCheckout.path), await recipePath(join(root, "recipes"), suite), "and reads the project's recipe")
 
+// Its spares mirror it too: a folder each, with a kept worktree of every repository at its place.
+await worktrees.settled()
+const suiteSpares = () => spares().filter((spare) => spare.repoRoot === suite && spare.state === "ready")
+assert.equal(suiteSpares().length, 2, "a project folder keeps two spares ready")
+for (const spare of suiteSpares()) {
+  assert.match(spare.path, /\/worktrees\/suite-[0-9a-f]{8}\/\.spare-[0-9a-f]{8}$/)
+  assert.deepEqual(spare.members.map((member: { repoRoot: string }) => member.repoRoot).sort(), [api, app])
+  assert.equal(await mirroredProject(spare.path), suite, "a spare reads the project's recipe as its Thread will")
+  for (const [name, repo] of [["app", app], ["api", api]] as const) {
+    assert.equal(git(join(spare.path, name), "status", "--porcelain"), "")
+    assert.match(git(repo, "worktree", "list", "--porcelain"), new RegExp(`worktree ${join(spare.path, name)}\\nHEAD [0-9a-f]+\\ndetached\\nlocked Mako keeps this checkout ready`))
+  }
+}
+// The next Thread takes one whole, each repository caught up to where its own starts.
+git(api, "commit", "--allow-empty", "-q", "-m", "third")
+const spareSuiteId = randomUUID()
+const spareSuite = await worktrees.prepare(spareSuiteId, suite, "Second suite Thread")
+assert.equal(spareSuite.spare, true, "a project folder's Thread starts from a spare")
+for (const [name, repo] of [["app", app], ["api", api]] as const) {
+  const inside = join(spareSuite.path, name)
+  assert.equal(git(inside, "rev-parse", "--abbrev-ref", "HEAD"), spareSuite.branch, `${name} is on the Thread's branch`)
+  assert.equal(git(inside, "rev-parse", "HEAD"), git(repo, "rev-parse", "HEAD"), `${name} is at its own main`)
+  assert.equal(git(inside, "status", "--porcelain"), "")
+  const listed = git(repo, "worktree", "list", "--porcelain")
+  assert.match(listed, new RegExp(`worktree ${inside}\\nHEAD [0-9a-f]+\\nbranch refs/heads/${spareSuite.branch}(\\n\\n|$)`), `${name}'s repository knows where its worktree went, and keeps it no longer`)
+  assert.doesNotMatch(listed, /prunable/)
+}
+assert.equal(readFileSync(join(spareSuite.path, "app", ".env"), "utf8"), "API=1\n", "carry runs on a spare as on a fresh checkout")
+assert.equal(await mirroredProject(spareSuite.path), suite)
+await worktrees.settled()
+assert.equal(suiteSpares().length, 2, "the taken spare is replaced")
+await worktrees.abandon(spareSuiteId)
+
 // One row per repository, each reviewed and merged on its own; together they are the Thread's checkout.
 const suitePlaced = started(suiteId)
 await worktrees.attach(suiteId)
@@ -698,6 +732,23 @@ const dropped = await worktrees.prepare(droppedId, suite, "Never started here")
 await worktrees.abandon(droppedId)
 assert.equal(existsSync(dropped.path), false)
 assert.deepEqual([git(app, "branch", "--list", dropped.branch), git(api, "branch", "--list", dropped.branch)], ["", ""])
+
+// A repository added to the project since its spares were made: they mirror what it was, so the next Thread checks out fresh, and they go.
+await worktrees.settled()
+const docs = repository("suite/docs")
+const grownId = randomUUID()
+const grown = await worktrees.prepare(grownId, suite, "With the docs")
+assert.equal(grown.spare, false, "a spare missing a repository isn't taken")
+assert.equal(git(join(grown.path, "docs"), "rev-parse", "--abbrev-ref", "HEAD"), grown.branch)
+await worktrees.settled()
+assert.deepEqual(suiteSpares().map((spare) => spare.members.map((member: { repoRoot: string }) => member.repoRoot).sort()), [[api, app, docs], [api, app, docs]], "they're replaced by spares of the project as it is")
+for (const repo of [app, api]) assert.doesNotMatch(git(repo, "worktree", "list", "--porcelain"), /prunable|\/trash\//, "and their repositories keep no record of them")
+await worktrees.abandon(grownId)
+rmSync(docs, { recursive: true, force: true })
+// A second checkout of one of its repositories, such as a linked worktree beside it, isn't another repository: the Thread's branch fits in only one.
+git(app, "worktree", "add", "-q", "-b", "feature", join(suite, "app-feature"))
+assert.deepEqual(await projectRepositories(suite), { roots: [api, app] })
+git(app, "worktree", "remove", join(suite, "app-feature"))
 await assert.rejects(worktrees.prepare(randomUUID(), suite, "x", { kind: "from", ref: "main" }), /holds several repositories/)
 recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
 
@@ -711,4 +762,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole), refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, spares mirroring it taken whole and caught up per repository, spares replaced when its repositories change, a linked worktree beside its repository left out, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole), refusals")

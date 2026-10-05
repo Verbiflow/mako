@@ -10,10 +10,10 @@ import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 import { succeeds } from "@mako/git"
 import { WorktreeStarts } from "../electron/worktree-start.js"
 import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
-import type { WorktreeBranchPull, WorktreeSummary } from "../electron/contracts/thread-worktrees.js"
+import type { WorktreeBranchPull, WorktreeDetail, WorktreeSummary } from "../electron/contracts/thread-worktrees.js"
 import { worktreeMark, worktreeMarkLabel, worktreeTip } from "../src/lib/worktree-marks.ts"
 import { landState, readLandWith } from "../src/lib/worktree-landing.ts"
-import { landedFor, removedNote } from "../src/lib/worktree-removal.ts"
+import { landedFor, removable, removedNote, worktreeCheckouts } from "../src/lib/worktree-removal.ts"
 
 /**
  * Where a new Thread's branch starts: the project folder's branch, or its
@@ -293,6 +293,30 @@ assert.equal(landedFor({ kind: "empty" }, undefined), true, "nothing committed i
 assert.equal(landedFor({ kind: "open", into: "main", commits: 2 }, undefined), false)
 assert.equal(landedFor({ kind: "open", into: "main", commits: 2 }, { landing: { kind: "merged", into: "main" } }), true)
 assert.equal(landedFor({ kind: "unknown" }, { landing: { kind: "open", into: "main", commits: 1 } }), false)
+
+// Settings lists a Thread's checkout once: a project folder's worktree of each repository is one row, and it goes whole.
+const detail = (path: string, repoRoot: string, project: string, landing: WorktreeDetail["landing"], more: Partial<WorktreeDetail> = {}): WorktreeDetail =>
+  ({ path, repoRoot, project, branch: "mako/x", base: "b", createdAt: 10, thread: null, changes: 0, held: null, landing, users: [], bytes: 100, ...more })
+const [suiteRow, soloRow, ...noMore] = worktreeCheckouts([
+  detail("/w/suite-1/x/api", "/p/suite/api", "/p/suite", { kind: "merged", into: "main" }, { createdAt: 30 }),
+  detail("/w/shop-2/y", "/p/shop", "/p/shop/web", { kind: "open", into: "main", commits: 2 }, { createdAt: 20 }),
+  detail("/w/suite-1/x/app", "/p/suite/app", "/p/suite", { kind: "empty" }, { createdAt: 25, changes: 2, users: ["a shell"], bytes: null }),
+])
+assert.equal(noMore.length, 0)
+assert.deepEqual(suiteRow && { path: suiteRow.path, repositories: suiteRow.worktrees.map((worktree) => worktree.repoRoot), createdAt: suiteRow.createdAt, changes: suiteRow.changes, users: suiteRow.users, bytes: suiteRow.bytes, landing: suiteRow.landing },
+  { path: "/w/suite-1/x", repositories: ["/p/suite/api", "/p/suite/app"], createdAt: 25, changes: 2, users: ["a shell"], bytes: 100, landing: { kind: "merged", into: "main" } }, "one row for the checkout, newest first, its worktrees' counts together")
+assert.equal(soloRow?.path, "/w/shop-2/y", "a worktree of one repository started in a subfolder is a row of its own")
+assert.equal(removable(suiteRow!), false, "anything running in any of its repositories keeps it")
+const [twoOpen] = worktreeCheckouts([
+  detail("/w/s/x/api", "/p/s/api", "/p/s", { kind: "open", into: "main", commits: 1 }),
+  detail("/w/s/x/app", "/p/s/app", "/p/s", { kind: "unknown" }),
+  detail("/w/s/x/web", "/p/s/web", "/p/s", { kind: "open", into: "trunk", commits: 2 }),
+])
+assert.deepEqual(twoOpen?.landing, { kind: "open", into: "main", commits: 3 }, "unmerged anywhere is unmerged")
+const [oneUnknown] = worktreeCheckouts([detail("/w/s/x/api", "/p/s/api", "/p/s", { kind: "merged", into: "main" }), detail("/w/s/x/app", "/p/s/app", "/p/s", { kind: "unknown" })])
+assert.equal(oneUnknown && removable(oneUnknown), false, "a repository Git can't tell about keeps the checkout")
+const [allEmpty] = worktreeCheckouts([detail("/w/s/x/api", "/p/s/api", "/p/s", { kind: "empty" }), detail("/w/s/x/app", "/p/s/app", "/p/s", { kind: "empty" })])
+assert.equal(allEmpty && removable(allEmpty), true)
 
 threads.close()
 rmSync(root, { recursive: true, force: true })

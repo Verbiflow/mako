@@ -3,7 +3,7 @@ import type { ThreadGroup } from "../../electron/contracts/thread-groups"
 import type { ThreadRunState } from "../../electron/contracts/conversation-session"
 import type { AppMark, RoomApp, RoomView } from "../../electron/contracts/thread-app"
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
-import type { ThreadWorktree, WorktreeStartReceipt, WorktreeSummary } from "../../electron/contracts/thread-worktrees"
+import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeStartReceipt, WorktreeSummary } from "../../electron/contracts/thread-worktrees"
 
 /**
  * The fixture desk's `?mock&app=rail`: four of the api project's Threads in
@@ -98,6 +98,58 @@ export function railRoom(now: number): RoomView {
     ],
     marks: RAIL_MARKS,
   }
+}
+
+const SUITE = "/Users/you/makomono"
+const SUITE_ROOT = `${ROOT}/makomono-5e1d9a07`
+
+/** Two Threads' checkouts of the makomono project folder, a worktree of each of its repositories in each: one still open, one landed in both. */
+const SUITE_WORKTREES: WorktreeDetail[] = ([
+  { folder: "spares-for-projects", repo: "mako", landing: { kind: "open", into: "main", commits: 4 }, changes: 0, bytes: 212 * MB, hours: 0.5 },
+  { folder: "spares-for-projects", repo: "mako-backend", landing: { kind: "open", into: "main", commits: 1 }, changes: 3, bytes: 64 * MB, hours: 0.5 },
+  { folder: "recipe-history", repo: "mako", landing: { kind: "merged", into: "main" }, changes: 0, bytes: 180 * MB, hours: 30 },
+  { folder: "recipe-history", repo: "mako-backend", landing: { kind: "empty" }, changes: 0, bytes: 41 * MB, hours: 30 },
+] satisfies Array<Pick<WorktreeDetail, "landing" | "changes" | "bytes"> & { folder: string; repo: string; hours: number }>).map(({ folder, repo, landing, changes, bytes, hours }, index): WorktreeDetail => ({
+  path: `${SUITE_ROOT}/${folder}/${repo}`,
+  thread: index < 2 ? ThreadIdSchema.parse("00000000-0000-4000-8000-0000000000b1") : null,
+  repoRoot: `${SUITE}/${repo}`,
+  project: SUITE,
+  branch: `mako/${folder}`,
+  base: "7d2e0a1",
+  createdAt: Date.now() - hours * 3_600_000,
+  changes,
+  held: changes ? `${repo} has changes that aren't committed. Commit or discard them, then remove the worktree.` : null,
+  landing,
+  users: [],
+  bytes,
+}))
+
+/** Settings › Worktrees for the scene: the api worktrees, each one row, and the makomono checkouts, one row each for both repositories. */
+export function railInventory(removed: ReadonlySet<string>): WorktreeInventory {
+  const api = RAIL_WORKTREES.map((worktree, index): WorktreeDetail => {
+    const summary = RAIL_SUMMARIES.find((candidate) => candidate.path === worktree.path)
+    const changes = summary?.changes ?? 0
+    return {
+      ...worktree,
+      changes,
+      held: changes ? `${worktree.path.split("/").at(-1)} has changes that aren't committed. Commit or discard them, then remove the worktree.` : null,
+      landing: summary?.landing ?? { kind: "unknown" },
+      users: MOVED[index]?.mark.state === "running" ? ["Claude", "a shell"] : [],
+      bytes: (90 + index * 35) * MB,
+    }
+  })
+  const gone = (worktree: WorktreeDetail) => removed.has(worktree.path) ||
+    (worktree.project === SUITE && [...removed].some((path) => path.startsWith(`${SUITE_ROOT}/${worktree.branch.slice("mako/".length)}/`)))
+  return { worktrees: [...api, ...SUITE_WORKTREES].filter((worktree) => !gone(worktree)), spares: { count: 3, bytes: 1_380 * MB } }
+}
+
+/** What removing one of the makomono worktrees would lose: any of its checkout's, since they go together. */
+export function railSuiteRemoval(path: string): { held: string | null; landing: WorktreeDetail["landing"] } | undefined {
+  const found = SUITE_WORKTREES.find((worktree) => worktree.path === path)
+  if (!found) return undefined
+  const together = SUITE_WORKTREES.filter((worktree) => worktree.branch === found.branch)
+  const open = together.find((worktree) => worktree.landing.kind === "open")
+  return { held: together.find((worktree) => worktree.held)?.held ?? null, landing: open?.landing ?? together.find((worktree) => worktree.landing.kind === "merged")?.landing ?? { kind: "empty" } }
 }
 
 export const RAIL_PURPOSES: ThreadPurpose[] = MOVED.flatMap((entry, index) => {
