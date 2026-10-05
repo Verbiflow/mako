@@ -8,6 +8,7 @@ import { foldTools } from "@/lib/tools"
 import { toExchanges, type Exchange } from "@/lib/exchanges"
 import { changedLiveBlockStart, isTurnStart } from "../../electron/contracts/live-content"
 import { touchedFiles, type TouchedFile } from "@/lib/context-files"
+import { nativePromptRequestIds } from "../../electron/contracts/native-prompt-identity"
 
 export interface LiveProjection {
   messages: ChatMessage[]
@@ -111,6 +112,20 @@ export function projectLive(
         snapshot.base.ref.harness
       )
     : []
+  if (snapshot.base && snapshot.requests) {
+    const ids = nativePromptRequestIds(snapshot.base.ref, snapshot.requests)
+    const seen = new Set<string>()
+    for (const message of base)
+      if (message.role === "user" && message.anchor?.id && !message.steeringFor) {
+        if (seen.has(message.anchor.id)) ids.delete(message.anchor.id)
+        seen.add(message.anchor.id)
+      }
+    for (const message of base)
+      if (message.role === "user" && message.anchor?.id && !message.steeringFor) {
+        const requestId = ids.get(message.anchor.id)
+        if (requestId) message.requestId = requestId
+      }
+  }
   if (snapshot.history) {
     const token = snapshot.history.token
     for (const message of base)

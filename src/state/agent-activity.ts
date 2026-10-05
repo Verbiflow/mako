@@ -33,9 +33,10 @@ const WORKTREE_STEPS = {
   carry: "Copying files from your folder",
 } satisfies Record<WorktreeStep, string>
 
-export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, quietForMs = 0, native, harness }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
+export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
   if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : "Connecting" }
+  if (switchingAccount) return { kind: "waiting", label: "Waiting to switch account" }
   if (preparing) return { kind: "connecting", label: "Sending" }
   if (native) return nativeAgentActivity(native)
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
