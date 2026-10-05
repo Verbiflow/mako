@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
+import type { AccountRemoval, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
 import {
   credentialFingerprint,
   loginPending,
@@ -280,10 +280,11 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error }
 }
 
-async function removeAccount(name: string): Promise<void> {
+async function removeAccount(name: string): Promise<AccountRemoval> {
   if (name === "default")
     throw new Error("The default account is the CLI's own login")
   await rm(accountDir("codex", name), { recursive: true, force: true })
+  return {}
 }
 
 async function accountEnv(

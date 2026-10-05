@@ -12,10 +12,13 @@ import { codexSkillSource } from "./skills.js"
 import { resolveCodexExecutable } from "./executable.js"
 import { codexUtilityRunner } from "./utility.js"
 import { npmInstall } from "../update-source.js"
+import { codexUsageHistory } from "./usage-history.js"
+import { codexPresentation } from "./presentation.js"
 
 export const installCodex: ProviderModule = (host) => installHarness(host, {
   provider: "codex",
-  presentation: { icon: { id: "codex-cloud", tint: "currentColor" } },
+  presentation: codexPresentation,
+  diagnostics: {},
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -52,5 +55,5 @@ export const installCodex: ProviderModule = (host) => installHarness(host, {
     ],
   },
   utility: codexUtilityRunner,
-  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: codexUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
 })
