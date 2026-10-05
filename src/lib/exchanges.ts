@@ -20,7 +20,7 @@ import { textOf } from "@/lib/format"
 export const LEAD_EXCHANGE_ID = "lead"
 
 export interface Exchange {
-  /** Stable across re-renders: the id of the message that opened the exchange. */
+  /** A retained Mako request when proven, otherwise the opening message ID. Native anchors stay separate. */
   id: string
   /** The user's message, absent for anything the agent said unprompted. */
   prompt?: ChatMessage
@@ -202,7 +202,7 @@ export function toExchanges(
           ? exchanges.pop()
           : undefined
       current = {
-        id: message.id,
+        id: message.requestId ? `acp-request-${message.requestId}` : message.id,
         prompt: message,
         response: [],
         system: folded?.opener ? [{ message: folded.opener, after: 0 }, ...folded.system] : [],
@@ -265,6 +265,80 @@ export function toExchanges(
       ? old
       : exchange
   })
+}
+
+function promptWords(exchange: Exchange): string {
+  return exchange.prompt ? textOf(exchange.prompt.blocks).replace(/\s+/g, " ").trim() : ""
+}
+
+/** Below this length a prompt inside another is chance ("yes", "continue"), not the same prompt retold. */
+const RETOLD_MIN = 24
+/** Retelling is a visual fallback; never scan an entire history for every new prompt. */
+const RETOLD_LOOKBEHIND = 64
+
+function samePrompt(left: string, right: string): boolean {
+  if (left === right) return left !== ""
+  const [shorter, longer] = left.length < right.length ? [left, right] : [right, left]
+  return shorter.length >= RETOLD_MIN && longer.includes(shorter)
+}
+
+/**
+ * The turns that came back under another id, by their old id. A host
+ * checkpoint hands a finished conversation to its native history, whose
+ * messages have the provider's ids, so a covered range can be renamed; the
+ * native record can also add or drop a prompt, and retell one with its
+ * attachments or spacing written differently. Prompts are matched in order,
+ * by their words; equal-sized gaps use positional layout continuity. This is
+ * best-effort presentation only. It is never native correspondence, fork,
+ * replay, deduplication or execution-ownership evidence. Proven request IDs
+ * are supplied upstream from retained native receipts instead.
+ */
+export function renamedExchanges(before: readonly Exchange[], after: readonly Exchange[]): Map<string, string> {
+  const renamed = new Map<string, string>()
+  const kept = new Set(after.map((exchange) => exchange.id))
+  const gone = before.filter((exchange) => !kept.has(exchange.id))
+  if (gone.length === 0) return renamed
+  const had = new Set(before.map((exchange) => exchange.id))
+  const arrived = after.filter((exchange) => !had.has(exchange.id))
+  if (arrived.length === 0) return renamed
+  const goneWords = gone.map(promptWords)
+  const exact = new Map<string, number[]>()
+  goneWords.forEach((words, index) => {
+    if (!words) return
+    const positions = exact.get(words)
+    if (positions) positions.push(index)
+    else exact.set(words, [index])
+  })
+  const matches: [number, number][] = []
+  let floor = gone.length
+  for (let next = arrived.length - 1; next >= 0 && floor > 0; next -= 1) {
+    const words = promptWords(arrived[next]!)
+    const positions = exact.get(words)
+    while (positions?.length && positions.at(-1)! >= floor) positions.pop()
+    let matched = positions?.at(-1)
+    const lower = Math.max(0, floor - RETOLD_LOOKBEHIND, matched === undefined ? 0 : matched + 1)
+    for (let old = floor - 1; old >= lower; old -= 1) {
+      if (!samePrompt(goneWords[old]!, words)) continue
+      matched = old
+      break
+    }
+    if (matched !== undefined) {
+      matches.push([matched, next])
+      floor = matched
+    }
+  }
+  matches.reverse()
+  let from: [number, number] = [-1, -1]
+  // SAFETY: The sentinel literal has exactly two numeric lengths, matching each tuple in matches.
+  for (const to of [...matches, [gone.length, arrived.length] as [number, number]]) {
+    const span = to[0] - from[0] - 1
+    if (span > 0 && span === to[1] - from[1] - 1)
+      for (let step = 1; step <= span; step += 1)
+        renamed.set(gone[from[0] + step]!.id, arrived[from[1] + step]!.id)
+    if (to[0] < gone.length) renamed.set(gone[to[0]]!.id, arrived[to[1]]!.id)
+    from = to
+  }
+  return renamed
 }
 
 /** Everything the agent said in an exchange, as plain text for the clipboard. */

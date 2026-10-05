@@ -23,6 +23,8 @@ export type {
   RewindPreview,
   RewindInput,
   AccountHarness,
+  AccountLogin,
+  AccountLoginResult,
   AccountProvider,
   AccountUsage,
   AccountProviderInfo,

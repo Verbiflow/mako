@@ -8,7 +8,9 @@ export function connectionStatusText(connection: ProviderConnection): string {
   if (state.status === "signed-out") return "Not signed in"
   const who = state.account ? `Signed in as ${state.account}` : "Signed in"
   const via =
-    state.source === "env"
+    state.source === "account"
+      ? "using an account added in Mako"
+      : state.source === "env"
       ? "using a configured API key"
       : state.source === "cli"
         ? `using ${connection.label}’s CLI login`
