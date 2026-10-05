@@ -30,7 +30,7 @@ import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
-import { projectFolder } from "@/lib/worktree-paths"
+import { checkoutOf, projectFolder } from "@/lib/worktree-paths"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { togglePinned, usePrefs } from "@/state/prefs"
@@ -179,7 +179,7 @@ export const ThreadRow = memo(function ThreadRow({
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
   // The rail follows project folders; a row in a worktree, or moved by its harness, follows its own for the branch.
-  const ownCheckouts = [...(ref.worktrees ?? []).map((worktree) => worktree.path), ref.currentCwd ?? ""].filter(Boolean).join("\n")
+  const ownCheckouts = [...(ref.worktrees ?? []).filter((worktree) => !worktree.mirrors).map((worktree) => worktree.path), ref.currentCwd ?? ""].filter(Boolean).join("\n")
   useEffect(() => {
     if (ownCheckouts) followCheckouts(ownCheckouts.split("\n"))
   }, [ownCheckouts])
@@ -190,7 +190,8 @@ export const ThreadRow = memo(function ThreadRow({
   // A worktree's app is its Thread's own; the project folder's app is marked on the folder's header.
   const checkout = useWorktrees((state) => {
     const workingIn = workingFolder(state, ref)
-    return (worktreeAt(state.worktrees, workingIn) ?? worktreeAt(state.outside, workingIn))?.worktree.path
+    const within = (worktreeAt(state.worktrees, workingIn) ?? worktreeAt(state.outside, workingIn))?.worktree
+    return within && checkoutOf(within)
   })
   const project = useWorktrees((state) => projectFolder(ref.worktrees, ref.cwd) ?? (ref.cwd ? state.folderMap(ref.cwd) : undefined))
   const active = useSession((state) => state.meta?.sessionFile === ref.path)

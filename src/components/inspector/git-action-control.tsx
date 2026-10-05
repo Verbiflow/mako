@@ -85,7 +85,7 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
   const status = useSession((state) => state.git)
   const state = useGitPush(cwd, branch)
   const branchPull = useBranchPull()
-  const worktree = useWorktrees((current) => worktreeAt(current.worktrees, status?.cwd)?.worktree)
+  const worktree = useWorktrees((current) => worktreeAt(current.worktrees, status?.root)?.worktree)
   const { review, reread } = useWorktreeReview(worktree?.path, status)
   const landed = useWorktreeSummaries((current) => (worktree ? current.byPath[worktree.path]?.landing.kind === "merged" : false))
   const last = usePrefs((prefs) => readLandWith(worktree ? prefs.landWith[worktree.repoRoot] : undefined))

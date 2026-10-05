@@ -23,7 +23,7 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "
  */
 export function WorktreeReview() {
   const status = useSession((state) => state.git)
-  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, status?.cwd)?.worktree)
+  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, status?.root)?.worktree)
   const { review, reread } = useWorktreeReview(worktree?.path, status)
   const summary = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path] : undefined))
   const branchPull = useBranchPull()

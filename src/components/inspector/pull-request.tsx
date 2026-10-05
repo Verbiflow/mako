@@ -41,8 +41,8 @@ export function PullRequestCard() {
   const ahead = useSession((state) => state.git?.ahead ?? 0)
   const upstream = useSession((state) => state.git?.upstream)
   const behind = useSession((state) => state.git?.behind ?? 0)
-  const cwd = useSession((state) => state.git?.cwd)
-  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
+  const repository = useSession((state) => state.git?.root)
+  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, repository)?.worktree)
   const composing = usePullComposer(branchPull?.root)
 
   if (!branchPull) return null

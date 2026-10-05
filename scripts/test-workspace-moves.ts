@@ -11,7 +11,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
-import type { ThreadWorktree, WorktreeSummary, WorktreeUpdate } from "../electron/contracts/thread-worktrees.js"
+import type { ThreadWorktree, WorktreeReview, WorktreeSummary, WorktreeUpdate } from "../electron/contracts/thread-worktrees.js"
+import type { ThreadCheckout } from "../electron/thread-worktrees.js"
 import type { WorkspaceMoves as WorkspaceMovesState } from "../electron/contracts/workspace-moves.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/mcp-reach.js"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
@@ -40,6 +41,9 @@ try {
   const worktree: ThreadWorktree = { path: worktreePath, thread: ThreadIdSchema.parse(randomUUID()), repoRoot: project, project, branch: "mako/thread", base: git(project, "rev-parse", "HEAD"), createdAt: Date.now() }
 
   let placed: ThreadWorktree | undefined
+  let projectCheckout: ThreadCheckout | undefined
+  const reviews = new Map<string, WorktreeReview>()
+  const mergedPaths: string[] = []
   const removedPaths: string[] = []
   const updates: WorktreeUpdate[] = [
     { kind: "conflicts", from: "origin/main", files: ["a.txt", "b.txt"] },
@@ -47,9 +51,13 @@ try {
     { kind: "current", from: "origin/main" },
   ]
   const worktrees = {
-    ofConversation: () => placed,
+    threadCheckout: () => projectCheckout ?? (placed && { path: placed.path, project: placed.repoRoot, branch: placed.branch, worktrees: [placed] }),
+    review: async (path: string) => reviews.get(path) ?? assert.fail(`no review of ${path}`),
     ahead: async () => 0,
-    merge: async () => ({ branch: worktree.branch, into: "main" }),
+    merge: async (path: string) => {
+      mergedPaths.push(path)
+      return { branch: worktree.branch, into: "main" }
+    },
     remove: async (path: string) => {
       removedPaths.push(path)
       return { root, worktrees: [] }
@@ -64,7 +72,10 @@ try {
   }
 
   assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, changed: 2 }, "a new worktree takes the checkout's uncommitted files")
-  assert.deepEqual(await moveablePlace(worktrees, "c", join(root)), { refused: "This folder isn't in a Git repository, so there's no branch to move onto." })
+  const plain = join(root, "plain")
+  mkdirSync(plain)
+  assert.deepEqual(await moveablePlace(worktrees, "c", plain), { refused: "This folder isn't in a Git repository and holds none, so there's no branch to move onto." })
+  assert.deepEqual(await moveablePlace(worktrees, "c", root), { project: realpathSync(root), changed: 2 }, "a project folder holding repositories moves onto one branch in each, with each one's uncommitted files")
   assert.deepEqual(await moveablePlace(null, "c", project), { refused: "Worktrees need the Thread store, which didn't open." })
   placed = worktree
   assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, joins: "mako/thread", changed: 0 }, "a Thread with a worktree is joined and nothing moves")
@@ -297,6 +308,37 @@ try {
   assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), /^Removed this Thread's worktree, .* its branch, mako\/thread, is kept/is)
   assert.deepEqual(removedPaths, [worktreePath])
   assert.deepEqual(changed, [1, 1, 1, 1], "windows are told to read the worktrees again after a merge and a removal")
+
+  // A project folder of several repositories: one worktree per repository on the one branch, merged together or not at all.
+  const checkoutPath = join(root, "checkout")
+  mkdirSync(checkoutPath)
+  const members = ["api", "web"].map((name): ThreadWorktree => ({ ...worktree, path: join(checkoutPath, name), repoRoot: join(root, name), project: root }))
+  projectCheckout = { path: checkoutPath, project: root, branch: "mako/thread", worktrees: members }
+  sources.set("g", { ...sources.get("g")!, cwd: checkoutPath })
+  const ofProject = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} })))
+  assert.equal(ofProject.editsIn, "this Thread's worktree", "the folder mirroring the project is the Thread's worktree")
+  assert.deepEqual(ofProject.threadWorktree, {
+    folder: checkoutPath, branch: "mako/thread", mainCheckout: root,
+    repositories: members.map((member) => ({
+      folder: member.path, mainCheckout: member.repoRoot, commitsSinceBranching: 0, startedFrom: "origin/main",
+      behind: { from: "origin/main", commits: 2 },
+      pullRequest: { number: 7, state: "open", url: "https://github.com/o/r/pull/7", checks: "failed" },
+    })),
+  }, "each repository's branch stands on its own")
+  const review = (path: string, commits: number, merge: WorktreeReview["merge"]): WorktreeReview =>
+    ({ path, branch: "mako/thread", into: "main", base: worktree.base, commits, files: [], merge, behind: null })
+  reviews.set(members[0]!.path, review(members[0]!.path, 1, { ok: false, reason: "It conflicts with main." }))
+  reviews.set(members[1]!.path, review(members[1]!.path, 2, { ok: true, into: "main" }))
+  const refusedMerge = await agent.callTool({ name: "worktree_merge", arguments: {} })
+  assert.equal(refusedMerge.isError, true)
+  assert.equal(text(refusedMerge), "Nothing was merged. api: It conflicts with main.")
+  assert.deepEqual(mergedPaths, [worktreePath], "one repository's refusal merges none of them")
+  reviews.set(members[0]!.path, review(members[0]!.path, 0, { ok: false, reason: "Nothing is committed here that main doesn't have." }))
+  assert.equal(text(await agent.callTool({ name: "worktree_merge", arguments: {} })), "Merged mako/thread in web into main. The branch and this Thread's worktree are still there.")
+  assert.deepEqual(mergedPaths, [worktreePath, members[1]!.path], "a repository with nothing committed is left out")
+  assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), new RegExp(`^Removed this Thread's worktree, ${checkoutPath}\\. .* kept with everything committed on it in each repository\\.$`))
+  assert.deepEqual(removedPaths, [worktreePath, members[0]!.path], "removing any of a project's worktrees removes its checkout")
+  projectCheckout = undefined
 
   grants.revoke("binding", "g")
   await assert.rejects(agent.listTools(), { code: 401 })

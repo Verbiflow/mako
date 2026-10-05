@@ -9,7 +9,7 @@ import type { CheckoutHead, CheckoutHeads } from "../electron/contracts/checkout
 import { moveablePlace } from "../electron/workspace-tools.js"
 
 const unused = () => Promise.reject(new Error("not called"))
-const noWorktrees = { ofConversation: () => undefined, ahead: unused, merge: unused, remove: unused, update: unused, summary: unused }
+const noWorktrees = { threadCheckout: () => undefined, ahead: unused, merge: unused, remove: unused, review: unused, update: unused, summary: unused }
 
 /**
  * Checkout heads against real repositories: what HEAD reads as in each state

@@ -121,4 +121,24 @@ const setsBefore = sets
 applyThreads([...listed])
 assert.equal(sets, setsBefore, "a new list naming the same worktrees changes nothing")
 
-console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, moved by its harness vs a cd, detached, removed, Mako's own excluded; named by the host: one project before any head, project filter, live folder, harness move, branch from head, quiet relist")
+// A Thread's checkout of a project folder holding several repositories: a worktree of each inside the folder mirroring it.
+const suite = "/Users/you/suite"
+const mirror = "/Users/you/.mako/worktrees/suite-1/rename"
+const suiteThread = ThreadIdSchema.parse("00000000-0000-4000-8000-000000000003")
+const member = (name: string) => ({ thread: suiteThread, path: `${mirror}/${name}`, repoRoot: `${suite}/${name}`, project: suite, branch: "mako/rename", base: "0".repeat(40), createdAt: 0 })
+worktreesStore.set({ ...worktreesStore.get(), worktrees: [made, member("api"), member("app")] })
+// Any change the folder map follows rebuilds it over the worktrees now listed, as a list from the host does.
+const { chatFoldersStore } = await import("@/state/chat-folders")
+chatFoldersStore.set({ ...chatFoldersStore.get(), projects: new Set(chatFoldersStore.get().projects) })
+const ofSuite = worktreesStore.get()
+assert.equal(worktreeAt(ofSuite.worktrees, `${mirror}/app/web`)?.worktree.repoRoot, `${suite}/app`, "a folder in one repository finds that repository's worktree")
+assert.deepEqual(worktreeAt(ofSuite.worktrees, mirror)?.worktree.branch, "mako/rename", "the checkout itself finds the Thread's branch")
+assert.equal(ofSuite.folderMap(`${mirror}/app/web`), `${suite}/app/web`)
+assert.equal(ofSuite.folderMap(mirror), suite, "and files under the project folder")
+assert.equal(ofSuite.folderMap(`${mirror}/notes`), `${suite}/notes`)
+const mirrored = { harness: "codex", nativeId: "x-9", path: "/p/x-9.jsonl", cwd: mirror, worktrees: [{ path: mirror, repoRoot: suite, mirrors: true as const }], updatedAt: "2026-09-28T09:00:04Z" }
+applyThreads([...listed, mirrored])
+assert.equal(worktreesStore.get().outside.some((entry) => entry.path === mirror), false, "the checkout is no worktree made outside Mako")
+assert.equal(threadFolderKey(mirrored), threadFolderKey({ cwd: suite }), "its sessions file under the project, the checkout removed or not")
+
+console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, moved by its harness vs a cd, detached, removed, Mako's own excluded; named by the host: one project before any head, project filter, live folder, harness move, branch from head, quiet relist; a project checkout of several repositories")

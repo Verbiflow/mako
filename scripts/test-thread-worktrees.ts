@@ -5,11 +5,12 @@ import { randomUUID } from "node:crypto"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "../electron/contracts/thread-identity.js"
 import type { Prepared } from "../electron/thread-processes.js"
-import { inputsDigest, RecipeSchema, type Recipe } from "../electron/thread-recipe.js"
+import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, type Recipe } from "../electron/thread-recipe.js"
 import { ThreadStore } from "../electron/thread-store.js"
-import { worktreeSlug } from "../electron/contracts/thread-worktrees.js"
+import { worktreeCheckout, worktreeSlug } from "../electron/contracts/thread-worktrees.js"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "../electron/worktree-carry.js"
 
@@ -612,6 +613,94 @@ const looseDigest = await inputsDigest(loosePlain, ["db"])
 writeFileSync(join(loosePlain, "db", "002.sql"), "two\n")
 assert.notEqual(await inputsDigest(loosePlain, ["db"]), looseDigest, "outside Git, every file in the folder counts")
 
+// A project folder holding several repositories: the Thread's checkout mirrors it, with a worktree of each on one branch.
+const suite = join(root, "suite")
+const app = repository("suite/app")
+const api = repository("suite/api")
+git(api, "commit", "--allow-empty", "-q", "-m", "second")
+writeFileSync(join(suite, "notes.md"), "shared notes\n")
+writeFileSync(join(suite, "scratch.txt"), "not carried\n")
+recipe = RecipeSchema.parse({ carry: ["app/.env", "api/.env.*", "notes.md"] })
+const suiteId = randomUUID()
+const suiteCheckout = await worktrees.prepare(suiteId, suite, "Rename the account API")
+assert.match(suiteCheckout.path, /\/worktrees\/suite-[0-9a-f]{8}\/rename-account-api$/)
+assert.equal(suiteCheckout.cwd, suiteCheckout.path, "the conversation runs in the folder mirroring the project")
+assert.equal(suiteCheckout.branch, "mako/rename-account-api")
+for (const [name, repo] of [["app", app], ["api", api]] as const) {
+  const inside = join(suiteCheckout.path, name)
+  assert.equal(git(inside, "rev-parse", "--abbrev-ref", "HEAD"), suiteCheckout.branch, `${name} is on the Thread's branch`)
+  assert.equal(git(inside, "rev-parse", "HEAD"), git(repo, "rev-parse", "HEAD"), `${name} starts from its own main`)
+  assert.equal(realpathSync(git(inside, "rev-parse", "--path-format=absolute", "--git-common-dir")), join(repo, ".git"), `${name} is a worktree of its own repository`)
+}
+assert.equal(readFileSync(join(suiteCheckout.path, "app", ".env"), "utf8"), "API=1\n", "the recipe names files inside a repository by their place in the project")
+assert.equal(readFileSync(join(suiteCheckout.path, "api", ".env.local"), "utf8"), "LOCAL=1\n")
+assert.equal(readFileSync(join(suiteCheckout.path, "notes.md"), "utf8"), "shared notes\n", "and files outside every repository")
+assert.equal(existsSync(join(suiteCheckout.path, "scratch.txt")), false, "a loose file the recipe doesn't name stays behind")
+assert.equal(suiteCheckout.copied, 3)
+assert.equal(await mirroredProject(suiteCheckout.path), suite, "the checkout names the project it mirrors")
+assert.equal(await projectRoot(suiteCheckout.path), suite)
+assert.equal(await recipePath(join(root, "recipes"), suiteCheckout.path), await recipePath(join(root, "recipes"), suite), "and reads the project's recipe")
+
+// One row per repository, each reviewed and merged on its own; together they are the Thread's checkout.
+const suitePlaced = started(suiteId)
+await worktrees.attach(suiteId)
+const suiteRows = threads.worktrees().filter((worktree) => worktree.thread === suitePlaced.thread).sort((a, b) => a.path.localeCompare(b.path))
+assert.deepEqual(suiteRows.map(({ path, repoRoot, project, branch }) => ({ path, repoRoot, project, branch })), [
+  { path: join(suiteCheckout.path, "api"), repoRoot: api, project: suite, branch: suiteCheckout.branch },
+  { path: join(suiteCheckout.path, "app"), repoRoot: app, project: suite, branch: suiteCheckout.branch },
+])
+for (const row of suiteRows) assert.equal(worktreeCheckout(row), suiteCheckout.path)
+const storeRows = (() => {
+  const db = new DatabaseSync(join(root, "threads.sqlite"), { readOnly: true })
+  try {
+    return db.prepare("SELECT path, repo_root FROM thread_worktrees WHERE thread_id = ?").all(suitePlaced.thread)
+  } finally {
+    db.close()
+  }
+})()
+assert.deepEqual(storeRows.map((row) => ({ ...row })), [{ path: suiteCheckout.path, repo_root: suite }], "the Thread keeps one checkout row, the one an older build reads")
+const ofSuite = worktrees.threadCheckout(suiteId)
+assert.deepEqual(ofSuite && { path: ofSuite.path, project: ofSuite.project, branch: ofSuite.branch, worktrees: ofSuite.worktrees.length }, { path: suiteCheckout.path, project: suite, branch: suiteCheckout.branch, worktrees: 2 })
+writeFileSync(join(suiteCheckout.path, "api", "web", "index.ts"), "export const renamed = 1\n")
+git(join(suiteCheckout.path, "api"), "commit", "-qam", "rename")
+const apiReview = await worktrees.review(join(suiteCheckout.path, "api"))
+assert.deepEqual([apiReview.commits, apiReview.files.map((file) => file.path)], [1, ["web/index.ts"]])
+assert.equal((await worktrees.review(join(suiteCheckout.path, "app"))).commits, 0, "each repository's review is its own")
+assert.equal(await worktrees.joinFolder(suiteId, randomUUID(), join(app, "web")), join(suiteCheckout.path, "app", "web"), "a fork from inside one repository joins the same folder of the checkout")
+assert.equal(await worktrees.joinFolder(suiteId, randomUUID(), suite), suiteCheckout.path)
+
+// Removing any of its worktrees removes the checkout, and only when none of them would lose work.
+writeFileSync(join(suiteCheckout.path, "app", "draft.txt"), "draft\n")
+await assert.rejects(worktrees.remove(join(suiteCheckout.path, "api")), /app has changes that aren't committed/)
+assert.equal(existsSync(join(suiteCheckout.path, "api")), true)
+rmSync(join(suiteCheckout.path, "app", "draft.txt"))
+await worktrees.remove(join(suiteCheckout.path, "api"))
+assert.equal(existsSync(suiteCheckout.path), false, "the whole checkout goes")
+assert.equal(threads.worktrees().some((worktree) => worktree.thread === suitePlaced.thread), false)
+assert.ok(git(api, "rev-parse", "--verify", "--quiet", `refs/heads/${suiteCheckout.branch}`), "the branches stay with what was committed")
+
+// Continuing on a branch moves each repository's uncommitted files into its own worktree.
+writeFileSync(join(app, "web", "index.ts"), "export const moving = 1\n")
+writeFileSync(join(api, "new.txt"), "untracked\n")
+const carryBothId = randomUUID()
+const carryBoth = await worktrees.prepareFork(randomUUID(), carryBothId, suite, "Carry both")
+assert.equal(await worktrees.moveChanges(carryBothId), 2)
+assert.equal(readFileSync(join(carryBoth.path, "app", "web", "index.ts"), "utf8"), "export const moving = 1\n")
+assert.equal(readFileSync(join(carryBoth.path, "api", "new.txt"), "utf8"), "untracked\n")
+assert.deepEqual([git(app, "status", "--porcelain"), git(api, "status", "--porcelain")], ["", ""], "the project folder's repositories are left clean")
+assert.equal(await worktrees.moveChanges(carryBothId), 2, "a repeated move answers the same")
+const suiteLoose = (await worktrees.inventory()).worktrees.filter((worktree) => worktree.path.startsWith(`${carryBoth.path}/`))
+assert.deepEqual(suiteLoose.map((worktree) => worktree.repoRoot).sort(), [api, app], "a checkout no Thread joined lists each repository's worktree")
+
+// One whose conversation never started is given back whole, its empty branches too.
+const droppedId = randomUUID()
+const dropped = await worktrees.prepare(droppedId, suite, "Never started here")
+await worktrees.abandon(droppedId)
+assert.equal(existsSync(dropped.path), false)
+assert.deepEqual([git(app, "branch", "--list", dropped.branch), git(api, "branch", "--list", dropped.branch)], ["", ""])
+await assert.rejects(worktrees.prepare(randomUUID(), suite, "x", { kind: "from", ref: "main" }), /holds several repositories/)
+recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })
+
 // Folders that can't have one say what to do instead.
 const plain = join(root, "plain")
 mkdirSync(plain)
@@ -622,4 +711,4 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 await worktrees.settled()
 threads.close()
 rmSync(root, { recursive: true, force: true })
-console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, refusals")
+console.log("thread worktrees: names, subfolder, the recipe's carry and install outputs at any depth, one per conversation, attach, resume, in-use, dirty, branch kept, outside removal, spares (fill, claim, catch up, outputs that no longer fit their inputs, two hosts, orphans, idle), install records that travel only when the main checkout's proves them, virtual environments refused, credentials carried as copies and named at save, legacy secrets read as carry, carry links (a folder of links, a file link, made the worktree's own by worktree_bring, tracked paths refused), big copied folders measured with a link suggested, writes through links told from each checkout's own, a path inside an ignored folder, no recipe means nothing extra, inventory (landed, squashed, empty, dirty, in use, size), review (committed, renamed, untracked, diffs), merge (dirty, conflict, main dirty, merged), continue (moved staged, repeated, kept stash, drifted, one per Thread, joining it, abandoned, cut short, checkout busy), same names at once, loose worktrees, detached and mid-rebase removal, stale staging, a project folder of several repositories (one checkout mirroring it, carry by project path, one store row, per-repository review, fork joining, removal together, changes moved per repository, abandoned whole), refusals")

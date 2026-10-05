@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises"
 import { connect } from "node:net"
 import { basename, join } from "node:path"
 import { ThreadIdSchema, type ThreadId } from "./contracts/thread-identity.js"
-import { worktreeSlug } from "./contracts/thread-worktrees.js"
+import { worktreeCheckout, worktreeSlug } from "./contracts/thread-worktrees.js"
 import {
   AppKeySchema,
   THREAD_HOST_SUFFIX,
@@ -174,8 +174,8 @@ export class ThreadEnvironments {
       if (!thread) throw new Error("An app belongs to a folder or a Thread")
       return { app: AppKeySchema.parse(thread) }
     }
-    const worktree = this.dependencies.store.worktrees().find((candidate) => candidate.path === checkout)
-    if (worktree) return { app: AppKeySchema.parse(worktree.thread), name: basename(worktree.path) }
+    const worktree = this.dependencies.store.worktrees().find((candidate) => candidate.path === checkout || worktreeCheckout(candidate) === checkout)
+    if (worktree) return { app: AppKeySchema.parse(worktree.thread), name: basename(checkout) }
     return { app: folderApp(checkout), name: basename(checkout) }
   }
 

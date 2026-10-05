@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { WorktreeOrigins } from "../electron/worktree-origins.js"
+import { PROJECT_CHECKOUT_FILE } from "../electron/contracts/thread-worktrees.js"
 
 /**
  * Which worktree a session's folder is in, against real repositories:
@@ -65,6 +66,20 @@ try {
   mkdirSync(join(repo, ".git", "modules", "vendored"), { recursive: true })
   writeFileSync(join(submodule, ".git"), `gitdir: ${join(repo, ".git", "modules", "vendored")}\n`)
   assert.equal(origins.of(submodule), undefined, "a submodule's .git file points without a commondir, so it's no worktree")
+
+  // A Thread's checkout of a project folder holding several repositories is filed under the project, marked as no worktree.
+  const suite = join(root, "suite")
+  mkdirSync(suite)
+  const mirror = join(root, "home", ".mako", "worktrees", "suite-1", "rename")
+  mkdirSync(mirror, { recursive: true })
+  writeFileSync(join(mirror, PROJECT_CHECKOUT_FILE), JSON.stringify({ project: suite }))
+  git(repo, "worktree", "add", "-q", "-b", "mako/rename", join(mirror, "app"))
+  assert.deepEqual(origins.of(mirror), { path: mirror, repoRoot: suite, mirrors: true }, "the checkout itself mirrors the project")
+  assert.deepEqual(origins.of(join(mirror, "app")), { path: join(mirror, "app"), repoRoot: repo }, "a repository's worktree inside it is a worktree of its own")
+  await origins.flush()
+  rmSync(mirror, { recursive: true, force: true })
+  git(repo, "worktree", "prune")
+  assert.deepEqual(new WorktreeOrigins(memory).of(mirror), { path: mirror, repoRoot: suite, mirrors: true }, "and stays filed there once removed")
 
   // Every folder a catalog could hold, twice: the first pass reads the disk, the second only memory.
   const folders = Array.from({ length: 400 }, (_, index) => join([repo, claude, codex, plain][index % 4] ?? repo, `deep/${index}`))
@@ -142,7 +157,7 @@ try {
   assert.equal(new WorktreeOrigins(memory).of(join(root, "home", ".codex", "worktrees", "a1b2", "app", "x")), undefined,
     "a torn file starts the memory over without failing")
 
-  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, /private spelling, submodule, removed while running, after restart, recalled in the asked spelling, removed unseen, hosts saving at once, a dead host's lock, torn file")
+  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, a project checkout of several repositories (and after removal), /private spelling, submodule, removed while running, after restart, recalled in the asked spelling, removed unseen, hosts saving at once, a dead host's lock, torn file")
   console.log(`${folders.length} folders: ${cold.toFixed(1)} ms first, ${warm.toFixed(2)} ms again`)
 } finally {
   rmSync(root, { recursive: true, force: true })

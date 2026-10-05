@@ -64,7 +64,7 @@ export const THREAD_STORE_SCHEMA = 1
  * ignore. The schema number rises only for a change an older reader would
  * misread; raising it refuses the whole store to every older host.
  */
-export const THREAD_STORE_MIGRATION = 3
+export const THREAD_STORE_MIGRATION = 4
 
 /**
  * The store is synchronous on the host's main thread. Opening waits as long
@@ -357,10 +357,28 @@ CREATE TABLE IF NOT EXISTS thread_worktrees (
   repo_root TEXT NOT NULL, project TEXT NOT NULL, branch TEXT NOT NULL, base TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS thread_worktrees_thread ON thread_worktrees(thread_id, device_id);
 `
+/**
+ * For a Thread's checkout of a project folder holding several repositories,
+ * whose `thread_worktrees` row is the folder mirroring the project: each
+ * repository's worktree inside it. A table of its own, so the Thread keeps
+ * one row there that older builds read as they always have.
+ */
+const WORKTREE_REPOSITORY_TABLE = `
+CREATE TABLE IF NOT EXISTS thread_worktree_repositories (
+  path TEXT PRIMARY KEY, checkout TEXT NOT NULL, repo_root TEXT NOT NULL, base TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS thread_worktree_repositories_checkout ON thread_worktree_repositories(checkout);
+`
 const WorktreeRowSchema = z.object({
   path: z.string(), thread_id: z.string(), repo_root: z.string(), project: z.string(),
   branch: z.string(), base: z.string(), created_at: z.number(),
 })
+const WorktreeRepositoryRowSchema = z.object({ path: z.string(), checkout: z.string(), repo_root: z.string(), base: z.string() })
+/** One repository's worktree in a Thread's checkout of several. */
+export interface WorktreeRepository {
+  path: string
+  repoRoot: string
+  base: string
+}
 /**
  * Threads Mako started for a job of its own, such as setting up a project's
  * app. `purpose` is unchecked so a later build can add one; a build that
@@ -639,24 +657,39 @@ export class ThreadStore {
     })
   }
 
-  /** Record the worktree a Thread was started in; the first one recorded for the Thread on this device stays. */
-  attachWorktree(input: Omit<ThreadWorktree, "createdAt">): ThreadWorktree | undefined {
+  /**
+   * Record the checkout a Thread was started in; the first one recorded for
+   * the Thread on this device stays. A checkout of a project folder holding
+   * several repositories names each one's worktree in `repositories`.
+   */
+  attachWorktree(input: Omit<ThreadWorktree, "createdAt">, repositories: readonly WorktreeRepository[] = []): void {
     const thread = this.thread(input.thread)
     if (!thread) throw new Error("This Thread no longer exists")
     this.write(() => {
-      this.sql("INSERT OR IGNORE INTO thread_worktrees VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      const added = this.sql("INSERT OR IGNORE INTO thread_worktrees VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .run(input.path, thread.id, this.deviceId, input.repoRoot, input.project, input.branch, input.base, this.now())
+      if (!added.changes) return
+      for (const repository of repositories)
+        this.sql("INSERT OR IGNORE INTO thread_worktree_repositories VALUES (?, ?, ?, ?)").run(repository.path, input.path, repository.repoRoot, repository.base)
     })
-    return this.worktrees().find((worktree) => worktree.path === input.path)
   }
 
-  /** This device's worktrees, each with the Thread it belongs to now. */
+  /**
+   * This device's worktrees, each with the Thread it belongs to now. A
+   * checkout of several repositories lists each one's worktree, with the
+   * project folder as `project`.
+   */
   worktrees(): ThreadWorktree[] {
+    const repositories = new Map<string, WorktreeRepository[]>()
+    for (const found of this.sql("SELECT path, checkout, repo_root, base FROM thread_worktree_repositories ORDER BY path").all()) {
+      const row = WorktreeRepositoryRowSchema.parse(found)
+      repositories.set(row.checkout, [...repositories.get(row.checkout) ?? [], { path: row.path, repoRoot: row.repo_root, base: row.base }])
+    }
     return this.sql("SELECT path, thread_id, repo_root, project, branch, base, created_at FROM thread_worktrees WHERE device_id = ? ORDER BY created_at")
       .all(this.deviceId)
-      .map((found) => {
+      .flatMap((found) => {
         const row = WorktreeRowSchema.parse(found)
-        return {
+        const worktree: ThreadWorktree = {
           path: row.path,
           thread: this.thread(ThreadIdSchema.parse(row.thread_id))?.id ?? ThreadIdSchema.parse(row.thread_id),
           repoRoot: row.repo_root,
@@ -665,6 +698,8 @@ export class ThreadStore {
           base: row.base,
           createdAt: row.created_at,
         }
+        const inside = repositories.get(row.path)
+        return inside ? inside.map((repository) => ({ ...worktree, ...repository })) : [worktree]
       })
   }
 
@@ -741,9 +776,15 @@ export class ThreadStore {
     return found ? environmentValues(EnvironmentRowSchema.parse(found)) : undefined
   }
 
+  /** Forget a worktree; a checkout of several repositories goes with the last of its worktrees, or at once by its own folder. */
   detachWorktree(path: string): void {
     this.write(() => {
-      this.sql("DELETE FROM thread_worktrees WHERE path = ? AND device_id = ?").run(path, this.deviceId)
+      const found = this.sql("SELECT checkout FROM thread_worktree_repositories WHERE path = ?").get(path)
+      const checkout = found ? z.object({ checkout: z.string() }).parse(found).checkout : path
+      this.sql("DELETE FROM thread_worktree_repositories WHERE path = ?").run(path)
+      if (checkout !== path && this.sql("SELECT 1 AS found FROM thread_worktree_repositories WHERE checkout = ? LIMIT 1").get(checkout)) return
+      this.sql("DELETE FROM thread_worktree_repositories WHERE checkout = ?").run(checkout)
+      this.sql("DELETE FROM thread_worktrees WHERE path = ? AND device_id = ?").run(checkout, this.deviceId)
     })
   }
 
@@ -1584,8 +1625,10 @@ export class ThreadStore {
     for (const found of this.db.prepare("SELECT path, thread_id, device_id FROM thread_worktrees ORDER BY created_at").all()) {
       const row = z.object({ path: z.string(), thread_id: z.string(), device_id: z.string() }).parse(found)
       const key = `${this.thread(ThreadIdSchema.parse(row.thread_id))?.id ?? row.thread_id}\0${row.device_id}`
-      if (seen.has(key)) this.db.prepare("DELETE FROM thread_worktrees WHERE path = ?").run(row.path)
-      else seen.add(key)
+      if (seen.has(key)) {
+        this.db.prepare("DELETE FROM thread_worktrees WHERE path = ?").run(row.path)
+        this.db.prepare("DELETE FROM thread_worktree_repositories WHERE checkout = ?").run(row.path)
+      } else seen.add(key)
     }
   }
 
@@ -1595,6 +1638,7 @@ export class ThreadStore {
     this.db.prepare("DELETE FROM placement_changes WHERE seq <= (SELECT max(seq) FROM placement_changes) - ?").run(PLACEMENT_LOG_KEEP)
     this.db.exec("DROP TABLE IF EXISTS regroups")
     this.db.exec(WORKTREE_TABLE)
+    this.db.exec(WORKTREE_REPOSITORY_TABLE)
     this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
     this.db.exec(PURPOSE_TABLE)

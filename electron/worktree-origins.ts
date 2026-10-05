@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
 import type { LinkedCheckout } from "./contracts/checkout-heads.js"
+import { PROJECT_CHECKOUT_FILE } from "./contracts/thread-worktrees.js"
 import { gitDirPointer, pointedCheckout, spelledLike } from "./checkout-heads.js"
 
 /** Worktrees remembered after they're gone, at most; the ones seen longest ago go first. */
@@ -34,6 +35,17 @@ function readText(path: string): string | null {
     return readFileSync(path, "utf8").trim()
   } catch {
     return null
+  }
+}
+
+/** The project folder a Thread's checkout of several repositories at `dir` mirrors, from its `PROJECT_CHECKOUT_FILE`. */
+function mirroredProject(dir: string): string | undefined {
+  const text = readText(join(dir, PROJECT_CHECKOUT_FILE))
+  if (text === null) return undefined
+  try {
+    return z.object({ project: z.string().min(1) }).parse(JSON.parse(text)).project
+  } catch {
+    return undefined
   }
 }
 
@@ -78,7 +90,9 @@ function parseRemembered(text: string | null): Map<string, Remembered> {
  * A folder is read once: a stat of `.git` per directory up the tree until
  * one answers, and two small reads for a worktree. Worktrees are remembered
  * in `file`, shared by every host of this user, so the sessions of a
- * worktree that was since removed still file under its project.
+ * worktree that was since removed still file under its project. A Thread's
+ * checkout of a project folder holding several repositories is answered the
+ * same way, marked `mirrors`, though Git has no worktree there.
  */
 export class WorktreeOrigins {
   private readonly file: string
@@ -140,6 +154,12 @@ export class WorktreeOrigins {
         if (found) this.remember(found)
         break
       }
+      const project = mirroredProject(dir)
+      if (project) {
+        found = { path: dir, repoRoot: project, mirrors: true }
+        this.remember(found)
+        break
+      }
       if (dirname(dir) === dir) break
     }
     for (const dir of walked) this.directories.set(dir, found)
@@ -148,8 +168,13 @@ export class WorktreeOrigins {
 
   /** A folder that's gone: the worktree it was in when some host last saw it, spelled as the folder is, or Claude's layout. */
   private recalled(folder: string): LinkedCheckout | null {
-    for (const [path, { repoRoot }] of this.remembered)
-      if (inside(path, folder)) return { path: spelledLike(path, folder), repoRoot: spelledLike(repoRoot, folder) }
+    for (const [path, { repoRoot }] of this.remembered) {
+      if (!inside(path, folder)) continue
+      const recalled: LinkedCheckout = { path: spelledLike(path, folder), repoRoot: spelledLike(repoRoot, folder) }
+      // Not stored, since older builds rewrite the file: a project folder is there and in no repository.
+      if (isDirectory(repoRoot) && !existsSync(join(repoRoot, ".git"))) recalled.mirrors = true
+      return recalled
+    }
     const claude = CLAUDE_WORKTREE.exec(folder)
     return claude ? { path: claude[0], repoRoot: claude[1] } : null
   }

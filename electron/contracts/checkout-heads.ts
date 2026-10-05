@@ -2,6 +2,8 @@
 export interface LinkedCheckout {
   path: string
   repoRoot: string
+  /** A Thread's checkout of a project folder holding several repositories, `repoRoot`: no worktree itself, but filed under the project like one. */
+  mirrors?: true
 }
 
 /** What a Git checkout has checked out, read from its HEAD; `linked` when the checkout is a linked worktree. */

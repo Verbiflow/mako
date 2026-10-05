@@ -291,9 +291,9 @@ function useLastTurn(workspace: string): Extract<Scope, { kind: "turn" }> | null
  * worktree it is the same Since main its branch bar shows.
  */
 function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: string; onChoose: (scope: Scope) => void }) {
-  const cwd = useSession((state) => state.git?.cwd)
+  const repository = useSession((state) => state.git?.root)
   const branch = useSession((state) => state.git?.branch)
-  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
+  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, repository)?.worktree)
   const hosted = useGitHub((state) => state.status?.defaultBranch)
   const lastTurn = useLastTurn(workspace)
   const turnHarness = useAcp((state) => {

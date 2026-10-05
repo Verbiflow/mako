@@ -8,7 +8,8 @@ import { belowAgents } from "./background-priority.js"
 import type { Prepared } from "./thread-processes.js"
 import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
-import { git } from "@mako/git"
+import { discoverRepositories } from "./repository-discovery.js"
+import { git, succeeds } from "@mako/git"
 
 const execute = promisify(execFile)
 
@@ -71,10 +72,46 @@ export interface OutputsCarry {
  * asking for "ignored by these patterns" walks every one of them (220 ms).
  */
 export async function ignoredEntries(repoRoot: string): Promise<string[]> {
+  try {
+    return await ignoredIn(repoRoot)
+  } catch (error) {
+    // A project folder holding several repositories: each one's, under its folder, and what lies outside all of them, which no worktree checks out.
+    const { roots } = await discoverRepositories(repoRoot)
+    if (!roots.length || roots.includes(repoRoot)) throw error
+    const inside = await Promise.all(roots.map(async (root) =>
+      (await ignoredIn(root).catch((): string[] => [])).map((entry) => `${relative(repoRoot, root)}/${entry}`)))
+    return [...inside.flat(), ...await outsideRepositories(repoRoot, roots)].sort()
+  }
+}
+
+async function ignoredIn(repoRoot: string): Promise<string[]> {
   return (await git(repoRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
     .split("\0")
     .map((entry) => entry.replace(/\/+$/, ""))
     .filter((entry) => entry && entry !== ".git" && !entry.startsWith(".git/"))
+}
+
+/** What a project folder holds outside its repositories, a folder holding none named once. */
+async function outsideRepositories(root: string, repositories: readonly string[], folder = root): Promise<string[]> {
+  const found: string[] = []
+  for (const entry of await readdir(folder, { withFileTypes: true }).catch(() => [])) {
+    const path = join(folder, entry.name)
+    if (repositories.includes(path)) continue
+    if (entry.isDirectory() && repositories.some((repository) => repository.startsWith(`${path}/`)))
+      found.push(...await outsideRepositories(root, repositories, path))
+    else found.push(relative(root, path))
+  }
+  return found
+}
+
+/** Where Git answers for `pattern`: the repository, or in a project folder of several, the one the pattern points into. */
+async function gitFor(root: string, pattern: string): Promise<{ cwd: string; inside: string; pattern: string } | undefined> {
+  if (await succeeds(root, ["rev-parse", "--git-dir"])) return { cwd: root, inside: "", pattern }
+  for (const repository of (await discoverRepositories(root)).roots) {
+    const inside = relative(root, repository)
+    if (pattern.startsWith(`${inside}/`)) return { cwd: repository, inside: `${inside}/`, pattern: pattern.slice(inside.length + 1) }
+  }
+  return undefined
 }
 
 /**
@@ -91,9 +128,10 @@ export async function matchedEntries(repoRoot: string, patterns: readonly string
     if (/[*?[\]{}]/.test(pattern)) {
       const prefix = pattern.slice(0, pattern.search(/[*?[\]{}]/))
       // Git collapses an ignored folder; ask only for a pattern aimed inside it.
-      if (ignored.some((entry) => prefix.startsWith(`${entry}/`) && !matchesGlob(entry, pattern))) {
-        const nested = await git(repoRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", `:(glob)${pattern}`])
-        for (const entry of nested.split("\0").filter(Boolean)) found.add(entry)
+      const asked = ignored.some((entry) => prefix.startsWith(`${entry}/`) && !matchesGlob(entry, pattern)) ? await gitFor(repoRoot, pattern) : undefined
+      if (asked) {
+        const nested = await git(asked.cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", `:(glob)${asked.pattern}`])
+        for (const entry of nested.split("\0").filter(Boolean)) found.add(`${asked.inside}${entry}`)
       }
       continue
     }
@@ -583,8 +621,10 @@ function cloneText(size: Size): string {
 
 /** Whether Git tracks anything `pattern` names in the main checkout. */
 async function tracked(repoRoot: string, pattern: string): Promise<boolean> {
-  const spec = /[*?[\]{}]/.test(pattern) ? `:(glob)${pattern}` : pattern
-  return (await git(repoRoot, ["ls-files", "-z", "--", spec]).catch(() => "")).length > 0
+  const asked = await gitFor(repoRoot, pattern)
+  if (!asked) return false
+  const spec = /[*?[\]{}]/.test(asked.pattern) ? `:(glob)${asked.pattern}` : asked.pattern
+  return (await git(asked.cwd, ["ls-files", "-z", "--", spec]).catch(() => "")).length > 0
 }
 
 /**

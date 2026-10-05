@@ -51,10 +51,9 @@ export async function handGitAction(action: GitAction, where: GitHandoff): Promi
 /** Mako's Git commands for the checkout the composer works in, each with what it does here or why it can't; none outside Git. */
 export function useGitCommands(): GitCommand[] {
   const root = useSession((state) => state.git?.root)
-  const cwd = useSession((state) => state.git?.cwd)
   const branch = useSession((state) => state.git?.branch) || null
   const operation = useSession((state) => state.git?.operation)
-  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
+  const worktree = useWorktrees((state) => worktreeAt(state.worktrees, root)?.worktree)
   const summary = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path] : undefined))
   const branchPull = useBranchPull()
   if (!root) return []

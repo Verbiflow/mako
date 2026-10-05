@@ -17,6 +17,25 @@ export interface ThreadWorktree {
   start?: WorktreeStartReceipt
 }
 
+/**
+ * In a Thread's checkout of a project folder holding several repositories,
+ * the file naming the project folder it mirrors (`{"project": "/…"}`). Git
+ * can't say: the folder holding the repositories' worktrees is in none of them.
+ */
+export const PROJECT_CHECKOUT_FILE = ".mako-project.json"
+
+/**
+ * The folder a Thread works in that this worktree is part of. A project of
+ * one repository: the worktree itself. A project folder holding several
+ * (no repository itself): the folder mirroring it, with one worktree per
+ * repository at the same place inside, all on the Thread's branch.
+ */
+export function worktreeCheckout(worktree: Pick<ThreadWorktree, "path" | "repoRoot" | "project">): string {
+  if (!worktree.repoRoot.startsWith(`${worktree.project}/`)) return worktree.path
+  const inside = worktree.repoRoot.slice(worktree.project.length)
+  return worktree.path.endsWith(inside) ? worktree.path.slice(0, -inside.length) : worktree.path
+}
+
 export interface WorktreeStartReceipt {
   /** Where a new branch started (`main`, `origin/main`), or null on a branch that existed already. */
   from: string | null

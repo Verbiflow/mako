@@ -8,7 +8,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { landedFor, removedNote } from "@/lib/worktree-removal"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
-import { pathInside, plainPath, worktreeAt } from "@/lib/worktree-paths"
+import { pathInside, plainPath, projectFolder, worktreeAt } from "@/lib/worktree-paths"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
 import { checkoutHeadsStore } from "@/state/checkout-heads"
 import { confirmAction } from "@/state/confirm"
@@ -76,7 +76,7 @@ function outsideOf(heads: CheckoutHeads, refs: readonly ThreadRef[], worktrees: 
     found.set(key, { path: linked.path, repoRoot: linked.repoRoot, branch: head && head.kind !== "detached" ? head.name : undefined })
   }
   for (const head of Object.values(heads)) if (head?.linked) add(head.linked, head)
-  for (const ref of refs) for (const linked of ref.worktrees ?? []) add(linked, heads[linked.path])
+  for (const ref of refs) for (const linked of ref.worktrees ?? []) if (!linked.mirrors) add(linked, heads[linked.path])
   return [...found.values()]
 }
 
@@ -87,8 +87,8 @@ function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
     worktrees,
     outside,
     folderMap: (path) => {
-      const found = worktreeAt(worktrees, path) ?? worktreeAt(outside, path)
-      return found ? `${found.worktree.repoRoot}${found.inside}` : chatGroupOf(path, chats)
+      const found = worktreeAt(outside, path)
+      return projectFolder(worktrees, path) ?? (found ? `${found.worktree.repoRoot}${found.inside}` : chatGroupOf(path, chats))
     },
   }
 }

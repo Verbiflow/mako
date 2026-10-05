@@ -5,6 +5,7 @@ import { z } from "zod"
 import { STEPS_FOLDER_VARIABLE, type CheckStep } from "./check-steps.js"
 import type { RecipeVersionView } from "./contracts/project-app.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironment } from "./contracts/thread-environments.js"
+import { PROJECT_CHECKOUT_FILE } from "./contracts/thread-worktrees.js"
 import { git } from "@mako/git"
 
 /**
@@ -249,10 +250,24 @@ export async function checkoutOf(cwd: string): Promise<string> {
   return realpath(top).catch(() => top)
 }
 
+const ProjectCheckoutSchema = z.object({ project: z.string().min(1) })
+
+/** The project folder a Thread's checkout of several repositories mirrors, read from its `PROJECT_CHECKOUT_FILE`. */
+export async function mirroredProject(checkout: string): Promise<string | undefined> {
+  const text = await readFile(join(checkout, PROJECT_CHECKOUT_FILE), "utf8").catch(() => undefined)
+  if (text === undefined) return undefined
+  try {
+    return ProjectCheckoutSchema.parse(JSON.parse(text)).project
+  } catch {
+    return undefined
+  }
+}
+
 /** The project a checkout belongs to: its main checkout, which every worktree of it shares. */
 export async function projectRoot(checkout: string): Promise<string> {
   const common = await git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
-  return common ? realpath(dirname(common)).catch(() => dirname(common)) : checkout
+  if (common) return realpath(dirname(common)).catch(() => dirname(common))
+  return (await mirroredProject(checkout)) ?? checkout
 }
 
 /**
@@ -262,7 +277,8 @@ export async function projectRoot(checkout: string): Promise<string> {
  */
 export async function recipePath(root: string, checkout: string): Promise<string> {
   const common = await git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
-  const identity = await realpath(common || checkout).catch(() => common || checkout)
+  const folder = common || (await mirroredProject(checkout)) || checkout
+  const identity = await realpath(folder).catch(() => folder)
   const project = common ? basename(dirname(identity)) : basename(identity)
   const digest = createHash("sha256").update(identity).digest("hex").slice(0, 8)
   return join(root, `${project.replace(/[^A-Za-z0-9._-]+/g, "-")}-${digest}.json`)
