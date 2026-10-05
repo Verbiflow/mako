@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from "react"
-import { AppWindowIcon, CircleStopIcon, FileIcon, FolderIcon, GitBranchIcon, GitMergeIcon, InfoIcon, Trash2Icon } from "lucide-react"
+import { AppWindowIcon, CircleStopIcon, FileIcon, FolderIcon, GitBranchIcon, GitMergeIcon, InfoIcon, MessageSquareIcon, Trash2Icon } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
@@ -7,7 +7,8 @@ import { useConfirm } from "@/state/confirm"
 import { PathLabel } from "@/components/ui/path-label"
 
 const icons = { remove: Trash2Icon, merge: GitMergeIcon, stop: CircleStopIcon }
-const subjectIcons = { folder: FolderIcon, branch: GitBranchIcon, app: AppWindowIcon, file: FileIcon }
+const subjectIcons = { folder: FolderIcon, branch: GitBranchIcon, app: AppWindowIcon, session: MessageSquareIcon, file: FileIcon }
+const proseSubjects: ReadonlySet<string> = new Set(["app", "session"])
 
 /** The one dialog `confirmAction` opens, mounted once beside the toaster. */
 export function ConfirmHost() {
@@ -56,10 +57,10 @@ export function ConfirmHost() {
             {request.subjects.map((subject) => {
               const SubjectIcon = subjectIcons[subject.kind]
               return (
-                <li key={`${subject.kind}:${subject.name}`} className="flex h-8 items-center gap-2.5 px-3">
+                <li key={`${subject.kind}:${subject.id ?? subject.name}`} className="flex h-8 items-center gap-2.5 px-3">
                   <SubjectIcon className="size-3.5 shrink-0 text-faint" aria-label={subject.kind} />
                   {subject.kind === "file" ? <PathLabel path={subject.name} className="flex-1" nameClassName="text-foreground/90" /> :
-                  <span className={cn("min-w-0 flex-1 truncate text-label text-foreground/90", subject.kind !== "app" && "font-mono")} title={subject.name}>{subject.name}</span>}
+                  <span className={cn("min-w-0 flex-1 truncate text-label text-foreground/90", !proseSubjects.has(subject.kind) && "font-mono")} title={subject.name}>{subject.name}</span>}
                   {subject.detail ? (
                     <span className={cn("shrink-0 text-label", subject.lost ? "text-negative/85" : "text-faint")}>{subject.detail}</span>
                   ) : null}

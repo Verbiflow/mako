@@ -28,15 +28,17 @@ const Toaster = ({ ...props }: ToasterProps) => {
     document.documentElement.classList.contains("light") ? "light" : "dark"
   )
   useEffect(() => {
-    const observer = new MutationObserver(() =>
+    const sync = () =>
       setTheme(
         document.documentElement.classList.contains("light") ? "light" : "dark"
       )
-    )
+    const observer = new MutationObserver(sync)
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["class"],
     })
+    // The theme can be applied by an effect that runs before this one.
+    sync()
     return () => observer.disconnect()
   }, [])
 

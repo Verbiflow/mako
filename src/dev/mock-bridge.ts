@@ -15,6 +15,7 @@ import type { ForkInput, TransferInput } from "../../electron/shared"
 import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import type { ExecutionContext } from "../../electron/contracts/execution-context"
+import type { AccountRemovalOutcome, AccountRemovalWait } from "../../electron/account-types"
 import type { SignInHold, SignInReadiness } from "../../electron/contracts/live-conversations"
 import { continueTurnPrompt } from "../../electron/contracts/turn-continuation"
 import { z } from "zod"
@@ -29,6 +30,8 @@ import type {
   AccountLogin,
   AccountLoginResult,
   AccountProviderInfo,
+  AccountRemovalPlan,
+  AccountRemovalSession,
   AccountUsage, HarnessAccount, ResetCreditOutcome,
   ThreadContextOptions,
   ThreadFileContext,
@@ -1294,6 +1297,25 @@ export function installMockBridge() {
         running.finish({ status: "added", name, email })
       }
       fixtureAccounts = () => list
+      const sessionsOn = (harness: string, name: string) => [...liveSnapshots].flatMap(([id, snapshot]) => {
+        const account = snapshot.session.executionContext?.account
+        return snapshot.session.harness === harness && account?.kind === "configured" && account.name === name &&
+          snapshot.session.status !== "closed" && snapshot.session.connection !== "disconnected"
+          ? [{ id, snapshot }]
+          : []
+      })
+      const removalWait = (snapshot: LiveSnapshot): AccountRemovalWait | undefined =>
+        snapshot.session.backgroundTasks ? "background" : snapshot.permissions.length ? "approval" : snapshot.session.status === "running" ? "turn" : undefined
+      const watchRemoval = (harness: string, name: string) => {
+        const timer = setInterval(() => {
+          const account = list.find((entry) => entry.harness === harness && entry.name === name)
+          if (!account?.removing) return clearInterval(timer)
+          if (sessionsOn(harness, name).some(({ snapshot }) => removalWait(snapshot))) return
+          clearInterval(timer)
+          list = list.filter((entry) => entry !== account)
+          emit({ type: "account-removal", harness, name, event: { status: "removed" } })
+        }, 500)
+      }
       return {
         accounts: async () => ({ providers, accounts: list }),
         captureAccount: async () => {},
@@ -1303,9 +1325,36 @@ export function installMockBridge() {
             .filter((account) => account.harness !== harness || !account.missing)
             .map((account) => account.harness === harness ? { ...account, active: account.name === (name ?? "default") } : account)
         },
-        removeAccount: async (harness: string, name: string) => {
+        accountRemovalPlan: async (harness: string, name: string): Promise<AccountRemovalPlan> => ({
+          sessions: sessionsOn(harness, name).map(({ id, snapshot }) => {
+            const entry: AccountRemovalSession = { conversation: id, title: snapshot.session.title || "Untitled conversation" }
+            const waitingFor = removalWait(snapshot)
+            if (waitingFor) entry.waitingFor = waitingFor
+            return entry
+          }),
+          runs: 0,
+          elsewhere: false,
+        }),
+        // As the host does: idle sessions let go at once, busy ones keep the
+        // account until their work ends, and the last one finishes the removal.
+        removeAccount: async (harness: string, name: string): Promise<AccountRemovalOutcome> => {
+          if (sessionsOn(harness, name).some(({ snapshot }) => removalWait(snapshot))) {
+            list = list.map((account) => account.harness === harness && account.name === name ? { ...account, removing: true } : account)
+            watchRemoval(harness, name)
+            return { status: "pending" }
+          }
           list = list.filter((account) => account.harness !== harness || account.name !== name)
-          return {}
+          return { status: "removed" }
+        },
+        keepAccount: async (harness: string, name: string) => {
+          const pending = list.some((account) => account.harness === harness && account.name === name && account.removing)
+          if (pending) list = list.map((account) => {
+            if (account.harness !== harness || account.name !== name) return account
+            const kept = { ...account }
+            delete kept.removing
+            return kept
+          })
+          return pending
         },
         startAccountLogin: async (harness: string, renew?: string): Promise<AccountLogin> => {
           await new Promise((resolve) => setTimeout(resolve, 700))
