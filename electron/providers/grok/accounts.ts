@@ -289,6 +289,7 @@ export const grokAccountCapability: SelectableAccountCapability = {
   removeAccount: async (name) => {
     if (name === "default") throw new Error("The default account is Grok's own login")
     await rm(accountDir("grok", name), { recursive: true, force: true })
+    return {}
   },
   selectedAccount: (selection, env) => ({ name: selection ?? "default", dir: authPath(env) }),
   credentialRevision: (name, env = process.env) =>

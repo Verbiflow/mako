@@ -12,14 +12,17 @@ import { grokSkillSource } from "./skills.js"
 import { grokConnection } from "./connection.js"
 import { grokAccountCapability } from "./accounts.js"
 import { npmInstall, scriptInstall } from "../update-source.js"
+import { grokUsageHistory } from "./usage-history.js"
 import {
   environmentForExecutable,
   resolveExecutable,
 } from "../../executable.js"
+import { grokPresentation } from "./presentation.js"
 
 export const installGrok: ProviderModule = (host) => installHarness(host, {
   provider: "grok",
-  presentation: { icon: { id: "grok-ring", tint: "currentColor" } },
+  presentation: grokPresentation,
+  diagnostics: { sdk: "@agentclientprotocol/sdk" },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -57,7 +60,7 @@ export const installGrok: ProviderModule = (host) => installHarness(host, {
     ],
   },
   utility: notBuilt("Grok's agent keeps each session it opens in Grok's history; a one-off request that leaves none behind isn't built yet"),
-  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: grokUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
 })
 
 /** Grok's own updater can spawn npm even when its binary lives in ~/.grok/bin.
