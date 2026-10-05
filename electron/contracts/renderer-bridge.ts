@@ -123,7 +123,8 @@ import type {
   AccountLogin,
   AccountLoginResult,
   AccountProvider,
-  AccountRemoval,
+  AccountRemovalOutcome,
+  AccountRemovalPlan,
   AccountUsage,
   AccountCatalog,
   ResetCreditOutcome,
@@ -449,7 +450,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     selectAccount: (harness: AccountHarness, name: string | null) =>
       invokeTrustedHost<void>("mako:account-select", harness, name),
     removeAccount: (harness: AccountHarness, name: string) =>
-      invokeTrustedHost<AccountRemoval>("mako:account-remove", harness, name),
+      invokeTrustedHost<AccountRemovalOutcome>("mako:account-remove", harness, name),
+    accountRemovalPlan: (harness: AccountHarness, name: string) =>
+      invokeTrustedHost<AccountRemovalPlan>("mako:account-removal-plan", harness, name),
+    keepAccount: (harness: AccountHarness, name: string) =>
+      invokeTrustedHost<boolean>("mako:account-keep", harness, name),
     accountUsage: (harness: AccountProvider, name: string) =>
       invokeTrustedHost<AccountUsage>("mako:account-usage", harness, name),
     useResetCredit: (harness: AccountProvider, name: string, attempt: string) =>

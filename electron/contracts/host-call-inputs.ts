@@ -5,10 +5,12 @@ import { z } from "zod"
 export const hostCallInputs = {
   "mako:abort": z.tuple([]),
   "mako:account-capture": z.tuple([z.string(), z.string()]),
+  "mako:account-keep": z.tuple([z.string(), z.string()]),
   "mako:account-login-cancel": z.tuple([z.string()]),
   "mako:account-login-code": z.tuple([z.string(), z.string()]),
   "mako:account-login-start": z.tuple([z.string(), z.string().optional()]),
   "mako:account-login-wait": z.tuple([z.string()]),
+  "mako:account-removal-plan": z.tuple([z.string(), z.string()]),
   "mako:account-remove": z.tuple([z.string(), z.string()]),
   "mako:account-reset": z.tuple([z.string(), z.string(), z.string()]),
   "mako:account-select": z.tuple([z.string(), z.union([z.null(), z.string()])]),
