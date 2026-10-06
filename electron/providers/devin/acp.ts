@@ -16,15 +16,25 @@ import { DevinApprovalObserver, readDevinApprovalDecisions } from "./approval-ob
 import { hostWarn } from "../../host-log.js"
 import { devinUsageUpdate } from "./usage.js"
 
+const { nativeSource, ...resume } = devinResumePolicy()
+
 export const devinAcpSource: ProviderAcpSource = {
   nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-  ...devinResumePolicy(),
+  nativeSource,
+  resume: {
+    kind: "native",
+    via: "ACP `session/load` with the session ID.",
+    wake: "The next message starts a new `devin` ACP agent that loads the session, replaying its history.",
+    ...resume,
+  },
+  fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new Devin session and resumes it, as its ACP agent has no fork." },
+  questions: { kind: "request", via: "The `ask_user_question` tool's request." },
   provider: "devin",
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question"], coverage: "Structured question selections from exact native tool events and the saved main branch. Tool permission choices remain submission-only." },
   planning: { via: "mode", mode: "plan", proposal: "write_plan's rendered plan file, built by answering exit_plan_mode's permission request" },
   toolName: devinToolName,
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
-  observeAgents: input => new DevinAgents(input),
+  agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", observe: input => new DevinAgents(input) },
   observeBackground: devinBackground,
   providerTurns: devinProviderTurns,
   decodeNotification: devinNotification,
@@ -34,8 +44,7 @@ export const devinAcpSource: ProviderAcpSource = {
   permissionTitle: devinPermissionTitle,
   backgroundStop: { kind: "ends-on-stop", how: "Stop kills each running background shell with killBackgroundShell, and its session/cancel ends each background subagent, with or without a running turn; no turn follows. Closing closes stdin, which ends them; a signal would leave them running." },
   compaction: devinCompaction,
-  canResume: true,
-  steering: "concurrent-prompt",
+  steering: { kind: "supported", via: "A prompt sent while a turn runs is read at its next step.", wire: "concurrent-prompt" },
   access: {
     native: { edits: "accept-edits", auto: "smart", chat: "ask", plan: "plan", full: "bypass" },
     default: "edits",

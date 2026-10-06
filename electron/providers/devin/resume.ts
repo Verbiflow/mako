@@ -10,7 +10,10 @@ import type { NativeResumeEvidence } from "../../native-continuation.js"
 
 const rowSchema = z.object({ main_chain_id: z.number().nullable(), model: z.string().nullable(), working_directory: z.string() })
 
-export function devinResumePolicy(directory = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "devin", "cli")) {
+const devinDirectory = (env: NodeJS.ProcessEnv) => join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "devin", "cli")
+
+export function devinResumePolicy(configured?: string) {
+  const directory = configured ?? devinDirectory(process.env)
   const database = join(directory, "sessions.db")
   const nativeSource = (path: string, nativeId: string | undefined) => {
     const split = path.lastIndexOf("#")
@@ -80,18 +83,19 @@ export function devinResumePolicy(directory = join(process.env.XDG_DATA_HOME || 
       return { kind: "unavailable", reason: "The Devin session is missing from its database." }
     return { kind: "available", checkpoint: current, strategy: "same-session" }
   }
-  /** `<database>#<id>`, once Devin has saved the session's row. */
-  const locateSession = ({ nativeId }: { nativeId: string }): string | undefined => {
+  /** `<database>#<id>` in the account's store, once Devin has saved the session's row. */
+  const locateSession = ({ nativeId, env }: { nativeId: string; env: NodeJS.ProcessEnv }): string | undefined => {
     if (!/^[\w-]+$/.test(nativeId)) return undefined
+    const store = join(configured ?? devinDirectory(env), "sessions.db")
     let db: DatabaseSync | undefined
     try {
-      db = openNativeStore(database)
-      return db.prepare("SELECT 1 FROM sessions WHERE id = ? AND hidden = 0").get(nativeId) ? `${database}#${nativeId}` : undefined
+      db = openNativeStore(store)
+      return db.prepare("SELECT 1 FROM sessions WHERE id = ? AND hidden = 0").get(nativeId) ? `${store}#${nativeId}` : undefined
     } catch {
       return undefined
     } finally {
       db?.close()
     }
   }
-  return { checkpoint, inspectNativeSession, locateSession, nativeSource }
+  return { checkpoint, inspect: inspectNativeSession, locate: locateSession, nativeSource }
 }

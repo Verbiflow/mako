@@ -19,18 +19,6 @@ export const devinProfileLoader: ProviderProfileLoader = {
     work: [{ model: "swe-2", options: { effort: "high" } }],
   },
   transport: "acp",
-  capabilities: [
-    "start",
-    "resume",
-    "stream",
-    "interrupt",
-    "steer",
-    "permissions",
-    "images",
-    "commands",
-    "mcp",
-    "models",
-  ],
   cacheKey: (env) => JSON.stringify(["standalone", devinExecutable(), env.XDG_CONFIG_HOME ?? "", env.XDG_DATA_HOME ?? ""]),
   async load(base, cwd, context) {
     const env = devinEnvironment(base)

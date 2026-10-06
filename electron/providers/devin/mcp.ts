@@ -12,8 +12,6 @@ export const devinMcpSource: ProviderMcpSource = {
   command: () => devinExecutable(),
   userFiles: () => [
     join(homedir(), ".config", "devin", "mcp_config.json"),
-    join(homedir(), ".config", "devin", "mcp.json"),
-    join(homedir(), ".devin", "mcp.json"),
   ],
   workspaceFiles: (cwd) => [
     join(cwd, ".devin", "mcp_config.local.json"),

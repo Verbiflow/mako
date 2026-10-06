@@ -8,8 +8,8 @@ const configRoot = () => join(homedir(), ".config", "devin", "skills")
 export const devinSkillSource: ProviderSkillSource = {
   provider: "devin",
   command: () => devinExecutable(),
-  userRoots: () => [configRoot(), join(homedir(), ".devin", "skills")],
+  userRoots: () => [configRoot()],
   workspaceFolder: ".devin",
   targetUserRoot: configRoot,
-  readsUniversalRoot: false,
+  readsUniversalRoot: true,
 }
