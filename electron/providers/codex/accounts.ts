@@ -1,3 +1,4 @@
+import { z } from "zod"
 import { existsSync } from "node:fs"
 import {
   appendFile,
@@ -18,6 +19,7 @@ import type { AccountRemoval, AccountUsage, HarnessAccount, ResetCreditOutcome }
 import {
   credentialFingerprint,
   loginPending,
+  principalFingerprint,
   markLoginPending,
   managedAccountHome,
   recordAccountHome,
@@ -363,6 +365,13 @@ async function useResetCredit(name: string, attempt: string): Promise<ResetCredi
   return outcome
 }
 
+/** Codex rewrites its tokens and `last_refresh` on every refresh; the account and the API key name the login. */
+const CodexPrincipal = z.object({
+  auth_mode: z.string().optional(),
+  OPENAI_API_KEY: z.string().nullable().optional(),
+  tokens: z.object({ account_id: z.string().optional() }).nullable().optional(),
+})
+
 export const codexAccountCapability: SelectableAccountCapability = {
   provider: "codex",
   mode: "selectable",
@@ -385,7 +394,7 @@ export const codexAccountCapability: SelectableAccountCapability = {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
         throw error
       })
-    return credentialFingerprint([home, raw])
+    return credentialFingerprint([home, principalFingerprint(raw, CodexPrincipal)])
   },
   useResetCredit,
 }

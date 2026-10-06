@@ -1,5 +1,8 @@
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { codexLiveDriver } from "./live-driver.js"
 import { emitCodexSession } from "@mako/sessions"
+import { codexModelProvider } from "./credentials.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { codexAccountCapability } from "./accounts.js"
@@ -37,7 +40,8 @@ export const installCodex: ProviderModule = (host) => installHarness(host, {
     // Loaded on use: `accounts` reaches the provider registry this module is part of.
     emit: async (thread) => {
       const { accountEnv } = await import("../../accounts.js")
-      return emitCodexSession(thread, { store: (await accountEnv("codex", process.env)).CODEX_HOME || undefined })
+      const store = (await accountEnv("codex", process.env)).CODEX_HOME || undefined
+      return emitCodexSession(thread, { store, codexModelProvider: await codexModelProvider(store ?? join(homedir(), ".codex")) })
     },
   },
   connection: lacks("Signs in through `codex login`"),

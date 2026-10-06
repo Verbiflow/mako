@@ -1,59 +1,44 @@
 import { basename, join } from "node:path"
+import { z } from "zod"
 import { objectValue, stringValue, type JsonObject, type JsonValue } from "../../codex-app-json.js"
 import type { UsageTokenCounts } from "../../usage-pricing.js"
 import {
-  discover,
-  MAX_BYTES_PER_FILE,
   parseObject,
-  readLines,
   tokenValue,
   validTimestamp,
-  yieldToMain,
+  type JsonlReader,
   type UsageEvent,
 } from "../../usage-scan.js"
 import type { ProviderUsageHistory } from "../usage-history.js"
 
-interface RawCodexUsage {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-}
+const RawCodexUsageSchema = z.object({
+  input: z.number().nonnegative(),
+  output: z.number().nonnegative(),
+  cacheRead: z.number().nonnegative(),
+  cacheWrite: z.number().nonnegative(),
+})
+type RawCodexUsage = z.infer<typeof RawCodexUsageSchema>
 
-interface CodexContext {
-  session: string
-  cwd: string
-  model: string
-  previous: RawCodexUsage | null
-  partial: boolean
-}
+/** What a rollout's later lines read against: its session, folder and model so far, and the thread's last total. */
+const CodexContextSchema = z.object({
+  session: z.string(),
+  cwd: z.string(),
+  model: z.string(),
+  previous: RawCodexUsageSchema.nullable(),
+})
+type CodexContext = z.infer<typeof CodexContextSchema>
 
+/** Live rollouts, and the ones Codex archived; a rollout moved between them is the same calls. */
 export const codexUsageHistory: ProviderUsageHistory = {
   provider: "codex",
   async scan(scan) {
-    const { files, truncated } = await discover([join(scan.homeRoot, ".codex", "sessions")])
-    for (const [index, file] of files.entries()) {
-      const context: CodexContext = {
-        session: basename(file.path, ".jsonl"),
-        cwd: "unknown",
-        model: "unknown",
-        previous: null,
-        partial: file.size > MAX_BYTES_PER_FILE,
-      }
-      const read = await readLines(file, (line) => {
-        if (
-          !line.includes('"session_meta"') &&
-          !line.includes('"turn_context"') &&
-          !line.includes('"token_count"')
-        )
-          return
-        const event = parseCodexRecord(scan.source, line, context, file.mtimeMs)
-        if (event) scan.record(event)
-      })
-      if (read) scan.session(context.session)
-      if ((index + 1) % 8 === 0) await yieldToMain()
+    const reader: JsonlReader<CodexContext> = {
+      needles: ['"session_meta"', '"turn_context"', '"token_count"'],
+      start: (file) => ({ session: basename(file.path, ".jsonl"), cwd: "unknown", model: "unknown", previous: null }),
+      restore: (state) => CodexContextSchema.parse(state),
+      line: (line, context, file) => parseCodexRecord(scan.source, line, context, file.mtimeMs),
     }
-    return { truncated }
+    await scan.jsonl([join(scan.homeRoot, ".codex", "sessions"), join(scan.homeRoot, ".codex", "archived_sessions")], reader)
   },
 }
 
@@ -113,13 +98,6 @@ function codexDelta(
   context: CodexContext
 ): RawCodexUsage | null {
   const previous = context.previous
-  if (context.partial) {
-    context.partial = false
-    if (total && !last && !previous) {
-      context.previous = total
-      return null
-    }
-  }
   if (total && previous && rawCodexEqual(total, previous)) return null
   if (total && last && previous && !rawCodexMonotonic(total, previous)) {
     const previousSize = rawCodexTotal(previous)

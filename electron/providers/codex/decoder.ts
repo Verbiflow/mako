@@ -22,8 +22,8 @@ import { decoded, type Decoded } from "../../contracts/native-decoding.js"
 import { MAX_STREAMED_TOOL_OUTPUT } from "../../contracts/live-content.js"
 import type { NativeActivityObservation } from "../../contracts/native-activity.js"
 import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
-import type { LiveSessionState } from "../../contracts/providers-acp.js"
-import { SessionUsage, type UsageObservation } from "../../session-usage.js"
+import type { LiveSessionState, TokenCounts } from "../../contracts/providers-acp.js"
+import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../../session-usage.js"
 import type { CodexAgentItem } from "./agents.js"
 import { codexAnsweredQuestions, codexAsyncQuestion } from "./questions.js"
 import { codexUpdatedWindows } from "./rate-limits.js"
@@ -48,7 +48,7 @@ export type CodexEffect =
   | { type: "server-request-resolved"; requestId: JsonRpcId }
   /** A subagent's thread started or finished a turn. */
   | { type: "subagent-turn"; threadId: string; completed: boolean }
-  | { type: "agents"; item: CodexAgentItem; replay: boolean }
+  | { type: "agents"; item: CodexAgentItem; replay: boolean; toolId: string }
   | { type: "question"; question: NativeQuestion }
   | { type: "question-answer"; answer: NativeQuestionAnswer }
   /** A command's item completed, so its terminal no longer runs. */
@@ -203,6 +203,8 @@ export class CodexDecoder {
   /** Context tokens when the running compaction started. */
   private compactingFrom: number | undefined
   private readonly meter = new SessionUsage()
+  /** The thread's running total at its latest reading, which every process of the thread continues. */
+  private threadTotal: TokenCounts | undefined
 
   private readonly view: CodexDecoderView
 
@@ -234,6 +236,18 @@ export class CodexDecoder {
     for (const entry of entries.slice(-MAX_REPLAY_ITEMS)) this.item(out, entry.turnId, entry.item, true, true)
     this.items.clear()
     return out
+  }
+
+  /**
+   * What this reading of the thread's total adds. The first reading has no
+   * earlier one: a call in a turn this decoder saw start counts itself, and a
+   * resumed thread's repeat of its last reading only sets where counting starts.
+   */
+  private threadSpend(total: TokenCounts, call: TokenCounts | undefined): TokenCounts | undefined {
+    const before = this.threadTotal
+    this.threadTotal = total
+    const added = before && tokensSince(before, total)
+    return added ?? call
   }
 
   /** Stream assembly ends with the process. */
@@ -313,9 +327,10 @@ export class CodexDecoder {
         out.push(decoded.effect({ type: "server-request-resolved", requestId: notification.requestId }))
         return
       case "thread/tokenUsage/updated": {
-        const { used, size, total } = notification
+        const { used, size, total, call, turnId } = notification
         const observations: UsageObservation[] = [{ kind: "context", used, size }]
-        if (total) observations.push({ kind: "total", tokens: total })
+        const spent = total && this.threadSpend(total, turnId === this.currentTurnId ? call : undefined)
+        if (spent && contextOf(spent) > 0) observations.push({ kind: "spent", tokens: spent })
         const usage = this.meter.observe(...observations)
         if (usage) out.push(decoded.state({ usage }))
         return
@@ -523,6 +538,10 @@ export class CodexDecoder {
           item.arguments ?? undefined)
         if (completed) finishTool(out, tracker, item.status, item.contentItems ? boundedJson(item.contentItems) : undefined)
         return
+      case "functionCallOutput":
+        startTool(out, tracker, item.tool, item.tool, "completed")
+        if (completed) finishTool(out, tracker, "completed", boundedText(item.output, MAX_TOOL_OUTPUT))
+        return
       case "webSearch": {
         const input = item.action ?? { query: item.query }
         const title = item.query || searchTarget(item.action) || "Web search"
@@ -555,8 +574,20 @@ export class CodexDecoder {
       case "hookPrompt":
         return
       case "collabAgentToolCall":
+        startTool(out, tracker, agentCallTitle(item), AGENT_TOOL_NAMES[item.tool], item.status, item.tool === "spawnAgent"
+          ? { prompt: item.prompt ?? "", model: item.model ?? "", receivers: item.receiverThreadIds }
+          : { receivers: item.receiverThreadIds })
+        if (item.status !== "inProgress") finishTool(out, tracker, item.status, agentStatesText(item.agentsStates))
+        out.push(decoded.effect({ type: "agents", item, replay, toolId: tracker.acpId }))
+        return
       case "subAgentActivity":
-        out.push(decoded.effect({ type: "agents", item, replay }))
+        // Multi-agent v2 reports a spawn only as its `started` activity, under the spawn call's ID.
+        if (item.kind === "started") {
+          startTool(out, tracker, `Agent ${item.agentPath.split("/").at(-1) ?? item.agentPath}`, "spawn_agent", completed ? "completed" : "inProgress",
+            { agent: item.agentPath })
+          if (completed) finishTool(out, tracker, "completed")
+        }
+        out.push(decoded.effect({ type: "agents", item, replay, toolId: tracker.acpId }))
         return
       case "plan":
         out.push(decoded.update({
@@ -633,6 +664,47 @@ function retrying(message: string, variant: string | undefined): NativeActivityO
  * shows (the command, the file) are supplied here. Without the input the
  * shell row had no command on it at all, live or expanded.
  */
+/** The native tool behind each collab call, as the model names it. */
+const AGENT_TOOL_NAMES = {
+  spawnAgent: "spawn_agent",
+  sendInput: "send_input",
+  sendMessage: "send_message",
+  followupTask: "followup_task",
+  resumeAgent: "resume_agent",
+  wait: "wait_agent",
+  interruptAgent: "interrupt_agent",
+  closeAgent: "close_agent",
+  listAgents: "list_agents",
+} as const satisfies Record<Extract<CodexAgentItem, { type: "collabAgentToolCall" }>["tool"], string>
+
+function agentCallTitle(item: Extract<CodexAgentItem, { type: "collabAgentToolCall" }>): string {
+  const agents = item.receiverThreadIds.length === 1 ? "agent" : `${item.receiverThreadIds.length} agents`
+  switch (item.tool) {
+    case "spawnAgent":
+      return item.prompt ? `Agent: ${firstLine(item.prompt)}` : "Agent"
+    case "sendInput":
+    case "sendMessage":
+      return `Message ${agents}`
+    case "followupTask":
+      return `Follow up with ${agents}`
+    case "interruptAgent":
+      return `Interrupt ${agents}`
+    case "listAgents":
+      return "List agents"
+    case "resumeAgent":
+      return `Resume ${agents}`
+    case "wait":
+      return item.receiverThreadIds.length ? `Wait for ${agents}` : "Wait for agents"
+    case "closeAgent":
+      return `Close ${agents}`
+  }
+}
+
+/** What each agent reported when the call returned, one line per agent. */
+function agentStatesText(states: Extract<CodexAgentItem, { type: "collabAgentToolCall" }>["agentsStates"]): string {
+  return Object.values(states).flatMap((state) => state ? [state.message ? `${state.status}: ${firstLine(state.message)}` : state.status] : []).join("\n")
+}
+
 function startTool(out: CodexDecoded[], tracker: ItemTracker, title: string, name: string, status: string, input?: JsonValue): void {
   if (tracker.started) return
   tracker.started = true

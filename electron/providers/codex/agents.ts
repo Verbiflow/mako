@@ -1,19 +1,39 @@
 import { CodexAgentStatus, type CodexAgentRun } from "./agent-status.js"
 import { z } from "zod"
+import type { CollabAgentTool } from "./generated/v2/CollabAgentTool.js"
+import type { CollabAgentToolCallStatus } from "./generated/v2/CollabAgentToolCallStatus.js"
+import type { SubAgentActivityKind } from "./generated/v2/SubAgentActivityKind.js"
 import type { ThreadItem } from "./generated/v2/ThreadItem.js"
 import type { NativeAgentObservation } from "../../contracts/native-agents.js"
+
+/**
+ * Every collab tool and call status in the generated protocol, so
+ * regenerating after a Codex upgrade fails the build on a value this schema
+ * would reject.
+ */
+const COLLAB_TOOLS = {
+  spawnAgent: "spawnAgent",
+  sendInput: "sendInput",
+  sendMessage: "sendMessage",
+  followupTask: "followupTask",
+  resumeAgent: "resumeAgent",
+  wait: "wait",
+  interruptAgent: "interruptAgent",
+  closeAgent: "closeAgent",
+  listAgents: "listAgents",
+} as const satisfies { [Tool in CollabAgentTool]: Tool }
+const COLLAB_STATUSES = {
+  inProgress: "inProgress",
+  completed: "completed",
+  failed: "failed",
+  interrupted: "interrupted",
+} as const satisfies { [Status in CollabAgentToolCallStatus]: Status }
 
 export const CodexAgentItemSchema = z.object({
   type: z.literal("collabAgentToolCall"),
   id: z.string(),
-  tool: z.enum([
-    "spawnAgent",
-    "sendInput",
-    "resumeAgent",
-    "wait",
-    "closeAgent",
-  ]),
-  status: z.enum(["inProgress", "completed", "failed"]),
+  tool: z.enum(COLLAB_TOOLS),
+  status: z.enum(COLLAB_STATUSES),
   senderThreadId: z.string(),
   receiverThreadIds: z.array(z.string()).max(256),
   prompt: z.string().nullable(),
@@ -38,15 +58,19 @@ export const CodexAgentItemSchema = z.object({
 }) satisfies z.ZodType<
   Omit<Extract<ThreadItem, { type: "collabAgentToolCall" }>, "reasoningEffort">
 >
-// The checked-in generated baseline predates the additive completed activity.
-// Verified in the installed 0.154.0 native records and upstream completion emitter.
+const ACTIVITY_KINDS = {
+  started: "started",
+  interacted: "interacted",
+  interrupted: "interrupted",
+  completed: "completed",
+} as const satisfies { [Kind in SubAgentActivityKind]: Kind }
 export const CodexAgentActivitySchema = z.object({
   type: z.literal("subAgentActivity"),
   id: z.string(),
-  kind: z.enum(["started", "interacted", "interrupted", "completed"]),
+  kind: z.enum(ACTIVITY_KINDS),
   agentThreadId: z.string(),
   agentPath: z.string(),
-}) satisfies z.ZodType<Omit<Extract<ThreadItem, { type: "subAgentActivity" }>, "kind"> & { kind: "started" | "interacted" | "interrupted" | "completed" }>
+}) satisfies z.ZodType<Extract<ThreadItem, { type: "subAgentActivity" }>>
 export type CodexAgentItem =
   | z.infer<typeof CodexAgentItemSchema>
   | z.infer<typeof CodexAgentActivitySchema>
@@ -112,7 +136,8 @@ export class CodexAgents {
   refresh(nativeId: string): void {
     if (this.agents.has(nativeId)) this.status?.observe(nativeId)
   }
-  project(item: CodexAgentItem, replay: boolean): NativeAgentObservation[] {
+  /** `toolId` names the transcript row of the call that spawned the agent. */
+  project(item: CodexAgentItem, replay: boolean, toolId: string): NativeAgentObservation[] {
     const updates = new Map<string, NativeAgentObservation>()
     const add = (agent: NativeAgentObservation) => {
       const observed: NativeAgentObservation =
@@ -141,7 +166,7 @@ export class CodexAgents {
         ...previous,
         nativeId: item.agentThreadId,
         title: previous?.title ?? item.agentPath.slice(0, 512),
-        toolId: previous?.toolId ?? item.id,
+        toolId: previous?.toolId ?? toolId,
         nativeRunId: item.kind === "started" ? undefined : previous?.nativeRunId,
         state: item.kind === "started" ? { kind: "working" }
           : item.kind === "completed" || this.status
@@ -158,11 +183,13 @@ export class CodexAgents {
             parentNativeId: item.senderThreadId,
             title: previous?.title ?? item.prompt?.slice(0, 512) ?? "Agent",
             model: item.model?.slice(0, 256) ?? previous?.model,
-            toolId: previous?.toolId ?? item.id,
+            toolId: previous?.toolId ?? toolId,
             state:
               item.status === "failed"
                 ? { kind: "failed", error: "Agent launch failed" }
-                : { kind: "working" },
+                : item.status === "interrupted"
+                  ? { kind: "canceled" }
+                  : { kind: "working" },
           })
         }
       }

@@ -8,6 +8,7 @@ const AuthConfig = z.object({
   cli_auth_credentials_store: z.enum(["file", "keyring", "auto", "ephemeral"]).default("file"),
   features: z.object({ secret_auth_storage: z.boolean().optional() }).optional(),
 })
+const ModelProviderConfig = z.object({ model_provider: z.string().min(1).default("openai") })
 
 async function optionalFile(path: string): Promise<string | null> {
   try { return await readFile(path, "utf8") }
@@ -33,6 +34,15 @@ export async function readCodexCredentials(home: string): Promise<string | null>
   const keychain = await readKeychain("Codex Auth", key, "required")
   if (keychain !== null || store === "keyring") return keychain
   return optionalFile(join(home, "auth.json"))
+}
+
+/** The provider a home's sessions run on; Codex's own default when its config names none. */
+export async function codexModelProvider(home: string): Promise<string> {
+  const contents = await optionalFile(join(home, "config.toml")).catch(() => null)
+  if (contents === null) return "openai"
+  try {
+    return ModelProviderConfig.parse(parse(contents)).model_provider
+  } catch { return "openai" }
 }
 
 /** Captured credentials belong to this home, irrespective of the original storage backend. */

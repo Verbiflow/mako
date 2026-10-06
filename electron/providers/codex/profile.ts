@@ -51,21 +51,6 @@ export const codexProfileLoader: ProviderProfileLoader = {
     work: [{ model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }],
   },
   transport: "app-server",
-  capabilities: [
-    "start",
-    "resume",
-    "fork-at-turn",
-    "stream",
-    "steer",
-    "interrupt",
-    "permissions",
-    "images",
-    "audio",
-    "skills",
-    "mcp",
-    "models",
-    "review",
-  ],
   cacheKey: (env) => `${env.CODEX_HOME ?? ""}\0${env.CODEX_EXECUTABLE ?? ""}`,
   async load(env, cwd, context) {
     const executable = await resolveCodexExecutable(env)
