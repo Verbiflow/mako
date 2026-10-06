@@ -135,7 +135,7 @@ export const providers = {
     const previous = profiles[provider]
     if (previous) profiles[provider] = {
       id: previous.id, label: previous.label, transport: previous.transport,
-      capabilities: previous.capabilities, models: [], available: false, pending: true,
+      models: [], available: false, pending: true,
     }
     providerStore.set({ profiles, contexts, contextErrors })
     if (!workspaces.size) workspaces.add("")

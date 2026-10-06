@@ -6,7 +6,7 @@ import { acpStore, carriedFailureSeen, replaceAcpConversation, updateAcpConversa
 import { syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "../../electron/contracts/live-content"
-import { requestsAfter } from "../../electron/contracts/live-conversations"
+import { changesSession, requestsAfter, sessionAfter } from "../../electron/contracts/live-conversations"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
@@ -187,6 +187,28 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   return fetch
 }
 
+/**
+ * Put a loaded conversation back the way boot listed it: its session,
+ * requests and status stay and keep following batches, its transcript goes
+ * and is read again, the newest window as the host pages it, when it is
+ * shown. False while a read of it is in flight.
+ */
+export function unloadLive(id: string): boolean {
+  const current = acpStore.get().conversations[id]
+  if (current?.kind !== "live" || !current.hydrated || fetching.has(id)) return false
+  pending.delete(id)
+  replaceAcpConversation(id, {
+    ...current,
+    hydrated: false,
+    blocks: [],
+    base: undefined,
+    baseCoveredBlocks: undefined,
+    history: undefined,
+    projection: undefined,
+  })
+  return true
+}
+
 function batchNativeActivity(batch: LiveBatch, current: { nativeActivity?: LiveSnapshot["nativeActivity"] }): LiveSnapshot["nativeActivity"] {
   return batch.nativeActivity === undefined ? current.nativeActivity : (batch.nativeActivity ?? undefined)
 }
@@ -204,7 +226,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     !fetching.has(batch.id)
   ) {
     if (sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
-    const session = batch.session ?? current.session
+    const session = sessionAfter(current.session, batch)
     const requests = requestsAfter(current.requests, batch)
     const next = {
       ...current,
@@ -235,7 +257,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     }
     replaceAcpConversation(batch.id, next)
     notifyCompletion(current.requests, requests)
-    if (batch.session || batch.permissions || requests)
+    if (changesSession(batch) || batch.permissions || requests)
       syncThreadStatus(next, current.session.status, current.threadPath)
     return
   }
@@ -261,7 +283,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     return
   }
   if (batch.revision <= (current.revision ?? 0)) return
-  const session = batch.session ?? current.session
+  const session = sessionAfter(current.session, batch)
   const blocks = reduceLiveUpdates(current.blocks, batch.updates)
   const history = current.history ? { ...current.history,
     blockEnd: batch.blockCount ?? current.history.blockStart + blocks.length } : undefined
@@ -300,7 +322,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
       batch.threadPath === undefined
         ? current.threadPath
         : (batch.threadPath ?? undefined),
-    sending: batch.session || (pendingPrompts?.length ?? 0) < (current.pendingPrompts?.length ?? 0)
+    sending: changesSession(batch) || (pendingPrompts?.length ?? 0) < (current.pendingPrompts?.length ?? 0)
       ? false : current.sending,
     canceling: session.status === "running" ? current.canceling : false,
     permission: batch.permissions
@@ -332,10 +354,10 @@ export function applyLiveBatch(batch: LiveBatch): void {
   })
   notifyCompletion(current.requests, changedRequests)
   const next = acpStore.get().conversations[batch.id]
-  if (next && batch.session?.settings) acknowledgeComposerSettings(next)
+  if (next && (batch.session ?? batch.sessionChanges)?.settings) acknowledgeComposerSettings(next)
   if (
     next?.kind === "live" &&
-    (batch.session || batch.permissions || changedRequests)
+    (changesSession(batch) || batch.permissions || changedRequests)
   )
     syncThreadStatus(next, current.session.status, current.threadPath)
 }

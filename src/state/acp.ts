@@ -126,7 +126,7 @@ export const acp = {
     return Boolean(
       live &&
       live.session.status === "running" &&
-      descriptorFor(threadsStore.get(), live.harness)?.canSteer
+      descriptorFor(threadsStore.get(), live.harness)?.capabilities.steering.state === "implemented"
     )
   },
 

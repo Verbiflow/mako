@@ -16,6 +16,7 @@ import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } 
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
 import { watchSessionPanes } from "@/state/session-panes"
+import { watchLiveResidency } from "@/state/live-residency"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
@@ -602,6 +603,7 @@ function adoptSnapshot(next: TabSnapshot) {
 let stopOutboxWatch: (() => void) | undefined
 let stopThreadWatch: (() => void) | undefined
 let stopPaneWatch: (() => void) | undefined
+let stopResidencyWatch: (() => void) | undefined
 function adoptBoot(boot: BootPayload) {
   const active = boot.tabs.find((tab) => tab.id === boot.activeTabId) ?? boot.tabs[0]
   if (!active) throw new Error("The host started without a conversation")
@@ -611,6 +613,7 @@ function adoptBoot(boot: BootPayload) {
   stopOutboxWatch ??= watchPendingMessages(() => { void restorePendingMessages() })
   stopThreadWatch ??= watchThreadSessions()
   stopPaneWatch ??= watchSessionPanes()
+  stopResidencyWatch ??= watchLiveResidency()
   void restorePendingMessages()
   store.set({
     phase: "ready",
