@@ -115,21 +115,6 @@ export const claudeProfileLoader: ProviderProfileLoader = {
   },
   transport: "sdk",
   nativeModelIds: true,
-  capabilities: [
-    "start",
-    "resume",
-    "fork",
-    "stream",
-    "interrupt",
-    "steer",
-    "compact",
-    "permissions",
-    "images",
-    "commands",
-    "mcp",
-    "models",
-    "agent-teams",
-  ],
   cacheKey: environmentKey,
   async loadForSend(env, cwd, context) {
     const entry = discoveries.get(discoveryKey(env, cwd))

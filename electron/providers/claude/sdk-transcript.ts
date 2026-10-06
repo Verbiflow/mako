@@ -27,12 +27,18 @@ export class ClaudeTranscript {
   /** The account's Claude home the process runs under. */
   private readonly configDir: string | undefined
 
-  constructor(configDir?: string) {
+  /** Told the path when a hook first reports it or a new one, so the binding records it mid-turn. */
+  private readonly located: ((path: string) => void) | undefined
+
+  constructor(configDir?: string, located?: (path: string) => void) {
     this.configDir = configDir
+    this.located = located
   }
 
   readonly hook: HookCallback = async (input) => {
-    if (!input.agent_id) this.path = input.transcript_path
+    if (input.agent_id || input.transcript_path === this.path) return {}
+    this.path = input.transcript_path
+    this.located?.(input.transcript_path)
     return {}
   }
 

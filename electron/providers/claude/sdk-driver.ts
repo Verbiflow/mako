@@ -42,7 +42,7 @@ import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../../prov
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { CLAUDE_AUTH_LOG, claudeAuthDiagnostics } from "./auth-diagnostics.js"
-import type { ClaudeCredentialState } from "./accounts.js"
+import { claudeConfigDir, type ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
 import { claudeCommandLifecycle } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../../native-continuation.js"
@@ -125,6 +125,8 @@ export interface ClaudeSdkDependencies {
   receiptTimeoutMs?: number
   prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root">) => Promise<ClaudePermissionObserver | undefined>
   inspectCredentials?: (env: NodeJS.ProcessEnv) => Promise<ClaudeCredentialState>
+  /** The config folder an account's sessions are kept under. */
+  configDir?: (account: string) => string
 }
 
 type Engine = LiveEngineApi<Live>
@@ -338,10 +340,21 @@ export function createClaudeSdkDriver(
     approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question", ...(dependencies.prepareApprovals ? ["tool-permission" as const] : [])], coverage: "Parent AskUserQuestion results in the saved branch; parent tool decisions from the bundled runtime's local native event exporter, retained before delivery. Existing telemetry configuration, custom runtimes, child tools and MCP elicitation retain submission evidence unless a matching observer is available. Missing native events never confirm an answer." },
     planning: { via: "mode", mode: "plan", proposal: "ExitPlanMode's `plan` input, built by answering its permission request" },
     approvalAnswerDigest: claudeApprovalAnswerDigest,
-    observesNativeAgents: true,
-    canResume: true,
-    ...fileResumeEvidence(claudeProcessProbe),
-    forkPoint: "checkpoint",
+    resume: {
+      kind: "native",
+      via: "The Agent SDK's `resume` option with the session ID, after the session file is checked.",
+      wake: "The next message starts a new `claude` process that resumes the session from its file.",
+      ...fileResumeEvidence(claudeProcessProbe),
+      async locate(binding) {
+        const account = binding.executionContext?.account
+        const name = account?.kind === "configured" ? account.name : "default"
+        return new ClaudeTranscript((dependencies.configDir ?? claudeConfigDir)(name)).locate(binding.nativeId)
+      },
+    },
+    fork: { kind: "native", point: "checkpoint", via: "The Agent SDK's `forkSession` at a checkpoint (`resumeSessionAt`)." },
+    questions: { kind: "request", via: "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input." },
+    nativeAgents: { kind: "observed", via: "Agent and Workflow tool calls and their sidechain messages." },
+    modeSwitching: { kind: "native", via: "Claude Code's permission modes, set on the running query with `setPermissionMode`." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. Mako declares no per-task stop affordance, so an interrupt stops them too." },
     turnRecovery: {
       kind: "continues",
@@ -349,7 +362,6 @@ export function createClaudeSdkDriver(
       exit: "The SDK stream's failure when the process dies settles the session failed and disconnected in one update, with the transcript found by session ID when no hook has reported it yet.",
       tests: ["scripts/test-claude-sdk.ts", "scripts/test-turn-recovery-live.mjs"],
     },
-    steering: "step",
     modes: CLAUDE_MODES,
     defaultMode: "default",
     available: () => dependencies.available(),
@@ -398,8 +410,13 @@ export function createClaudeSdkDriver(
           starting.delete(options.conversationId)
       }
       const input = new ClaudeInput()
-      const transcript = new ClaudeTranscript((config.env ?? process.env).CLAUDE_CONFIG_DIR || join(homedir(), ".claude"))
-      const decoder = new ClaudeDecoder({ get state() { return live.state } })
+      const transcript = new ClaudeTranscript((config.env ?? process.env).CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), (path) => {
+        if (!live.closed && live.state.nativePath !== path) engine.patch(live, { nativePath: path })
+      })
+      const decoder = new ClaudeDecoder({
+        get state() { return live.state },
+        restores: options.resume && !options.fork ? { totals: options.observedUsage } : undefined,
+      })
       const permissions = new ClaudePermissions(
         options.conversationId,
         options.emit,
@@ -436,6 +453,8 @@ export function createClaudeSdkDriver(
               ...(config.hooks?.SessionStart ?? []),
               { hooks: [transcript.hook] },
             ],
+            // A fresh session reports its transcript at the first prompt, not only when that turn ends.
+            UserPromptSubmit: [...(config.hooks?.UserPromptSubmit ?? []), { hooks: [transcript.hook] }],
             Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
             PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [decoder.hook] }],
           },
@@ -524,6 +543,11 @@ export function createClaudeSdkDriver(
         ]))
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
+        // A resumed session's hooks have not reported its transcript yet, and
+        // recovery refuses a reopened session that names no source.
+        if (options.resume) await transcript.locate(live.state.nativeId)
+        if (live.closed)
+          throw new Error("Claude disconnected during initialization")
         engine.patch(live, {
           executionContext: {
             ...(live.state.executionContext ?? context),
@@ -599,7 +623,7 @@ export function createClaudeSdkDriver(
       engine.emitUpdate(live, { kind: "user", text })
       dispatch.report({ kind: "submitted", source: "sdk-input", correlationId: uuid })
     },
-    async steer(id, input) {
+    steering: { kind: "supported", lands: "step", via: "A message sent while a turn runs joins the running query and is read at its next step.", async steer(id, input) {
       const live = requireLive(id)
       const content = await claudeInputContent(input.text, input.attachments)
       if (
@@ -645,7 +669,7 @@ export function createClaudeSdkDriver(
         }
       }
       return receipt
-    },
+    } },
     compaction: { kind: "supported", async start(id, actionId) {
       const live = requireLive(id)
       if (live.state.status === "running")
@@ -667,11 +691,11 @@ export function createClaudeSdkDriver(
       })
     } },
     // `summary` answers from the last response's usage without a token-count request per category.
-    async contextBreakdown(id) {
+    contextBreakdown: { kind: "itemized", via: "The Agent SDK's `getContextUsage`, by category.", async read(id) {
       const { query } = requireLive(id)
       if (!query.getContextUsage) throw new Error("This Claude session cannot itemize its context")
       return claudeContextBreakdown(await query.getContextUsage({ detail: "summary" }))
-    },
+    } },
     async permission(id, requestId, response, dispatch) {
       dispatch.assertCurrent()
       const live = sessions.get(id)
@@ -713,9 +737,12 @@ export function createClaudeSdkDriver(
         // makes Stop definitive; the next prompt resumes the same native session.
         stop(live)
         await live.exited()
+        // A first turn stopped early has no hook-reported transcript; the next prompt resumes from this one.
+        const nativePath = await live.transcript.locate(live.state.nativeId)
         // The interrupt's own `error_during_execution` result may have settled
         // the turn as failed first; Stop ends it interrupted.
         engine.patch(live, {
+          nativePath,
           status: "ready",
           connection: "disconnected",
           lastStop: "interrupted",

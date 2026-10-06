@@ -1,8 +1,9 @@
 import type { HookCallback, ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import { isDeclaredTool } from "@mako/sessions/tool-identity"
 import type { JsonValue } from "../../codex-app-json.js"
 import { decoded, decodedNotices, type Decoded } from "../../contracts/native-decoding.js"
-import type { LiveSessionCommand, LiveSessionState, TokenCounts } from "../../contracts/providers-acp.js"
-import { SessionUsage, type UsageObservation } from "../../session-usage.js"
+import type { LiveSessionCommand, LiveSessionState, NativeTotals, TokenCounts } from "../../contracts/providers-acp.js"
+import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../../session-usage.js"
 import { claudeRateLimitWindow } from "./accounts.js"
 import { claudeMessageKind } from "./sdk-message-kinds.js"
 import { ClaudeNotices } from "./sdk-notices.js"
@@ -21,6 +22,8 @@ import { ClaudeProjection } from "./sdk-projection.js"
 /** The session the decoder reads; the driver's live state is one. */
 export interface ClaudeDecoderView {
   readonly state: Pick<LiveSessionState, "currentMode" | "usage" | "settings" | "commands" | "backgroundTasks">
+  /** Set when this process resumes a session; `totals` are its last totals Mako kept, when it has them. */
+  readonly restores?: { totals?: NativeTotals }
 }
 
 export class ClaudeDecoder {
@@ -30,12 +33,15 @@ export class ClaudeDecoder {
   /** The main loop's latest model, whose window the turn's result reports. */
   private lastModel?: string
   private readonly meter = new SessionUsage()
+  /** Claude's totals at this process's latest result. */
+  private totals?: NativeTotals
   /** Commands `init` said belong to a terminal; a later command list leaves them out too. */
   private terminalCommands = new Set<string>()
 
   constructor(view: ClaudeDecoderView, now: () => number = Date.now) {
     this.view = view
     this.notices = new ClaudeNotices(now)
+    if (view.restores?.totals) this.meter.observe({ kind: "native", totals: view.restores.totals })
   }
 
   /** The PostCompact hook, whose summary names the compaction boundary that follows. */
@@ -74,8 +80,53 @@ export class ClaudeDecoder {
           .map((name) => described.get(name) ?? { name }),
         settings: { ...this.view.state.settings, model: message.model, options },
       }))
+      for (const tool of message.tools)
+        if (!tool.startsWith("mcp__") && !isDeclaredTool("claude", tool))
+          out.push(decoded.unknown(`tool ${tool}`, { reported: tool, version: message.claude_code_version ?? null }))
     }
     return out
+  }
+
+  /**
+   * What a result's totals add. They cover every model this process called,
+   * but a resumed process may start them from the session's totals at its
+   * last exit (Claude restores them when that session was the last to exit
+   * in its folder). The first result decides which: the restored totals are
+   * the ones Mako kept, and what this process added must cover the turn's
+   * own main-loop spend. With no kept totals, the turn's own spend is all
+   * that is known to be this process's.
+   */
+  private resultSpend(totals: NativeTotals, turn: TokenCounts): UsageObservation[] {
+    const observations: UsageObservation[] = [{ kind: "native", totals }]
+    const before = this.totals ?? this.startingTotals(totals, turn)
+    this.totals = totals
+    if (before === "unknown") {
+      if (contextOf(turn) > 0) observations.push({ kind: "spent", tokens: turn })
+      return observations
+    }
+    const tokens = before ? tokensSince(before.tokens, totals.tokens) ?? turn : totals.tokens
+    if (contextOf(tokens) > 0) observations.push({ kind: "spent", tokens })
+    const cost = (totals.cost ?? 0) - (before?.cost ?? 0)
+    if (cost > 0) observations.push({ kind: "costSpent", amount: cost, currency: "USD" })
+    return observations
+  }
+
+  /**
+   * Where this process's totals started: nothing for a new session, the kept
+   * totals if Claude restored them, or unknown. Claude restores whichever
+   * session last exited in the folder, so totals that neither extend the kept
+   * ones nor are this turn alone are another session's, and unknown.
+   */
+  private startingTotals(totals: NativeTotals, turn: TokenCounts): NativeTotals | undefined | "unknown" {
+    const { restores } = this.view
+    if (!restores) return undefined
+    if (restores.totals) {
+      const added = tokensSince(restores.totals.tokens, totals.tokens)
+      const restoredCost = (totals.cost ?? 0) >= (restores.totals.cost ?? 0)
+      if (added && restoredCost && tokensSince(turn, added)) return restores.totals
+    }
+    const beyondTurn = tokensSince(turn, totals.tokens)
+    return beyondTurn && contextOf(beyondTurn) === 0 ? undefined : "unknown"
   }
 
   /** Claude's own reports that move the session's state outside a turn's content. */
@@ -95,10 +146,12 @@ export class ClaudeDecoder {
     if (message.type === "result") {
       const size = this.lastModel && contextWindow(message.modelUsage, this.lastModel)
       const observations: UsageObservation[] = Object.keys(message.modelUsage).length
-        ? [{ kind: "total", tokens: sessionTokens(message.modelUsage) }]
+        ? this.resultSpend(
+          { tokens: sessionTokens(message.modelUsage), ...message.total_cost_usd > 0 && { cost: message.total_cost_usd } },
+          turnTokens(message.usage)
+        )
         : []
       if (size) observations.push({ kind: "window", size })
-      if (message.total_cost_usd > 0) observations.push({ kind: "cost", amount: message.total_cost_usd, currency: "USD" })
       return this.usage(...observations)
     }
     if (message.type === "conversation_reset") {
@@ -146,6 +199,16 @@ function sessionTokens(models: Record<string, ModelUsage>): TokenCounts {
     if (usage.thinkingTokens) tokens.reasoning = (tokens.reasoning ?? 0) + usage.thinkingTokens
   }
   return tokens
+}
+
+/** The main loop's spend in one turn, which a result reports for that turn alone. */
+function turnTokens(usage: { input_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; output_tokens: number }): TokenCounts {
+  return {
+    input: usage.input_tokens,
+    cacheRead: usage.cache_read_input_tokens ?? 0,
+    cacheWrite: usage.cache_creation_input_tokens ?? 0,
+    output: usage.output_tokens,
+  }
 }
 
 /** The answering model's window. Usage can key it with a suffix the reply's model id lacks (`[1m]`). */

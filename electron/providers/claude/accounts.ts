@@ -1,3 +1,4 @@
+import { z } from "zod"
 import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk"
 import { claudeProbeUsage } from "./usage-probe.js"
 import { createHash } from "node:crypto"
@@ -27,6 +28,8 @@ import {
   managedAccountHome,
   recordAccountHome,
   credentialFingerprint,
+  principalFingerprint,
+  readOptionalFile,
   accountDir,
   accountsRoot,
   cleanAccountName,
@@ -68,6 +71,10 @@ function nativeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 const HOME = ".claude"
 function defaultHome(env: NodeJS.ProcessEnv = process.env) {
   return env.CLAUDE_CONFIG_DIR || join(homedir(), HOME)
+}
+/** The config folder an account's sessions are kept under: the CLI's ordinary one for `default`. */
+export function claudeConfigDir(account: string): string {
+  return account === "default" ? join(homedir(), HOME) : accountDir("claude", account)
 }
 async function homeSettings(home: string): Promise<string | null> {
   try { return await readFile(join(home, "settings.json"), "utf8") }
@@ -563,6 +570,21 @@ export const claudeAccountCapability: SelectableAccountCapability = {
   accountUsage,
   credentialRevision: async (name, base = process.env) => {
     const env = await usageEnv(name, base)
-    return credentialFingerprint([defaultHome(env), env.USER ?? null, await readCredentials(env), await homeSettings(defaultHome(env))])
+    const state = await readOptionalFile(env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, ".claude.json") : join(homedir(), ".claude.json"))
+    return credentialFingerprint([defaultHome(env), env.USER ?? null,
+      principalFingerprint(await readCredentials(env), ClaudePrincipal),
+      principalFingerprint(state, ClaudeAccount),
+      await homeSettings(defaultHome(env))])
   },
 }
+
+/**
+ * Claude rewrites its OAuth tokens and their expiry on every refresh, and keeps
+ * MCP servers' tokens beside them; who signed in is in its state file.
+ */
+const ClaudePrincipal = z.object({
+  claudeAiOauth: z.object({ subscriptionType: z.string().nullable().optional(), scopes: z.array(z.string()).optional() }).optional(),
+})
+const ClaudeAccount = z.object({
+  oauthAccount: z.object({ accountUuid: z.string().optional(), organizationUuid: z.string().optional() }).optional(),
+})

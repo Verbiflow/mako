@@ -1,14 +1,14 @@
 import { basename, join } from "node:path"
+import { z } from "zod"
 import { objectValue, stringValue } from "../../codex-app-json.js"
 import {
-  discover,
   fingerprint,
   parseObject,
-  readLines,
   tokenCounts,
   tokenTotal,
+  tokenValue,
   validTimestamp,
-  yieldToMain,
+  type JsonlReader,
   type UsageEvent,
 } from "../../usage-scan.js"
 import type { ProviderUsageHistory } from "../usage-history.js"
@@ -16,22 +16,13 @@ import type { ProviderUsageHistory } from "../usage-history.js"
 export const claudeUsageHistory: ProviderUsageHistory = {
   provider: "claude",
   async scan(scan) {
-    const { files, truncated } = await discover([
-      join(scan.homeRoot, ".claude", "projects"),
-      join(scan.homeRoot, ".claude", "transcripts"),
-    ])
-    for (const [index, file] of files.entries()) {
-      const fallbackSession = basename(file.path, ".jsonl")
-      await readLines(file, (line) => {
-        if (!line.includes('"usage"') || !line.includes('"assistant"')) return
-        const event = parseClaudeEvent(scan.source, line, fallbackSession, file.mtimeMs)
-        if (!event) return
-        scan.session(event.session)
-        scan.record(event)
-      })
-      if ((index + 1) % 8 === 0) await yieldToMain()
+    const reader: JsonlReader<null> = {
+      needles: ['"usage"'],
+      start: () => null,
+      restore: (state) => z.null().parse(state),
+      line: (line, _state, file) => parseClaudeEvent(scan.source, line, basename(file.path, ".jsonl"), file.mtimeMs),
     }
-    return { truncated }
+    await scan.jsonl([join(scan.homeRoot, ".claude", "projects"), join(scan.homeRoot, ".claude", "transcripts")], reader)
   },
 }
 
@@ -54,6 +45,8 @@ function parseClaudeEvent(
     "cache_creation_input_tokens"
   )
   if (tokenTotal(counts) === 0) return null
+  const hour = tokenValue(objectValue(usage.cache_creation)?.ephemeral_1h_input_tokens)
+  if (hour) counts.cacheWrite1h = hour
   const timestamp = validTimestamp(root.timestamp, fallbackTime)
   const messageId = stringValue(message.id)
   const requestId = stringValue(root.requestId)
