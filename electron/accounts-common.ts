@@ -25,6 +25,32 @@ export function credentialFingerprint(values: readonly (string | null)[]): strin
   return createHmac("sha256", credentialSalt).update(JSON.stringify(values)).digest("hex")
 }
 
+/**
+ * Who `contents` signs in as, as `credentialRevision` compares it: the fields
+ * `principal` keeps, without the tokens a CLI rotates on its own before they
+ * lapse. A refresh would otherwise read as another account and refuse the
+ * next prompt. Contents in a shape `principal` does not read count whole.
+ */
+export function principalFingerprint(contents: string | null, principal: z.ZodType): string {
+  if (contents === null) return credentialFingerprint([null])
+  const parsed = z.string().transform((text, context) => {
+    try { return JSON.parse(text) }
+    catch {
+      context.addIssue({ code: "custom", message: "not JSON" })
+      return z.NEVER
+    }
+  }).pipe(principal).safeParse(contents)
+  return credentialFingerprint([parsed.success ? JSON.stringify(parsed.data) : contents])
+}
+
+export async function readOptionalFile(path: string): Promise<string | null> {
+  try { return await readFile(path, "utf8") }
+  catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
+    throw error
+  }
+}
+
 export async function credentialFileFingerprint(path: string): Promise<string> {
   try { return credentialFingerprint([await readFile(path, "utf8")]) }
   catch (error) {

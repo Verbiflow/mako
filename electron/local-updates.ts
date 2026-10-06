@@ -346,7 +346,7 @@ const SYNC_MANIFEST = ".mako-sync.json"
 const DEPENDENCIES_SENTINEL = join("node_modules", ".package-lock.json")
 
 interface BuildSyncManifest {
-  /** Signature of the npm-managed dependency sentinel, when one exists. */
+  /** Signatures of npm's dependency sentinel and the project lockfile. */
   deps: string | null
   /** Last synced source entries: relative path → signature. */
   entries: Record<string, string>
@@ -423,9 +423,9 @@ async function scanBuildSource(
  * A manifest of the last synced signatures makes repeat updates copy only
  * what changed — the full clone of a checkout plus node_modules was the
  * slowest step of every local update. node_modules is replaced whole only
- * when npm's own sentinel moved; hand edits inside it are deliberately not
- * tracked. Generated output (dist, tsbuildinfo) is never synced, so it
- * survives in the checkout and the compile stays incremental.
+ * when npm's sentinel or the project lockfile moved; hand edits inside it
+ * are deliberately not tracked. Generated output (dist, tsbuildinfo) is never
+ * synced, so it survives in the checkout and the compile stays incremental.
  */
 export async function syncBuildCheckout(
   source: string,
@@ -442,10 +442,13 @@ export async function syncBuildCheckout(
   }
   await files.mkdir(checkout, { recursive: true })
 
-  const deps = await files
-    .lstat(join(source, DEPENDENCIES_SENTINEL))
-    .then((info) => `${info.size}:${info.mtimeMs}`)
-    .catch(() => null)
+  const locks = await Promise.all(
+    [DEPENDENCIES_SENTINEL, "package-lock.json"].map((path) => files
+      .lstat(join(source, path))
+      .then((info) => `${info.size}:${info.mtimeMs}`)
+      .catch(() => null))
+  )
+  const deps = locks[0] === null ? null : JSON.stringify(locks)
   const sourceModules = await files
     .lstat(join(source, "node_modules"))
     .then((info) => info.isDirectory())

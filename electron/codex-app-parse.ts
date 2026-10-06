@@ -121,12 +121,16 @@ type ResolvedNotification = {
 type TokenUsageNotification = {
   method: "thread/tokenUsage/updated"
   threadId: string
+  /** The turn whose call this reading follows. A resumed thread first repeats its last reading under the turn that made it. */
+  turnId?: string
   /** Tokens in the context window at the latest request. */
   used: number
   /** The model's context window, when Codex knows it. */
   size?: number
-  /** The thread's running total, by kind, when Codex itemizes it. */
+  /** The thread's running total across its processes, by kind, when Codex itemizes it. */
   total?: TokenCounts
+  /** The latest call's tokens, by kind, when Codex itemizes them. */
+  call?: TokenCounts
 }
 
 type WarningNotification = {
@@ -233,8 +237,17 @@ const BreakdownSchema = z.object({
   outputTokens: count,
   reasoningOutputTokens: count,
 })
+function codexCounts(breakdown: z.infer<typeof BreakdownSchema>): TokenCounts {
+  return fromInclusiveCounts({
+    input: breakdown.inputTokens,
+    cacheRead: breakdown.cachedInputTokens,
+    cacheWrite: breakdown.cacheWriteInputTokens,
+    output: breakdown.outputTokens,
+    reasoning: breakdown.reasoningOutputTokens,
+  })
+}
 const TokenUsageSchema = z.object({
-  last: z.object({ totalTokens: count }),
+  last: z.object({ totalTokens: count }).and(BreakdownSchema.partial()),
   total: BreakdownSchema.optional().catch(undefined),
   modelContextWindow: z.number().positive().nullish(),
 })
@@ -248,6 +261,17 @@ const McpStatusSchema = z.object({
 })
 const SafetyBufferingSchema = z.object({ turnId: z.string(), showBufferingUi: z.boolean() })
 const SummaryPartSchema = z.object({ turnId: z.string(), itemId: z.string(), summaryIndex: z.number() })
+const FUNCTION_OUTPUT_PLACEHOLDERS = { input_image: "[image]", input_audio: "[audio]", encrypted_content: "[encrypted content]" } as const
+const FunctionCallOutputSchema = z.object({
+  name: z.string().min(1),
+  namespace: z.string().nullable(),
+  output: z.union([z.string(), z.array(z.discriminatedUnion("type", [
+    z.object({ type: z.literal("input_text"), text: z.string() }),
+    z.object({ type: z.literal("input_image") }).loose(),
+    z.object({ type: z.literal("input_audio") }).loose(),
+    z.object({ type: z.literal("encrypted_content") }).loose(),
+  ])).transform((parts) => parts.map((part) => part.type === "input_text" ? part.text : FUNCTION_OUTPUT_PLACEHOLDERS[part.type]).join("\n"))]),
+}).loose()
 
 export function parseJsonRpcEnvelope(line: string): JsonRpcEnvelope {
   let value: JsonValue
@@ -374,13 +398,11 @@ export function parseNotification(
       if (threadId === undefined || !usage.success) return null
       const { last, total, modelContextWindow } = usage.data
       const parsed: TokenUsageNotification = { method, threadId, used: last.totalTokens, size: modelContextWindow ?? undefined }
-      if (total) parsed.total = fromInclusiveCounts({
-        input: total.inputTokens,
-        cacheRead: total.cachedInputTokens,
-        cacheWrite: total.cacheWriteInputTokens,
-        output: total.outputTokens,
-        reasoning: total.reasoningOutputTokens,
-      })
+      const turnId = stringValue(params.turnId)
+      if (turnId) parsed.turnId = turnId
+      if (total) parsed.total = codexCounts(total)
+      const call = BreakdownSchema.safeParse(last)
+      if (call.success) parsed.call = codexCounts(call.data)
       return parsed
     }
     case "warning":
@@ -651,6 +673,17 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
             results: Array.isArray(root.results) ? root.results : null,
           }
     }
+    case "functionCallOutput": {
+      const parsed = FunctionCallOutputSchema.safeParse(root)
+      if (!parsed.success) return { type: "unsupported", id, sourceType: type }
+      const { name, namespace, output } = parsed.data
+      return {
+        type,
+        id,
+        tool: namespace ? `${namespace}.${name}` : name,
+        output,
+      }
+    }
     case "sleep": {
       const durationMs = numberValue(root.durationMs)
       return durationMs === undefined ? null : { type, id, durationMs }
@@ -670,11 +703,11 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
     }
     case "collabAgentToolCall": {
       const parsed = CodexAgentItemSchema.safeParse(root)
-      return parsed.success ? parsed.data : null
+      return parsed.success ? parsed.data : { type: "unsupported", id, sourceType: type }
     }
     case "subAgentActivity": {
       const parsed = CodexAgentActivitySchema.safeParse(root)
-      return parsed.success ? parsed.data : null
+      return parsed.success ? parsed.data : { type: "unsupported", id, sourceType: type }
     }
     case "plan": {
       const text = stringValue(root.text)

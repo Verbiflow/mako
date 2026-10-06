@@ -84,13 +84,15 @@ function turnBlocks(blocks: readonly LiveBlock[], requestId: string): readonly L
  * Closes the calls still running in the request's turn. Nothing will report
  * on them now: the process running them is gone, or the host lost it.
  */
-export function closeCutOffCalls(blocks: readonly LiveBlock[], requestId: string, note: string): LiveUpdate[] {
+export function closeCutOffCalls(blocks: readonly LiveBlock[], requestId: string, note: string, status: "failed" | "canceled" = "failed"): LiveUpdate[] {
   return turnBlocks(blocks, requestId).flatMap((block) =>
     block.type === "tool" && !liveToolFinished(block.status)
-      ? [{ kind: "tool-update" as const, id: block.id, status: "failed", output: note, unfinished: true as const }]
+      ? [{ kind: "tool-update" as const, id: block.id, status, output: note, unfinished: true as const }]
       : []
   )
 }
+
+export const STOPPED_CALL_NOTE = "You stopped the turn before this call returned a result."
 
 /** What a row closed by `closeCutOffCalls` says, for the user reading the transcript. */
 export function cutOffNote(interruption: Interruption, error: string | undefined): string {

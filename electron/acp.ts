@@ -75,7 +75,7 @@ import { basename, join } from "node:path"
 import { acpObservedSettings, applyAcpSettings } from "./acp-config.js"
 import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord } from "./acp-decoder.js"
-import { nativeCapture } from "./native-capture.js"
+import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { deliverDecoded } from "./contracts/native-decoding.js"
 import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
@@ -153,10 +153,14 @@ interface Live {
   reopening?: Promise<void>
   /** Only one native mode request may own the acknowledgment at a time. */
   changingMode?: boolean
+  /** The last mode the agent itself reported, including one replayed while a session loads. */
+  nativeMode?: string
   /** The tier the process was launched with, for providers that read it at start. */
   launchAccess: AccessTier | null
   /** Re-read the admitted store after native persistence, never on token updates. */
   locateNativePath(): string | undefined
+  /** The opt-in recording of this session's wire, when capture is on for the harness. */
+  capture?: NativeCapture
 }
 
 /** Output that begins a turn. A tool update can still belong to the turn before. */
@@ -359,7 +363,7 @@ async function startAcp(
   })
   const located = () =>
     live.sessionId
-      ? (source?.locateSession?.({ nativeId: live.sessionId, cwd: workingDir, env }) ?? live.state.nativePath)
+      ? ((source?.resume.kind === "native" ? source.resume.locate({ nativeId: live.sessionId, cwd: workingDir, env }) : undefined) ?? live.state.nativePath)
       : live.state.nativePath
   child.on("exit", (code, signal) => {
     live.agents?.dispose()
@@ -390,6 +394,7 @@ async function startAcp(
 
   const decoder = new AcpDecoder(source, () => live.state.settings)
   const capture = nativeCapture(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }))
+  if (capture) live.capture = capture
   /** Records a message as `acpDecoderSource` reads it: `{ method, params }`, or `{ request, params }` for one the agent waits on. */
   const record = (message: AcpNotificationRecord | AcpRequestRecord) => {
     if (capture) capture.record(JSON.parse(JSON.stringify(message)))
@@ -423,7 +428,7 @@ async function startAcp(
         sessionId: id,
         ...vendor.ask.request,
       })
-      return acpAnswer(vendor.ask, response.kind === "choice" ? response.optionId : null)
+      return acpAnswer(vendor.ask, response)
     },
     async unstable_createElicitation(params: CreateElicitationRequest) {
       return requestElicitation(live, params, approvals?.identifyElicitation?.(params))
@@ -433,6 +438,20 @@ async function startAcp(
       record({ method: "session/update", params })
       reportBackground(background?.sessionUpdate?.(params))
       announceProviderTurn(providerTurns?.updateCause?.(params))
+      // Before the child filter: a subagent's reading is never transcript, and its spend is the conversation's.
+      if (params.update.sessionUpdate === "usage_update") {
+        const reading = params.update
+        const read = source?.usageUpdate?.(UsageMetaSchema.safeParse(reading._meta).data) ?? { of: "agent", observations: [] }
+        if (read.of === "repeat") return
+        if (read.of === "subagent") {
+          observeUsage(read.observations)
+          return
+        }
+        const observations: UsageObservation[] = [{ kind: "context", used: reading.used, size: reading.size }, ...read.observations]
+        if (reading.cost) observations.push({ kind: "cost", amount: reading.cost.amount, currency: reading.cost.currency })
+        observeUsage(observations)
+        return
+      }
       if (live.agents?.observe(params) === "child") return
       approvals?.observe?.(params)
       live.compaction?.observe(params.update)
@@ -443,15 +462,6 @@ async function startAcp(
       }
       if (params.update.sessionUpdate === "current_mode_update") {
         acpObserveNativeMode(id, params.update.currentModeId)
-        return
-      }
-      if (params.update.sessionUpdate === "usage_update") {
-        const reading = params.update
-        const extra = source?.usageUpdate ? source.usageUpdate(UsageMetaSchema.safeParse(reading._meta).data) : []
-        if (extra === null) return
-        const observations: UsageObservation[] = [{ kind: "context", used: reading.used, size: reading.size }, ...extra]
-        if (reading.cost) observations.push({ kind: "cost", amount: reading.cost.amount, currency: reading.cost.currency })
-        observeUsage(observations)
         return
       }
       if (params.update.sessionUpdate === "available_commands_update") {
@@ -584,8 +594,8 @@ async function startAcp(
       runtime = reportedRuntime(output === undefined ? undefined : parseVersion(output), "launch executable version query")
     }
     update(live, { executionContext: { ...context, runtime } })
-    live.promptCapabilities =
-      initialized.agentCapabilities?.promptCapabilities ?? {}
+    const advertised = initialized.agentCapabilities?.promptCapabilities ?? {}
+    live.promptCapabilities = source?.readsUnadvertised?.image ? { ...advertised, image: true } : advertised
     live.closesSession = Boolean(initialized.agentCapabilities?.sessionCapabilities?.close)
     const mcpCapabilities = initialized.agentCapabilities?.mcpCapabilities
     const transports: McpTransport[] = ["stdio"]
@@ -644,7 +654,8 @@ async function startAcp(
     for (const decoded of opening.splice(0))
       if ((decoded.sessionId ?? session.sessionId) === session.sessionId)
         applyNotification({ ...decoded, sessionId: session.sessionId, usage: decoded.usage?.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") })
-    live.agents = await trace.step("observation", () => source?.observeAgents?.({
+    const agents = source?.agents
+    live.agents = await trace.step("observation", () => agents?.kind !== "observed" ? undefined : agents.observe({
       nativeId: session.sessionId, cwd: workingDir, env, observedAgents: options.observedAgents,
       publish: (agent) => {
         if (!live.startup.signal.aborted) engine.emitAgent(live, agent)
@@ -671,10 +682,13 @@ async function startAcp(
         ? accessModeId(spec.access)
         : requestedModeId
     if (effectiveModeId) {
-      const change = acpModeChange(policy, modes, effectiveModeId, runAccess, harness)
-      if (change.kind === "native" && change.nativeModeId !== sessionModes?.currentModeId) {
+      // Grok 1.0.46 lists no modes on load; the mode it restored arrives only in the replay.
+      const restored = sessionModes?.currentModeId ?? live.nativeMode ?? null
+      const change = acpModeChange(policy, modes, effectiveModeId, runAccess, harness, restored)
+      if (change.kind === "native" && change.nativeModeId !== restored) {
         await trace.step("settings", () => watch.step("session/set_mode", connection.setSessionMode({ sessionId: session.sessionId, modeId: change.nativeModeId })))
         if (sessionModes) sessionModes.currentModeId = change.nativeModeId
+        live.nativeMode = change.nativeModeId
         live.configOptions = live.configOptions.map(option =>
           option.type === "select" && (option.category === "mode" || option.id === "mode")
             ? { ...option, currentValue: change.nativeModeId } : option)
@@ -889,6 +903,7 @@ export async function livePrompt(
   live.providerTurnCause = undefined
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
   engine.emitUpdate(live, { kind: "user", text })
+  live.capture?.prompted()
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
   dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
   void turn.send(() => connection.prompt({ sessionId, prompt })).then(
@@ -929,11 +944,19 @@ export async function liveSteer(id: string, input: ProviderSteerInput): Promise<
   if (!live?.sessionId || !live.connection)
     throw new Error("This interactive session is not connected")
   const turn = live.turn
-  if (!providerHost.acpSources.get(live.harness)?.steering ||
-    live.state.status !== "running" || turn?.id !== input.expectedRunId || !turn.acceptsSteering)
+  const declared = providerHost.acpSources.get(live.harness)?.steering
+  const steering = declared?.kind === "supported" ? declared.wire : undefined
+  if (!steering || live.state.status !== "running" || turn?.id !== input.expectedRunId || !turn.acceptsSteering)
     return { kind: "not-accepted", reason: "The provider turn has already changed or does not support steering" }
   const connection = live.connection
   const sessionId = live.sessionId
+  if (steering !== "concurrent-prompt" && steering !== "interrupting-prompt") {
+    if (input.attachments.length) return { kind: "not-accepted", reason: "This agent takes only text in the middle of a turn" }
+    const reply = await connection.extMethod(steering.extension, { sessionId, text: input.text })
+    return steering.taken.safeParse(reply).success
+      ? { kind: "accepted" }
+      : { kind: "not-accepted", reason: `The agent did not take the message: ${JSON.stringify(reply)?.slice(0, 200)}` }
+  }
   const prompt = acpPromptBlocks(input.text, input.attachments, live.promptCapabilities)
   await turn.send(() => connection.prompt({ sessionId, prompt }), "steer")
   return { kind: "accepted" }
@@ -982,6 +1005,7 @@ export async function liveSetMode(id: string, modeId: string): Promise<void> {
     await connection.setSessionMode({ sessionId, modeId: nativeMode })
     if (sessions.get(id) !== live || live.connection !== connection || live.sessionId !== sessionId || live.startup.signal.aborted)
       throw new Error("The session ended before its mode change was acknowledged.")
+    live.nativeMode = nativeMode
     live.configOptions = live.configOptions.map((option) =>
       option.type === "select" && (option.category === "mode" || option.id === "mode")
         ? { ...option, currentValue: nativeMode } : option
@@ -997,6 +1021,7 @@ export function acpObserveNativeMode(id: string, nativeMode: string): void {
   const live = sessions.get(id)
   if (!live) return
   const policy = providerHost.acpSources.get(live.harness)?.access
+  live.nativeMode = nativeMode
   update(live, { currentMode: acpReportedMode(policy, nativeMode, live.launchAccess) })
 }
 

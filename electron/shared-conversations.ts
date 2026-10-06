@@ -27,7 +27,7 @@ const liveTarget = z.object({ kind: z.literal("live"), id: z.string() })
 const conversationCalls = new Set([
   "mako:live-read",
   "mako:live-continue", "mako:live-snapshot", "mako:live-state", "mako:live-prompt", "mako:live-permission",
-  "mako:live-mode", "mako:live-cancel", "mako:live-close", "mako:live-edit-queued",
+  "mako:live-mode", "mako:live-cancel", "mako:live-close", "mako:live-prewarm", "mako:live-edit-queued",
   "mako:live-clear-queue", "mako:live-sign-in-readiness", "mako:live-sign-in-resume", "mako:live-earlier", "mako:live-bind", "mako:read-live-file",
   "mako:live-child-cancel", "mako:live-merge-fork",
   "mako:live-rewind-preview", "mako:live-rewind", "mako:live-turn-changes", "mako:live-turn-diff", "mako:live-action", "mako:live-steer-queued",

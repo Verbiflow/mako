@@ -6,6 +6,7 @@ import type { LiveAction, LiveActionInput } from "./contracts/live-actions.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { ProviderBinding } from "./contracts/conversation-control.js"
 import type { NativeQuestionHistory } from "./contracts/live-questions.js"
+import type { ProviderLiveDriver } from "./providers/live-driver.js"
 
 interface QuestionDelivery {
   continue(id: string, bindingId: string, requestId: string, text: string, displayText: string): void
@@ -22,7 +23,7 @@ export class LiveQuestions {
   reconcile(resident: Resident, required = false): Promise<void> | undefined {
     const control = this.host.control(resident)
     const initial = control.bindings.find(item => item.id === control.activeBindingId)
-    const history = initial && this.host.dependencies.driver(initial.provider)?.sessionQuestions?.history
+    const history = initial && sessionQuestions(this.host.dependencies.driver(initial.provider))?.history
     if (!initial || !history) return
     this.host.discoverNativePath(resident)
     const binding = this.host.control(resident).bindings.find(item => item.id === initial.id)
@@ -86,7 +87,7 @@ export class LiveQuestions {
     const native = NativeQuestionSchema.parse(raw)
     const control = this.host.control(resident)
     const binding = control.bindings.find(item => item.id === bindingId)
-    if (!binding || !this.host.dependencies.driver(binding.provider)?.sessionQuestions ||
+    if (!binding || !sessionQuestions(this.host.dependencies.driver(binding.provider)) ||
       (binding.nativeId && binding.nativeId !== native.sessionId)) return
     const previous = control.questions?.find(item => item.bindingId === bindingId &&
       item.native.sessionId === native.sessionId && item.native.turnId === native.turnId && item.native.itemId === native.itemId)
@@ -134,7 +135,7 @@ export class LiveQuestions {
       return true
     }
     const binding = control.bindings.find(item => item.id === question.bindingId)
-    const capability = binding && this.host.dependencies.driver(binding.provider)?.sessionQuestions
+    const capability = binding && sessionQuestions(this.host.dependencies.driver(binding.provider))
     if (!capability) throw new Error("This provider cannot currently accept this saved question's answer")
     const remaining = { ...question.native, questions: question.native.questions.filter(item => !question.answered?.includes(item.id)) }
     // Local repeats use their original full answer to compare the saved operation.
@@ -165,7 +166,7 @@ export class LiveQuestions {
     if (!remaining.questions.length || question.dismissed || question.retired || control.activeBindingId !== question.bindingId || resident.closing || resident.opening || resident.transferring || resident.rewinding || resident.storageFault)
       throw new Error("This question is no longer available on the current session")
     const running = resident.snapshot.requests.find(item => item.status === "dispatching")
-    if (resident.snapshot.session.status === "running" && running?.nativeRun && resident.driver?.steer) {
+    if (resident.snapshot.session.status === "running" && running?.nativeRun && resident.driver?.steering.kind === "supported") {
       const sent = await this.delivery.steer(id, { kind: "steer", id: question.id, requestId: running.id, text, displayText, attachments: [] })
       // An authoritative refusal is safe to queue. Unknown delivery never is.
       if (sent.state.kind === "not-accepted" && canContinue())
@@ -175,4 +176,10 @@ export class LiveQuestions {
     }
     return true
   }
+}
+
+/** The harness's nonblocking session questions, which Mako tracks and answers itself. */
+function sessionQuestions(driver: ProviderLiveDriver | undefined) {
+  const questions = driver?.questions
+  return questions?.kind === "session" ? questions : undefined
 }

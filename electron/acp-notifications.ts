@@ -6,16 +6,14 @@ import type {
   SessionNotification,
   SessionUpdate,
 } from "@agentclientprotocol/sdk"
+import { z } from "zod"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
+import { acpLocationDetails, acpText } from "@mako/sessions/acp-tool-details"
 import { decoded, type Decoded } from "./contracts/native-decoding.js"
 import type { LiveSessionState, LiveUpdate, LiveDriverEvent } from "./shared.js"
 
-interface AcpToolOutputBoundary {
-  value: Extract<
-    SessionUpdate,
-    { sessionUpdate: "tool_call_update" }
-  >["rawOutput"]
-}
+/** A tool's `rawOutput`, which ACP leaves to the agent: JSON, read for its words. */
+const RawOutputSchema = z.json().optional().catch(undefined)
 
 /* ------------------------------------------------------------ translation */
 
@@ -111,7 +109,7 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
             : JSON.stringify(raw.rawInput, null, 2),
         ...content,
         details: withLocations(content.details, raw.locations),
-        output: content.output ?? parseAcpToolOutput({ value: raw.rawOutput }),
+        output: content.output ?? (acpText(RawOutputSchema.parse(raw.rawOutput)) || undefined),
       }
       break
     }
@@ -151,17 +149,6 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
     (update.kind === "user" && update.attachments?.length)
     ? [decoded.update(update)]
     : []
-}
-
-function parseAcpToolOutput(
-  boundary: AcpToolOutputBoundary
-): string | undefined {
-  const { value } = boundary
-  if (value === undefined) return undefined
-  if (Object.prototype.toString.call(value) === "[object String]") {
-    return String(value)
-  }
-  return JSON.stringify(value, null, 2)
 }
 
 function contentAttachment(
@@ -243,11 +230,6 @@ function withLocations(
   details: ToolDetail[] | undefined,
   locations: ReadonlyArray<{ path: string; line?: number | null }> | null | undefined
 ): ToolDetail[] | undefined {
-  if (!locations?.length) return details
-  const links: ToolDetail[] = locations.map((location) => ({
-    type: "location",
-    path: location.path,
-    line: location.line ?? undefined,
-  }))
-  return [...(details ?? []), ...links]
+  const links = acpLocationDetails(locations)
+  return links.length ? [...(details ?? []), ...links] : details
 }

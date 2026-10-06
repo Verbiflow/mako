@@ -173,7 +173,7 @@ function applyEffect(context: ProtocolContext, effect: CodexEffect): void {
         for (const settle of context.subagentTurns?.get(effect.threadId) ?? []) settle()
       return
     case "agents":
-      context.protocol.observeAgents(effect.item, effect.replay)
+      context.protocol.observeAgents(effect.item, effect.replay, effect.toolId)
       return
     case "question":
       context.protocol.observeQuestion?.(effect.question)

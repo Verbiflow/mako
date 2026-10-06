@@ -305,7 +305,7 @@ async function accountSnapshot(
   }
   const source = held?.profile ?? current(await providerProfileCache.nearest(prefix))
   if (!source) return null
-  // Models and capabilities belong to the account; defaults and the
+  // Models belong to the account; defaults and the
   // configured model can differ per workspace, so they stay unknown.
   const borrowed: HarnessProfile = {
     id: source.id,
@@ -313,7 +313,6 @@ async function accountSnapshot(
     available: source.available,
     transport: source.transport,
     models: source.models,
-    capabilities: source.capabilities,
     pending: true,
   }
   if (source.defaultModel !== undefined) borrowed.defaultModel = source.defaultModel

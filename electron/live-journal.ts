@@ -10,6 +10,7 @@ import {
 import {
   ContextManifestSchema,
   ConversationControlSchema,
+  NativeTotalsSchema,
   PromptAttachmentSchema,
 } from "./contracts/conversation-control.js"
 import { mkdirSync, readdirSync } from "node:fs"
@@ -158,12 +159,14 @@ const MetadataSchema = z.object({
     settings: SessionSettingsSchema.optional(),
     lastStop: z.string().optional(),
     error: z.string().optional(),
-    // How full the context is belongs to the conversation and reopens with
-    // it; what was spent belonged to the process that ended.
+    // How full the context is and the harness's own session totals belong to
+    // the conversation and reopen with it; what was spent belonged to the
+    // process that ended.
     usage: z.object({
       used: z.number().optional(),
       size: z.number().optional(),
       compacted: z.boolean().optional(),
+      native: NativeTotalsSchema.optional(),
     }).optional(),
   }),
   revision: z.number().int().nonnegative(),
@@ -212,6 +215,35 @@ const AppendValueSchema = z.union([
   ToolGrowthSchema.transform((growth) => ({ kind: "tool" as const, growth })),
 ])
 type AppendValue = z.infer<typeof AppendValueSchema>
+const ProgressSchema = z.object({ revision: z.number().int().nonnegative() })
+
+/** Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. */
+type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity"
+
+/**
+ * Whether `next` holds metadata `previous` did not. Fields are compared by
+ * identity, which the host keeps for what did not change, so a streamed
+ * flush does not serialise a harness's commands and models again.
+ */
+function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
+  const changed = {
+    session: previous.session !== next.session,
+    control: previous.control !== next.control,
+    permissions: previous.permissions !== next.permissions,
+    nativeAgents: previous.nativeAgents !== next.nativeAgents,
+    baseCoveredBlocks: previous.baseCoveredBlocks !== next.baseCoveredBlocks,
+    threadPath: previous.threadPath !== next.threadPath,
+    nativePaths: previous.nativePaths !== next.nativePaths,
+    hasSessionQuestions: previous.hasSessionQuestions !== next.hasSessionQuestions,
+    epoch: previous.epoch !== next.epoch,
+    createdAt: previous.createdAt !== next.createdAt,
+    threadId: previous.threadId !== next.threadId,
+    sessionId: previous.sessionId !== next.sessionId,
+    history: previous.history !== next.history,
+  } satisfies Record<Exclude<keyof LiveSnapshot, UnstoredMetadata>, boolean>
+  return Object.values(changed).some(Boolean)
+}
+
 const AppendCountSchema = z.object({
   block_id: z.number().int().nonnegative(),
   count: z.number().int().nonnegative(),
@@ -254,6 +286,8 @@ export function journalSummary(metadata: string) {
 export class LiveJournal {
   private readonly db: DatabaseSync
   private readonly appends = new Map<number, number>()
+  /** Journals written before `options` had its own row keep it in metadata until their next commit. */
+  private optionsStored = false
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
@@ -262,6 +296,8 @@ export class LiveJournal {
       this.db
         .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS base (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -274,23 +310,46 @@ export class LiveJournal {
         const row = AppendCountSchema.parse(value)
         this.appends.set(row.block_id, row.count)
       }
+      this.optionsStored = Boolean(this.db.prepare("SELECT 1 FROM options WHERE id=1").get())
     } catch (error) {
       this.db.close()
       throw error
     }
   }
 
-  summary() {
+  /**
+   * The metadata row with the session's model options put back. They change
+   * far less often than the session (Devin offers 721 model choices, 113KB),
+   * so they have their own row instead of riding along with every status.
+   */
+  private metadata(): string | null {
     const row = this.db.prepare("SELECT value FROM metadata WHERE id=1").get()
-    return row ? journalSummary(RowSchema.parse(row).value) : null
+    if (!row) return null
+    const value = RowSchema.parse(row).value
+    const options = this.db.prepare("SELECT value FROM options WHERE id=1").get()
+    if (!options) return value
+    const parsed = JSON.parse(value)
+    parsed.session.configOptions = JSON.parse(RowSchema.parse(options).value)
+    return JSON.stringify(parsed)
+  }
+
+  summary() {
+    const metadata = this.metadata()
+    if (!metadata) return null
+    const summary = journalSummary(metadata)
+    return { ...summary, revision: Math.max(summary.revision, this.revision()) }
+  }
+
+  /** The revision of the last commit; the metadata row keeps the one it was last written at. */
+  private revision(): number {
+    return ProgressSchema.safeParse(this.db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
   }
 
   read(): LiveSnapshot | null {
-    const row = this.db.prepare("SELECT value FROM metadata WHERE id=1").get()
-    if (!row) return null
-    const metadata = MetadataSchema.parse(
-      JSON.parse(RowSchema.parse(row).value)
-    )
+    const metadataValue = this.metadata()
+    if (!metadataValue) return null
+    const stored = MetadataSchema.parse(JSON.parse(metadataValue))
+    const metadata = { ...stored, revision: Math.max(stored.revision, this.revision()) }
     const base = this.db.prepare("SELECT value FROM base WHERE id=1").get()
     const blocks = this.db
       .prepare("SELECT value FROM blocks ORDER BY id")
@@ -339,9 +398,17 @@ export class LiveJournal {
     this.db.exec("BEGIN IMMEDIATE")
     try {
       const { blocks, requests, base, ...metadata } = next
-      this.db
-        .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-        .run(JSON.stringify({ ...metadata, activityAt: undefined, nativeActivity: undefined }))
+      const { configOptions, ...session } = metadata.session
+      // Comes from the live harness each time and is not read back.
+      delete session.commands
+      const writeOptions = !this.optionsStored || configOptions !== previous?.session.configOptions
+      if (writeOptions)
+        this.db.prepare("INSERT OR REPLACE INTO options VALUES (1, ?)").run(JSON.stringify(configOptions))
+      if (!previous || writeOptions || metadataChanged(previous, next))
+        this.db
+          .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
+          .run(JSON.stringify({ ...metadata, session, activityAt: undefined, nativeActivity: undefined }))
+      this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       if (!previous || base !== previous.base)
         this.db
           .prepare("INSERT OR REPLACE INTO base VALUES (1, ?)")
@@ -412,6 +479,7 @@ export class LiveJournal {
             upsertRequest.run(request.id, JSON.stringify(request))
       }
       this.db.exec("COMMIT")
+      if (writeOptions) this.optionsStored = true
       for (const [index, count] of counts) {
         if (count) this.appends.set(index, count)
         else this.appends.delete(index)

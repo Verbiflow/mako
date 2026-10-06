@@ -4,6 +4,7 @@ import { ExecutionAccountChanged, ExecutionIdentityMismatch, signInState } from 
 import type { AccountRemovalSession, AccountRemovalWait } from "./account-types.js"
 import { holdForSignIn, releaseSignIn, signInPause } from "./contracts/sign-in-hold.js"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
+import { resumes } from "./providers/live-capabilities.js"
 import { verifyRecoveredSession } from "./provider-recovery.js"
 import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
@@ -77,11 +78,11 @@ import type {
   NativeActivityObservation,
 } from "./shared.js"
 import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart } from "./contracts/live-content.js"
-import { requestsDelta, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "./contracts/live-conversations.js"
-import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, TurnSteps } from "./interrupted-turn.js"
+import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "./contracts/live-conversations.js"
+import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, STOPPED_CALL_NOTE, TurnSteps } from "./interrupted-turn.js"
 import { controlNote } from "./control-launch.js"
 import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
-import { carriedUsage, spendBetween } from "./session-usage.js"
+import { carriedUsage, restorableTotals, spendBetween } from "./session-usage.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type ContextBreakdown } from "./contracts/providers-acp.js"
 import {
   AUTO_CONTINUE_DELAY_MS,
@@ -134,9 +135,11 @@ export class LiveConversations {
     this.assets = new LiveAssets(join(dependencies.root, "assets"))
     const access: LiveAccess = {
       discoverNativePath: (resident) => this.discoverNativePath(resident),
+      locateNativePath: (resident) => this.locateNativePath(resident),
       observe: (event) => this.observe(event),
       retainAttachments: (attachments) => this.assets.retainPrompt(attachments),
       close: (id) => this.close(id),
+      reopen: (resident) => this.reopen(resident),
       pending: (resident) => this.transfers.pending(resident),
       storageFailed: (resident, boundary) =>
         this.storageFailed(resident, boundary),
@@ -150,6 +153,8 @@ export class LiveConversations {
       residencyChanged: (resident) => this.scheduleHibernation(resident),
       driverEvents: (resident, bindingId) =>
         this.driverEvents(resident, bindingId),
+      nativeStart: (resident, driver, bindingId, start) =>
+        this.nativeStart(resident, driver, bindingId, start),
       agentActor: (conversationId) => this.agentActor(conversationId),
     }
     this.checkpoints = new LiveCheckpoints(access, (id, input) =>
@@ -506,8 +511,9 @@ export class LiveConversations {
   async contextBreakdown(id: string): Promise<ContextBreakdown | null> {
     const resident = this.load(id)
     const bindingId = resident && this.control(resident).activeBindingId
-    if (!resident?.driver?.contextBreakdown || !bindingId || resident.snapshot.session.connection !== "connected") return null
-    return resident.driver.contextBreakdown(bindingId)
+    const breakdown = resident?.driver?.contextBreakdown
+    if (breakdown?.kind !== "itemized" || !bindingId || resident?.snapshot.session.connection !== "connected") return null
+    return breakdown.read(bindingId)
   }
 
   snapshot(id: string): LiveSnapshot | null {
@@ -580,6 +586,26 @@ export class LiveConversations {
     if (!resident || !this.canHibernate(resident)) return false
     void this.hibernate(resident, reason)
     return true
+  }
+
+  /**
+   * The user started writing to this conversation. A hibernated one wakes now,
+   * so its two-second restart overlaps the typing instead of following Send;
+   * a warm one restarts its idle window so it cannot hibernate under the draft.
+   */
+  prewarm(id: string): "waking" | "kept-warm" | "unchanged" {
+    const resident = this.load(id)
+    if (!resident || resident.closing || resident.retireWhenIdle || resident.snapshot.session.status === "closed") return "unchanged"
+    if (signInPause(resident.snapshot.requests)) return "unchanged"
+    if (resident.hibernating || (!resident.driver && this.reopens(resident))) {
+      if (!resident.waking) hostLog("residency", "prewarm waking", { conversation: id, harness: resident.snapshot.session.harness })
+      void this.wake(resident)
+      return "waking"
+    }
+    if (!this.canHibernate(resident)) return "unchanged"
+    this.clearHibernationTimer(resident)
+    this.scheduleHibernation(resident, false)
+    return "kept-warm"
   }
 
   setArchived(id: string, archived: boolean): void {
@@ -872,6 +898,33 @@ export class LiveConversations {
     return snapshot.session
   }
 
+  /** A process that exited by itself still owns its binding and account until its driver closes it. */
+  private releaseExited(resident: Resident, driver: ProviderLiveDriver, conversation: string, bindingId: string): void {
+    const cleanup = Promise.resolve()
+      .then(() => driver.close(bindingId))
+      .catch((error) => hostWarn("live", "an exited session's cleanup failed", { conversation, harness: driver.provider, error: errorMessage({ error }) }))
+    const exited = (resident.exited ??= new Map())
+    exited.set(bindingId, cleanup)
+    void cleanup.finally(() => { if (exited.get(bindingId) === cleanup) exited.delete(bindingId) })
+  }
+
+  /** Every native start, so Close can cancel its setup and a reconnect never races the exited process's cleanup. */
+  private async nativeStart(
+    resident: Resident,
+    driver: ProviderLiveDriver,
+    bindingId: string,
+    start: () => Promise<LiveSessionState>
+  ): Promise<LiveSessionState> {
+    await resident.exited?.get(bindingId)
+    const entry = { driver, bindingId }
+    resident.starting = entry
+    try {
+      return await start()
+    } finally {
+      if (resident.starting === entry) resident.starting = undefined
+    }
+  }
+
   /** Start the conversation's first native session; its outcome lands on the resident. */
   private launch(
     resident: Resident,
@@ -892,7 +945,7 @@ export class LiveConversations {
         // Check and start without yielding so a stale owner never spawns.
         if (resident.generation !== generation || resident.closing || !this.moves.executes(resident))
           throw new Error("Execution ownership changed while preparing the native session.")
-        return driver.start(cwd, {
+        return this.nativeStart(resident, driver, id, () => driver.start(cwd, {
         ...options,
         modeId,
         tuning,
@@ -902,7 +955,7 @@ export class LiveConversations {
           : undefined,
           conversationTools,
           threadEnvironment,
-        })
+        }))
       })
       .then(async (session) => {
         if (resident.generation !== generation) {
@@ -1104,12 +1157,8 @@ export class LiveConversations {
   private async reopenAfterSignIn(resident: Resident): Promise<void> {
     if (resident.driver && this.canHibernate(resident, false, true)) await this.hibernate(resident, "account-change")
     if (resident.closing || resident.snapshot.session.status === "closed") return
+    if (!resident.driver && this.reopens(resident)) return this.wake(resident)
     const binding = this.activeBinding(resident)
-    if (!resident.driver && resident.snapshot.session.connection === "disconnected" && binding?.nativeId && binding.path) {
-      resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, connection: "hibernated" } }
-      this.flush(resident)
-    }
-    if (!resident.driver && resident.snapshot.session.connection === "hibernated") return this.wake(resident)
     const driver = this.dependencies.driver(binding?.provider ?? "")
     if (!resident.driver && !resident.opening && binding && !binding.nativeId && binding.id === resident.snapshot.session.id &&
       driver?.available(this.dependencies.appPath)) {
@@ -1155,7 +1204,7 @@ export class LiveConversations {
 
   private removalWait(resident: Resident): AccountRemovalWait | undefined {
     if (this.canHibernate(resident, false, true)) return undefined
-    if (!this.dependencies.driver(this.activeBinding(resident)?.provider ?? "")?.canResume) return "close"
+    if (!resumes(this.dependencies.driver(this.activeBinding(resident)?.provider ?? ""))) return "close"
     return this.accountSwitchWait(resident) ?? "operation"
   }
 
@@ -1257,7 +1306,7 @@ export class LiveConversations {
     const driver = this.dependencies.driver(binding?.provider ?? "")
     return Boolean(
       resident.driver &&
-        driver?.canResume &&
+        resumes(driver) &&
         resident.snapshot.session.connection === "connected" &&
         resident.snapshot.session.status === "ready" &&
         !resident.snapshot.session.backgroundTasks &&
@@ -1302,7 +1351,7 @@ export class LiveConversations {
    */
   private accountSwitchWait(resident: Resident): AccountSwitchWait | undefined {
     const binding = this.activeBinding(resident)
-    if (!this.dependencies.driver(binding?.provider ?? "")?.canResume || !binding?.nativeId || !binding.path) return undefined
+    if (!resumes(this.dependencies.driver(binding?.provider ?? "")) || !binding?.nativeId || !binding.path) return undefined
     if (resident.snapshot.session.backgroundTasks) return "background"
     if ((resident.snapshot.nativeAgents?.agents ?? []).some(isActiveNativeAgent)) return "subagents"
     if (this.control(resident).children.some(child => child.status === "starting" || child.status === "working" || child.status === "needs-permission"))
@@ -1518,6 +1567,22 @@ export class LiveConversations {
     })
   }
 
+  private async reopen(resident: Resident): Promise<void> {
+    if (resident.driver || resident.snapshot.session.status === "closed") return
+    await this.locateNativePath(resident)
+    if (!resident.driver && this.reopens(resident)) await this.wake(resident)
+  }
+
+  /** Whether an unconnected conversation resumes on wake; a disconnected one with a recorded session becomes hibernated. */
+  private reopens(resident: Resident): boolean {
+    const binding = this.activeBinding(resident)
+    if (resident.snapshot.session.connection === "disconnected" && binding?.nativeId && binding.path) {
+      resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, connection: "hibernated" } }
+      this.flush(resident)
+    }
+    return resident.snapshot.session.connection === "hibernated"
+  }
+
   private wake(resident: Resident): Promise<void> {
     if (resident.waking) return resident.waking
     const hibernating = resident.hibernating
@@ -1547,7 +1612,8 @@ export class LiveConversations {
     if (
       !binding?.nativeId ||
       !binding.path ||
-      !driver?.canResume ||
+      !driver ||
+      !resumes(driver) ||
       !driver.available(this.dependencies.appPath)
     ) {
       const message =
@@ -1612,11 +1678,12 @@ export class LiveConversations {
         return
       }
       if (!this.moves.executes(resident)) throw new Error("Execution ownership changed while preparing native recovery.")
-      const session = await driver.start(resident.snapshot.session.cwd, {
+      const session = await this.nativeStart(resident, driver, binding.id, () => driver.start(resident.snapshot.session.cwd, {
         conversationId: binding.id,
         resume: binding.nativeId,
         observedAgents: resident.snapshot.nativeAgents?.agents.filter((agent) => agent.bindingId === binding.id && agent.provider === binding.provider),
         observedApprovals: knownApprovalOccurrences(this.control(resident), binding.id),
+        observedUsage: restorableTotals(resident.snapshot.session, binding),
         threadPath: binding.path,
         title: resident.snapshot.session.title,
         tuning,
@@ -1629,7 +1696,7 @@ export class LiveConversations {
           : undefined,
         conversationTools,
         threadEnvironment,
-      })
+      }))
       startedSession = session
       if (resident.generation !== generation) {
         await driver.close(binding.id)
@@ -1793,6 +1860,7 @@ export class LiveConversations {
         if (raw.session.connection === "disconnected") {
           bound.connections.delete(bindingId)
           void this.revokeTools(bindingId, owner)
+          if (!bound.closing && !bound.hibernating) this.releaseExited(bound, connection.driver, owner, bindingId)
         }
       }
       return
@@ -1848,6 +1916,7 @@ export class LiveConversations {
       const connection = resident.connections.get(bindingId)
       if (connection) connection.session = { ...event.session, id: bindingId }
       if (event.session.connection === "disconnected") {
+        const exited = connection?.driver ?? resident.driver
         resident.snapshot = {
           ...resident.snapshot,
           nativeAgents: disconnectNativeAgents(
@@ -1858,6 +1927,7 @@ export class LiveConversations {
         resident.driver = null
         resident.connections.delete(bindingId)
         void this.revokeTools(bindingId, id)
+        if (exited && !resident.closing && !resident.hibernating) this.releaseExited(resident, exited, id, bindingId)
       }
       const gone = event.session.connection === "disconnected" || event.session.status === "closed"
       if ((previousStatus === "running" && event.session.status !== "running") || gone) {
@@ -2059,11 +2129,7 @@ export class LiveConversations {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held", signIn: pause.hold })
     }
-    if (
-      resident.hibernating ||
-      (!resident.driver &&
-        resident.snapshot.session.connection === "hibernated")
-    ) {
+    if (resident.hibernating || (!resident.driver && this.reopens(resident))) {
       request.inputDigest = inputDigest
       const accepted = this.admit(resident, request)
       void this.wake(resident)
@@ -2114,21 +2180,26 @@ export class LiveConversations {
     if (resident.driver || resident.snapshot.session.connection !== "disconnected") return undefined
     const binding = this.activeBinding(resident)
     const driver = this.dependencies.driver(binding?.provider ?? "")
-    return binding?.nativeId && driver?.canResume && driver.available(this.dependencies.appPath) ? binding : undefined
+    return binding?.nativeId && driver && resumes(driver) && driver.available(this.dependencies.appPath) ? binding : undefined
   }
 
   /**
-   * A turn cut short by anything but the user's Stop: closes the calls
-   * nothing will report on now, and keeps on the request what the agent has
-   * no account of, for the next prompt to tell it.
+   * A turn cut short: closes the calls nothing will report on now. Unless the
+   * user stopped it, keeps on the request what the agent has no account of,
+   * for the next prompt to tell it.
    */
   private recordCutOff(resident: Resident, requestId: string): void {
     const steps = resident.steps
     resident.steps = undefined
     const request = resident.snapshot.requests.find((candidate) => candidate.id === requestId)
     const interruption = request?.interruption
-    if (!interruption || interruption.reason === "stopped") return
+    if (!interruption) return
     const blocks = reduceLiveUpdates(resident.snapshot.blocks, resident.updates)
+    // A harness that ends its process on Stop never reports the calls it was running.
+    if (interruption.reason === "stopped") {
+      resident.updates.push(...closeCutOffCalls(blocks, requestId, STOPPED_CALL_NOTE, "canceled"))
+      return
+    }
     const closing = closeCutOffCalls(blocks, requestId, cutOffNote(interruption, request.error))
     const record = recordCutOffCalls(
       reduceLiveUpdates(blocks, closing),
@@ -2376,13 +2447,11 @@ export class LiveConversations {
       const binding = source.control?.bindings.find(
         (candidate) => candidate.id === request.nativeRun?.bindingId
       )
-      const forkPoint = this.dependencies.driver(command.provider)?.forkPoint
+      const fork = this.dependencies.driver(command.provider)?.fork
       const nativePoint =
-        forkPoint === "checkpoint"
-          ? request.nativeRun?.forkId
-          : forkPoint === "run"
-            ? request.nativeRun?.runId
-            : undefined
+        fork?.kind !== "native" ? undefined
+          : fork.point === "checkpoint" ? request.nativeRun?.forkId
+            : request.nativeRun?.runId
       // A native session is stored against the folder it ran in, so a fork elsewhere starts fresh with the transcript.
       if (
         cwd === undefined &&
@@ -2470,7 +2539,7 @@ export class LiveConversations {
         status: "ready",
         connection: "disconnected",
         modes: [],
-        currentMode: null,
+        currentMode: command.provider === source.session.harness ? source.session.currentMode : null,
         configOptions: [],
         lastStop: undefined,
         error: undefined,
@@ -2682,6 +2751,24 @@ export class LiveConversations {
     this.flush(resident)
     this.checkpointIdle(resident)
     this.scheduleHibernation(resident)
+  }
+
+  private async locateNativePath(resident: Resident): Promise<void> {
+    this.discoverNativePath(resident)
+    const binding = this.activeBinding(resident)
+    if (!binding?.nativeId || binding.path) return
+    const resume = this.dependencies.driver(binding.provider)?.resume
+    const locate = resume?.kind === "native" ? resume.locate : undefined
+    const env = locate ? await (this.dependencies.accountEnv?.(binding) ?? Promise.resolve(process.env)) : process.env
+    const path = await locate?.(binding, resident.snapshot.session.cwd, env).catch((error) => {
+      hostWarn("recovery", "native session lookup failed", { harness: binding.provider, binding: binding.id, error: errorMessage({ error }) })
+      return undefined
+    })
+    const current = this.activeBinding(resident)
+    if (!path || current?.id !== binding.id || current.nativeId !== binding.nativeId || current.path) return
+    hostLog("recovery", "native session located by its ID", { harness: binding.provider, binding: binding.id })
+    this.updateBinding(resident, { ...resident.snapshot.session, harness: binding.provider, nativeId: binding.nativeId, nativePath: path })
+    this.flush(resident)
   }
 
   editQueued(id: string, input: QueuedPromptEdit): LiveSnapshot {
@@ -2988,10 +3075,9 @@ export class LiveConversations {
   }
   async setMode(id: string, modeId: string): Promise<void> {
     const resident = this.require(id)
-    if (
-      !resident.driver &&
-      resident.snapshot.session.connection === "hibernated"
-    ) {
+    // The next message reopens an unconnected session in the mode recorded here.
+    const { connection, status } = resident.snapshot.session
+    if (!resident.driver && (connection === "hibernated" || connection === "disconnected") && status !== "closed") {
       if (
         resident.snapshot.session.modes.length > 0 &&
         !resident.snapshot.session.modes.some((mode) => mode.id === modeId)
@@ -3051,6 +3137,13 @@ export class LiveConversations {
     const generation = resident.generation
     resident.closing = true
     this.declineAutoContinue(resident)
+    const starting = resident.starting
+    if (starting) {
+      hostLog("live", "Close cancels a native setup in progress", { conversation: id, harness: starting.driver.provider })
+      await Promise.resolve()
+        .then(() => starting.driver.close(starting.bindingId))
+        .catch((error) => hostWarn("live", "a native setup did not cancel on Close", { conversation: id, harness: starting.driver.provider, error: errorMessage({ error }) }))
+    }
     const openingOperation = resident.openingOperation
     if (openingOperation) await openingOperation
     const hibernationOperation = resident.hibernating
@@ -3675,6 +3768,7 @@ export class LiveConversations {
     const updates = delivery.updates
     const snapshot = {
       ...resident.snapshot,
+      session: sharedSession(previous.session, resident.snapshot.session),
       blocks: delivery.blocks,
       revision: resident.snapshot.revision + 1,
       activityAt: resident.activityAt,
@@ -3710,8 +3804,7 @@ export class LiveConversations {
           previous.threadPath !== snapshot.threadPath
             ? (snapshot.threadPath ?? null)
             : undefined,
-        session:
-          previous.session !== snapshot.session ? snapshot.session : undefined,
+        ...sessionDelta(previous.session, snapshot.session),
         permissions:
           previous.permissions !== snapshot.permissions
             ? snapshot.permissions

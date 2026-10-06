@@ -4,6 +4,7 @@ import { z } from "zod"
 import { decodeAcpUpdate } from "./acp-notifications.js"
 import type { JsonObject } from "./codex-app-json.js"
 import { decoded, type Decoded } from "./contracts/native-decoding.js"
+import type { LivePermissionResponse } from "./contracts/providers-acp.js"
 import type { AcpAsk, AcpPlanDecoder, AcpVendorRequest, ProviderAcpSource } from "./providers/acp-source.js"
 
 /** The provider hooks the decoder reads. */
@@ -79,7 +80,8 @@ export class AcpDecoder {
 }
 
 /** What the agent is sent for the user's choice on a vendor request. */
-export function acpAnswer(ask: AcpAsk, optionId: string | null): JsonObject {
-  const chosen = optionId === null ? undefined : ask.answers?.find((answer) => answer.optionId === optionId)
+export function acpAnswer(ask: AcpAsk, response: LivePermissionResponse): JsonObject {
+  if (response.kind === "answers") return ask.answered?.(response.answers) ?? ask.dismissed ?? {}
+  const chosen = response.optionId === null ? undefined : ask.answers?.find((answer) => answer.optionId === response.optionId)
   return chosen?.result ?? ask.dismissed ?? {}
 }

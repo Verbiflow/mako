@@ -14,6 +14,7 @@ import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./providers/codex/settings.js"
 import { codexInput } from "./providers/codex/input.js"
+import { codexRuntimeVersion } from "./providers/codex/native-context.js"
 import type {
   ProviderSteerInput,
   ProviderSteerResult,
@@ -246,8 +247,8 @@ async function startCodex(
           observeAccountUsage("codex", name, (previous) => mergeWindows(previous, windows, Date.now())))
       },
       observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
-      observeAgents: (item, replay) => {
-        for (const agent of live.agents.project(item, replay))
+      observeAgents: (item, replay, toolId) => {
+        for (const agent of live.agents.project(item, replay, toolId))
           engine.emitAgent(live, agent)
       },
       observeQuestionAnswer: answer => emit({ type: "live-question-answered", id: live.id, answer }),
@@ -566,7 +567,7 @@ async function openThread(
   sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
   if (live.state.executionContext) updateState(live, { executionContext: {
     ...live.state.executionContext,
-    runtime: reportedRuntime(initialized.userAgent, "app-server initialize.userAgent"),
+    runtime: reportedRuntime(codexRuntimeVersion(initialized.userAgent), "app-server initialize.userAgent"),
   } })
   const identityObservation = observeNativeIdentity(async () => {
     const { account } = await rpcRequest(live, "account/read", { refreshToken: false })

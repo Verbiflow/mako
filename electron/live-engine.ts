@@ -23,7 +23,7 @@ import {
   decodedNotices,
   type DecodedSink,
 } from "./contracts/native-decoding.js"
-import { retainUnknown, type UnknownReason } from "./native-unknown.js"
+import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "./native-unknown.js"
 
 /** What a live engine's per-session record must carry to share the runtime. */
 export interface EngineLive {
@@ -208,10 +208,12 @@ export function createLiveEngine<
     live.emit({ type: "live-session", session: live.state })
   }
   const emitUpdate = (live: Live, update: LiveUpdate): void => {
+    if (update.kind === "tool") retainUndeclaredTools(live.state.harness, [update])
     live.emit({ type: "live-update", id: live.state.id, update })
   }
   const emitUpdates = (live: Live, updates: LiveUpdate[]): void => {
     if (updates.length === 0) return
+    retainUndeclaredTools(live.state.harness, updates)
     live.emit({ type: "live-updates", id: live.state.id, updates })
   }
   const unhandledEvent = (live: Live, kind: string): void => {

@@ -1,8 +1,9 @@
+import { resumes } from "./providers/live-capabilities.js"
 import { retireQuestionsForInput } from "./contracts/live-questions.js"
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "./contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
-import { realpath } from "node:fs/promises"
+import { access, realpath } from "node:fs/promises"
 import { join } from "node:path"
 import { TransferInputSchema, resumable } from "./contracts/conversation-control.js"
 import type {
@@ -15,9 +16,10 @@ import type { Actor } from "./contracts/thread-identity.js"
 import type { TurnContinuation } from "./contracts/live-conversations.js"
 import { classifyStartFailure } from "./contracts/provider-failure.js"
 import type { LiveSnapshot } from "./shared.js"
-import { hostLog } from "./host-log.js"
+import { hostLog, hostWarn } from "./host-log.js"
 import { verifyRecoveredSession } from "./provider-recovery.js"
 import { LiveRequestSchema } from "./live-journal.js"
+import { departedBinding, restorableTotals } from "./session-usage.js"
 import { capturedThread, prepareLiveContext } from "./live-context.js"
 import { bindingPath, errorMessage } from "./live-runtime.js"
 import type {
@@ -197,7 +199,7 @@ export class LiveTransfers {
       if (!emitted) return { fallback: "This agent has no session import." }
       // An account's store can reach the shared one through a symlink; the
       // session index knows the file by its real path.
-      return { sessionId: emitted.sessionId, path: await realpath(emitted.path) }
+      return { sessionId: emitted.sessionId, path: await realSourcePath(emitted.path) }
     } catch (error) {
       hostLog("transfer", "session import failed", {
         conversation: source.session.id,
@@ -221,7 +223,7 @@ export class LiveTransfers {
     let activated = false
     try {
       this.save(resident, { ...transfer, state: { kind: "preparing" } })
-      this.host.discoverNativePath(resident)
+      await this.host.locateNativePath(resident)
       const source = resident.snapshot
       const control = this.host.control(resident)
       const target = transfer.input.bindingId
@@ -259,7 +261,7 @@ export class LiveTransfers {
       let verdict: ResumeVerdict | undefined
       if (
         !prior &&
-        this.host.dependencies.driver(transfer.input.provider)?.canResume
+        resumes(this.host.dependencies.driver(transfer.input.provider))
       ) {
         for (const binding of [...bindings].reverse()) {
           if (
@@ -300,7 +302,7 @@ export class LiveTransfers {
       const nativeFork =
         !bindings.length &&
         control.ancestry?.nativeFork?.provider === transfer.input.provider &&
-        this.host.dependencies.driver(transfer.input.provider)?.forkPoint
+        this.host.dependencies.driver(transfer.input.provider)?.fork.kind === "native"
           ? control.ancestry.nativeFork
           : undefined
       const manifest = await prepareLiveContext({
@@ -312,8 +314,10 @@ export class LiveTransfers {
       if (resident.generation !== generation) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
       if (!driver) throw new Error("The destination provider was removed")
-      const carry = transfer.input.carry === "native" && !prior && !reconnect && !target && !nativeFork
-        ? await this.importSession(source, transfer.input.provider, driver.canResume)
+      // A fork goes on as the same conversation, so it opens on its history in the harness's own session store unless the harness forks itself.
+      const forking = !bindings.length && control.ancestry?.kind === "fork"
+      const carry = (transfer.input.carry === "native" || forking) && !prior && !reconnect && !target && !nativeFork
+        ? await this.importSession(source, transfer.input.provider, resumes(driver))
         : undefined
       if (resident.generation !== generation) return
       let imported = carry && "sessionId" in carry ? carry : undefined
@@ -323,7 +327,7 @@ export class LiveTransfers {
         ? transfer.input.modeId ??
           source.session.currentMode ??
           currentBinding?.modeId
-        : transfer.input.modeId ?? prior?.modeId
+        : transfer.input.modeId ?? prior?.modeId ?? (forking ? source.session.currentMode ?? undefined : undefined)
       const connection = prior ? resident.connections.get(prior.id) : undefined
       if (connection) {
         prepared = connection
@@ -365,7 +369,7 @@ export class LiveTransfers {
           source.session.title,
           source.session.cwd
         )
-        const open = (resume?: { nativeId?: string; path?: string }) => driver.start(source.session.cwd, {
+        const open = (resume?: { nativeId?: string; path?: string }) => this.host.nativeStart(resident, driver, bindingId, () => driver.start(source.session.cwd, {
           emit: this.host.driverEvents(resident, bindingId),
           mcpSnapshot: this.host.dependencies.mcpSnapshot
             ? () => this.host.dependencies.mcpSnapshot!(source.session.cwd)
@@ -379,13 +383,16 @@ export class LiveTransfers {
           observedApprovals: prior?.nativeId && !nativeFork
             ? knownApprovalOccurrences(source.control, prior.id)
             : undefined,
+          observedUsage: prior?.nativeId && !nativeFork && resume?.nativeId === prior.nativeId
+            ? restorableTotals(source.session, prior)
+            : undefined,
           fork: nativeFork,
           conversationTools,
           threadEnvironment,
           title: source.session.title,
           tuning,
           modeId,
-        })
+        }))
         let session: Awaited<ReturnType<typeof open>>
         if (imported) {
           try {
@@ -548,7 +555,7 @@ export class LiveTransfers {
                     tuning: appliedTuning,
                     modeId: binding.modeId,
                   }
-                : candidate
+                : departedBinding(candidate, previous.session)
           ),
           transfers: this.host
             .control(resident)
@@ -670,6 +677,12 @@ export class LiveTransfers {
           resident.snapshot.session.id
         )
       if (resident.generation === generation) {
+        hostWarn("transfer", reconnect ? "reconnect failed" : "switch failed", {
+          conversation: resident.snapshot.session.id,
+          harness: transfer.input.provider,
+          continues: transfer.continues?.reason ?? "",
+          error: errorMessage({ error }),
+        })
         try {
           this.save(resident, {
             ...transfer,
@@ -687,4 +700,11 @@ export class LiveTransfers {
       resident.transferring = false
     }
   }
+}
+
+/** A store holding many sessions, as Devin's `sessions.db`, names one as `file#record`; only the file resolves. */
+async function realSourcePath(path: string): Promise<string> {
+  const record = path.lastIndexOf("#")
+  if (record <= 0 || await access(path).then(() => true, () => false)) return realpath(path)
+  return `${await realpath(path.slice(0, record))}${path.slice(record)}`
 }

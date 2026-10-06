@@ -83,11 +83,11 @@ export function assessResumeEvidence(binding: ProviderBinding, evidence: NativeR
     : evidence
 }
 
-/** Explicit adapter contribution for stores that are regular files. */
+/** The resume evidence of a harness whose sessions are regular files. */
 export function fileResumeEvidence(probe: ProviderProcessProbe) {
   return {
     checkpoint: nativeCheckpoint,
-    inspectNativeSession: (binding: ProviderBinding) => inspectNativeSession(binding, probe, readNativeFile),
+    inspect: (binding: ProviderBinding) => inspectNativeSession(binding, probe, readNativeFile),
   }
 }
 

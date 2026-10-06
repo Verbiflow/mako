@@ -91,10 +91,12 @@ export class ProviderLaunchTrace {
   }
 }
 
-/** What failed, without the message: a system code such as `ENOENT`, else the error's class. */
+/** What failed, without the message: a system code such as `ENOENT`, else the error's class or tag. */
 const ErrorKind = z.union([
   z.object({ code: z.string().min(1) }).transform((error) => error.code),
   z.instanceof(Error).transform((error) => error.name),
+  // OpenCode's client rejects with tagged values, not Errors.
+  z.object({ _tag: z.string().min(1) }).transform((error) => error._tag),
 ]).catch("thrown value")
 
 export function traceProviderLaunch<T>(

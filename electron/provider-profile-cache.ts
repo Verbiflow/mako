@@ -19,7 +19,6 @@ const profileSchema = z.object({
   configuredModel: z.string().optional(),
   settings: SessionSettingsSchema.optional(),
   configurationError: z.string().optional(),
-  capabilities: z.array(z.string()),
   error: z.string().optional(),
 })
 const entrySchema = z.object({ hash: z.string(), savedAt: z.number() })

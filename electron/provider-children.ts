@@ -308,6 +308,11 @@ export function trackProviderChild(
   active?.track(child, info)
 }
 
+/** For a spawner that removes the record from its own exit handler, with `untrackProviderPid`. */
+export function trackProviderPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
+  active?.trackPid(info)
+}
+
 export function untrackProviderPid(pid: number): void {
   active?.untrackPid(pid)
 }

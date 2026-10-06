@@ -61,6 +61,7 @@ import { TransferInputSchema } from "./contracts/conversation-control.js"
 import { readConversationFile } from "./host-workspace.js"
 import { resolveFilePreview } from "./file-previews.js"
 import { providerHost } from "./providers/index.js"
+import { resumes } from "./providers/live-capabilities.js"
 import { describeConnection } from "./providers/connection-capability.js"
 import { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { RewindInput } from "./contracts/workspace-snapshots.js"
@@ -132,6 +133,7 @@ import {
 import { check, installUpdates, updateState } from "./updates.js"
 import { installApplicationIpc } from "./ipc/application.js"
 import { usageHarnesses, usageSummary } from "./usage.js"
+import { UsageLedger } from "./usage-ledger.js"
 import {
   automationList,
   bindAutomations,
@@ -218,6 +220,7 @@ import {
   captureAccount,
   accountCatalog,
   completePendingRemovals,
+  bindingAccountEnv,
   keepAccount,
   removeAccount,
   useResetCredit,
@@ -537,6 +540,7 @@ let conversationMcp: Awaited<ReturnType<typeof startConversationMcp>> | null =
   null
 let workspaceMoves: WorkspaceMoves | null = null
 let nativeRequests: NativeRequests | null = null
+let usageLedger: UsageLedger | undefined
 const appshots = new Appshots(async () => {
   const driver = resolveExecutable("cua-driver")
   const socket = await ensureMakoLocalControl()
@@ -825,10 +829,11 @@ const STORE_SPEND_THROTTLE_MS = 60_000
 function noteSpend(event: HostEvent) {
   let ended: string | undefined
   let throttle: number | undefined
-  if (event.type === "live-batch" && event.batch.session) {
-    const session = event.batch.session
-    if (session.status === "running") spending.set(session.id, session.harness)
-    else if (spending.delete(session.id)) ended = session.harness
+  const status = event.type === "live-batch" ? (event.batch.session ?? event.batch.sessionChanges)?.status : undefined
+  if (event.type === "live-batch" && status) {
+    const harness = event.batch.session?.harness ?? liveConversations?.snapshot(event.batch.id)?.session.harness
+    if (status === "running" && harness) spending.set(event.batch.id, harness)
+    else if (status !== "running") { ended = spending.get(event.batch.id); spending.delete(event.batch.id) }
   } else if (event.type === "thread-run" && event.run.status !== "running") {
     ended = event.run.harness
   } else if (event.type === "thread-ref" && Date.now() - Date.parse(event.ref.updatedAt ?? "") < RECENT_WRITE_MS) {
@@ -1358,9 +1363,10 @@ function bindIpc() {
   )
   handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace)))
 
-  handle("mako:usage", () =>
-    usageSummary(usageHarnesses(providerHost), join(homedir(), ".mako", "sessions"), homedir(), join(app.getPath("userData"), "conversations"))
-  )
+  handle("mako:usage", () => {
+    usageLedger ??= new UsageLedger(join(app.getPath("userData"), "usage-ledger.sqlite"))
+    return usageSummary(usageHarnesses(providerHost), join(homedir(), ".mako", "sessions"), homedir(), join(app.getPath("userData"), "conversations"), { ledger: usageLedger })
+  })
 
   /* Cross-harness threads: every agent's sessions on this machine. */
   handle("mako:threads", (_e, filter?: { cwd?: string; harness?: string }) => ({
@@ -1419,7 +1425,7 @@ function bindIpc() {
     live: (provider) => {
       const driver = providerHost.liveDrivers.get(provider)
       return driver
-        ? { available: driver.available(app.getAppPath()), canResume: driver.canResume }
+        ? { available: driver.available(app.getAppPath()), canResume: resumes(driver) }
         : null
     },
     nativeInstalled: (provider) => {
@@ -2007,6 +2013,7 @@ function bindIpc() {
     liveConversations.cancel(id)
   )
   handle("mako:live-close", (_event, id: string) => liveConversations.close(id))
+  handle("mako:live-prewarm", (_event, id: string) => liveConversations.prewarm(id))
 
   /** A new conversation on another harness, from the main composer. */
   handle(
@@ -2282,9 +2289,10 @@ app.whenReady().then(async () => {
       const driver = sourceProvider
         ? providerHost.liveDrivers.get(sourceProvider)
         : undefined
-      return driver?.checkpoint?.(path) ?? Promise.resolve(undefined)
+      return driver?.resume.kind === "native" ? driver.resume.checkpoint(path) : Promise.resolve(undefined)
     },
     nativePath: nativePathForSession,
+    accountEnv: bindingAccountEnv,
     emitSession: async (provider, thread) => {
       const emitter = providerHost.sessionEmitters.get(provider)
       return emitter ? emitter.emit(thread) : null

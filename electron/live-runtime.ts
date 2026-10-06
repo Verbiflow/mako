@@ -50,6 +50,10 @@ export interface Resident {
   generation: number
   opening: boolean
   openingOperation?: Promise<void>
+  /** A driver start still in its native setup; Close cancels it instead of waiting it out. */
+  starting?: { driver: ProviderLiveDriver; bindingId: string }
+  /** Cleanup of bindings whose process exited by itself; a start of the same binding waits for it. */
+  exited?: Map<string, Promise<void>>
   pendingCharacters: number
   updates: LiveBatch["updates"]
   /** See `LiveSnapshot.activityAt`; the next flush publishes it. */
@@ -102,6 +106,8 @@ export interface Dependencies {
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
   nativePath?(session: LiveSessionState): string | undefined
+  /** The environment of the account a binding ran on, to find its native session; host-only. */
+  accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
   /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   driver(provider: string): ProviderLiveDriver | undefined
@@ -141,6 +147,8 @@ export interface Dependencies {
 
 export interface LiveAccess {
   discoverNativePath(resident: Resident): void
+  /** `discoverNativePath`, then the driver's own lookup by native ID when the catalog doesn't list the session. */
+  locateNativePath(resident: Resident): Promise<void>
   observe(event: LiveDriverEvent): void
   retainAttachments(attachments: PromptAttachment[]): PromptAttachment[]
   dependencies: Dependencies
@@ -155,7 +163,15 @@ export interface LiveAccess {
     resident: Resident,
     bindingId: string
   ): (event: LiveDriverEvent) => void
+  nativeStart(
+    resident: Resident,
+    driver: ProviderLiveDriver,
+    bindingId: string,
+    start: () => Promise<LiveSessionState>
+  ): Promise<LiveSessionState>
   close(id: string): Promise<void>
+  /** Reconnect an idle conversation whose native session can resume, as a follow-up would. */
+  reopen(resident: Resident): Promise<void>
   pending(resident: Resident): ContextTransfer | undefined
   storageFailed(resident: Resident, boundary: FailureBoundary): void
   /** A conversation acting through Mako's tools, named by its Session. */
@@ -190,8 +206,11 @@ const RpcErrorSchema = z
  * "Unknown model config option: effort" beside it. Dropping that once left
  * two failed threads explained by nothing more than the generic code text.
  */
+/** A rejection that is not an Error but says what went wrong, as OpenCode's tagged errors do. */
+const ThrownMessageSchema = z.object({ message: z.string().min(1) })
+
 export function errorMessage({ error }: FailureBoundary): string {
-  if (!(error instanceof Error)) return String(error)
+  if (!(error instanceof Error)) return ThrownMessageSchema.safeParse(error).data?.message ?? String(error)
   // `data` is an own enumerable property on a JSON-RPC RequestError; the
   // Error prototype's own fields are not, so the entries are exactly the extras.
   const parsed = RpcErrorSchema.safeParse(Object.fromEntries(Object.entries(error)))

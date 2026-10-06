@@ -29,7 +29,7 @@ export async function verifyRecoveredSession(binding: ProviderBinding, session: 
     const receipt = session.executionContext?.sourceImport
     if (!receipt || receipt.nativeId !== binding.nativeId || !await sameSource(receipt.source, binding.path) || !await sameSource(receipt.destination, openedPath))
       throw new Error("The selected runtime or account opened a different native store without an exact import receipt. No prompt was dispatched; the saved binding was preserved.")
-    const evidence = await driver.inspectNativeSession?.(binding)
+    const evidence = driver.resume.kind === "native" ? await driver.resume.inspect(binding) : undefined
     if (evidence?.kind !== "available" || evidence.strategy !== "copy")
       throw new Error("The adapter could not verify the imported native source. No prompt was dispatched; the saved binding was preserved.")
     if (!receipt.revision || receipt.revision !== evidence.checkpoint)
@@ -50,8 +50,9 @@ export async function verifyRecoveredSession(binding: ProviderBinding, session: 
 export async function assessProviderResume(binding: ProviderBinding, driver: ProviderLiveDriver | undefined): Promise<ResumeVerdict> {
   if (!driver || driver.provider !== binding.provider)
     return { kind: "unavailable", reason: "The saved session's provider is not available." }
-  if (!driver.canResume || !driver.inspectNativeSession)
-    return { kind: "unavailable", reason: "This provider has not implemented native session recovery evidence." }
+  const resume = driver.resume
+  if (resume.kind !== "native")
+    return { kind: "unavailable", reason: `This provider can't reopen its sessions: ${resume.reason}` }
   if (!binding.nativeId || !binding.path)
     return { kind: "unavailable", reason: "The native session identity or source has not been located." }
   const started = performance.now()
@@ -59,7 +60,7 @@ export async function assessProviderResume(binding: ProviderBinding, driver: Pro
     const store = binding.executionContext?.store
     if (store?.kind === "located" && !await sameNativeSource(driver, binding.path, store.path, binding.nativeId))
       return { kind: "unavailable", reason: "The saved native source disagrees with its execution context." }
-    const evidence = await driver.inspectNativeSession(binding)
+    const evidence = await resume.inspect(binding)
     const verdict = assessResumeEvidence(binding, evidence)
     hostLog("recovery", "native session assessed", {
       harness: binding.provider, binding: binding.id, nativeId: binding.nativeId,

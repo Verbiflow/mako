@@ -36,6 +36,11 @@ export class LiveActions {
     )
   }
 
+  private provider(resident: Resident): string {
+    const control = this.host.control(resident)
+    return control.bindings.find((binding) => binding.id === control.activeBindingId)?.provider ?? ""
+  }
+
   private state(
     resident: Resident,
     id: string,
@@ -208,6 +213,11 @@ export class LiveActions {
         throw new Error("This action ID was already used for different input")
       return existing
     }
+    if (input.kind === "compact" && !resident.driver && this.host.dependencies.driver(this.provider(resident))?.compaction?.kind === "supported") {
+      await this.host.reopen(resident)
+      if (!resident.driver)
+        throw new Error(resident.snapshot.session.error ?? "This conversation could not reconnect to compact")
+    }
     const driver = resident.driver
     if (
       !driver ||
@@ -241,14 +251,13 @@ export class LiveActions {
     let retained = input
     let queued: LiveRequest | undefined
     if (input.kind !== "compact") {
-      const steer = driver.steer
+      const steering = driver.steering
       const request = resident.snapshot.requests.find(
         (item) => item.id === input.requestId && item.status === "dispatching"
       )
-      if (!steer)
-        throw new Error(
-          "This provider does not support steering an active turn"
-        )
+      if (steering.kind !== "supported")
+        throw new Error(`This provider can't steer an active turn: ${steering.reason}`)
+      const steer = steering.steer
       if (
         resident.snapshot.session.status !== "running" ||
         !request?.nativeRun ||
@@ -288,7 +297,7 @@ export class LiveActions {
           "The failed message is no longer available for recovery"
         )
       const compact = driver.compaction
-      if (!compact || compact.kind === "unavailable")
+      if (compact?.kind !== "supported")
         throw new Error(
           compact?.reason ??
             "This provider does not support verified compaction"

@@ -1,27 +1,27 @@
-import { readdir } from "node:fs/promises"
+import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { numberValue, objectValue, stringValue } from "./codex-app-json.js"
+import { hostWarn } from "./host-log.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
 import type { ProviderHost } from "./providers/host.js"
 import type { ProviderUsageHistory } from "./providers/usage-history.js"
 import type { UsageSummary, UsageTotals } from "./shared.js"
+import { UsageLedger } from "./usage-ledger.js"
 import { estimateUsageCost } from "./usage-pricing.js"
 import {
   DAYS,
   discover,
   fingerprint,
-  firstLine,
-  MAX_BYTES_PER_FILE,
-  MAX_FILES_PER_SOURCE,
   parseObject,
-  readLines,
+  readAppended,
   tokenCounts,
   tokenTotal,
   validTimestamp,
   yieldToMain,
+  type JsonlReader,
   type UsageEvent,
   type UsageScan,
 } from "./usage-scan.js"
@@ -32,11 +32,6 @@ interface Bucket extends UsageTotals {
   estimatedCost: number
   pricedTokens: number
   unpricedTokens: number
-}
-
-interface BuiltInMetadata {
-  cwd?: string
-  session?: string
 }
 
 /** A harness the usage table counts, under the name Settings shows for it. */
@@ -56,82 +51,166 @@ export function usageHarnesses(host: ProviderHost): UsageHarness[] {
   }))
 }
 
-/** One source's events and sessions, kept apart so sources scan concurrently. */
-interface Collected {
-  events: Map<string, UsageEvent>
-  sessions: Set<string>
-  truncated: boolean
+export interface UsageSummaryOptions {
+  /** Kept between summaries so each reads only what changed; a summary without one reads everything once. */
+  ledger?: UsageLedger
+  now?: number
+}
+
+/** A record some reader could not read. */
+interface Unread {
+  source: string
+  path: string
+  reason: string
 }
 
 export async function usageSummary(
   harnesses: readonly UsageHarness[],
   sessionsRoot: string,
   homeRoot = homedir(),
-  conversationsRoot?: string
+  conversationsRoot?: string,
+  options: UsageSummaryOptions = {}
 ): Promise<UsageSummary> {
-  const recorded = new Map(harnesses.flatMap((harness) => harness.history ? [] : [[harness.provider, harness.label] as const]))
-  const parts = await Promise.all([
-    collect("Mako", homeRoot, (scan) => scanBuiltIn(sessionsRoot, scan)),
-    ...harnesses.flatMap(({ label, history }) => history ? [collect(label, homeRoot, (scan) => history.scan(scan))] : []),
-    conversationsRoot ? scanRecorded(conversationsRoot, recorded) : undefined,
-  ])
-  // Merged in a fixed order: ranking breaks ties by insertion.
-  const events = new Map<string, UsageEvent>()
-  const sessions = new Set<string>()
-  let truncated = false
-  for (const part of parts) {
-    if (!part) continue
-    for (const event of part.events.values()) mergeEvent(events, event)
-    for (const session of part.sessions) sessions.add(session)
-    truncated ||= part.truncated
+  const ledger = options.ledger ?? new UsageLedger()
+  try {
+    return await ledger.exclusive(() => summarize(ledger, harnesses, sessionsRoot, homeRoot, conversationsRoot, options.now ?? Date.now()))
+  } finally {
+    if (!options.ledger) ledger.close()
   }
-  return aggregate(events.values(), sessions.size, truncated, new Set(recorded.values()))
 }
 
-async function collect(
+async function summarize(
+  ledger: UsageLedger,
+  harnesses: readonly UsageHarness[],
+  sessionsRoot: string,
+  homeRoot: string,
+  conversationsRoot: string | undefined,
+  now: number
+): Promise<UsageSummary> {
+  const since = windowStart(now)
+  const unread: Unread[] = []
+  const recorded = new Map(harnesses.flatMap((harness) => harness.history ? [] : [[harness.provider, harness.label] as const]))
+  await Promise.all([
+    scanSource(ledger, "Mako", homeRoot, since, unread, (scan) => scan.jsonl([sessionsRoot], BUILT_IN)),
+    ...harnesses.flatMap(({ label, history }) => history ? [scanSource(ledger, label, homeRoot, since, unread, (scan) => history.scan(scan))] : []),
+    conversationsRoot && recorded.size
+      ? scanSource(ledger, "Mako journals", homeRoot, since, unread, (scan) => scanRecorded(scan, conversationsRoot, recorded))
+      : undefined,
+  ])
+  ledger.forgetBefore(since)
+  for (const { source, path, reason } of unread.slice(0, 20)) hostWarn("usage", "Usage record unread", { source, path, reason })
+  if (unread.length > 20) hostWarn("usage", "More usage records unread", { count: unread.length - 20 })
+  return aggregate(ledger.events(since), ledger.sessions(since), unread.length > 0 || ledger.unreadFiles() > 0, new Set(recorded.values()), now)
+}
+
+/** UTC midnight of the summary's first day, so the total covers exactly the days it charts. */
+function windowStart(now: number): number {
+  const today = new Date(now)
+  today.setUTCHours(0, 0, 0, 0)
+  return today.getTime() - (DAYS - 1) * 86_400_000
+}
+
+async function scanSource(
+  ledger: UsageLedger,
   source: string,
   homeRoot: string,
-  read: (scan: UsageScan) => Promise<{ truncated: boolean }>
-): Promise<Collected> {
-  const events = new Map<string, UsageEvent>()
-  const sessions = new Set<string>()
-  const { truncated } = await read({
+  since: number,
+  unread: Unread[],
+  read: (scan: UsageScan) => Promise<void>
+): Promise<void> {
+  const seen = new Set<string>()
+  let batch: UsageEvent[] = []
+  const unreadable = (path: string, reason: string) => {
+    unread.push({ source, path, reason })
+  }
+  const scan: UsageScan = {
     homeRoot,
     source,
-    record: (event) => mergeEvent(events, event),
-    session: (id) => {
-      sessions.add(`${source}:${id}`)
+    since,
+    record: (event) => {
+      batch.push(event)
     },
-  })
-  return { events, sessions, truncated }
+    unreadable,
+    async jsonl(roots, reader, name) {
+      for (const [index, file] of (await discover(roots, since, name)).entries()) {
+        seen.add(file.identity)
+        try {
+          const cursor = ledger.cursor(source, file.identity)
+          const resumes = cursor !== undefined && cursor.offset <= file.size
+          const state = resumes ? reader.restore(cursor.state) : reader.start(file)
+          if (resumes && cursor.offset === file.size) continue
+          const events: UsageEvent[] = []
+          const read = await readAppended(file.path, resumes ? cursor.offset : 0, reader.needles, (line) => {
+            const out = reader.line(line, state, file)
+            if (Array.isArray(out)) events.push(...out)
+            else if (out) events.push(out)
+          })
+          const oversized = read.oversized ? `${read.oversized} line(s) over 64 MB` : undefined
+          if (oversized) unreadable(file.path, oversized)
+          const skipped = oversized ?? (resumes ? cursor.unread : undefined)
+          ledger.advance(source, file.identity, { offset: read.end, state, ...skipped && { unread: skipped } }, events)
+        } catch (error) {
+          unreadable(file.path, error instanceof Error ? error.message : String(error))
+        }
+        if ((index + 1) % 8 === 0) await yieldToMain()
+      }
+    },
+    async store(id, read) {
+      const outer = batch
+      batch = []
+      try {
+        const cursor = await read(ledger.storeCursor(source, id))
+        ledger.advanceStore(source, id, cursor, batch)
+      } catch (error) {
+        unreadable(id, error instanceof Error ? error.message : String(error))
+      } finally {
+        batch = outer
+      }
+    },
+  }
+  try {
+    await read(scan)
+  } catch (error) {
+    unreadable(source, error instanceof Error ? error.message : String(error))
+  }
+  if (batch.length) ledger.advanceStore(source, "", undefined, batch)
+  ledger.keepFiles(source, seen)
 }
 
-async function scanBuiltIn(sessionsRoot: string, scan: UsageScan): Promise<{ truncated: boolean }> {
-  const { files, truncated } = await discover([sessionsRoot])
-  for (const [index, file] of files.entries()) {
-    let cwd = "unknown"
-    let session = basename(file.path, ".jsonl")
-    const partial = file.size > MAX_BYTES_PER_FILE
-    if (partial) {
-      const header = await firstLine(file.path)
-      if (header) {
-        const metadata = parseBuiltInMetadata(header)
-        cwd = metadata.cwd ?? cwd
-        session = metadata.session ?? session
-      }
+/** Mako's built-in sessions: a `session` header names the session and its folder, and each message may carry usage. */
+const BuiltInContextSchema = z.object({ cwd: z.string(), session: z.string() })
+const BUILT_IN: JsonlReader<z.infer<typeof BuiltInContextSchema>> = {
+  needles: ['"usage"', '"type":"session"'],
+  start: (file) => ({ cwd: "unknown", session: basename(file.path, ".jsonl") }),
+  restore: (state) => BuiltInContextSchema.parse(state),
+  line(line, state, file) {
+    const root = parseObject(line)
+    if (!root) return null
+    if (stringValue(root.type) === "session") {
+      state.cwd = stringValue(root.cwd) ?? state.cwd
+      state.session = stringValue(root.id) ?? state.session
+      return null
     }
-    const read = await readLines(file, (line) => {
-      const metadata = parseBuiltInMetadata(line)
-      cwd = metadata.cwd ?? cwd
-      session = metadata.session ?? session
-      if (!line.includes('"usage"')) return
-      const event = parseBuiltInEvent(scan.source, line, cwd, session, file.mtimeMs)
-      if (event) scan.record(event)
-    })
-    if (read) scan.session(session)
-    if ((index + 1) % 8 === 0) await yieldToMain()
-  }
-  return { truncated }
+    const message = objectValue(root.message)
+    const usage = objectValue(message?.usage)
+    if (!message || !usage) return null
+    const counts = tokenCounts(usage, "input", "output", "cacheRead", "cacheWrite")
+    const cost = numberValue(objectValue(usage.cost)?.total)
+    if (tokenTotal(counts) === 0 && (!cost || cost <= 0)) return null
+    const id = stringValue(root.id)
+    const timestamp = validTimestamp(root.timestamp, file.mtimeMs)
+    const event: UsageEvent = {
+      ...counts,
+      key: `Mako:${id ?? fingerprint(timestamp, stringValue(message.model), counts)}`,
+      source: "Mako",
+      session: state.session,
+      timestamp,
+      model: stringValue(message.model) ?? "unknown",
+      cwd: state.cwd,
+    }
+    if (cost !== undefined) event.reportedCost = cost
+    return event
+  },
 }
 
 /** A journal row: one JSON document in `value`. */
@@ -149,123 +228,77 @@ const RecordedSpendSchema = z.object({
 })
 
 /**
- * What Mako measured while running harnesses whose own stores keep no
- * token counts, read from each conversation's journal.
+ * What Mako measured while running harnesses whose own stores keep no token
+ * counts, read from each conversation's journal; a journal is read again
+ * only after it changes.
  */
-async function scanRecorded(
-  root: string,
-  recorded: ReadonlyMap<string, string>
-): Promise<Collected> {
-  const events = new Map<string, UsageEvent>()
-  const sessions = new Set<string>()
+async function scanRecorded(scan: UsageScan, root: string, recorded: ReadonlyMap<string, string>): Promise<void> {
   let names: string[]
   try {
     names = (await readdir(root)).filter((name) => name.endsWith(".sqlite"))
   } catch {
-    return { events, sessions, truncated: false }
-  }
-  const truncated = names.length > MAX_FILES_PER_SOURCE
-  for (const [index, name] of names.slice(0, MAX_FILES_PER_SOURCE).entries()) {
-    let db: DatabaseSync | undefined
-    try {
-      db = new DatabaseSync(join(root, name), { readOnly: true })
-      const rows = db.prepare(`SELECT value FROM requests WHERE value LIKE '%"spend"%'`).all()
-      if (!rows.length) continue
-      const metadata = JournalRowSchema.safeParse(db.prepare("SELECT value FROM metadata WHERE id=1").get()).data
-      const cwd = (metadata && stringValue(objectValue(parseObject(metadata.value)?.session)?.cwd)) ?? "unknown"
-      const conversation = basename(name, ".sqlite")
-      for (const row of rows) {
-        const value = JournalRowSchema.safeParse(row).data?.value
-        if (value === undefined) continue
-        const parsed = RecordedSpendSchema.safeParse(parseObject(value))
-        const source = parsed.success ? recorded.get(parsed.data.spend.provider) : undefined
-        if (!parsed.success || !source) continue
-        const { spend } = parsed.data
-        const event: UsageEvent = {
-          input: spend.tokens?.input ?? 0,
-          output: spend.tokens?.output ?? 0,
-          cacheRead: spend.tokens?.cacheRead ?? 0,
-          cacheWrite: spend.tokens?.cacheWrite ?? 0,
-          key: `${source}:${conversation}:${parsed.data.id}`,
-          source,
-          session: conversation,
-          timestamp: new Date(spend.at).toISOString(),
-          model: spend.model ?? "unknown",
-          cwd,
-        }
-        if (spend.cost !== undefined && spend.cost >= 0) event.reportedCost = spend.cost
-        sessions.add(`${source}:${conversation}`)
-        mergeEvent(events, event)
-      }
-    } catch {
-      continue
-    } finally {
-      db?.close()
-    }
-    if ((index + 1) % 16 === 0) await yieldToMain()
-  }
-  return { events, sessions, truncated }
-}
-
-function parseBuiltInMetadata(line: string): BuiltInMetadata {
-  const root = parseObject(line)
-  if (!root) return {}
-  const type = stringValue(root.type)
-  if (type !== "session") return {}
-  return {
-    cwd: stringValue(root.cwd),
-    session: stringValue(root.id),
-  }
-}
-
-function parseBuiltInEvent(
-  source: string,
-  line: string,
-  cwd: string,
-  session: string,
-  fallbackTime: number
-): UsageEvent | null {
-  const root = parseObject(line)
-  const message = objectValue(root?.message)
-  const usage = objectValue(message?.usage)
-  if (!root || !message || !usage) return null
-  const counts = tokenCounts(usage, "input", "output", "cacheRead", "cacheWrite")
-  const cost = numberValue(objectValue(usage.cost)?.total)
-  if (tokenTotal(counts) === 0 && (!cost || cost <= 0)) return null
-  const id = stringValue(root.id)
-  const timestamp = validTimestamp(root.timestamp, fallbackTime)
-  const event: UsageEvent = {
-    ...counts,
-    key: `${source}:${id ?? fingerprint(timestamp, stringValue(message.model), counts)}`,
-    source,
-    session,
-    timestamp,
-    model: stringValue(message.model) ?? "unknown",
-    cwd,
-  }
-  if (cost !== undefined) event.reportedCost = cost
-  return event
-}
-
-function mergeEvent(events: Map<string, UsageEvent>, event: UsageEvent): void {
-  const existing = events.get(event.key)
-  if (!existing) {
-    events.set(event.key, event)
     return
   }
-  existing.input = Math.max(existing.input, event.input)
-  existing.output = Math.max(existing.output, event.output)
-  existing.cacheRead = Math.max(existing.cacheRead, event.cacheRead)
-  existing.cacheWrite = Math.max(existing.cacheWrite, event.cacheWrite)
-  if (event.reportedCost !== undefined)
-    existing.reportedCost = Math.max(existing.reportedCost ?? 0, event.reportedCost)
+  for (const [index, name] of names.entries()) {
+    const path = join(root, name)
+    let modified: number
+    try {
+      const [main, wal] = await Promise.all([stat(path), stat(`${path}-wal`).catch(() => undefined)])
+      modified = Math.max(main.mtimeMs, wal?.mtimeMs ?? 0)
+    } catch {
+      continue
+    }
+    if (modified < scan.since) continue
+    await scan.store(path, async (cursor) => {
+      if (cursor !== undefined && modified <= cursor) return cursor
+      readJournal(scan, path, basename(name, ".sqlite"), recorded)
+      return modified
+    })
+    if ((index + 1) % 16 === 0) await yieldToMain()
+  }
+}
+
+function readJournal(scan: UsageScan, path: string, conversation: string, recorded: ReadonlyMap<string, string>): void {
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const rows = db.prepare(`SELECT value FROM requests WHERE value LIKE '%"spend"%'`).all()
+    if (!rows.length) return
+    const metadata = JournalRowSchema.safeParse(db.prepare("SELECT value FROM metadata WHERE id=1").get()).data
+    const cwd = (metadata && stringValue(objectValue(parseObject(metadata.value)?.session)?.cwd)) ?? "unknown"
+    for (const row of rows) {
+      const value = JournalRowSchema.safeParse(row).data?.value
+      if (value === undefined) continue
+      const parsed = RecordedSpendSchema.safeParse(parseObject(value))
+      const source = parsed.success ? recorded.get(parsed.data.spend.provider) : undefined
+      if (!parsed.success || !source || parsed.data.spend.at < scan.since) continue
+      const { spend } = parsed.data
+      const event: UsageEvent = {
+        input: spend.tokens?.input ?? 0,
+        output: spend.tokens?.output ?? 0,
+        cacheRead: spend.tokens?.cacheRead ?? 0,
+        cacheWrite: spend.tokens?.cacheWrite ?? 0,
+        key: `${source}:${conversation}:${parsed.data.id}`,
+        source,
+        session: conversation,
+        timestamp: new Date(spend.at).toISOString(),
+        model: spend.model ?? "unknown",
+        cwd,
+        summed: true,
+      }
+      if (spend.cost !== undefined && spend.cost >= 0) event.reportedCost = spend.cost
+      scan.record(event)
+    }
+  } finally {
+    db.close()
+  }
 }
 
 function aggregate(
   events: Iterable<UsageEvent>,
   sessions: number,
   truncated: boolean,
-  recordedByMako: ReadonlySet<string>
+  recordedByMako: ReadonlySet<string>,
+  now: number
 ): UsageSummary {
   const total = empty("total")
   const days = new Map<string, Bucket>()
@@ -283,7 +316,7 @@ function aggregate(
 
   return {
     total: totalsOf(total),
-    days: recentDays(days),
+    days: recentDays(days, now),
     models: rank(models).map((bucket) => ({
       model: bucket.key,
       ...totalsOf(bucket),
@@ -361,9 +394,9 @@ function totalsOf(bucket: Bucket): UsageTotals {
   }
 }
 
-function recentDays(days: Map<string, Bucket>): UsageSummary["days"] {
+function recentDays(days: Map<string, Bucket>, now: number): UsageSummary["days"] {
   const result: UsageSummary["days"] = []
-  const today = new Date()
+  const today = new Date(now)
   today.setUTCHours(0, 0, 0, 0)
   for (let offset = DAYS - 1; offset >= 0; offset -= 1) {
     const date = new Date(today)

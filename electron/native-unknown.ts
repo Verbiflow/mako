@@ -1,6 +1,8 @@
 import { appendFile, mkdir, rename, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import { hasVocabulary, isDeclaredTool } from "@mako/sessions/tool-identity"
 import type { JsonValue } from "./codex-app-json.js"
+import type { LiveUpdate } from "./contracts/live-content.js"
 import { hostLog, hostLogPath } from "./host-log.js"
 import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
 
@@ -55,6 +57,20 @@ export function retainUnknown(harness: string, kind: string, reason: UnknownReas
   if (raw === undefined || !path) return
   const line = `${JSON.stringify({ at: new Date(now).toISOString(), harness, kind, reason, record: sample(raw) })}\n`
   queue = queue.then(() => append(path, line)).catch(() => undefined)
+}
+
+/**
+ * Live tool calls whose name the harness's vocabulary
+ * (`packages/sessions/src/harnesses/`) doesn't declare, kept as kind
+ * `tool <name>`: a tool the harness gained or renamed, shown by
+ * `harness:doctor` instead of guessed at from the shared names.
+ */
+export function retainUndeclaredTools(harness: string, updates: readonly LiveUpdate[]): void {
+  if (!hasVocabulary(harness)) return
+  for (const update of updates) {
+    if (update.kind !== "tool" || !update.name || isDeclaredTool(harness, update.name)) continue
+    retainUnknown(harness, `tool ${update.name}`, "unknown", { name: update.name, title: update.title, toolKind: update.toolKind ?? null })
+  }
 }
 
 /** What this host has seen and not decoded, most frequent first. */

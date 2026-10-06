@@ -73,6 +73,8 @@ export type ThreadItem =
     }
   | { type: "webSearch"; id: string; query: string; action: JsonObject | null; results: JsonValue[] | null }
   | { type: "sleep"; id: string; durationMs: number }
+  /** A tool's result that a client handed Codex to start a turn; Mako never starts one this way. */
+  | { type: "functionCallOutput"; id: string; tool: string; output: string }
   | { type: "enteredReviewMode" | "exitedReviewMode"; id: string; review: string }
   /** Text a hook added to the conversation; Codex itself does not show it. */
   | { type: "hookPrompt"; id: string }
@@ -205,7 +207,7 @@ export interface ProtocolCallbacks {
   unhandled?(kind: string, reason?: "unknown" | "unreadable", raw?: JsonValue): void
   /** `account/rateLimits/updated`: the windows the session's account just reported. */
   usage?(windows: import("./account-types.js").UsageWindow[]): void
-  observeAgents(item: CodexAgentItem, replay: boolean): void
+  observeAgents(item: CodexAgentItem, replay: boolean, toolId: string): void
   observeAgentTurn?(nativeId: string): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void
   resolveServerRequest(id: JsonRpcId): void

@@ -121,6 +121,8 @@ export class ProviderStartupWatch {
 
   /** Run one startup request under the watch. Steps run one at a time. */
   async step<Value>(name: string, work: Promise<Value>): Promise<Value> {
+    // A refused step still owns `work`; its rejection must not go unhandled.
+    work.catch(() => undefined)
     if (this.pending) throw new Error(`${this.harness} startup step ${this.pending.name} is still pending`)
     if (this.disposed) throw new Error(`${this.harness} startup watch was disposed before ${name}`)
     if (this.exit)

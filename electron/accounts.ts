@@ -31,6 +31,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import type { ProviderBinding } from "./contracts/conversation-control.js"
 import type {
   AccountCatalog,
   AccountLoginResult,
@@ -485,6 +486,20 @@ export async function accountEnv(
   base: NodeJS.ProcessEnv
 ): Promise<NodeJS.ProcessEnv> {
   return (await resolveAccountLaunch(provider, base, { trackCredential: false })).env
+}
+
+/**
+ * The environment the account a binding ran on launches with, not the one
+ * selected now, to find where its native session lives. Holds nothing. An
+ * account that is gone or signed out falls back to the CLI's own, which
+ * shares every harness's session store.
+ */
+export async function bindingAccountEnv(binding: ProviderBinding): Promise<NodeJS.ProcessEnv> {
+  const base = childProcessEnv(process.env)
+  const capability = providerHost.accountCapabilities.get(binding.provider)
+  const account = binding.executionContext?.account
+  if (!capability || account?.kind !== "configured" || !account.managed) return base
+  return capability.accountEnv(account.name, base).catch(() => base)
 }
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
