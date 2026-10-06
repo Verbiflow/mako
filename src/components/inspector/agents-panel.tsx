@@ -5,6 +5,7 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { stage } from "@/state/stage"
 import { useThreads } from "@/state/threads"
 import { descriptorFor } from "@/state/descriptors"
+import { capabilityText } from "../../../electron/contracts/harness-capabilities"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatTokens } from "@/lib/format"
@@ -64,8 +65,8 @@ function AgentRoster({
 }) {
   useHarnessIdentity()
   const [visible, setVisible] = useState(40)
-  const supported = useThreads(
-    (state) => descriptorFor(state, provider)?.observesNativeAgents === true
+  const capability = useThreads(
+    (state) => descriptorFor(state, provider)?.capabilities.nativeAgents
   )
   const agents = roster?.agents ?? []
   const working = agents.filter(
@@ -79,9 +80,9 @@ function AgentRoster({
         body={
           !provider
             ? "Open a live conversation to follow the agents it starts."
-            : supported
+            : !capability || capability.state === "implemented"
               ? "Agents the provider starts appear here with their progress and results."
-              : `${harnessLabel(provider)} does not report its agents to Mako.`
+              : `${harnessLabel(provider)} does not report its agents to Mako. ${capabilityText(capability)}`
         }
       />
     )

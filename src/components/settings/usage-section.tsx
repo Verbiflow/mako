@@ -161,7 +161,7 @@ function LocalUsage() {
         current public model list prices. Subscriptions, discounts, and billing
         adjustments are not included.
         {data.truncated
-          ? " Older files or oversized file prefixes were left unread to keep the scan bounded."
+          ? " Some session records could not be read, so these totals may be low."
           : ""}
       </p>
     </div>
