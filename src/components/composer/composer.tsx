@@ -73,6 +73,7 @@ import {
 import type { PromptAttachment } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { acp, acpStore, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
+import { noteComposing } from "@/state/prewarm"
 import { openSessionDraft, sessionDraftKey, threadGroupsStore, useThreadGroups } from "@/state/thread-groups"
 import { startInThread } from "@/state/thread-sessions"
 import {
@@ -281,6 +282,7 @@ export function Composer() {
   const update = useCallback(
     (value: string) => {
       rememberDraft(draftKey, value)
+      noteComposing(value)
     },
     [draftKey]
   )
@@ -759,12 +761,11 @@ export function Composer() {
 
   const busy = status.streaming || status.compacting
   const liveHarness = useAcp((state) => activeAcp(state)?.harness ?? null)
-  const supportsSteering = useThreads(
-    (state) => descriptorFor(state, liveHarness)?.canSteer === true
-  )
-  const steeringKind = useThreads(
-    (state) => descriptorFor(state, liveHarness)?.steering ?? null
-  )
+  const steeringKind = useThreads((state) => {
+    const steering = descriptorFor(state, liveHarness)?.capabilities.steering
+    return steering?.state === "implemented" ? steering.lands : null
+  })
+  const supportsSteering = steeringKind !== null
   const steerOnEnter = usePrefs((state) => state.steerOnEnter)
   const steerTitle = steeringTitle(steeringKind)
   const liveRunning = useAcp((state) => {

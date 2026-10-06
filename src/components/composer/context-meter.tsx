@@ -8,6 +8,8 @@ import { harnessLabel } from "@/lib/harness-label"
 import type { ContextBreakdown, ContextCategory, LiveSessionUsage, TokenCounts } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { acp, useAcp } from "@/state/acp"
+import { descriptorFor } from "@/state/descriptors"
+import { useThreads } from "@/state/threads"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 
 type Tone = "neutral" | "caution" | "negative"
@@ -133,7 +135,8 @@ export function UsageDetails({
   onCompact?: () => void
 }) {
   useHarnessIdentity()
-  const breakdown = useBreakdown(conversationId, usage.used)
+  const itemizes = useThreads((state) => descriptorFor(state, harness)?.capabilities.contextBreakdown.state === "implemented")
+  const breakdown = useBreakdown(conversationId, usage.used, itemizes)
   const fraction = usage.used !== undefined && usage.size ? usage.used / usage.size : undefined
   return (
     <div className="flex flex-col" data-usage-details>
@@ -167,10 +170,11 @@ export function UsageDetails({
   )
 }
 
-/** Claude itemizes its context on request; asked once each time the popover opens and the reading moves. */
-function useBreakdown(conversationId: string, used: number | undefined): ContextBreakdown | null {
+/** A harness that declares a breakdown itemizes its context on request; asked once each time the popover opens and the reading moves. */
+function useBreakdown(conversationId: string, used: number | undefined, itemizes: boolean): ContextBreakdown | null {
   const [breakdown, setBreakdown] = useState<ContextBreakdown | null>(null)
   useEffect(() => {
+    if (!itemizes) return
     let current = true
     acp
       .contextBreakdown(conversationId)
@@ -183,8 +187,8 @@ function useBreakdown(conversationId: string, used: number | undefined): Context
     return () => {
       current = false
     }
-  }, [conversationId, used])
-  return breakdown
+  }, [conversationId, used, itemizes])
+  return itemizes ? breakdown : null
 }
 
 function ContextBar({ fraction, breakdown }: { fraction: number; breakdown: ContextBreakdown | null }) {

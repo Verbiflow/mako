@@ -1,12 +1,10 @@
-import {
-  compactionAvailable,
-  UNAVAILABLE_RECOVERY,
-} from "../../../electron/contracts/recovery"
+import { capabilityText } from "../../../electron/contracts/harness-capabilities"
+import { compactionAvailable } from "../../../electron/contracts/recovery"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
 import { descriptorFor } from "@/state/descriptors"
 
-/** The same capability and admission rules serve the menu and failed messages. */
+/** The harness's compaction declaration and the shared admission rule serve the menu and failed messages. */
 export function CompactionControl({
   requestId,
   onStart,
@@ -16,9 +14,7 @@ export function CompactionControl({
 }) {
   const harness = useAcp((state) => activeLiveAcp(state)?.harness)
   const capability = useThreads(
-    (state) =>
-      (descriptorFor(state, harness)?.recovery ?? UNAVAILABLE_RECOVERY)
-        .compaction
+    (state) => descriptorFor(state, harness)?.capabilities.compaction
   )
   const enabled = useAcp((state) => {
     const live = activeLiveAcp(state)
@@ -34,9 +30,10 @@ export function CompactionControl({
       )
     )
   })
-  if (capability.kind === "unavailable")
+  if (!capability) return null
+  if (capability.state !== "implemented")
     return (
-      <p className="px-2 py-2 text-label text-faint">{capability.reason}</p>
+      <p className="px-2 py-2 text-label text-faint">{capabilityText(capability)}</p>
     )
   return (
     <button

@@ -1,7 +1,7 @@
 import { capabilityToken, threadToken } from "@/lib/mentions"
 import { isMakoServerName } from "@/lib/composer-capabilities"
 import { fileName } from "@/lib/format"
-import { skillChipTitle, type SkillAppendixEntry } from "@/lib/skill-references"
+import { skillChipTitle, skillSourceLabel, type SkillAppendixEntry } from "@/lib/skill-references"
 import { findThreadReference } from "@/lib/thread-references"
 import type { SkillDelivery } from "@/lib/types"
 import { UNIVERSAL_SKILL_PROVIDER } from "../../../electron/contracts/skill-reach"
@@ -110,7 +110,7 @@ function sentDelivery(sent: SkillChipSent): SkillDelivery | undefined {
   if (sent === undefined) return undefined
   if (sent === null) return { kind: "missing" }
   return sent.from
-    ? { kind: "handover", path: "", from: sent.from }
+    ? { kind: "handover", path: "", from: sent.from, source: skillSourceLabel(sent.from) }
     : { kind: "native", path: "" }
 }
 
