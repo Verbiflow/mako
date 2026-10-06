@@ -155,12 +155,16 @@ export const Prose = memo(function Prose({
     () => (hasTree ? [skipMarkdownParse] : prosePlugins(referenceInput)),
     [referenceInput, hasTree]
   )
+  // Sections are rebuilt on every streamed batch, so the list arrives as a new
+  // array each time; keyed by its contents, unchanged prose is not reparsed.
+  const previewKey = previewedFiles?.join("\0") ?? ""
   const rehypePlugins = useMemo<
     Parameters<typeof Markdown>[0]["rehypePlugins"]
   >(() => {
-    const assets: [typeof rehypeAssetGroups, { previewedFiles?: readonly string[] }] = [rehypeAssetGroups, { previewedFiles }]
+    const files = previewKey ? previewKey.split("\0") : undefined
+    const assets: [typeof rehypeAssetGroups, { previewedFiles?: readonly string[] }] = [rehypeAssetGroups, { previewedFiles: files }]
     return tree ? [[reuseParsedProse, tree], assets] : [assets]
-  }, [tree, previewedFiles])
+  }, [tree, previewKey])
 
   const settled = !streaming && !referenceInput && !urlTransform && !hasTree && !previewedFiles?.length
   const rendered = useMemo(() => {
