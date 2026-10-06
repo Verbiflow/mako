@@ -1,13 +1,12 @@
 import { basename, dirname, join } from "node:path"
+import { z } from "zod"
 import { numberValue, objectValue, stringValue, type JsonObject } from "../../codex-app-json.js"
 import {
-  discover,
   fingerprint,
   parseObject,
-  readLines,
   tokenTotal,
   tokenValue,
-  yieldToMain,
+  type JsonlReader,
   type UsageEvent,
 } from "../../usage-scan.js"
 import type { UsageTokenCounts } from "../../usage-pricing.js"
@@ -19,22 +18,17 @@ const GROK_UPDATES = "updates.jsonl"
 /** Grok's own unit: `costUsdTicks` are ten-billionths of a dollar. */
 const GROK_TICKS_PER_USD = 1e10
 
-
 export const grokUsageHistory: ProviderUsageHistory = {
   provider: "grok",
   async scan(scan) {
-    const { files, truncated } = await discover([join(scan.homeRoot, ".grok", "sessions")], GROK_UPDATES)
-    for (const [index, file] of files.entries()) {
+    const reader: JsonlReader<null> = {
+      needles: ['"turn_completed"'],
+      start: () => null,
+      restore: (state) => z.null().parse(state),
       // sessions/<url-encoded cwd>/<session id>/updates.jsonl
-      const cwd = decodedDirectory(basename(dirname(dirname(file.path))))
-      const read = await readLines(file, (line) => {
-        if (!line.includes('"turn_completed"')) return
-        for (const event of parseGrokTurn(scan.source, line, cwd, file.mtimeMs)) scan.record(event)
-      })
-      if (read) scan.session(basename(dirname(file.path)))
-      if ((index + 1) % 8 === 0) await yieldToMain()
+      line: (line, _state, file) => parseGrokTurn(scan.source, line, decodedDirectory(basename(dirname(dirname(file.path)))), file.mtimeMs),
     }
-    return { truncated }
+    await scan.jsonl([join(scan.homeRoot, ".grok", "sessions")], reader, GROK_UPDATES)
   },
 }
 

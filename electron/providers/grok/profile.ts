@@ -18,20 +18,6 @@ export const grokProfileLoader: ProviderProfileLoader = {
     work: [{ model: "grok-4.7", options: { effort: "high" } }],
   },
   transport: "acp",
-  capabilities: [
-    "start",
-    "resume",
-    "fork",
-    "stream",
-    "interrupt",
-    "steer",
-    "permissions",
-    "images",
-    "commands",
-    "mcp",
-    "models",
-    "memory",
-  ],
   cacheKey: (env) => `${env.GROK_HOME ?? ""}\0${env.GROK_AUTH_PATH ?? ""}`,
   async load(env, cwd, context) {
     const executable = resolveExecutable("grok", env)

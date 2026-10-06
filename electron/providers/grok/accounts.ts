@@ -17,8 +17,9 @@ import {
   accountDir,
   accountsRoot,
   cleanAccountName,
-  credentialFileFingerprint,
   childProcessEnv,
+  principalFingerprint,
+  readOptionalFile,
   jsonFields,
   loginPending,
   markLoginPending,
@@ -31,6 +32,18 @@ import type { JsonValue } from "../../codex-app-json.js"
 import { resolveExecutable } from "../../executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"
+
+/** Grok rotates an entry's `key`, `refresh_token` and `expires_at` in place; a key with no refresh token is the login itself. */
+const GrokPrincipal = z.record(z.string(), z.object({
+  key: z.string().optional(),
+  refresh_token: z.string().optional(),
+  user_id: z.string().optional(),
+  principal_id: z.string().optional(),
+  principal_type: z.string().optional(),
+  team_id: z.string().optional(),
+  auth_mode: z.string().optional(),
+  oidc_issuer: z.string().optional(),
+}).transform(({ key, refresh_token, ...principal }) => refresh_token === undefined ? { ...principal, key } : principal))
 
 function authPath(env: NodeJS.ProcessEnv): string {
   return (
@@ -292,7 +305,7 @@ export const grokAccountCapability: SelectableAccountCapability = {
     return {}
   },
   selectedAccount: (selection, env) => ({ name: selection ?? "default", dir: authPath(env) }),
-  credentialRevision: (name, env = process.env) =>
-    credentialFileFingerprint(name === "default" ? authPath(env) : accountAuthPath(name)),
+  credentialRevision: async (name, env = process.env) =>
+    principalFingerprint(await readOptionalFile(name === "default" ? authPath(env) : accountAuthPath(name)), GrokPrincipal),
   accountUsage,
 }

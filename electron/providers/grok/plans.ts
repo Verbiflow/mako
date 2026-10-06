@@ -4,6 +4,7 @@ import { PLAN_APPROVAL_TITLE } from "../../acp-decoder.js"
 import type { JsonObject } from "../../codex-app-json.js"
 import type { LiveUpdate } from "../../contracts/live-content.js"
 import type { AcpPlanDecoder, AcpVendorRequest, AcpVendorRequests } from "../acp-source.js"
+import { GROK_QUESTION_METHOD, questionRequest } from "./questions.js"
 
 /**
  * Grok's plan mode, recorded 2026-09-30 from grok 1.0.44 against a scripted
@@ -52,8 +53,9 @@ export const grokPlans = (): AcpPlanDecoder => ({
 })
 
 export const grokRequests: AcpVendorRequests = {
-  methods: new Set([GROK_EXIT_PLAN_METHOD]),
-  decode: (method, params) => method === GROK_EXIT_PLAN_METHOD ? exitPlanRequest(params) : undefined,
+  methods: new Set([GROK_EXIT_PLAN_METHOD, GROK_QUESTION_METHOD]),
+  decode: (method, params) => method === GROK_EXIT_PLAN_METHOD ? exitPlanRequest(params)
+    : method === GROK_QUESTION_METHOD ? questionRequest(params) : undefined,
 }
 
 function exitPlanRequest(params: JsonObject): AcpVendorRequest | undefined {

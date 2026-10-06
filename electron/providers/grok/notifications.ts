@@ -87,6 +87,8 @@ export function grokNotification(method: string, params: JsonObject): AcpNotific
   if (WORKSPACE_METHODS.has(method)) return { kind: method, notices: [] }
   // The snapshot that announces a turn Grok starts itself; the provider-turn observer reads it.
   if (method === "_x.ai/task_completed") return { sessionId: Session.safeParse(params).data?.sessionId, kind: method, notices: [] }
+  // The echo of a message Mako steered in; the host already shows it.
+  if (method === "_x.ai/session/interjection") return { sessionId: Session.safeParse(params).data?.sessionId, kind: method, notices: [] }
   // The model list, sent when the session opens and when its model changes, names the window.
   if (method === "_x.ai/models/update") {
     const size = grokModelWindow(params)
