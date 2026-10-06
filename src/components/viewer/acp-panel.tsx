@@ -173,6 +173,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
   const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
   const madeByMako = useMemo(() => makoPrompts(requests), [requests])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
+  const unread = useAcp((state) => scopedLiveAcp(state, scope)?.hydrated === false)
   const lastExchangeId = exchanges.at(-1)?.id
   const row = useAcp((state) => {
     const current = scopedAcp(state, scope)
@@ -194,7 +195,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       makoPrompts={madeByMako}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
       opening={worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined}
-      empty={
+      empty={unread ? null : (
         <div className="mx-auto flex w-full max-w-content flex-col gap-4 px-6 py-6">
           <p className="pt-8 text-center text-ui leading-relaxed text-faint">
             {session?.status === "failed"
@@ -213,7 +214,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
             preparing={preparing && session?.status !== "running"}
           />
         </div>
-      }
+      )}
       footer={
         <AcpActivity
           running={running}
