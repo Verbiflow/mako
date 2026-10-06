@@ -1,9 +1,10 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { ProviderStartupWatch, type StartupWatchOptions } from "../../../provider-startup.js"
+import { mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
-import { hostLog, hostWarn } from "../../../host-log.js"
+import { hostLog, hostLogPath, hostWarn } from "../../../host-log.js"
 import { spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../headless-node.js"
 import {
@@ -100,6 +101,42 @@ type Params<Method extends SdkMethod> = Extract<SdkRequest, { method: Method }> 
 const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login", "steer", "send"])
 const STARTUP_METHODS: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["hello", "authStatus", "models", "open"])
 
+/**
+ * A child per conversation stays warm between turns, so its young generation
+ * is held small: with V8's default it kept about 25MB more while idle, and
+ * 12–15MB more after a turn, on Cursor SDK 1.0.31 (2026-10-05).
+ */
+const CHILD_V8_FLAGS = ["--max-semi-space-size=1"]
+
+/**
+ * `kill -USR2 <pid>` writes a heap snapshot of a child beside the host log,
+ * for a session whose SDK holds more than it should. Free until signalled.
+ */
+function heapSnapshotFlags(): string[] {
+  const log = hostLogPath()
+  if (!log) return []
+  const directory = join(dirname(log), "cursor-heaps")
+  mkdirSync(directory, { recursive: true })
+  return ["--heapsnapshot-signal=SIGUSR2", `--diagnostic-dir=${directory}`]
+}
+
+/**
+ * What V8 writes on stderr before aborting, most specific first. Only which
+ * marker appeared is kept: the rest of stderr may contain provider input.
+ */
+const RUNTIME_FATALS = [
+  { marker: "JavaScript heap out of memory", reason: "it ran out of JavaScript heap" },
+  { marker: "FATAL ERROR:", reason: "its JavaScript runtime aborted" },
+] as const
+const FATAL_MARKER_OVERLAP = Math.max(...RUNTIME_FATALS.map(({ marker }) => marker.length)) - 1
+const STDERR_DRAIN_MS = 250
+
+export type CursorSdkExit = {
+  code: number | null
+  signal: NodeJS.Signals | null
+  fatal: (typeof RUNTIME_FATALS)[number]["reason"] | undefined
+}
+
 export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
 }
@@ -112,7 +149,7 @@ export function cursorSdkChildEntry(): string {
  * disconnect, which callers treat as "unknown", not "not done".
  */
 export class CursorSdkClient {
-  readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
+  readonly exited: Promise<CursorSdkExit>
   private readonly child: ChildProcessWithoutNullStreams
   private readonly pending = new Map<number, Pending>()
   private readonly lines = new LineAssembler(CURSOR_SDK_MAX_LINE_BYTES)
@@ -124,19 +161,27 @@ export class CursorSdkClient {
     this.options = options
     const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
     delete env.NODE_OPTIONS
-    this.child = spawnProviderProcess(headlessNodeExecutable(options.execPath), [options.entry ?? cursorSdkChildEntry()], {
+    this.child = spawnProviderProcess(headlessNodeExecutable(options.execPath), [...CHILD_V8_FLAGS, ...heapSnapshotFlags(), options.entry ?? cursorSdkChildEntry()], {
       cwd: options.cwd,
       env,
       windowsHide: true,
     }, { kind: "cursor:sdk", owner: options.owner })
-    // Diagnostics may contain provider input. Drain without forwarding to host logs.
-    this.child.stderr?.resume()
+    const fatals = new Set<string>()
+    let stderrTail = ""
+    this.child.stderr.on("data", (chunk: Buffer) => {
+      const text = stderrTail + chunk.toString("latin1")
+      for (const { marker } of RUNTIME_FATALS) if (text.includes(marker)) fatals.add(marker)
+      stderrTail = text.slice(-FATAL_MARKER_OVERLAP)
+    })
+    const stderrEnded = new Promise<void>((resolve) => this.child.stderr.once("close", resolve))
     this.child.stdout?.on("data", (chunk: Buffer) => this.receive(chunk))
     this.exited = new Promise((resolve) => {
       const settle = (code: number | null, signal: NodeJS.Signals | null) => {
         this.closed = true
         this.failPending(new CursorSdkDisconnectedError())
-        resolve({ code, signal })
+        const drained = new Promise<void>((done) => setTimeout(done, STDERR_DRAIN_MS).unref())
+        void Promise.race([stderrEnded, drained]).then(() =>
+          resolve({ code, signal, fatal: RUNTIME_FATALS.find(({ marker }) => fatals.has(marker))?.reason }))
       }
       this.child.once("exit", settle)
       this.child.once("error", (error) => {

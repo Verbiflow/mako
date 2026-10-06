@@ -3,11 +3,8 @@ import { closeSync, mkdirSync, openSync, rmSync } from "node:fs"
 import { dirname } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore, refuseNativeWrite } from "@mako/sessions/read-only-sqlite"
-import {
-  CURSOR_SDK_IMPORT_METADATA_KEY,
-  cursorSdkStorePath,
-  type CursorSdkImport,
-} from "@mako/sessions"
+import { CURSOR_SDK_IMPORT_METADATA_KEY, type CursorSdkImport } from "@mako/sessions/cursor-sdk-index"
+import { cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
 import { z } from "zod"
 import { CursorImportError, type LegacyStoreSnapshot } from "../legacy-store.js"
 export { CursorImportError } from "../legacy-store.js"

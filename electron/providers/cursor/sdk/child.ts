@@ -9,7 +9,7 @@
  * protocol lines; anything the SDK prints goes to stderr, which the host
  * drains without logging because it can carry provider input.
  */
-import { crashSummary, cursorSdkWireError } from "./errors.js"
+import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "./errors.js"
 import { guardShellFolder } from "./shell-folder.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
@@ -28,7 +28,8 @@ import {
 } from "@cursor/sdk"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 import { unpackedPath } from "../../../asar-unpacked.js"
-import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions"
+// Narrow entries: the package root loads every harness's reader into each Cursor child.
+import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions/cursor-sdk-index"
 import { z } from "zod"
 import {
   copyLegacyStore,
@@ -39,6 +40,7 @@ import {
   type KnownAgent,
 } from "./import.js"
 import { readLegacyStoreSnapshot } from "../legacy-store.js"
+import { lostCursorRun, recordCursorRun, settleCursorRun } from "./run-records.js"
 import {
   CURSOR_SDK_EXIT,
   CURSOR_SDK_HEADLESS,
@@ -61,6 +63,7 @@ const PackageSchema = z.object({ name: z.string(), version: z.string() })
 interface OpenAgent {
   agentId: string
   cwd: string
+  stateRoot: string
   store: SqliteLocalAgentStore
   handle: SDKAgent
   model: SdkModelSelection | undefined
@@ -298,6 +301,17 @@ async function importLegacyStore(
 async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   if (agent) throw new ConfigurationError("This child already has an agent open")
   const store = await SqliteLocalAgentStore.open({ workspaceRef: params.cwd, stateRoot: params.stateRoot })
+  // `send` persists the active run before loading its checkpoint, and can
+  // die during that load before returning a Run. Record its owner before
+  // the SDK writes the run, so a crash there is recoverable too.
+  const createRun = store.runs.create.bind(store.runs)
+  store.runs.create = async (input) => {
+    const failure = recordCursorRun(params.stateRoot, input.run.agentId, {
+      runId: input.run.runId, pid: process.pid, startedAt: performance.timeOrigin,
+    })
+    if (failure) throw new ConfigurationError(`The Cursor run's owner could not be recorded: ${failure}`)
+    return createRun(input)
+  }
   // HTTP/1.1 unless asked otherwise. Over HTTP/2 (SDK 1.0.31), a large
   // conversation's stream closes ("Premature close") right after the turn
   // ends and before its checkpoint arrives, so the SDK re-runs the whole
@@ -321,6 +335,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   const base: Omit<OpenAgent, "handle"> = {
     agentId,
     cwd: params.cwd,
+    stateRoot: params.stateRoot,
     store,
     model: params.model,
     mcpServers: mcpConfig(params.mcpServers),
@@ -366,7 +381,7 @@ function forwardMessage(turn: string, message: SDKMessage): void {
   remember(turn, text)
 }
 
-async function pump(turn: string, run: Run): Promise<void> {
+async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
   try {
     for await (const message of run.stream()) forwardMessage(turn, message)
   } catch (cause) {
@@ -386,6 +401,7 @@ async function pump(turn: string, run: Run): Promise<void> {
   } finally {
     if (active?.turn === turn) active = undefined
   }
+  settleRun(open, run.id)
   write({
     event: "result",
     turn,
@@ -436,12 +452,30 @@ type SendOptions = NonNullable<Parameters<SDKAgent["send"]>[1]>
 
 /** A native busy refusal is final for this attempt. A Mako reservation cannot
  * authorize force-taking a run an independent executor may have just started.
+ * The one exception is proof the run is dead: the agent's active run is the
+ * exact run a Mako child recorded and that child is gone (`run-records.ts`).
  */
 async function startRun(open: OpenAgent, message: Parameters<SDKAgent["send"]>[0], options: SendOptions): Promise<Run> {
   const receipt = open.sourceImport
   if (receipt)
     verifyImportRevision(receipt.revision, readLegacyStoreSnapshot(receipt.path, receipt.nativeId).revision)
-  return open.handle.send(message, options)
+  const lost = await lostCursorRun(open.stateRoot, open.agentId)
+  const stuck = lost !== undefined && (await open.store.agents.get({ agentId: open.agentId }))?.activeRunId === lost
+  if (stuck) log("info", "expiring the run a child that is gone left active")
+  const run = await open.handle.send(message, stuck ? { ...options, local: { force: true } } : options)
+    .catch((cause: unknown) => { throw cursorBusyRefusal(cause, open.agentId) ?? cause })
+  const unrecorded = recordCursorRun(open.stateRoot, open.agentId, { runId: run.id, pid: process.pid, startedAt: performance.timeOrigin })
+  if (unrecorded) log("warn", `the run is not recorded, so a later child cannot expire it if this one dies: ${unrecorded}`)
+  return run
+}
+
+/** A run that ended in this child; one whose end is unknown stays recorded. */
+function settleRun(open: OpenAgent, runId: string): void {
+  try {
+    settleCursorRun(open.stateRoot, open.agentId, runId)
+  } catch (cause) {
+    log("warn", `the ended run's record was kept: ${cursorSdkWireError(cause).message}`)
+  }
 }
 
 async function send(params: SendParams): Promise<SdkResult<"send">> {
@@ -500,7 +534,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
     let finish = () => {}
     const finished = new Promise<void>(resolve => { finish = resolve })
     active = { turn: params.turn, run, finished, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0 }
-    void pump(params.turn, run).then(finish, cause => {
+    void pump(open, params.turn, run).then(finish, cause => {
       log("warn", `run projection ended early: ${cursorSdkWireError(cause).message}`)
       finish()
     })
@@ -679,8 +713,9 @@ async function runHeadless(spec: SdkHeadlessSpec): Promise<number | "stopped"> {
   process.on("SIGTERM", stop)
   try {
     await openAgent({ ...spec, cwd: process.cwd() })
+    const open = agent!
     if (stopped) return "stopped"
-    run = await startRun(agent!, { text: spec.prompt }, {
+    run = await startRun(open, { text: spec.prompt }, {
       model: spec.model,
       mode: "agent",
       onDelta: ({ update }) => {
@@ -689,6 +724,7 @@ async function runHeadless(spec: SdkHeadlessSpec): Promise<number | "stopped"> {
     })
     if (stopped) stop()
     const result = await run.wait()
+    settleRun(open, run.id)
     await cancellation
     if (stopped) return "stopped"
     if (result.status === "finished") return 0

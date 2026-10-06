@@ -58,10 +58,8 @@ import type {
   SdkRunResult,
 } from "./wire.js"
 import { cursorSdkExitReason } from "./wire.js"
-
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
-
 const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
 
 export interface CursorSdkDriverDependencies {
@@ -409,10 +407,14 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   return {
     provider: "cursor",
     launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
+    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. The SDK has no way to ask for it." },
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
     planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation" },
-    observesNativeAgents: true,
-    compaction: { kind: "unavailable", reason: "Cursor's SDK does not expose manual compaction. Start a new thread and carry over what matters." },
+    nativeAgents: { kind: "observed", via: "`task` tool calls and the subagent runs they start." },
+    questions: { kind: "unavailable", reason: "The SDK's `askQuestion` tool has no answer channel in local runs: the SDK makes no interactive request." },
+    contextBreakdown: { kind: "unavailable", reason: "The SDK reports a run's token usage, not what fills the context." },
+    modeSwitching: { kind: "single", reason: "The SDK runs one mode, agent; Plan is a setting chosen with each message." },
+    fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own." },
     // Verified 2026-09-27 (SDK 1.0.31): a shell the SDK moved to the
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.
@@ -423,17 +425,16 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       exit: "The SDK child's exit, unless Mako closed it, settles the running turn and the session failed and disconnected in one update.",
       tests: ["scripts/test-turn-recovery-live.mjs"],
     },
-    canResume: true,
+    resume: {
+      kind: "native",
+      via: "`Agent.resume` over the SDK's local store; a `cursor-agent` store is imported into it first.",
+      wake: "The next message starts a new SDK child that resumes the agent; a run its killed child left active is expired by the next one (`run-records.ts`).",
+      checkpoint,
+      inspect: inspectNativeSession,
+    },
     nativeIdentity: CURSOR_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-    checkpoint,
-    inspectNativeSession,
-    // Verified 2026-09-13 (SDK 1.0.31): a steer delivered while `sleep 6 &&
-    // echo two` ran completed that shell step after 1.7 s and the model
-    // resumed with the steered text, so the SDK cuts the current step short
-    // rather than waiting for it, the same as `cursor-agent acp` did.
-    steering: "interrupt",
     modes: CURSOR_SDK_MODES,
     defaultMode: CURSOR_SDK_DEFAULT_MODE,
     available: () => true,
@@ -493,11 +494,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         },
       }
       sessions.set(live.state.id, live)
-      void live.client.exited.then(({ code, signal }) => {
+      void live.client.exited.then(({ code, signal, fatal }) => {
         if (live.closed) return
         stop(engine, live)
-        const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
-        hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail, reason: signal ? undefined : cursorSdkExitReason(code) })
+        const exit = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
+        const detail = fatal ? `${fatal}, ${exit}` : exit
+        hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail, reason: fatal ?? (signal ? undefined : cursorSdkExitReason(code)) })
         if (live.state.status === "running") {
           settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`)
           engine.event(live, messageEvent(TURN_FAILED, `Cursor's SDK process exited (${detail})`, "error"))
@@ -654,7 +656,11 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         throw error
       }
     },
-    async steer(id, input): Promise<ProviderSteerResult> {
+    // Verified 2026-09-13 (SDK 1.0.31): a steer delivered while `sleep 6 &&
+    // echo two` ran completed that shell step after 1.7 s and the model
+    // resumed with the steered text, so the SDK cuts the current step short
+    // rather than waiting for it, the same as `cursor-agent acp` did.
+    steering: { kind: "supported", lands: "interrupt", via: "A message sent while a run works cuts its current step short and the model continues with it.", async steer(id, input): Promise<ProviderSteerResult> {
       const live = requireLive(id)
       if (live.state.status !== "running" || live.state.nativeRunId !== input.expectedRunId)
         return { kind: "not-accepted", reason: "The Cursor turn has already changed" }
@@ -668,7 +674,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return { kind: "accepted" }
       }
       return { kind: "not-accepted", reason: "Cursor could not fold the message into the running turn" }
-    },
+    } },
     async permission(id, requestId, response, dispatch) {
       dispatch.assertCurrent()
       dispatch.report(engine.respondPermission(id, requestId, response))

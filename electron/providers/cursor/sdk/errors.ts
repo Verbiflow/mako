@@ -79,3 +79,9 @@ export function cursorSdkWireError(cause: unknown): SdkWireError {
   return { message: String(cause), kind: "unknown" }
 }
 
+/** SDK 1.0.31 uses a plain Error for this refusal, before creating a run. */
+export function cursorBusyRefusal(cause: unknown, agentId: string): AgentBusyError | undefined {
+  return cause instanceof Error && cause.message === `Agent ${agentId} already has active run`
+    ? new AgentBusyError(cause.message)
+    : undefined
+}
