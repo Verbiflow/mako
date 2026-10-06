@@ -9,7 +9,7 @@ type ExclusiveSession = Awaited<ReturnType<NonNullable<ProviderLiveDriver["start
  * while foreground/children might still be running. */
 export function withNativeExclusion(driver: ProviderLiveDriver): ProviderLiveDriver {
   const startExclusive = driver.startExclusive
-  const steer = driver.steer
+  const steering = driver.steering
   const compaction = driver.compaction
   if (driver.nativeExclusion.kind !== "atomic" || !startExclusive) return driver
   const sessions = new Map<string, Promise<ExclusiveSession>>()
@@ -74,8 +74,10 @@ export function withNativeExclusion(driver: ProviderLiveDriver): ProviderLiveDri
     permission: (id, ...args) => held(id, () => driver.permission(id, ...args)),
     setMode: (id, ...args) => held(id, () => driver.setMode(id, ...args)),
     cancel: id => held(id, () => driver.cancel(id)),
-    steer: steer && ((id, ...args) => held(id, () => steer.call(driver, id, ...args))),
-    compaction: compaction?.kind === "supported"
+    steering: steering.kind === "supported"
+      ? { ...steering, steer: (id, input) => held(id, () => steering.steer(id, input)) }
+      : steering,
+    compaction: compaction.kind === "supported"
       ? { kind: "supported", start: (id, actionId) => held(id, () => compaction.start(id, actionId)) }
       : compaction,
   }

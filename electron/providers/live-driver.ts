@@ -19,7 +19,6 @@ import type { ProviderCapability } from "./registry.js"
 import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
-import { UNAVAILABLE_RECOVERY, type RecoveryCapabilities } from "../contracts/recovery.js"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
 
@@ -29,14 +28,9 @@ import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapabili
  */
 export type ProviderCompaction =
   | { kind: "supported"; start(id: string, actionId: string): Promise<void> }
+  /** The harness compacts on its own as the context fills, and Mako cannot start it. */
+  | { kind: "automatic"; reason: string }
   | { kind: "unavailable"; reason: string }
-
-export function recoveryCapabilities(driver: ProviderLiveDriver | undefined): RecoveryCapabilities {
-  const compaction = driver?.compaction
-  return compaction?.kind === "supported"
-    ? { compaction: { kind: "supported" } }
-    : compaction ? { compaction } : UNAVAILABLE_RECOVERY
-}
 
 /** How long a closing provider has to end its own work before it is terminated. */
 export const SHUTDOWN_GRACE_MS = 5_000
@@ -73,6 +67,89 @@ export type TurnRecovery =
   | { kind: "manual"; reason: string }
 
 /**
+ * A capability the driver doesn't have, with the reason the window shows:
+ * `unavailable` when the harness has no such thing, `not-built` when it has
+ * one Mako doesn't drive yet, which is a gap to close.
+ */
+export type DriverAbsent =
+  | { kind: "unavailable"; reason: string }
+  | { kind: "not-built"; reason: string }
+
+/**
+ * Reopening a native session in a new process. Mako closes an idle
+ * conversation's process exactly when its session can be reopened, so this
+ * also decides residency.
+ * - `via`: how the harness reopens it.
+ * - `wake`: what the next message does once Mako has closed the process.
+ * - `checkpoint`: a digest of the session's source that moves when the
+ *   session does; undefined when there is no source.
+ * - `inspect`: native identity, source and ownership facts; shared policy
+ *   decides eligibility.
+ * - `locate`: where the harness keeps the session named by
+ *   `binding.nativeId`, for a binding whose source was never reported, as
+ *   when the process ended inside its first turn. `cwd` is the folder the
+ *   session ran in and `env` the environment of its account; undefined when
+ *   no record exists yet.
+ */
+export type NativeResume =
+  | {
+      kind: "native"
+      via: string
+      wake: string
+      checkpoint(path: string): Promise<string | undefined>
+      inspect(binding: ProviderBinding): Promise<NativeResumeEvidence>
+      locate?(binding: ProviderBinding, cwd: string, env: NodeJS.ProcessEnv): Promise<string | undefined>
+    }
+  | DriverAbsent
+
+/**
+ * Forking a conversation at an answer. `native`: the harness forks its own
+ * session, at a completed run or at a checkpoint inside one. `import`: it
+ * can't, so Mako writes the conversation up to the fork point into a new
+ * native session and resumes it, which needs native resume and a session
+ * emitter.
+ */
+export type NativeFork =
+  | { kind: "native"; point: "run" | "checkpoint"; via: string }
+  | { kind: "import"; via: string }
+  | DriverAbsent
+
+/** Adding a message to the running turn. `lands` says what the harness does with it. */
+export type SteerCapability =
+  | { kind: "supported"; lands: LiveSteering; via: string; steer(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult> }
+  | DriverAbsent
+
+/**
+ * How the agent asks the user a question. `request`: a blocking native
+ * request carrying the questions, answered through `permission`.
+ * `session`: a nonblocking session question; ordinary user input retires
+ * its form, exact answers preserve other questions, and native history
+ * supplies the same retirement evidence after external continuation.
+ * `history` is read-only catch-up that rejects unavailable or incomplete
+ * evidence and never returns partial history.
+ */
+export type QuestionCapability =
+  | { kind: "request"; via: string }
+  | {
+      kind: "session"
+      via: string
+      encodeAnswer(question: import("../contracts/live-questions.js").NativeQuestion, answers: Record<string, string[]>): string
+      history?(binding: ProviderBinding): Promise<import("../contracts/live-questions.js").NativeQuestionHistory>
+    }
+  | DriverAbsent
+
+/** Subagents the harness starts, observed with their progress and results. */
+export type NativeAgentsCapability = { kind: "observed"; via: string } | DriverAbsent
+
+/** What fills the running session's context, by category. */
+export type ContextBreakdownCapability =
+  | { kind: "itemized"; via: string; read(id: string): Promise<import("../contracts/providers-acp.js").ContextBreakdown> }
+  | DriverAbsent
+
+/** Changing the running session's mode. `single`: the harness runs one mode, and why. */
+export type ModeSwitching = { kind: "native"; via: string } | { kind: "single"; reason: string }
+
+/**
  * A running agent's grant to Mako's own MCP servers, both opened with
  * `token`: `mako-computer` for browser and computer use and, when the host
  * serves it, `mako` for the Thread's worktree, app and recipe; plus the
@@ -102,6 +179,8 @@ export interface ProviderStartOptions extends LiveStartOptions {
   observedApprovals?: import("../contracts/approval-response.js").NativeApprovalIdentity[]
   /** Prior child identities for this exact resumed binding; states require fresh evidence. */
   observedAgents?: NativeAgentObservation[]
+  /** The harness's last session totals for this exact resumed binding, which its process may restore. */
+  observedUsage?: import("../contracts/providers-acp.js").NativeTotals
   emit?: (event: LiveDriverEvent) => void
   mcpSnapshot?: () => Promise<McpRegistrySnapshot>
   fork?: { nativeId: string; runId: string }
@@ -143,36 +222,29 @@ export interface ProviderLiveDriver extends ProviderCapability {
   /** Native record identity within a physical file, for DB/SDK locators.
    * Undefined rejects an invalid locator; ordinary transcript files omit it. */
   nativeSource?(path: string, nativeId: string | undefined): { path: string; record: string } | undefined
-  /** Nonblocking session questions. Ordinary user input retires their Mako forms;
-   * exact answers preserve other questions. Native history supplies the same
-   * retirement evidence after external continuation. Blocking approvals stay separate. */
-  sessionQuestions?: {
-    encodeAnswer(question: import("../contracts/live-questions.js").NativeQuestion, answers: Record<string, string[]>): string
-    /** Read-only native catch-up. Reject unavailable/incomplete evidence; never return partial history. */
-    history?(binding: ProviderBinding): Promise<import("../contracts/live-questions.js").NativeQuestionHistory>
-  }
   approvalEvidence: ApprovalEvidenceCapability
   planning: PlanningCapability
   /** Hash the exact provider encoding before sending, without retaining answer text. */
   approvalAnswerDigest?(request: import("../shared.js").LivePermissionRequest, response: LivePermissionResponse): string | undefined
-  observesNativeAgents?: true
-  steer?(id: string, input: ProviderSteerInput): Promise<ProviderSteerResult>
-  /** Required with `steer`; says what the provider does with the message. */
-  steering?: LiveSteering
+  /*
+   * Each capability below is declared once, here: its implemented variant
+   * carries what implements it, and an absent one says why. The catalog the
+   * window and the audit read is projected from these fields alone.
+   */
+  resume: NativeResume
+  fork: NativeFork
+  steering: SteerCapability
+  questions: QuestionCapability
+  nativeAgents: NativeAgentsCapability
+  contextBreakdown: ContextBreakdownCapability
+  compaction: ProviderCompaction
+  modeSwitching: ModeSwitching
   /** The modes a fresh session will offer, declared without starting one. */
   modes?: readonly LiveSessionMode[]
   /** The mode a fresh session runs under when nothing was chosen — the level the chip reports before launch. */
   defaultMode?: string
-  compaction?: ProviderCompaction
-  /** What fills the running session's context, by category, from a harness that itemizes it. */
-  contextBreakdown?(id: string): Promise<import("../contracts/providers-acp.js").ContextBreakdown>
   backgroundStop: BackgroundStop
   turnRecovery: TurnRecovery
-  forkPoint?: "run" | "checkpoint"
-  canResume: boolean
-  checkpoint?(path: string): Promise<string | undefined>
-  /** Required when resumable. Native identity, source and ownership facts; shared policy decides eligibility. */
-  inspectNativeSession?(binding: ProviderBinding): Promise<NativeResumeEvidence>
   available(appPath: string): boolean
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
   /**
@@ -226,13 +298,20 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   NativePromptIdentityCapabilitySchema.parse(driver.nativePromptIdentity)
   if ((driver.nativeExclusion.kind === "atomic") !== Boolean(driver.startExclusive))
     throw new Error(`${driver.provider}: native atomic exclusion requires an exclusive start implementation, declared together`)
-  if (driver.canResume && (!driver.checkpoint || !driver.inspectNativeSession))
-    throw new Error(`${driver.provider}: native recovery requires explicit checkpoint and session evidence`)
   ApprovalEvidenceCapabilitySchema.parse(driver.approvalEvidence)
-  if (driver.approvalEvidence.kind === "no-interactive-requests" && driver.modes?.some(mode => mode.access === "ask" || mode.access === "edits"))
+  const interactive = driver.approvalEvidence.kind !== "no-interactive-requests"
+  if (!interactive && driver.modes?.some(mode => mode.access === "ask" || mode.access === "edits"))
     throw new Error(`${driver.provider}: an asking mode requires native interactive requests`)
-  if (Boolean(driver.steer) !== Boolean(driver.steering))
-    throw new Error(`${driver.provider}: steer and steering are declared together or not at all`)
+  if (driver.questions.kind === "request" && !interactive)
+    throw new Error(`${driver.provider}: questions asked through a native request need interactive requests`)
+  const resumes = driver.resume.kind === "native"
+  if (driver.fork.kind === "import" && !resumes)
+    throw new Error(`${driver.provider}: a fork Mako imports continues as a resumed session, which needs native resume`)
+  const modeCount = driver.modes?.length ?? 0
+  if ((driver.modeSwitching.kind === "native") !== modeCount > 1)
+    throw new Error(`${driver.provider}: mode switching is ${driver.modeSwitching.kind} with ${modeCount} mode${modeCount === 1 ? "" : "s"} declared`)
+  for (const [name, text] of declaredTexts(driver))
+    if (!text.trim()) throw new Error(`${driver.provider}: explain its ${name} declaration`)
   for (const mode of driver.modes ?? [])
     if (mode.access && mode.enforcement !== "provider" && mode.enforcement !== "launch")
       throw new Error(`${driver.provider}: mode ${mode.id} names a tier with no enforcer`)
@@ -253,12 +332,25 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
     throw new Error(`${driver.provider}: declare how Stop ends its background work, or the evidence that none outlives its turn`)
   const recovery = driver.turnRecovery
   if (recovery?.kind === "continues") {
-    if (!driver.canResume)
-      throw new Error(`${driver.provider}: a turn is continued on its native session, which needs canResume`)
+    if (!resumes)
+      throw new Error(`${driver.provider}: a turn is continued on its native session, which needs native resume`)
     if (!recovery.accepted.trim() || !recovery.exit.trim() || !recovery.tests.length)
       throw new Error(`${driver.provider}: declare when a prompt is accepted, how a process death is reported, and the tests that prove both`)
   } else if (!recovery?.reason.trim())
     throw new Error(`${driver.provider}: declare how a turn survives its process dying, or why it cannot`)
+}
+
+/** The words each capability declaration carries, so none is left empty. */
+function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
+  const text = (value: { kind: string; via?: string; reason?: string }) => value.via ?? value.reason ?? ""
+  const { resume, fork, steering, questions, nativeAgents, contextBreakdown, compaction, modeSwitching } = driver
+  const texts: [string, string][] = [
+    ["resume", text(resume)], ["fork", text(fork)], ["steering", text(steering)], ["questions", text(questions)],
+    ["subagents", text(nativeAgents)], ["context breakdown", text(contextBreakdown)],
+    ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["mode switching", text(modeSwitching)],
+  ]
+  if (resume.kind === "native") texts.push(["idle wake", resume.wake])
+  return texts
 }
 
 /** Call immediately before answering a native request, after any adapter awaits. */

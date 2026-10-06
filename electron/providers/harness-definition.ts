@@ -7,6 +7,7 @@ import type { ProviderConnectionCapability } from "./connection-capability.js"
 import type { ProviderDecoderSource } from "./decoder-source.js"
 import type { ProviderHost } from "./host.js"
 import { validateLiveDriver, type ProviderLiveDriver } from "./live-driver.js"
+import { liveCapabilities, type LiveCapabilities } from "./live-capabilities.js"
 import type { ProviderMcpSource } from "./mcp-source.js"
 import type { NativeRunner } from "./native-runner.js"
 import type { ProviderProcessProbe } from "./process-probe.js"
@@ -54,7 +55,7 @@ export interface HarnessDefinition {
   toolEditing: ProviderAuthoringCapability | Absent
   skillEditing: ProviderEditingCapability | Absent
   mcpEditing: ProviderEditingCapability | Absent
-  /** Starts, streams, steers, answers and stops turns. */
+  /** Starts, streams, steers, answers and stops turns, and declares where it stands on each live capability. */
   live: ProviderLiveDriver
   /**
    * Turns the harness's native messages into Mako's decoded events, outside
@@ -84,12 +85,13 @@ export interface HarnessDefinition {
 
 export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation" | "diagnostics">
 
-/** What an installed harness said it has no capability for. */
+/** What an installed harness said it has no capability for, and where it stands on each live one. */
 export interface HarnessRecord {
   provider: string
   presentation: HarnessPresentation
   diagnostics: HarnessDiagnostics
   absent: Partial<Record<HarnessFamily, Absent>>
+  capabilities: LiveCapabilities
 }
 
 export function isAbsent<T extends ProviderCapability>(value: T | Absent): value is Absent {
@@ -115,6 +117,8 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   }
   // Native recovery preconditions must fail before installing any contribution.
   validateLiveDriver(harness.live)
+  if (harness.live.fork.kind === "import" && isAbsent(harness.sessionEmitter))
+    throw new Error(`${provider} forks by importing the conversation into a new session, which needs its session emitter`)
   if (!isAbsent(harness.nativeRunner) && !harness.nativeRunner.transport?.trim())
     throw new Error(`${provider} must declare its headless transport`)
   if (!isAbsent(harness.nativeRunner)) {
@@ -156,5 +160,5 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   install(host.updateSources, "updates", harness.updates)
   install(host.usageHistories, "usageHistory", harness.usageHistory)
   install(host.artifactPreviews, "artifactPreview", harness.artifactPreview)
-  host.harnesses.register({ provider: harness.provider, presentation, diagnostics, absent })
+  host.harnesses.register({ provider: harness.provider, presentation, diagnostics, absent, capabilities: liveCapabilities(harness.live) })
 }

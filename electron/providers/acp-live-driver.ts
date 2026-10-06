@@ -12,8 +12,8 @@ export const ACP_NATIVE_IDENTITY = {
 export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
   if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
     throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)
-  if (source.canResume && !source.locateSession)
-    throw new Error(`${source.provider}: a resumable ACP source must locate its sessions, or a new session's dropped first turn cannot be continued`)
+  const resume = source.resume
+  const modes = acpSessionModes(source.access, source.nativeModes ? { availableModes: [...source.nativeModes] } : null)
   return {
     provider: source.provider,
     launchEnvironment: { kind: "prepared", via: "Shared ACP launch applies the admitted account environment before native process creation." },
@@ -24,9 +24,14 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
     planning: source.planning,
     backgroundStop: source.backgroundStop,
     approvalAnswerDigest: source.approvalAnswerDigest,
-    observesNativeAgents: source.observeAgents ? true : undefined,
-    canResume: source.canResume,
-    turnRecovery: source.canResume
+    nativeAgents: source.agents.kind === "observed" ? { kind: "observed", via: source.agents.via } : source.agents,
+    questions: source.questions,
+    fork: source.fork,
+    contextBreakdown: { kind: "unavailable", reason: "ACP's `usage_update` carries the context used and its size, nothing itemized." },
+    resume: resume.kind === "native"
+      ? { ...resume, locate: async (binding, cwd, env) => binding.nativeId ? resume.locate({ nativeId: binding.nativeId, cwd, env }) : undefined }
+      : resume,
+    turnRecovery: resume.kind === "native"
       ? {
           kind: "continues",
           accepted: "The agent's first output of the turn, or the session/prompt response when nothing streams first.",
@@ -34,24 +39,26 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
           tests: ["scripts/test-acp-provider-turn.mjs", "scripts/test-turn-recovery-live.mjs"],
         }
       : { kind: "manual", reason: `${source.provider} cannot reopen its sessions, so a turn its process dropped is left to the user.` },
-    compaction: source.compaction?.kind === "supported"
+    compaction: source.compaction.kind === "supported"
       ? { kind: "supported", start: async (id, actionId) => (await import("../acp.js")).liveCompact(id, actionId) }
       : source.compaction,
-    checkpoint: source.checkpoint,
-    inspectNativeSession: source.inspectNativeSession,
     nativeSource: source.nativeSource,
     available: (appPath) => source.available(appPath),
     start: async (cwd, options) =>
       (await import("../acp.js")).liveStart(source.provider, cwd, options),
     prompt: async (...args) => (await import("../acp.js")).livePrompt(...args),
-    steer: source.steering
-      ? async (...args) => (await import("../acp.js")).liveSteer(...args)
-      : undefined,
-    steering: source.steering === "interrupting-prompt" ? "interrupt" : source.steering ? "step" : undefined,
-    modes: acpSessionModes(
-      source.access,
-      source.nativeModes ? { availableModes: [...source.nativeModes] } : null
-    ),
+    steering: source.steering.kind === "supported"
+      ? {
+          kind: "supported",
+          lands: source.steering.wire === "interrupting-prompt" ? "interrupt" : "step",
+          via: source.steering.via,
+          steer: async (...args) => (await import("../acp.js")).liveSteer(...args),
+        }
+      : source.steering,
+    modes,
+    modeSwitching: modes.length > 1
+      ? { kind: "native", via: "ACP `session/set_mode`." }
+      : { kind: "single", reason: "The agent advertises one session mode." },
     defaultMode: acpDefaultMode(source.access),
     permission: async (id, requestId, response, dispatch) => {
       const { acpRespondPermission } = await import("../acp.js")

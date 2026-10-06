@@ -166,7 +166,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     if (confirmation?.kind === "differs") throw await admission.mismatch(confirmation.principal, confirmation.expected)
     return owner
   }
-  const steer = driver.steer
+  const steering = driver.steering
   const compaction = driver.compaction
   return {
     ...driver, start, close,
@@ -176,8 +176,10 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
       preparePrompt(dispatch, () => current(id, owner))
       return driver.prompt(id, ...args)
     },
-    steer: steer && (async (id, ...args) => { const owner = await ready(id); current(id, owner); return steer.call(driver, id, ...args) }),
-    compaction: compaction?.kind === "supported"
+    steering: steering.kind === "supported"
+      ? { ...steering, steer: async (id, input) => { const owner = await ready(id); current(id, owner); return steering.steer(id, input) } }
+      : steering,
+    compaction: compaction.kind === "supported"
       ? { kind: "supported", start: async (id, actionId) => { const owner = await ready(id); current(id, owner); return compaction.start(id, actionId) } }
       : compaction,
     // Approvals and Stop concern already admitted work and remain available

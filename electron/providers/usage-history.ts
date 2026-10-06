@@ -7,6 +7,6 @@ import type { ProviderCapability } from "./registry.js"
  * what Mako measured while running it.
  */
 export interface ProviderUsageHistory extends ProviderCapability {
-  /** Records the last `DAYS` of calls; `truncated` when a bound left some unread. */
-  scan(scan: UsageScan): Promise<{ truncated: boolean }>
+  /** Records its calls since `scan.since`, through `scan.jsonl` or `scan.store` so a summary reads only what changed. */
+  scan(scan: UsageScan): Promise<void>
 }

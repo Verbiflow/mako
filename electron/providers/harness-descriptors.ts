@@ -1,6 +1,5 @@
 import type { HarnessDescriptor } from "../contracts/providers-acp.js"
 import type { ProviderHost } from "./host.js"
-import { recoveryCapabilities } from "./live-driver.js"
 
 /** The name Mako shows for a harness: its profile's label. */
 export function harnessLabel(host: ProviderHost, provider: string): string {
@@ -15,24 +14,23 @@ export interface HarnessAvailability {
   resumable: ReadonlySet<string>
 }
 
-/** What the renderer is told about each installed harness, in Mako's order. */
+/**
+ * What the renderer is told about each installed harness, in Mako's order.
+ * Capabilities are the harness's declarations whether or not it runs here;
+ * `live` says whether it does.
+ */
 export function describeHarnesses(host: ProviderHost, here: HarnessAvailability): HarnessDescriptor[] {
-  return host.harnesses.list().map(({ provider, presentation }) => {
-    const candidate = host.liveDrivers.get(provider)
-    const driver = candidate && here.live(provider) ? candidate : undefined
+  return host.harnesses.list().map(({ provider, presentation, capabilities }) => {
+    const driver = host.liveDrivers.get(provider)
     const descriptor: HarnessDescriptor = {
       provider,
       displayName: harnessLabel(host, provider),
       presentation,
       defaults: host.profiles.get(provider)?.defaults,
       resumable: here.resumable.has(provider),
-      live: driver !== undefined,
-      canResume: driver?.canResume ?? false,
-      observesNativeAgents: driver?.observesNativeAgents === true,
-      canSteer: Boolean(driver?.steer),
-      recovery: recoveryCapabilities(driver),
+      live: driver !== undefined && here.live(provider),
+      capabilities,
     }
-    if (driver?.steering) descriptor.steering = driver.steering
     if (driver?.modes?.length) descriptor.modes = [...driver.modes]
     if (driver?.defaultMode) descriptor.defaultMode = driver.defaultMode
     return descriptor

@@ -1,8 +1,9 @@
+import type { z } from "zod"
 import type { McpServer, ClientCapabilities, SessionNotification, SessionUpdate, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
-import type { ProviderLiveDriver } from "./live-driver.js"
+import type { DriverAbsent, NativeResume, ProviderLiveDriver } from "./live-driver.js"
 import type { RequestPermissionRequest, NewSessionRequest } from "@agentclientprotocol/sdk"
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "../acp-access.js"
@@ -63,18 +64,59 @@ export interface AcpApprovalObserver {
 }
 
 /** Provider-owned process launch and environment for an interactive ACP agent. */
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "checkpoint" | "inspectNativeSession" | "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity"> {
+/**
+ * Reopening an ACP session in a new agent process, with `session/load`.
+ * `locate` finds the session's source from its id alone once the agent has
+ * written it. A session is resumed only from a located source, and the
+ * thread catalog finds one only after it has indexed the file, so without
+ * it a process that dies in a new session's first turn could not be
+ * continued.
+ */
+export type AcpResume =
+  | (Omit<Extract<NativeResume, { kind: "native" }>, "locate"> & {
+      locate(input: { nativeId: string; cwd: string; env: NodeJS.ProcessEnv }): string | undefined
+    })
+  | DriverAbsent
+
+/**
+ * How a second `session/prompt` during a running turn behaves, verified
+ * against the real agent. `concurrent-prompt` folds it into the running
+ * turn; `interrupting-prompt` cancels the current step and continues with
+ * the message. `extension` names the agent's own request, sent
+ * `{ sessionId, text }`, that joins the running turn at its next step;
+ * `taken` parses only the reply that says it took the message. An agent
+ * that queues it behind the turn declares it unavailable.
+ */
+export type AcpSteering =
+  | { kind: "supported"; via: string; wire: "concurrent-prompt" | "interrupting-prompt" | { extension: string; taken: z.ZodType } }
+  | DriverAbsent
+
+/** Subagents, observed by the provider's own child evidence; shared ACP owns only binding lifetime and delivery. */
+export type AcpAgents =
+  | {
+      kind: "observed"
+      via: string
+      observe(input: {
+        nativeId: string
+        observedAgents?: readonly NativeAgentObservation[]
+        cwd: string
+        env: NodeJS.ProcessEnv
+        publish(agent: NativeAgentObservation): void
+      }): Promise<AcpAgentObserver> | AcpAgentObserver
+    }
+  | DriverAbsent
+
+export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "fork" | "questions"> {
   /** Native tool identity supplied by provider extensions to ACP metadata. */
   toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
-  /** Provider-owned native child evidence; shared ACP owns only binding lifetime and delivery. */
-  observeAgents?(input: {
-    nativeId: string
-    observedAgents?: readonly NativeAgentObservation[]
-    cwd: string
-    env: NodeJS.ProcessEnv
-    publish(agent: NativeAgentObservation): void
-  }): Promise<AcpAgentObserver> | AcpAgentObserver
-  compaction?: import("../acp-compaction.js").AcpCompactionSpec
+  agents: AcpAgents
+  compaction: import("../acp-compaction.js").AcpCompactionSpec
+  /**
+   * Prompt content the agent reads though its `initialize` does not
+   * advertise it, each with the run that showed it. Sent inline, not as a
+   * file link the model would have to open.
+   */
+  readsUnadvertised?: { image?: { verified: string } }
   /** Provider evidence of background commands, and how Stop ends them. Required when Stop ends background work. */
   observeBackground?(): AcpBackgroundObserver
   /**
@@ -90,12 +132,8 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
    * payloads. `undefined` for a method the provider does not own.
    */
   decodeNotification?(method: string, params: JsonObject): AcpNotificationDecoding | undefined
-  /**
-   * What a `usage_update`'s `_meta` adds to ACP's own used, size and cost,
-   * such as the call's tokens by kind. `null` for a reading that is not the
-   * main agent's, which the meter leaves out. Pure.
-   */
-  usageUpdate?(meta: JsonObject | undefined): UsageObservation[] | null
+  /** Whose reading a `usage_update` is, and what its `_meta` adds to ACP's own used, size and cost. Pure. */
+  usageUpdate?(meta: JsonObject | undefined): AcpUsageReading
   /**
    * How the agent reports its MCP servers starting, opened once per session:
    * which servers it will start, and which did not, as setup notices.
@@ -114,22 +152,8 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
   /** A permission request's title when the agent leaves the tool call's title out. */
   permissionTitle?(request: RequestPermissionRequest): string | undefined
   clientCapabilities?: Pick<ClientCapabilities, "_meta">
-  canResume: boolean
-  /**
-   * The native session's source, found from its id alone once the agent has
-   * written it. A session is resumed only from a located source, and the
-   * thread catalog finds one only after it has indexed the file, so without
-   * this a process that dies in a new session's first turn could not be
-   * continued. Required when `canResume`.
-   */
-  locateSession?(input: { nativeId: string; cwd: string; env: NodeJS.ProcessEnv }): string | undefined
-  /**
-   * How a second `session/prompt` during a running turn behaves, verified
-   * against the real agent. `concurrent-prompt` folds it into the running
-   * turn; `interrupting-prompt` cancels the current step and continues with
-   * the message. An agent that queues it behind the turn declares nothing.
-   */
-  steering?: "concurrent-prompt" | "interrupting-prompt"
+  resume: AcpResume
+  steering: AcpSteering
   access?: AcpAccessPolicy
   /**
    * The session modes the installed agent advertises, recorded from a real
@@ -168,6 +192,17 @@ export interface AcpBackgroundObserver {
   /** End all of the session's background work, as Stop does on every harness. */
   stop(control: AcpBackgroundControl): Promise<void>
 }
+
+/**
+ * Whose reading a `usage_update` is. The main agent's moves the context
+ * meter and adds its spend; a subagent's own call adds its spend to the
+ * conversation's and leaves the main context alone; a repeat of a reading
+ * already counted adds nothing.
+ */
+export type AcpUsageReading =
+  | { of: "agent"; observations: UsageObservation[] }
+  | { of: "subagent"; observations: UsageObservation[] }
+  | { of: "repeat" }
 
 export interface AcpNotificationDecoding {
   /** The session the notification names; notices for another session are not applied. */
@@ -218,9 +253,11 @@ export interface AcpAnswer {
 
 /** A request put to the user: what the desk shows, and for a vendor request, what each choice sends. */
 export interface AcpAsk {
-  request: Pick<LivePermissionRequest, "title" | "kind" | "options" | "implementsPlan">
+  request: Pick<LivePermissionRequest, "title" | "kind" | "options" | "implementsPlan" | "questions">
   /** Absent for ACP's own permission request, whose answer is the chosen option. */
   answers?: AcpAnswer[]
+  /** For a request that asks `questions`: what the agent is sent for the user's answers, by question ID. */
+  answered?(answers: Record<string, string[]>): JsonObject
   /** Sent when the request ends with no choice, as when the session stops. */
   dismissed?: JsonObject
 }

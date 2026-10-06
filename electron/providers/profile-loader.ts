@@ -17,7 +17,6 @@ export interface ProviderProfileLoader extends ProviderCapability {
   /** Mako's model choices for this harness until the person makes their own. */
   defaults: HarnessDefaults
   transport: HarnessProfile["transport"]
-  capabilities: string[]
   nativeModelIds?: true
   cacheKey(env: NodeJS.ProcessEnv): string
   load(env: NodeJS.ProcessEnv, cwd?: string, context?: ProfileLoadContext): Promise<HarnessProfile>
@@ -34,7 +33,6 @@ export function availableProviderProfile(
     available: true,
     transport: loader.transport,
     models: catalog.models,
-    capabilities: loader.capabilities,
   }
   const settings = workDefault(loader.defaults, catalog.models) ?? catalog.settings
   if (settings) profile.settings = settings
@@ -67,7 +65,6 @@ export function unavailableProviderProfile(
     available: false,
     transport: loader.transport,
     models: [],
-    capabilities: loader.capabilities,
     error,
   }
 }
@@ -83,7 +80,6 @@ export function pendingProviderProfile(
     pending: true,
     transport: loader.transport,
     models: [],
-    capabilities: loader.capabilities,
   }
 }
 
@@ -97,7 +93,6 @@ export function unknownProviderProfile(
     available: false,
     transport: "remote",
     models: [],
-    capabilities: [],
     error,
   }
 }
