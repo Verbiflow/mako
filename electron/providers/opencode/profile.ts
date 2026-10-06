@@ -19,19 +19,6 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
   label: "OpenCode",
   defaults: { work: [] },
   transport: "sdk",
-  capabilities: [
-    "start",
-    "resume",
-    "fork",
-    "stream",
-    "interrupt",
-    "permissions",
-    "images",
-    "commands",
-    "mcp",
-    "models",
-    "agents",
-  ],
   cacheKey: (env) => {
     const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_CONFIG_HOME, env.OPENCODE_CONFIG_DIR,
       env.OPENCODE_CONFIG, env.OPENCODE_CONFIG_CONTENT, env.OPENCODE_BIN_PATH, env.OPENCODE2_BIN_PATH])

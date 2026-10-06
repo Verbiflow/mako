@@ -7,7 +7,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { resolveExecutable } from "../../executable.js"
 import { isOpenCodeV2 } from "./version.js"
-import { readOpenCodeRecord } from "./resume.js"
+import { openCodeStoreHoldsSession, readOpenCodeRecord } from "./resume.js"
 
 export interface OpenCodeInstallation {
   command: string
@@ -54,27 +54,36 @@ export async function resolveOpenCodeInstallation(
   throw new Error("No verified OpenCode v2 executable is available. Install OpenCode v2 or configure OPENCODE_BIN_PATH.")
 }
 
-/** The one native store path that holds this session; anything else is refused. */
+/**
+ * The one configured store path that holds this session's row. A session
+ * with inputs still waiting is found too: where it lives is not whether it
+ * can be loaded.
+ */
+export async function locateOpenCodeSession(sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const paths = openCodeDatabasePaths(env).flatMap(database => [
+    `${database}#${encodeURIComponent(sessionId)}`,
+    `${database}#v2:${encodeURIComponent(sessionId)}`,
+  ])
+  const holds = await Promise.all(paths.map(path => openCodeStoreHoldsSession(path, sessionId)))
+  const matches = paths.filter((_, index) => holds[index])
+  if (matches.length > 1)
+    throw new Error("More than one OpenCode native store matches this session. Its exact source is required.")
+  if (!matches.length) throw new Error("The OpenCode native session could not be resolved in the configured stores.")
+  return matches[0]!
+}
+
+/** The session's store path, once its record can be loaded; anything else is refused. */
 export async function verifyOpenCodeSession(
   sessionId: string,
   nativePath?: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string> {
-  const databases = openCodeDatabasePaths(env)
-  if (nativePath && !databases.some(database => nativePath.startsWith(`${database}#`)))
+  if (nativePath && !openCodeDatabasePaths(env).some(database => nativePath.startsWith(`${database}#`)))
     throw new Error("The saved OpenCode session belongs to a different native store configuration.")
-  const paths = nativePath ? [nativePath] : databases.flatMap(database => [
-    `${database}#${encodeURIComponent(sessionId)}`,
-    `${database}#v2:${encodeURIComponent(sessionId)}`,
-  ])
-  const records = await Promise.all(paths.map(path => readOpenCodeRecord({
+  const path = nativePath ?? await locateOpenCodeSession(sessionId, env)
+  const record = await readOpenCodeRecord({
     id: "runtime-resolution", provider: "opencode", nativeId: sessionId, path, coveredBlocks: 0, includesBase: false,
-  })))
-  if (nativePath && records[0]?.kind === "unavailable") throw new Error(records[0].reason)
-  const matches = paths.filter((_, index) => records[index]?.kind === "available")
-  if (matches.length !== 1)
-    throw new Error(matches.length > 1
-      ? "More than one OpenCode native store matches this session. Its exact source is required."
-      : "The OpenCode native session could not be resolved in the configured stores.")
-  return matches[0]!
+  })
+  if (record.kind === "unavailable") throw new Error(record.reason)
+  return path
 }

@@ -9,11 +9,10 @@ export const openCodeMcpSource: ProviderMcpSource = {
   command: () => openCodeExecutable(),
   userFiles: () => [
     join(homedir(), ".config", "opencode", "opencode.json"),
-    join(homedir(), ".opencode", "config.json"),
   ],
   workspaceFiles: (cwd) => [
     join(cwd, "opencode.json"),
-    join(cwd, ".opencode", "config.json"),
+    join(cwd, ".opencode", "opencode.json"),
   ],
   readsCli: false,
   write: { kind: "none" },

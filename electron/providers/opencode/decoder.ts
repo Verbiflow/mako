@@ -199,7 +199,8 @@ export class OpenCodeDecoder {
     if (!("sessionID" in event.data) || event.data.sessionID !== this.root) return []
     switch (event.type) {
       case "session.usage.updated":
-        return this.usage({ kind: "total", tokens: openCodeTokens(event.data.tokens) }, { kind: "cost", amount: event.data.cost, currency: "USD" })
+        // The session's total across every OpenCode process; each step's own spend is counted when it ends.
+        return []
       case "session.agent.selected":
         return [{ kind: "state", patch: { currentMode: openCodeModeForAgent(event.data.agent, this.view.launchAccess) } }]
       case "session.model.selected":
@@ -222,8 +223,13 @@ export class OpenCodeDecoder {
 
   private contentOf(event: OpenCodeEvent): Decoded<OpenCodeEffect>[] {
     const decoded: Decoded<OpenCodeEffect>[] = []
-    if (event.type === "session.step.ended" && event.data.sessionID === this.root)
-      decoded.push(...this.usage({ kind: "call", tokens: openCodeTokens(event.data.tokens) }))
+    if (event.type === "session.step.ended") {
+      const tokens = openCodeTokens(event.data.tokens)
+      const observations: UsageObservation[] = [{ kind: "spent", tokens }]
+      if (event.data.cost > 0) observations.push({ kind: "costSpent", amount: event.data.cost, currency: "USD" })
+      if (event.data.sessionID === this.root) observations.push({ kind: "call", tokens })
+      decoded.push(...this.usage(...observations))
+    }
     // The observer reads the call's name: a start opens it and a result closes it.
     const ends = event.type === "session.tool.success" || event.type === "session.tool.failed"
     const ending = ends ? this.agentCall(event) : undefined

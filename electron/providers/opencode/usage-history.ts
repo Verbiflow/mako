@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs"
 import type { DatabaseSync } from "node:sqlite"
 import { join } from "node:path"
 import { z } from "zod"
@@ -6,8 +7,6 @@ import type { UsageTokenCounts } from "../../usage-pricing.js"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { parseObject, tokenTotal, tokenValue, yieldToMain, type UsageEvent, type UsageScan } from "../../usage-scan.js"
 import type { ProviderUsageHistory } from "../usage-history.js"
-
-const MAX_OPENCODE_ROWS = 100_000
 
 const OpenCodeRowSchema = z.object({
   id: z.string(),
@@ -27,48 +26,63 @@ export const openCodeUsageHistory: ProviderUsageHistory = {
   scan,
 }
 
-async function scan(scan: UsageScan): Promise<{ truncated: boolean }> {
+/** A message's last change in epoch ms; OpenCode has stored both seconds and milliseconds. */
+const CHANGED_MS = (alias: string, updated: string) =>
+  `(CASE WHEN coalesce(${updated}, ${alias}.time_created) < 10000000000 THEN coalesce(${updated}, ${alias}.time_created) * 1000 ELSE coalesce(${updated}, ${alias}.time_created) END)`
+
+/**
+ * Each database is read from the last change the previous read saw. A
+ * message still streaming changes again and is read again; its key keeps
+ * the larger counts.
+ */
+async function scan(scan: UsageScan): Promise<void> {
   const root = join(scan.homeRoot, ".local", "share", "opencode")
-  let truncated = false
   for (const name of ["opencode-next.db", "opencode.db"]) {
-    let db: DatabaseSync | undefined
-    try {
-      db = openNativeStore(join(root, name))
-      db.exec("PRAGMA query_only = ON")
-      const rows = selectOpenCodeRows(db, name)
-      if (rows.length >= MAX_OPENCODE_ROWS) truncated = true
-      for (const row of rows) {
-        const event = parseOpenCodeEvent(scan.source, row)
-        if (!event) continue
-        scan.session(event.session)
-        scan.record(event)
+    const path = join(root, name)
+    if (!existsSync(path)) continue
+    await scan.store(path, async (cursor) => {
+      const db = openNativeStore(path)
+      try {
+        db.exec("PRAGMA query_only = ON")
+        const from = Math.max(cursor ?? 0, scan.since)
+        let latest = cursor
+        for (const row of selectOpenCodeRows(db, name, from)) {
+          const changed = openCodeMillis(row.time_updated ?? row.time_created)
+          if (latest === undefined || changed > latest) latest = changed
+          const event = parseOpenCodeEvent(scan.source, row)
+          if (event) scan.record(event)
+        }
+        return latest
+      } finally {
+        db.close()
       }
-    } catch {
-      continue
-    } finally {
-      db?.close()
-    }
+    })
     await yieldToMain()
   }
-  return { truncated }
+}
+
+function openCodeMillis(value: number): number {
+  return value < 10_000_000_000 ? value * 1000 : value
 }
 
 function selectOpenCodeRows(
   db: DatabaseSync,
-  databaseName: string
+  databaseName: string,
+  from: number
 ): OpenCodeRow[] {
   if (!databaseName.endsWith("opencode-next.db")) {
     return [
-      ...openCodeTableRows(db, "message"),
-      ...openCodeTableRows(db, "session_message", "session_v2", true),
+      ...openCodeTableRows(db, "message", from),
+      ...openCodeTableRows(db, "session_message", from, "session_v2", true),
     ]
   }
-  return openCodeTableRows(db, "session_message")
+  return openCodeTableRows(db, "session_message", from)
 }
 
 function openCodeTableRows(
   db: DatabaseSync,
   table: "message" | "session_message",
+  from: number,
   sessionTable = "session",
   excludeShadowed = false
 ): OpenCodeRow[] {
@@ -108,11 +122,10 @@ function openCodeTableRows(
        FROM ${table} ${alias}
        JOIN ${sessionTable} s ON s.id = ${alias}.session_id
        ${projectJoin}
-       WHERE ${assistant}${shadow}
-       ORDER BY ${alias}.time_created DESC, ${alias}.id DESC
-       LIMIT ?`
+       WHERE ${assistant}${shadow} AND ${CHANGED_MS(alias, updated)} >= ?
+       ORDER BY ${alias}.time_created, ${alias}.id`
     )
-    .all(MAX_OPENCODE_ROWS)
+    .all(from)
     .flatMap((row) => {
       const parsed = OpenCodeRowSchema.safeParse(row)
       return parsed.success ? [parsed.data] : []

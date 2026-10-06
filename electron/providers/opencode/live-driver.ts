@@ -15,18 +15,18 @@ import { openCodeRecordLocator } from "./resume-store.js"
 import { applyThreadEnvironment } from "../../thread-environment.js"
 import { hostLog, hostWarn } from "../../host-log.js"
 import { traceProviderLaunch } from "../../provider-launch.js"
-import type { AccessTier } from "../../contracts/access.js"
+import { accessModeId, type AccessTier } from "../../contracts/access.js"
 import { OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import type { LiveActionResult } from "../../contracts/live-actions.js"
 import type { LiveSessionState, McpRegistrySnapshot, PromptAttachment } from "../../shared.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import { nativeCapture, type NativeCapture } from "../../native-capture.js"
-import type { FailureBoundary } from "../../live-runtime.js"
+import { errorMessage } from "../../live-runtime.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
-import { resolveOpenCodeInstallation, openCodeExecutable, verifyOpenCodeSession } from "./installation.js"
+import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession } from "./installation.js"
 import { configureOpenCodePermissions } from "./permissions.js"
 import {
   OPENCODE_DEFAULT_MODE,
@@ -141,6 +141,42 @@ let lastIdTime = 0
 let idCounter = 0
 
 /** OpenCode's ascending identifier: a 48-bit time and counter, then 14 random base62 characters. */
+/** What opens a turn ahead of its user message: mode and model switches and the reminders OpenCode adds. */
+const TURN_PREAMBLE = new Set(["agent-switched", "model-switched", "location-switched", "synthetic", "system"])
+
+/**
+ * Where a fork after the turn `runId` opened ends: before whatever opened
+ * the next turn, or through the whole session when that turn was the last.
+ * `runId` is the turn's user message, whose ID Mako gives OpenCode.
+ */
+export function openCodeForkBoundary(messages: ReadonlyArray<{ id: string; type: string }>, runId: string):
+  { type: "before"; messageID: string } | { type: "through" } {
+  const turn = messages.findIndex(message => message.type === "user" && message.id === runId)
+  if (turn < 0) throw new Error("The answer to fork from is not in OpenCode's session")
+  const next = messages.findIndex((message, index) => index > turn && message.type === "user")
+  if (next < 0) return { type: "through" }
+  let start = next
+  while (start - 1 > turn && TURN_PREAMBLE.has(messages[start - 1]!.type)) start--
+  return { type: "before", messageID: messages[start]!.id }
+}
+
+/** A page of `message.list`, as far as reading a whole session uses it. */
+type MessagePage = (input: { sessionID: string; order?: "asc"; limit: number; cursor?: string }) =>
+  Promise<{ data: ReadonlyArray<{ id: string; type: string }>; cursor: { next?: string | null } }>
+
+export async function openCodeSessionMessages(list: MessagePage, sessionID: string): Promise<Array<{ id: string; type: string }>> {
+  const limit = 200
+  const messages: Array<{ id: string; type: string }> = []
+  // OpenCode 2.0.1 names a next page even after the last one, and refuses a cursor sent with `order`.
+  let page = await list({ sessionID, order: "asc", limit })
+  for (;;) {
+    for (const message of page.data) messages.push({ id: message.id, type: message.type })
+    const cursor = page.cursor.next
+    if (page.data.length < limit || !cursor) return messages
+    page = await list({ sessionID, limit, cursor })
+  }
+}
+
 export function openCodeMessageId(now = Date.now()): string {
   if (now !== lastIdTime) { lastIdTime = now; idCounter = 0 }
   const value = (BigInt(now) * 0x1000n + BigInt(++idCounter)) & 0xffffffffffffn
@@ -189,9 +225,7 @@ async function mcpServers(options: ProviderStartOptions): Promise<Array<{ name: 
   return servers
 }
 
-function errorText({ error }: FailureBoundary): string {
-  return error instanceof Error ? error.message : String(error)
-}
+const errorText = errorMessage
 
 /**
  * OpenCode v2 through its native API. One `opencode serve --stdio` per
@@ -637,7 +671,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       coverage: "OpenCode v2 native API permission and form requests with exact session-scoped identities, answered through the same API. Decisions are retained per connection; requests pending when the server exits end with it.",
     },
     approvalAnswerDigest: openCodeApprovalDigest,
-    observesNativeAgents: true,
+    nativeAgents: { kind: "observed", via: "`subagent` task calls and the child sessions they start." },
+    questions: { kind: "request", via: "The `question` tool's form, answered with `form.reply`." },
+    contextBreakdown: { kind: "unavailable", reason: "OpenCode reports token totals per message, not what fills the context." },
+    modeSwitching: { kind: "native", via: "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts every subagent session still executing and then removes every running shell of the conversation's sessions, once the interrupted turn settles, and at once with no turn running; closing does both before the server exits. OpenCode 2.0.1 keeps a background shell and a background subagent through an interrupt, and a shell past its server's exit." },
     turnRecovery: {
       kind: "continues",
@@ -651,26 +688,31 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         await startCompaction(requireLive(id), actionId)
       },
     },
-    canResume: true,
-    checkpoint: openCodeCheckpoint,
+    fork: { kind: "native", point: "run", via: "`session.fork` at a message." },
+    resume: {
+      kind: "native",
+      via: "The session ID on a new `opencode serve`, which reads the session from its own store.",
+      wake: "The next message starts a new `opencode serve` that reopens the session.",
+      checkpoint: openCodeCheckpoint,
+      inspect: inspectOpenCodeSession,
+      locate: async (binding, _cwd, env) => binding.nativeId ? locateOpenCodeSession(binding.nativeId, env) : undefined,
+    },
     nativeSource: (path, nativeId) => {
       const source = openCodeRecordLocator(path)
       return source && source.nativeId === nativeId
         ? { path: source.database, record: `${source.v2 ? "v2" : "unmarked"}:${source.nativeId}` }
         : undefined
     },
-    inspectNativeSession: inspectOpenCodeSession,
     modes: openCodeModes,
     defaultMode: OPENCODE_DEFAULT_MODE,
     available: () => openCodeExecutable() !== null,
     start: (requestedCwd, options) => cancellable(options.conversationId, signal => traceProviderLaunch("opencode", options.conversationId, async trace => {
       if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false) throw new Error("This OpenCode binding is already connected")
-      if (options.fork) throw new Error("OpenCode conversations cannot be forked from Mako yet")
       const env = await trace.step("account", () => options.accountLaunch?.env ?? dependencies.env())
       delete env.CLAUDECODE
       delete env.CLAUDE_CODE_ENTRYPOINT
-      const launchAccess = openCodeLaunchAccess(options.modeId)
+      const launchAccess = openCodeLaunchAccess(options.modeId, options.launchModeId)
       configureOpenCodePermissions(env, launchAccess)
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
@@ -718,8 +760,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE
         const agent = openCodeAgentForMode(requested, launchAccess)
         let session
-        if (options.resume) {
-          session = await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
+        const fork = options.fork
+        if (options.resume || fork) {
+          session = fork
+            ? await trace.step("session-open", async () => api.watch.step("session", api.client.session.fork({
+                sessionID: fork.nativeId,
+                boundary: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId),
+              })))
+            : await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
           const current = session.model ? { id: session.model.id, providerID: session.model.providerID, variant: session.model.variant } : undefined
           const ref = openCodeRequestedModel(catalog, options.tuning, current ?? catalog.defaultModel)
           if (session.agent !== agent) await trace.step("settings", () => api.client.session.switchAgent({ sessionID: session!.id, agent }))
@@ -755,10 +803,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           status: "ready",
           connection: "connected",
           nativeId: session.id,
-          nativePath: nativePath ?? await verifyOpenCodeSession(session.id, undefined, env).catch(() => undefined),
+          nativePath: nativePath ?? await locateOpenCodeSession(session.id, env).catch((error) => {
+            hostWarn("opencode", "the new session's store record was not found", { conversation: live.state.id, error: errorText({ error }) })
+            return undefined
+          }),
           title: session.title ?? options.title,
           modes,
           currentMode: openCodeModeForAgent(agent, launchAccess),
+          launchMode: accessModeId(launchAccess),
           commands: catalog.commands,
           ...reported,
         })
@@ -766,7 +818,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         for (const server of refused) mark(live, live.mcp.failed(server.name, server.error))
         readMcp(live)
         if (live.catalogGeneration !== loadedAt) refreshCatalog(live)
-        hostLog("opencode", options.resume ? "resumed session" : "created session", {
+        hostLog("opencode", options.resume ? "resumed session" : fork ? "forked session" : "created session", {
           conversation: live.state.id, session: session.id, pid: api.health.pid, version: api.health.version,
           model: openCodeLaunchId(live.model), access: launchAccess, mcpServers: servers.length,
         })
@@ -836,6 +888,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       }
       await live.interactions.respond(requestId, response, dispatch)
     },
+    steering: { kind: "supported", lands: "step", via: "A prompt sent while the session is busy is read at its next step.", async steer(id, input) {
+      const live = sessions.get(id)
+      const turn = live?.turn
+      if (!live?.root || live.closed || live.state.status !== "running" || !turn || turn.kind === "compaction" || live.state.nativeRunId !== input.expectedRunId)
+        return { kind: "not-accepted", reason: "The OpenCode turn has already changed" }
+      await live.api.client.session.prompt({ sessionID: live.root, id: openCodeMessageId(), text: input.text, files: promptFiles(input.attachments), delivery: "steer" })
+      return { kind: "accepted" }
+    } },
     async setMode(id, modeId) {
       const live = requireLive(id)
       if (!live.state.modes.some(mode => mode.id === modeId)) throw new Error(`OpenCode does not offer the mode "${modeId}" here`)

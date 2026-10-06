@@ -11,8 +11,9 @@ import type {
   OpenCodeAuthType,
 } from "../../account-types.js"
 import {
-  credentialFileFingerprint,
   credentialFingerprint,
+  principalFingerprint,
+  readOptionalFile,
   jsonFields,
   jwtClaims,
   stringValue,
@@ -57,13 +58,22 @@ function parseCredential(
   return credential
 }
 
-function parseCredentials(contents: string): Map<string, OpenCodeCredential> {
+function parseCredentials(fields: ReadonlyMap<string, JsonValue>): Map<string, OpenCodeCredential> {
   const credentials = new Map<string, OpenCodeCredential>()
-  for (const [providerId, value] of jsonFields(contents)) {
+  for (const [providerId, value] of fields) {
     const credential = parseCredential(value)
     if (credential) credentials.set(providerId, credential)
   }
   return credentials
+}
+
+const OpenCodePrincipals = z.json().transform((value) => principals(parseCredentials(valueFields(value) ?? new Map())))
+
+function principals(credentials: Map<string, OpenCodeCredential>): string[] {
+  return [...credentials].map(([provider, credential]) => {
+    const claims = jwtClaims(credential.access)
+    return `${provider}:${credential.type}:${credential.accountId ?? claims.accountId ?? claims.email ?? ""}`
+  })
 }
 
 const CredentialRow = z.object({ provider: z.string(), value: z.string() })
@@ -104,7 +114,7 @@ async function openCodeCredentials(env: NodeJS.ProcessEnv = process.env): Promis
   if (stored) return stored
   const path = authFile(env)
   try {
-    return { path, credentials: parseCredentials(await readFile(path, "utf8")) }
+    return { path, credentials: parseCredentials(jsonFields(await readFile(path, "utf8"))) }
   } catch {
     return null
   }
@@ -134,7 +144,7 @@ export function parseOpenCodeAccounts(
   contents: string,
   path = authFile()
 ): HarnessAccount[] {
-  return accountsFrom(parseCredentials(contents), path)
+  return accountsFrom(parseCredentials(jsonFields(contents)), path)
 }
 
 async function accountUsage(providerId: string): Promise<AccountUsage> {
@@ -177,13 +187,12 @@ export const openCodeAccountCapability: ObservedAccountCapability = {
   // One active login per provider inside OpenCode's own database; nothing to select.
   accountEnv: async (_selection, base) => ({ ...base }),
   selectedAccount: () => ({ name: "default" }),
+  // The access token is refreshed in place; a login's account is what names it.
   credentialRevision: async (_name, env = process.env) => {
     const stored = databaseCredentials(env)
-    if (!stored) return credentialFileFingerprint(authFile(env))
-    return credentialFingerprint([
-      stored.path,
-      ...[...stored.credentials].map(([provider, credential]) => `${provider}:${credential.type}:${credential.access ?? ""}`),
-    ])
+    if (stored) return credentialFingerprint([stored.path, ...principals(stored.credentials)])
+    const contents = await readOptionalFile(authFile(env))
+    return credentialFingerprint([authFile(env), principalFingerprint(contents, OpenCodePrincipals)])
   },
   accountUsage,
 }

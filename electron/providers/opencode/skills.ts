@@ -8,8 +8,8 @@ const configRoot = () => join(homedir(), ".config", "opencode", "skills")
 export const openCodeSkillSource: ProviderSkillSource = {
   provider: "opencode",
   command: () => openCodeExecutable() ?? "opencode",
-  userRoots: () => [configRoot(), join(homedir(), ".opencode", "skills")],
+  userRoots: () => [configRoot()],
   workspaceFolder: ".opencode",
   targetUserRoot: configRoot,
-  readsUniversalRoot: false,
+  readsUniversalRoot: true,
 }

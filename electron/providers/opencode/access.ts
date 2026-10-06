@@ -32,9 +32,10 @@ export function openCodeSessionModes(agents: ReadonlyArray<{ id: string; name: s
   return [...modes, ...LAUNCH_TIERS.map(launchMode)]
 }
 
-export function openCodeLaunchAccess(mode: string | undefined): AccessTier {
-  const tier = mode ? accessTierOfModeId(mode) : undefined
-  return tier === "full" || tier === "edits" ? tier : "ask"
+/** The first access tier among the selected mode and the level beside a native one such as Plan. */
+export function openCodeLaunchAccess(...modes: (string | undefined)[]): AccessTier {
+  const tier = modes.map((mode) => mode ? accessTierOfModeId(mode) : undefined).find((found) => found === "full" || found === "edits" || found === "ask")
+  return tier ?? "ask"
 }
 
 /** The native agent for a selected mode. A preset other than the launch preset needs a new session. */
