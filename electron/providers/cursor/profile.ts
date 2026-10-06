@@ -13,18 +13,6 @@ export interface CursorProfileOptions {
   accountKey(): string
 }
 
-const CAPABILITIES = [
-  "start",
-  "resume-acp",
-  "stream",
-  "interrupt",
-  "steer",
-  "permissions",
-  "images",
-  "mcp",
-  "models",
-]
-
 /**
  * Cursor's model catalog: what the SDK offers this account, under the SDK's
  * own ids, with reasoning and speed as parameters. The cache key names the
@@ -39,7 +27,6 @@ export function createCursorProfileLoader(options: CursorProfileOptions): Provid
       work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: "false" } }],
     },
     transport: "sdk",
-    capabilities: CAPABILITIES,
     cacheKey: () => options.accountKey(),
     async load(env, cwd, context) {
       const catalog = normalizeCursorSdkModels(await options.sdkModels(env, cwd, context))

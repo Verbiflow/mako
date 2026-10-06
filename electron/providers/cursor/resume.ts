@@ -47,17 +47,19 @@ export function cursorLegacyCheckpoint(path: string, id: string): string | undef
  * comes from there and only the blob count from the store. The directory
  * rather than the meta row names the agent because an imported store keeps
  * the `cursor-agent` session's meta, and the SDK agent may sit under another id.
+ * An agent whose first turn never ended has no root yet; that is its head,
+ * not a missing store.
  */
 export function cursorSdkCheckpoint(stateRoot: string, directoryName: string): string | undefined {
   const index = cursorSdkIndexPath(stateRoot)
   const agentId = cursorSdkAgentIdForDirectory(index, directoryName)
   if (!agentId) return undefined
   const record = readCursorSdkAgent(index, agentId)
-  if (!record?.rootId) return undefined
+  if (!record) return undefined
   let db: DatabaseSync | undefined
   try {
     db = openNativeStore(join(stateRoot, "agents", directoryName, "store.db"))
-    return digest([agentId, record.rootId, blobCount(db)])
+    return digest([agentId, record.rootId ?? null, blobCount(db)])
   } catch {
     return undefined
   } finally {

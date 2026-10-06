@@ -10,5 +10,5 @@ export const cursorSkillSource: ProviderSkillSource = {
   userRoots: () => [root()],
   workspaceFolder: ".cursor",
   targetUserRoot: root,
-  readsUniversalRoot: false,
+  readsUniversalRoot: true,
 }
