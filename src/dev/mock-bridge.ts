@@ -2211,6 +2211,7 @@ export function installMockBridge() {
         }
       }
     },
+    livePrewarm: async () => "unchanged" as const,
     liveClose: async (id: string) => {
       const session = acpSessions.get(id)
       if (!session) return
@@ -2264,7 +2265,6 @@ export function installMockBridge() {
         label: harness,
         available: false,
         transport: "acp" as const,
-        capabilities: [],
         models: [],
       },
     abortThreadRun: async () => {},
@@ -2504,7 +2504,6 @@ const MOCK_PROFILES = [
     transport: "acp" as const,
     defaultModel: "opus[1m]",
     settings: { model: "opus[1m]" },
-    capabilities: ["stream", "fork"],
     models: [
       mockModel("claude-opus-5-5", "Opus 5.5", [mockEffort("medium", ["low", "medium", "high", "xhigh", "max"]), mockFast], 1_000_000),
       mockModel("opus[1m]", "Opus 5", [mockEffort("high", ["low", "medium", "high", "xhigh", "max"]), mockFast], 1_000_000),
@@ -2520,7 +2519,6 @@ const MOCK_PROFILES = [
     transport: "app-server" as const,
     defaultModel: "gpt-5.6-sol",
     settings: { model: "gpt-5.6-sol" },
-    capabilities: ["stream", "fork-at-turn"],
     models: [
       mockModel("gpt-6.1-sol", "GPT-6.1 Sol", [mockEffort("low", ["low", "medium", "high", "xhigh", "max", "ultra"]), mockFast]),
       mockModel("gpt-6-astra", "GPT-6 Astra", [mockEffort("high", ["low", "medium", "high", "xhigh"]), mockFast]),
@@ -2538,7 +2536,6 @@ const MOCK_PROFILES = [
     transport: "acp" as const,
     defaultModel: "claude-fable-5",
     settings: { model: "claude-fable-5" },
-    capabilities: ["stream"],
     models: [
       mockModel("claude-fable-5", "Claude Fable 5", [mockContext("1m", ["300k", "1m"]), mockEffort("high", ["low", "medium", "high", "xhigh", "max"])]),
       mockModel("auto-smart", "Auto"),
@@ -2555,7 +2552,6 @@ const MOCK_PROFILES = [
     transport: "acp" as const,
     defaultModel: "grok-4.7",
     settings: { model: "grok-4.7" },
-    capabilities: ["stream"],
     models: [
       mockModel("grok-4.7", "Grok 4.7", [mockEffort("high", ["low", "high"])]),
       mockModel("grok-4.7-build-fast", "Grok 4.7 Build Fast"),
@@ -2570,7 +2566,6 @@ const MOCK_PROFILES = [
     transport: "acp" as const,
     defaultModel: "adaptive",
     settings: { model: "adaptive" },
-    capabilities: ["stream"],
     models: [
       mockModel("adaptive", "Adaptive"),
       mockModel("swe-2", "SWE-2", [mockEffort("medium", ["medium", "high", "max"])]),
@@ -2585,7 +2580,6 @@ const MOCK_PROFILES = [
     transport: "acp" as const,
     defaultModel: "opencode/x-preview-f-free",
     settings: { model: "opencode/x-preview-f-free" },
-    capabilities: ["stream", "resume", "models"],
     models: [
       mockModel("opencode/x-preview-f-free", "Ox Alpha Free (Unlimited)", [mockEffort("high", ["minimal", "low", "medium", "high", "xhigh"])]),
       mockModel("openai/gpt-5.4", "GPT-5.4", [mockEffort("medium", ["low", "medium", "high"])]),

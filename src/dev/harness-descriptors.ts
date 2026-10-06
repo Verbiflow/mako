@@ -2,7 +2,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 
 /** Every harness in Mako's order, as the host describes it on any Mac. */
-export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable">[] = [
+export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities">[] = [
   {
     "provider": "claude",
     "displayName": "Claude Code",
@@ -29,7 +29,62 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         }
       ]
     },
-    "resumable": true
+    "resumable": true,
+    "capabilities": {
+      "resume": {
+        "state": "implemented",
+        "via": "The Agent SDK's `resume` option with the session ID, after the session file is checked."
+      },
+      "residency": {
+        "state": "implemented",
+        "via": "Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. The next message starts a new `claude` process that resumes the session from its file."
+      },
+      "turnRecovery": {
+        "state": "implemented",
+        "via": "Accepted: The SDK's echo of the prompt's user message, as the turn starts. Exit: The SDK stream's failure when the process dies settles the session failed and disconnected in one update, with the transcript found by session ID when no hook has reported it yet."
+      },
+      "fork": {
+        "state": "implemented",
+        "via": "The Agent SDK's `forkSession` at a checkpoint (`resumeSessionAt`)."
+      },
+      "steering": {
+        "state": "implemented",
+        "via": "A message sent while a turn runs joins the running query and is read at its next step.",
+        "lands": "step"
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "The harness's own compaction, started by Mako's Compact action."
+      },
+      "planning": {
+        "state": "implemented",
+        "via": "Its plan mode; the plan reaches Mako through ExitPlanMode's `plan` input, built by answering its permission request."
+      },
+      "approvals": {
+        "state": "implemented",
+        "via": "The harness asks and reports each decision it applied."
+      },
+      "questions": {
+        "state": "implemented",
+        "via": "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input."
+      },
+      "modes": {
+        "state": "implemented",
+        "via": "Claude Code's permission modes, set on the running query with `setPermissionMode`."
+      },
+      "nativeAgents": {
+        "state": "implemented",
+        "via": "Agent and Workflow tool calls and their sidechain messages."
+      },
+      "backgroundStop": {
+        "state": "implemented",
+        "via": "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. Mako declares no per-task stop affordance, so an interrupt stops them too."
+      },
+      "contextBreakdown": {
+        "state": "implemented",
+        "via": "The Agent SDK's `getContextUsage`, by category."
+      }
+    }
   },
   {
     "provider": "codex",
@@ -71,7 +126,63 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         }
       ]
     },
-    "resumable": true
+    "resumable": true,
+    "capabilities": {
+      "resume": {
+        "state": "implemented",
+        "via": "`thread/resume` on the app-server with the thread ID."
+      },
+      "residency": {
+        "state": "implemented",
+        "via": "Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. The next message starts a new `codex app-server` that resumes the thread."
+      },
+      "turnRecovery": {
+        "state": "implemented",
+        "via": "Accepted: The turn/start response, which names the turn Codex began, before any of the turn runs. Exit: The app-server's exit, or a stdin or spawn error, settles the session failed and disconnected in one update; the rollout path was reported when the thread started."
+      },
+      "fork": {
+        "state": "implemented",
+        "via": "`thread/fork` at a turn."
+      },
+      "steering": {
+        "state": "implemented",
+        "via": "`turn/steer` adds the message to the running turn, read at its next step.",
+        "lands": "step"
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "The harness's own compaction, started by Mako's Compact action."
+      },
+      "planning": {
+        "state": "implemented",
+        "via": "The plan setting; the plan reaches Mako through The Plan collaboration mode's plan item, built by a message that asks for the implementation."
+      },
+      "approvals": {
+        "state": "implemented",
+        "via": "The harness asks and reports each decision it applied."
+      },
+      "questions": {
+        "state": "implemented",
+        "via": "`request_user_input` requests, answered on their own channel; the thread's history retires answered ones."
+      },
+      "modes": {
+        "state": "implemented",
+        "via": "Each mode is an approval policy and sandbox, sent with each turn."
+      },
+      "nativeAgents": {
+        "state": "implemented",
+        "via": "`spawn_agent` calls and the agent threads they start."
+      },
+      "backgroundStop": {
+        "state": "implemented",
+        "via": "Stop terminates exact native terminal IDs before interruption and checks again after settlement, including child threads. Stopped turn IDs retain a bounded guard for commands reported after interruption; failed native termination disconnects instead of claiming cleanup. Checked on Codex 0.159.3: foreground child exit and same-session follow-up. Closing ends terminals and subagents before the app-server exits."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "The app-server reports token totals and the context window, not what fills it."
+      }
+    }
   },
   {
     "provider": "cursor",
@@ -99,7 +210,65 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         }
       ]
     },
-    "resumable": true
+    "resumable": true,
+    "capabilities": {
+      "resume": {
+        "state": "implemented",
+        "via": "`Agent.resume` over the SDK's local store; a `cursor-agent` store is imported into it first."
+      },
+      "residency": {
+        "state": "implemented",
+        "via": "Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. The next message starts a new SDK child that resumes the agent; a run its killed child left active is expired by the next one (`run-records.ts`)."
+      },
+      "turnRecovery": {
+        "state": "implemented",
+        "via": "Accepted: The run ID the SDK returns for the sent message. Exit: The SDK child's exit, unless Mako closed it, settles the running turn and the session failed and disconnected in one update."
+      },
+      "fork": {
+        "state": "implemented",
+        "via": "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own."
+      },
+      "steering": {
+        "state": "implemented",
+        "via": "A message sent while a run works cuts its current step short and the model continues with it.",
+        "lands": "interrupt"
+      },
+      "compaction": {
+        "state": "default",
+        "reason": "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. The SDK has no way to ask for it."
+      },
+      "planning": {
+        "state": "implemented",
+        "via": "The plan setting; the plan reaches Mako through createPlan's `plan` argument, built by a message that asks for the implementation."
+      },
+      "approvals": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access."
+      },
+      "questions": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "The SDK's `askQuestion` tool has no answer channel in local runs: the SDK makes no interactive request."
+      },
+      "modes": {
+        "state": "no-op",
+        "reason": "The SDK runs one mode, agent; Plan is a setting chosen with each message."
+      },
+      "nativeAgents": {
+        "state": "implemented",
+        "via": "`task` tool calls and the subagent runs they start."
+      },
+      "backgroundStop": {
+        "state": "default",
+        "reason": "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "The SDK reports a run's token usage, not what fills the context."
+      }
+    }
   },
   {
     "provider": "opencode",
@@ -118,7 +287,63 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
     "defaults": {
       "work": []
     },
-    "resumable": true
+    "resumable": true,
+    "capabilities": {
+      "resume": {
+        "state": "implemented",
+        "via": "The session ID on a new `opencode serve`, which reads the session from its own store."
+      },
+      "residency": {
+        "state": "implemented",
+        "via": "Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. The next message starts a new `opencode serve` that reopens the session."
+      },
+      "turnRecovery": {
+        "state": "implemented",
+        "via": "Accepted: The server's acceptance of the prompt into the session's inbox, or its echo on the event stream. Exit: The server's exit settles the session failed and disconnected in one update."
+      },
+      "fork": {
+        "state": "implemented",
+        "via": "`session.fork` at a message."
+      },
+      "steering": {
+        "state": "implemented",
+        "via": "A prompt sent while the session is busy is read at its next step.",
+        "lands": "step"
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "The harness's own compaction, started by Mako's Compact action."
+      },
+      "planning": {
+        "state": "implemented",
+        "via": "Its plan mode; the plan reaches Mako through The Plan agent's reply to a step that ends its turn, built by a message to Build."
+      },
+      "approvals": {
+        "state": "implemented",
+        "via": "The harness asks and reports each decision it applied."
+      },
+      "questions": {
+        "state": "implemented",
+        "via": "The `question` tool's form, answered with `form.reply`."
+      },
+      "modes": {
+        "state": "implemented",
+        "via": "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`."
+      },
+      "nativeAgents": {
+        "state": "implemented",
+        "via": "`subagent` task calls and the child sessions they start."
+      },
+      "backgroundStop": {
+        "state": "implemented",
+        "via": "Stop interrupts every subagent session still executing and then removes every running shell of the conversation's sessions, once the interrupted turn settles, and at once with no turn running; closing does both before the server exits. OpenCode 2.0.1 keeps a background shell and a background subagent through an interrupt, and a shell past its server's exit."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "OpenCode reports token totals per message, not what fills the context."
+      }
+    }
   },
   {
     "provider": "grok",
@@ -145,7 +370,63 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         }
       ]
     },
-    "resumable": true
+    "resumable": true,
+    "capabilities": {
+      "resume": {
+        "state": "implemented",
+        "via": "ACP `session/load` with the session ID."
+      },
+      "residency": {
+        "state": "implemented",
+        "via": "Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. The next message starts a new `grok` ACP agent that loads the session, replaying its history."
+      },
+      "turnRecovery": {
+        "state": "implemented",
+        "via": "Accepted: The agent's first output of the turn, or the session/prompt response when nothing streams first. Exit: The connection's close aborts the turn, whose failed result then waits for the process exit, which settles the session failed and disconnected in one update, with the session's source located by its ID."
+      },
+      "fork": {
+        "state": "implemented",
+        "via": "Mako writes the conversation up to the fork point into a new Grok session and resumes it, as its ACP agent has no fork."
+      },
+      "steering": {
+        "state": "implemented",
+        "via": "`_x.ai/interject` adds the message to the running turn, read at its next step.",
+        "lands": "step"
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "The harness's own compaction, started by Mako's Compact action."
+      },
+      "planning": {
+        "state": "implemented",
+        "via": "Its plan mode; the plan reaches Mako through exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request."
+      },
+      "approvals": {
+        "state": "implemented",
+        "via": "The harness asks; Mako sees only that its answer was submitted."
+      },
+      "questions": {
+        "state": "implemented",
+        "via": "`_x.ai/ask_user_question` requests from the `ask_user_question` tool."
+      },
+      "modes": {
+        "state": "implemented",
+        "via": "ACP `session/set_mode`."
+      },
+      "nativeAgents": {
+        "state": "implemented",
+        "via": "`spawn_subagent` calls and the sessions they start."
+      },
+      "backgroundStop": {
+        "state": "implemented",
+        "via": "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Stop's session/cancel ends a subagent's work with no turn running too, checked on grok 1.0.41. Closing sends session/close too."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      }
+    }
   },
   {
     "provider": "devin",
@@ -180,6 +461,62 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         }
       ]
     },
-    "resumable": true
+    "resumable": true,
+    "capabilities": {
+      "resume": {
+        "state": "implemented",
+        "via": "ACP `session/load` with the session ID."
+      },
+      "residency": {
+        "state": "implemented",
+        "via": "Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. The next message starts a new `devin` ACP agent that loads the session, replaying its history."
+      },
+      "turnRecovery": {
+        "state": "implemented",
+        "via": "Accepted: The agent's first output of the turn, or the session/prompt response when nothing streams first. Exit: The connection's close aborts the turn, whose failed result then waits for the process exit, which settles the session failed and disconnected in one update, with the session's source located by its ID."
+      },
+      "fork": {
+        "state": "implemented",
+        "via": "Mako writes the conversation up to the fork point into a new Devin session and resumes it, as its ACP agent has no fork."
+      },
+      "steering": {
+        "state": "implemented",
+        "via": "A prompt sent while a turn runs is read at its next step.",
+        "lands": "step"
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "The harness's own compaction, started by Mako's Compact action."
+      },
+      "planning": {
+        "state": "implemented",
+        "via": "Its plan mode; the plan reaches Mako through write_plan's rendered plan file, built by answering exit_plan_mode's permission request."
+      },
+      "approvals": {
+        "state": "implemented",
+        "via": "The harness asks and reports each decision it applied."
+      },
+      "questions": {
+        "state": "implemented",
+        "via": "The `ask_user_question` tool's request."
+      },
+      "modes": {
+        "state": "implemented",
+        "via": "ACP `session/set_mode`."
+      },
+      "nativeAgents": {
+        "state": "implemented",
+        "via": "`run_subagent` calls, whose usage arrives tagged with the subagent's ID."
+      },
+      "backgroundStop": {
+        "state": "implemented",
+        "via": "Stop kills each running background shell with killBackgroundShell, and its session/cancel ends each background subagent, with or without a running turn; no turn follows. Closing closes stdin, which ends them; a signal would leave them running."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      }
+    }
   }
 ]

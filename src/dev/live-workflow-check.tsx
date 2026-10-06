@@ -133,7 +133,7 @@ const snapshot: LiveSnapshot = {
 }
 threadsStore.set({
   composerHarness: "claude",
-  descriptors: fixtureHarnesses.map((entry) => ({ ...entry, canSteer: entry.provider === "claude" })),
+  descriptors: fixtureHarnesses,
 })
 store.set({ messages: [], stream: null })
 acpStore.set({ activeKey: id })
