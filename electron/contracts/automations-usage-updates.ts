@@ -53,7 +53,7 @@ export interface UsageSummary {
   /** `recordedByMako` when the harness's own store keeps no counts and Mako measured the spend. */
   sources?: Array<{ source: string; recordedByMako?: true } & UsageTotals>
   sessions: number
-  /** True when older files or oversized file prefixes were left unread. */
+  /** True when some records in the window could not be read, so the totals may be low; the host log names them. */
   truncated: boolean
 }
 

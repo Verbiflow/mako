@@ -81,7 +81,13 @@ export interface SkillProviderStatus {
  */
 export type SkillDelivery =
   | { kind: "native"; path: string }
-  | { kind: "handover"; path: string; from: SkillProvider }
+  | {
+      kind: "handover"
+      path: string
+      from: SkillProvider
+      /** Where it came from, as the prompt and the chip say it: from the snapshot's labels, never the window's state. */
+      source: string
+    }
   | { kind: "missing" }
 
 /** One resolved `$skill` reference, ready to be written into a prompt. */

@@ -26,11 +26,8 @@ export interface HarnessDescriptor {
   resumable: boolean
   /** An interactive transport can drive this provider right now. */
   live: boolean
-  canResume: boolean
-  observesNativeAgents?: boolean
-  canSteer?: boolean
-  steering?: LiveSteering
-  recovery?: import("./recovery.js").RecoveryCapabilities
+  /** What a live conversation with this harness can do, each with how or why not, as the harness declares it. */
+  capabilities: import("./harness-capabilities.js").LiveCapabilities
   /**
    * The access ladder a new session with this provider offers, known before
    * any process starts so the desk can take the choice with the first prompt.
@@ -63,7 +60,6 @@ export interface HarnessProfile {
   /** Provider-resolved defaults in the requested workspace. Never saved as user choices. */
   settings?: SessionSettings
   configurationError?: string
-  capabilities: string[]
   error?: string
   /** Discovery is still running; nothing here is known yet. */
   pending?: boolean
@@ -131,6 +127,14 @@ export interface LiveSessionUsage {
   tokens?: TokenCounts
   /** Spend since this live session started, as the harness reports it. */
   cost?: { amount: number; currency: string }
+  /** The harness's own totals for the native session, from a harness whose totals outlive its process. */
+  native?: NativeTotals
+}
+
+/** A harness's running totals for a native session across its processes: tokens by kind, and cost in USD. */
+export interface NativeTotals {
+  tokens: TokenCounts
+  cost?: number
 }
 
 /** One part of what fills the context, from a harness that itemizes it (Claude). */

@@ -140,6 +140,8 @@ const replays = [
   "mako:live-cancel",
   /** Closing a closed conversation is a no-op. */
   "mako:live-close",
+  /** Waking a conversation that is awake or already waking does nothing more. */
+  "mako:live-prewarm",
   /** Cancelling a sign-in that has ended cancels nothing. */
   "mako:account-login-cancel",
   /** Setting the mode a session already has is a no-op. */

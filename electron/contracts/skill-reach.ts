@@ -71,6 +71,16 @@ export function skillDeliveryOrigin(
   return origin ? { origin, native: false } : undefined
 }
 
+/** Where a handover came from, as prose: a provider's name from the snapshot, or the universal root. */
+export function skillSourceProse(
+  from: string,
+  providers: readonly SkillProviderStatus[]
+): string {
+  if (from === UNIVERSAL_SKILL_PROVIDER)
+    return "the universal skills folder (.agents/skills)"
+  return `${providers.find((provider) => provider.id === from)?.label ?? from}'s skills`
+}
+
 export function skillDelivery(
   skill: SkillRecord,
   harness: string,
@@ -83,6 +93,7 @@ export function skillDelivery(
     kind: "handover",
     path: chosen.origin.provenance,
     from: chosen.origin.provider,
+    source: skillSourceProse(chosen.origin.provider, providers),
   }
 }
 

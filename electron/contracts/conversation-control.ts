@@ -30,6 +30,11 @@ export const TransferInputSchema = z.object({
   carry: z.enum(["native", "transcript"]).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
+/** A harness's running totals for one native session, as `NativeTotals`. */
+export const NativeTotalsSchema = z.object({
+  tokens: z.object({ input: z.number(), cacheRead: z.number(), cacheWrite: z.number(), output: z.number(), reasoning: z.number().optional() }),
+  cost: z.number().nonnegative().optional(),
+})
 export const ProviderBindingSchema = z.object({
   executionContext: ExecutionContextSchema.optional(),
   checkpoint: z.string().optional(),
@@ -41,6 +46,8 @@ export const ProviderBindingSchema = z.object({
   modeId: z.string().optional(),
   coveredBlocks: z.number().int().nonnegative(),
   includesBase: z.boolean(),
+  /** The native session's own totals when the conversation last moved off it, for a resume that restores them. */
+  nativeUsage: NativeTotalsSchema.optional(),
 })
 export type ProviderBinding = z.infer<typeof ProviderBindingSchema>
 

@@ -276,7 +276,12 @@ export interface LiveBatch {
   /** The host generation that numbered `revision`; see `LiveSummary.epoch`. */
   epoch?: string
   updates: LiveUpdate[]
+  /** The whole session, for a receiver that holds none; see `sessionAfter`. */
   session?: LiveSessionState
+  /** The session fields that changed; the rest, as a harness's commands and models, are as the receiver has them. */
+  sessionChanges?: Partial<LiveSessionState>
+  /** The session fields that went away. */
+  sessionCleared?: (keyof LiveSessionState)[]
   permissions?: LivePermissionRequest[]
   /** Every request, when one went away or they changed order; see `requestChanges`. */
   requests?: LiveRequest[]
@@ -289,6 +294,61 @@ export function requestsDelta(previous: readonly LiveRequest[], next: LiveReques
   if (previous === next) return {}
   if (next.length < previous.length || previous.some((request, index) => next[index]!.id !== request.id)) return { requests: next }
   return { requestChanges: next.filter((request, index) => request !== previous[index]) }
+}
+
+/** The fields a session object holds, as its producers typed it. */
+function sessionKeys(session: LiveSessionState): (keyof LiveSessionState)[] {
+  // SAFETY: sessions are built only from typed `LiveSessionState` values, so
+  // every own key is one of its fields.
+  return Object.keys(session) as (keyof LiveSessionState)[]
+}
+
+function copyField<Key extends keyof LiveSessionState>(target: Partial<LiveSessionState>, source: LiveSessionState, key: Key): void {
+  target[key] = source[key]
+}
+
+/** How a batch carries `next`: only the fields whose values are not `previous`'s; see `sharedSession`. */
+export function sessionDelta(previous: LiveSessionState, next: LiveSessionState): Pick<LiveBatch, "sessionChanges" | "sessionCleared"> {
+  const delta: Pick<LiveBatch, "sessionChanges" | "sessionCleared"> = {}
+  if (previous === next) return delta
+  const changes: Partial<LiveSessionState> = {}
+  const cleared: (keyof LiveSessionState)[] = []
+  let changed = false
+  for (const key of sessionKeys(next))
+    if (next[key] === undefined) { if (previous[key] !== undefined) cleared.push(key) }
+    else if (next[key] !== previous[key]) { copyField(changes, next, key); changed = true }
+  for (const key of sessionKeys(previous))
+    if (!(key in next) && previous[key] !== undefined) cleared.push(key)
+  if (changed) delta.sessionChanges = changes
+  if (cleared.length) delta.sessionCleared = cleared
+  return delta
+}
+
+/** The session after `batch`, from the one the receiver held. */
+export function sessionAfter(current: LiveSessionState, batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared">): LiveSessionState {
+  if (batch.session) return batch.session
+  if (!batch.sessionChanges && !batch.sessionCleared) return current
+  const next = { ...current, ...batch.sessionChanges }
+  for (const key of batch.sessionCleared ?? []) delete next[key]
+  return next
+}
+
+/** Whether `batch` changed the session at all. */
+export function changesSession(batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared">): boolean {
+  return Boolean(batch.session || batch.sessionChanges || batch.sessionCleared)
+}
+
+/**
+ * `next` keeping `previous`'s value for every field equal in content. A
+ * harness reports its whole session each time, and its commands and models
+ * arrive as new arrays even when nothing in them changed.
+ */
+export function sharedSession(previous: LiveSessionState, next: LiveSessionState): LiveSessionState {
+  let shared: LiveSessionState | undefined
+  for (const key of sessionKeys(next))
+    if (next[key] !== previous[key] && JSON.stringify(next[key]) === JSON.stringify(previous[key]))
+      copyField(shared ??= { ...next }, previous, key)
+  return shared ?? next
 }
 
 /** The requests after `batch`, from those the receiver held; `undefined` when the batch changed none. */

@@ -426,6 +426,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:live-mode", id, modeId),
     liveCancel: (id: string) => invokeTrustedHost<void>("mako:live-cancel", id),
     liveClose: (id: string) => invokeTrustedHost<void>("mako:live-close", id),
+    /** The user started writing here: wake it now so its restart overlaps the typing. */
+    livePrewarm: (id: string) => invokeTrustedHost<"waking" | "kept-warm" | "unchanged">("mako:live-prewarm", id),
 
     /* Provider transports with their own sign-in. */
     providerConnections: (refresh?: boolean) =>

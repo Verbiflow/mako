@@ -314,6 +314,7 @@ export const hostCallInputs = {
       }),
     ]),
   ]),
+  "mako:live-prewarm": z.tuple([z.string()]),
   "mako:live-prompt": z.tuple([
     z.string(),
     z.string(),
