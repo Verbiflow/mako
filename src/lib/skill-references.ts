@@ -68,7 +68,10 @@ export function skillNamesIn(text: string): string[] {
   return names
 }
 
-/** Where a handover came from, as prose: a provider's name or the universal root. */
+/**
+ * Where a sent message's handover came from, for its transcript chip, which
+ * has only the provider ID the appendix recorded.
+ */
 export function skillSourceLabel(provider: string): string {
   return provider === UNIVERSAL_SKILL_PROVIDER
     ? "the universal skills folder (.agents/skills)"
@@ -84,7 +87,7 @@ export function skillChipTitle(
   if (delivery.kind === "missing")
     return `No skill named ${name} is installed anywhere Mako looks`
   if (delivery.kind === "native") return `Skill: ${name} · the provider has it`
-  return `Skill: ${name} · handed over from ${skillSourceLabel(delivery.from)}`
+  return `Skill: ${name} · handed over from ${delivery.source}`
 }
 
 /** The chip's reading of a reference before it is sent. */
@@ -109,7 +112,7 @@ function entry(reference: SkillReference, handed: ReadonlySet<string>): string |
     return `[Skill ${reference.name}] Installed for you at ${delivery.path}. Use it now.`
   }
   const marker = `[Skill ${reference.name} from ${delivery.from}]`
-  const source = skillSourceLabel(delivery.from)
+  const { source } = delivery
   const directory = directoryOf(delivery.path)
   if (reference.hash && handed.has(reference.hash)) {
     return `${marker} Handed over from ${source} earlier in this conversation; apply it again now. Its files are in ${directory}/.`

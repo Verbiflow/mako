@@ -116,9 +116,10 @@ export function responseSections(
     const generated: ChatMessage[] = []
     // Splitting attachment/text blocks for layout must retain their shared
     // message provenance. Do not borrow visuals from another reply or turn.
-    const previewedFiles = message.blocks.flatMap(block =>
+    const previewed = message.blocks.flatMap(block =>
       block.type === "attachment" && block.source.kind === "file" ? [block.source.path] : []
     )
+    const previewedFiles = previewed.length > 0 ? previewed : undefined
     let workBlocks: Block[] = []
     const flushMessageWork = () => {
       if (workBlocks.length === 0) return
