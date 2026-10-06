@@ -278,6 +278,13 @@ function encodedInput(input: JsonValue | undefined): string | undefined {
   return isString(input) ? input : JSON.stringify(input)
 }
 
+/** A rollout records an MCP call's server as its `namespace` (`mcp__axiom`), beside the tool's own name. */
+function functionName(payload: JsonObject): string {
+  const name = stringValue(payload["name"])?.trim() || "tool"
+  const namespace = stringValue(payload["namespace"])?.trim()
+  return namespace?.startsWith("mcp__") ? `${namespace}__${name}` : name
+}
+
 function completedTool(status: string | undefined): CodexToolCompletion {
   const normalized = status?.toLowerCase()
   if (
@@ -422,7 +429,7 @@ function parseResponseItem(
         kind: "function_call_response",
         at,
         callId: stringValue(payload["call_id"]),
-        name: stringValue(payload["name"])?.trim() || "tool",
+        name: functionName(payload),
         input:
           stringValue(payload["arguments"]) ?? stringValue(payload["input"]),
       }

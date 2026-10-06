@@ -1,4 +1,5 @@
-import { acpToolDetails } from "../acp-tool-details.js"
+import { AcpLocationsSchema, acpLocationDetails, acpText, acpToolDetails } from "../acp-tool-details.js"
+import { GrokToolMeta, grokToolName } from "../harnesses/grok.js"
 import { acpAttachments } from "../acp-attachments.js"
 import { ProposedPlans, type AttachmentContent, type ToolDetail } from "../content.js"
 import { backgroundCommandLabel, subagentLabel } from "../provider-turn.js"
@@ -309,26 +310,6 @@ function parseJsonObject(raw: string): JsonObject | null {
   }
 }
 
-function contentText(content: JsonValue | undefined): string {
-  if (isString(content)) return content
-  if (Array.isArray(content)) return content.map(contentText).join("")
-  if (!isJsonObject(content)) return ""
-  const direct = stringValue(content["text"])
-  if (direct !== undefined) return direct
-  for (const key of [
-    "content",
-    "output_for_prompt",
-    "output",
-    "result",
-    "message",
-    "error",
-  ]) {
-    const nested = contentText(content[key])
-    if (nested) return nested
-  }
-  return ""
-}
-
 function encodedJson(value: JsonValue | undefined): string | undefined {
   if (value === undefined) return undefined
   if (isString(value)) return clip(value)
@@ -459,11 +440,8 @@ function failedToolUpdate(
 
 /** Grok's own name, as the live desk reads it; the title is a fallback for older files. */
 function toolName(update: JsonObject): string {
-  const native = stringValue(objectValue(objectValue(update["_meta"])?.["x.ai/tool"])?.["name"])
-  if (native) return native
   const title = stringValue(update["title"])
-  if (title && /^web search\b/i.test(title)) return "web_search"
-  return title || stringValue(update["kind"]) || "tool"
+  return grokToolName(GrokToolMeta.safeParse(update["_meta"]).data, title) ?? (title || stringValue(update["kind"]) || "tool")
 }
 
 function parseUpdateLine(raw: string): GrokUpdate | null {
@@ -480,7 +458,7 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
 
   switch (sessionUpdate) {
     case "user_message_chunk": {
-      const text = contentText(update["content"])
+      const text = acpText(update["content"])
       const attachments = acpAttachments(update["content"])
       if (!text && !attachments.length) return null
       const promptIndex = numberValue(metadata?.["promptIndex"])
@@ -497,7 +475,7 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
     }
     case "agent_message_chunk":
     case "agent_thought_chunk": {
-      const text = contentText(update["content"])
+      const text = acpText(update["content"])
       const attachments = acpAttachments(update["content"])
       return text || attachments.length
         ? { sessionUpdate, at, text, attachments }
@@ -508,12 +486,12 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
         sessionUpdate,
         at,
         attachments: acpAttachments(update["content"]),
-        details: acpToolDetails(update["content"]),
+        details: [...acpToolDetails(update["content"]), ...acpLocationDetails(AcpLocationsSchema.catch([]).parse(update["locations"]))],
         toolCallId: stringValue(update["toolCallId"]),
         name: toolName(update),
         input: encodedJson(update["rawInput"]),
         output:
-          clip(normalizeToolOutput(contentText(update["content"]))) ||
+          clip(normalizeToolOutput(acpText(update["content"]))) ||
           undefined,
         plan: grokProposedPlan(params, update, toolName(update) === "exit_plan_mode" ? objectValue(update["rawInput"])?.["planContent"] : undefined),
       }
@@ -521,12 +499,12 @@ function parseUpdateLine(raw: string): GrokUpdate | null {
     case "tool_call_update": {
       const status = stringValue(update["status"])
       const content =
-        contentText(update["content"]) || contentText(update["rawOutput"])
+        acpText(update["content"]) || acpText(update["rawOutput"])
       return {
         sessionUpdate,
         at,
         attachments: acpAttachments(update["content"]),
-        details: acpToolDetails(update["content"]),
+        details: [...acpToolDetails(update["content"]), ...acpLocationDetails(AcpLocationsSchema.catch([]).parse(update["locations"]))],
         toolCallId: stringValue(update["toolCallId"]),
         name: toolName(update),
         input: encodedJson(update["rawInput"]),
@@ -583,20 +561,20 @@ function parseLegacyLine(raw: string): LegacyGrokLine | null {
   if (!root) return null
   switch (stringValue(root["type"])) {
     case "user":
-      return { type: "user", text: contentText(root["content"]) }
+      return { type: "user", text: acpText(root["content"]) }
     case "reasoning":
-      return { type: "reasoning", text: contentText(root["summary"]) }
+      return { type: "reasoning", text: acpText(root["summary"]) }
     case "assistant":
       return {
         type: "assistant",
-        text: contentText(root["content"]),
+        text: acpText(root["content"]),
         calls: parseLegacyCalls(root["tool_calls"]),
       }
     case "tool_result":
       return {
         type: "tool_result",
         toolCallId: stringValue(root["tool_call_id"]),
-        output: normalizeToolOutput(contentText(root["content"])),
+        output: normalizeToolOutput(acpText(root["content"])),
       }
     default:
       return null
@@ -879,7 +857,7 @@ function updatesTranslator(): GrokTranslator {
     input: string | undefined,
     at?: string
   ): GrokToolBlock => {
-    const block: GrokToolBlock = { type: "tool", name, input }
+    const block: GrokToolBlock = { type: "tool", id, name, input }
     ensureAssistant(at).blocks.push(block)
     if (id) toolsById.set(id, block)
     return block
@@ -963,7 +941,7 @@ function updatesTranslator(): GrokTranslator {
           createTool(event.toolCallId, event.name, event.input, event.at)
         if (event.details?.length) target.details = event.details
         if (event.attachments?.length) target.attachments = event.attachments
-        if (!target.input && event.input) target.input = event.input
+        if (event.input) target.input = event.input
         if (event.output) {
           const complete = event.status === "completed" || event.failed
           target.output = clip(
@@ -972,6 +950,8 @@ function updatesTranslator(): GrokTranslator {
         }
         if (event.failed) target.error = true
         if (/cancel/i.test(event.status ?? "")) target.canceled = true
+        // A finished tool without words still finished; with no output the window draws it pending.
+        if (event.status === "completed" || event.failed || target.canceled) target.output ??= ""
         propose(event.plan, event.at)
         return
       }
