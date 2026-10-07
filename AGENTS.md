@@ -91,7 +91,7 @@ server that didn't start, a configuration warning, an imported setting, a
 failed start hook) is `setup: true`; build MCP failures with
 `mcpServerFailedEvent`. Harnesses repeat these on every thread load or turn
 (Claude's `system/init`), and every wake or restart opens a new live session,
-so the shared reducer in `electron/contracts/live-content.ts` keeps one per
+so the shared reducer in `packages/sessions/src/live-content.ts` keeps one per
 conversation (`sameSetupEvent`). Don't deduplicate them per decoder instead,
 and leave `setup` off turn facts such as failures, model changes and
 compaction.
