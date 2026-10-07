@@ -3,12 +3,11 @@ import { z } from "zod"
 import { AcpUpdateDecoder, type AcpDecoderHooks, type AcpSessionPatch } from "./acp-decoder.js"
 import { AcpContentBlockSchema } from "./acp-tool-details.js"
 import type { AttachmentContent } from "./content.js"
-import { cleanEntry, clip, EntrySink, type EntryBlock, type ThreadEntry, type TurnUsage } from "./format.js"
-import { liveToolFinished, reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
-import { normalizeToolOutput } from "./tool-output.js"
+import { cleanEntry, EntrySink, type ThreadEntry, type TurnUsage } from "./format.js"
+import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
+import { liveEvent, liveToolEntry } from "./live-entries.js"
 
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
-type ToolEntry = EntryBlock & { type: "tool" }
 
 /**
  * The saved updates the shared decoder reads, screened for every field
@@ -226,7 +225,7 @@ function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveBlock, s
         break
       case "event":
         assistant = undefined
-        entries.push(eventEntry(block, at))
+        entries.push({ kind: "event", at, ...liveEvent(block) })
         break
       case "plan":
         assistant = undefined
@@ -243,32 +242,10 @@ function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveBlock, s
         reply(block).blocks.push({ type: block.type, id: block.id, text: block.text, status: block.status, ...block.truncated && { truncated: true } })
         break
       case "tool":
-        reply(block).blocks.push(toolEntry(block))
+        reply(block).blocks.push(liveToolEntry(block))
         break
     }
   }
   if (usage && replied) replied.usage = usage
   return entries
-}
-
-function eventEntry(block: Extract<LiveBlock, { type: "event" }>, at: string | undefined): ThreadEntry {
-  const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", at, label: block.label }
-  if (block.detail !== undefined) entry.detail = block.detail
-  if (block.body !== undefined) entry.body = block.body
-  if (block.tone !== undefined) entry.tone = block.tone
-  if (block.source !== undefined) entry.source = block.source
-  return entry
-}
-
-function toolEntry(block: Extract<LiveBlock, { type: "tool" }>): ToolEntry {
-  const tool: ToolEntry = { type: "tool", id: block.id, name: block.name ?? block.title, input: clip(block.input) }
-  const output = clip(normalizeToolOutput(block.output))
-  if (output) tool.output = output
-  if (block.details?.length) tool.details = block.details
-  if (block.attachments?.length) tool.attachments = block.attachments
-  if (block.status === "failed") tool.error = true
-  if (/cancel/i.test(block.status)) tool.canceled = true
-  // A finished tool without words still finished; with no output the window draws it pending.
-  if (liveToolFinished(block.status)) tool.output ??= ""
-  return tool
 }
