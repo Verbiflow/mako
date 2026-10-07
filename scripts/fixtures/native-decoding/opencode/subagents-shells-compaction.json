@@ -691,6 +691,13 @@
           "kind": "state",
           "patch": {
             "usage": {
+              "tokens": {
+                "input": 41000,
+                "cacheRead": 12000,
+                "cacheWrite": 0,
+                "output": 1200,
+                "reasoning": 300
+              },
               "used": 54200,
               "size": 262144
             }
@@ -766,6 +773,13 @@
           "kind": "state",
           "patch": {
             "usage": {
+              "tokens": {
+                "input": 41000,
+                "cacheRead": 12000,
+                "cacheWrite": 0,
+                "output": 1200,
+                "reasoning": 300
+              },
               "used": 54200,
               "size": 262144,
               "compacted": true

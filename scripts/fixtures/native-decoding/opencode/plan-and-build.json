@@ -239,26 +239,7 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "state",
-          "patch": {
-            "usage": {
-              "tokens": {
-                "input": 473,
-                "cacheRead": 204,
-                "cacheWrite": 0,
-                "output": 59,
-                "reasoning": 54
-              },
-              "cost": {
-                "amount": 0,
-                "currency": "USD"
-              }
-            }
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -721,15 +702,11 @@
           "patch": {
             "usage": {
               "tokens": {
-                "input": 473,
-                "cacheRead": 204,
+                "input": 10995,
+                "cacheRead": 128,
                 "cacheWrite": 0,
-                "output": 59,
-                "reasoning": 54
-              },
-              "cost": {
-                "amount": 0,
-                "currency": "USD"
+                "output": 138,
+                "reasoning": 66
               },
               "used": 11261,
               "size": 1048576
@@ -776,28 +753,7 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "state",
-          "patch": {
-            "usage": {
-              "tokens": {
-                "input": 11468,
-                "cacheRead": 332,
-                "cacheWrite": 0,
-                "output": 197,
-                "reasoning": 120
-              },
-              "cost": {
-                "amount": 0,
-                "currency": "USD"
-              },
-              "used": 11261,
-              "size": 1048576
-            }
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -1325,15 +1281,11 @@
           "patch": {
             "usage": {
               "tokens": {
-                "input": 11468,
-                "cacheRead": 332,
+                "input": 11182,
+                "cacheRead": 11264,
                 "cacheWrite": 0,
-                "output": 197,
-                "reasoning": 120
-              },
-              "cost": {
-                "amount": 0,
-                "currency": "USD"
+                "output": 212,
+                "reasoning": 66
               },
               "used": 11397,
               "size": 1048576
@@ -1361,28 +1313,7 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "state",
-          "patch": {
-            "usage": {
-              "tokens": {
-                "input": 11655,
-                "cacheRead": 11468,
-                "cacheWrite": 0,
-                "output": 271,
-                "reasoning": 120
-              },
-              "cost": {
-                "amount": 0,
-                "currency": "USD"
-              },
-              "used": 11397,
-              "size": 1048576
-            }
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -1535,15 +1466,11 @@
           "patch": {
             "usage": {
               "tokens": {
-                "input": 11655,
-                "cacheRead": 11468,
+                "input": 22514,
+                "cacheRead": 11392,
                 "cacheWrite": 0,
-                "output": 271,
-                "reasoning": 120
-              },
-              "cost": {
-                "amount": 0,
-                "currency": "USD"
+                "output": 222,
+                "reasoning": 66
               },
               "used": 11470,
               "size": 1048576
@@ -1571,28 +1498,7 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "state",
-          "patch": {
-            "usage": {
-              "tokens": {
-                "input": 22987,
-                "cacheRead": 11596,
-                "cacheWrite": 0,
-                "output": 281,
-                "reasoning": 120
-              },
-              "cost": {
-                "amount": 0,
-                "currency": "USD"
-              },
-              "used": 11470,
-              "size": 1048576
-            }
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
