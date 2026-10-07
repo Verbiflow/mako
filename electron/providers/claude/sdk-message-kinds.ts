@@ -79,6 +79,19 @@ export function claudeCommandLifecycle(message: SDKMessage): z.infer<typeof Comm
   return CommandLifecycleSchema.safeParse(message).data
 }
 
+/** The ids of the messages Mako sent that `message` shows Claude Code took: a queued command, a user message, or the ones a reply answers. */
+export function claudeAcknowledged(message: SDKMessage): Set<string> {
+  const ids = new Set<string>()
+  const lifecycle = claudeCommandLifecycle(message)
+  if (lifecycle && lifecycle.state !== "cancelled") ids.add(lifecycle.command_uuid)
+  if (message.type === "user" && message.uuid) ids.add(message.uuid)
+  if ("user_message_uuid" in message && message.user_message_uuid)
+    ids.add(message.user_message_uuid)
+  if ("user_message_uuids" in message)
+    for (const id of message.user_message_uuids ?? []) ids.add(id)
+  return ids
+}
+
 const kinds = (where: "shown" | "state" | "ignored") =>
   [...Object.entries(KNOWN), ...Object.entries(NEWER)].flatMap(([kind, place]) => place === where ? [kind] : [])
 

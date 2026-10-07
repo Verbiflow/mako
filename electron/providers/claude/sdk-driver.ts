@@ -44,7 +44,7 @@ import { hostLog, hostWarn } from "../../host-log.js"
 import { CLAUDE_AUTH_LOG, claudeAuthDiagnostics } from "./auth-diagnostics.js"
 import { claudeConfigDir, type ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
-import { claudeCommandLifecycle } from "./sdk-message-kinds.js"
+import { claudeAcknowledged } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../../native-continuation.js"
 import { claudeProcessProbe } from "./process-probe.js"
 
@@ -152,14 +152,7 @@ function stop(live: Live): void {
 }
 
 function acknowledge(live: Live, message: SDKMessage): void {
-  const ids = new Set<string>()
-  const lifecycle = claudeCommandLifecycle(message)
-  if (lifecycle && lifecycle.state !== "cancelled") ids.add(lifecycle.command_uuid)
-  if (message.type === "user" && message.uuid) ids.add(message.uuid)
-  if ("user_message_uuid" in message && message.user_message_uuid)
-    ids.add(message.user_message_uuid)
-  if ("user_message_uuids" in message)
-    for (const id of message.user_message_uuids ?? []) ids.add(id)
+  const ids = claudeAcknowledged(message)
   const prompt = live.promptReceipt
   if (prompt && ids.has(prompt.id)) {
     live.promptReceipt = undefined

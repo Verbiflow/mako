@@ -110,6 +110,9 @@ export interface SessionMemoryOptions {
 }
 
 export const HOLD_STALE_MS = 3 * 60_000
+/** How long no build may write `conversation_routes` before a current one retires it. */
+export const LEGACY_ROUTES_RETIRE_MS = 14 * 24 * 60 * 60_000
+export const LEGACY_ROUTES_RETIRED = "This copy of Mako is older than the conversation ledger on this Mac. Update Mako to keep working in conversations."
 export const HOLD_HEARTBEAT_MS = 30_000
 export const ANNOTATION_CACHE_MS = 2_000
 
@@ -149,6 +152,18 @@ function processAlive(pid: number): boolean {
     return !(error instanceof Error && "code" in error && error.code === "ESRCH")
   }
 }
+
+const LegacyRoutesSchema = z.object({ watched_since: z.number(), last_write: z.number().nullable(), retired_at: z.number().nullable() })
+
+/** What an older build's write to `conversation_routes` becomes, and when it came. */
+const LEGACY_ROUTE_FORWARDING = (["INSERT", "UPDATE"] as const).map((event) => `
+  CREATE TRIGGER conversation_route_${event.toLowerCase()} AFTER ${event} ON conversation_routes BEGIN
+    INSERT INTO conversation_bindings VALUES (NEW.provider, NEW.native_id, NEW.conversation_id, CASE WHEN NEW.updated_at = 0 THEN CAST(unixepoch('subsec') * 1000 AS INTEGER) ELSE NEW.updated_at END)
+      ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=excluded.updated_at;
+    INSERT INTO conversation_journals VALUES (NEW.conversation_id, NEW.socket)
+      ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket;
+    UPDATE legacy_routes SET last_write = CAST(unixepoch('subsec') * 1000 AS INTEGER);
+  END;`).join("\n")
 
 export class SessionMemory {
   readonly path: string
@@ -225,23 +240,15 @@ export class SessionMemory {
           INSERT OR IGNORE INTO conversation_journals SELECT conversation_id,socket FROM conversation_routes;
           INSERT INTO session_memory_migrations VALUES (1);`)
       }
-      if (!this.db.prepare("SELECT version FROM session_memory_migrations WHERE version = 2").get()) {
+      if (!this.db.prepare("SELECT version FROM session_memory_migrations WHERE version = 3").get()) {
+        this.db.prepare("CREATE TABLE legacy_routes (watched_since INTEGER NOT NULL, last_write INTEGER, retired_at INTEGER)").run()
+        this.db.prepare("INSERT INTO legacy_routes VALUES (?, NULL, NULL)").run(this.now())
         this.db.exec(`DROP TRIGGER IF EXISTS conversation_route_insert;
           DROP TRIGGER IF EXISTS conversation_route_update;
-        CREATE TRIGGER conversation_route_insert AFTER INSERT ON conversation_routes BEGIN
-          INSERT INTO conversation_bindings VALUES (NEW.provider, NEW.native_id, NEW.conversation_id, CASE WHEN NEW.updated_at = 0 THEN CAST(unixepoch('subsec') * 1000 AS INTEGER) ELSE NEW.updated_at END)
-            ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=excluded.updated_at;
-          INSERT INTO conversation_journals VALUES (NEW.conversation_id, NEW.socket)
-            ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket;
-        END;
-        CREATE TRIGGER conversation_route_update AFTER UPDATE ON conversation_routes BEGIN
-          INSERT INTO conversation_bindings VALUES (NEW.provider, NEW.native_id, NEW.conversation_id, CASE WHEN NEW.updated_at = 0 THEN CAST(unixepoch('subsec') * 1000 AS INTEGER) ELSE NEW.updated_at END)
-            ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=excluded.updated_at;
-          INSERT INTO conversation_journals VALUES (NEW.conversation_id, NEW.socket)
-            ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket;
-        END;
-          INSERT INTO session_memory_migrations VALUES (2);`)
+          ${LEGACY_ROUTE_FORWARDING}
+          INSERT OR IGNORE INTO session_memory_migrations VALUES (2), (3);`)
       }
+      this.retireLegacyRoutes()
       this.db.exec("COMMIT")
       if (host.socket && host.launch)
         this.db.prepare("INSERT INTO runtime_hosts (socket, launch) VALUES (?, ?) ON CONFLICT(socket) DO UPDATE SET launch=excluded.launch")
@@ -250,6 +257,34 @@ export class SessionMemory {
       this.db.close()
       throw error
     }
+  }
+
+  /**
+   * Builds before this one write `conversation_routes`, whose triggers
+   * forward each write into the bindings and journals and note when it came.
+   * Once no build has written it for `LEGACY_ROUTES_RETIRE_MS`, the table goes;
+   * an empty one of the same name takes its place, so an older build that
+   * opens the ledger again creates nothing and fails its first write with
+   * `LEGACY_ROUTES_RETIRED` instead of routing where no current host looks.
+   */
+  private retireLegacyRoutes(): void {
+    const watch = LegacyRoutesSchema.parse(this.db.prepare("SELECT watched_since, last_write, retired_at FROM legacy_routes").get())
+    if (watch.retired_at !== null) return
+    const quietSince = Math.max(watch.watched_since, watch.last_write ?? 0)
+    if (watch.last_write !== null)
+      hostWarn("memory", "an older Mako build wrote conversation_routes", {
+        lastWrite: new Date(watch.last_write).toISOString(),
+        retiresAfter: new Date(quietSince + LEGACY_ROUTES_RETIRE_MS).toISOString(),
+      })
+    if (this.now() - quietSince < LEGACY_ROUTES_RETIRE_MS) return
+    this.db.exec(`DROP TABLE conversation_routes;
+      CREATE TABLE conversation_routes (
+        conversation_id TEXT PRIMARY KEY, provider TEXT NOT NULL, native_id TEXT NOT NULL, socket TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX conversation_routes_native ON conversation_routes(provider, native_id);
+      CREATE TRIGGER conversation_routes_retired_insert BEFORE INSERT ON conversation_routes BEGIN SELECT RAISE(ABORT, '${LEGACY_ROUTES_RETIRED}'); END;
+      CREATE TRIGGER conversation_routes_retired_update BEFORE UPDATE ON conversation_routes BEGIN SELECT RAISE(ABORT, '${LEGACY_ROUTES_RETIRED}'); END;`)
+    this.db.prepare("UPDATE legacy_routes SET retired_at = ?").run(this.now())
+    hostWarn("memory", "retired conversation_routes", { quietSince: new Date(quietSince).toISOString() })
   }
 
   /** Reads; a reader's snapshot is reopened first once another host has written. */
@@ -445,9 +480,8 @@ export class SessionMemory {
 
   /**
    * Where a conversation's journal is, and that it is bound to this native
-   * session. Builds before this one wrote `conversation_routes`, whose
-   * triggers fill both tables; that table and its triggers stay until no
-   * build that writes it can open this ledger.
+   * session. Builds before this one wrote `conversation_routes` instead
+   * (`retireLegacyRoutes`).
    */
   private bind(route: ConversationRoute, at: number): void {
     this.writer.prepare(`INSERT INTO conversation_bindings VALUES (?, ?, ?, ?)

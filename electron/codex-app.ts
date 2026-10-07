@@ -354,6 +354,7 @@ export async function codexAppPrompt(
     lastStop: undefined,
   })
   emitUpdate(live, { kind: "user", text })
+  live.capture?.prompted(text)
   try {
     dispatch.report({ kind: "submitted", source: "transport-call" })
     const result = await rpcRequest(live, "turn/start", {
@@ -486,6 +487,7 @@ export async function codexAppSteer(
   })
   if (result.turnId !== input.expectedRunId)
     throw new Error("Codex acknowledged steering for a different turn")
+  live.capture?.steered(input.text)
   return { kind: "accepted" }
 }
 

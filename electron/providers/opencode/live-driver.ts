@@ -860,6 +860,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       live.stopNotices.clear()
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
+      live.capture?.prompted(text)
       dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
       try {
         if (slash?.kind === "command") {
@@ -894,6 +895,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (!live?.root || live.closed || live.state.status !== "running" || !turn || turn.kind === "compaction" || live.state.nativeRunId !== input.expectedRunId)
         return { kind: "not-accepted", reason: "The OpenCode turn has already changed" }
       await live.api.client.session.prompt({ sessionID: live.root, id: openCodeMessageId(), text: input.text, files: promptFiles(input.attachments), delivery: "steer" })
+      live.capture?.steered(input.text)
       return { kind: "accepted" }
     } },
     async setMode(id, modeId) {

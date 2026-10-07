@@ -13,9 +13,9 @@ import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
  * `codex,claude` or `all`). One file per conversation goes to
  * `native-captures/` beside the host log: a header line with what the driver
  * knew when the first message arrived, then `{ "at", "message" }` lines,
- * `{ "at", "prompted": true, "text" }` where a turn opened that the wire
- * does not mark itself, so a replay knows where each turn began and what
- * Mako drew for it, and `{ "at", "steered": true, "text" }` where the harness
+ * `{ "at", "prompted": true, "text" }` where Mako sent a prompt, with what
+ * it drew for it, or `{ "at", "prompted": true }` where the harness opened a
+ * turn the wire does not mark, so a replay knows where each turn began, and `{ "at", "steered": true, "text" }` where the harness
  * took a message Mako steered into the running turn. It holds
  * conversation content and stays on this machine; bearer tokens and `token=`
  * values are scrubbed. A capture stops at `MAX_BYTES`.
