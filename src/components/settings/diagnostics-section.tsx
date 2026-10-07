@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Action } from "@/components/ui/kit"
 import { desktop } from "@/state/desktop"
 import { diagnostics } from "@/state/diagnostics"
-import { formatRelative } from "@/lib/format"
+import { formatBytes, formatRelative } from "@/lib/format"
 import type { CrashReport } from "../../../electron/crash.ts"
 import type { ProviderResidencySnapshot } from "../../../electron/contracts/provider-residency.ts"
 
@@ -130,6 +130,12 @@ export function DiagnosticsSection() {
               Mako keeps at most {residency.warmLimit} resumable idle processes
               for faster follow-ups and hibernates them after idle for{" "}
               {Math.round(residency.idleMs / 60_000)} minutes.
+            </p>
+            <p className="mt-1 text-label leading-relaxed text-faint">
+              {residency.memory.loaded} conversations in memory, about{" "}
+              {formatBytes(residency.memory.bytes)} ({formatBytes(residency.memory.pinnedBytes)} running
+              or waiting) of a {formatBytes(residency.memory.budget)} budget.{" "}
+              {residency.memory.unloaded} more were unloaded and load again when opened.
             </p>
           </div>
           {residency.entries.length > 0 ? (
