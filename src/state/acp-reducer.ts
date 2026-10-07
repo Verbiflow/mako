@@ -1,1 +1,1 @@
-export { reduceLiveUpdates as reduceAcpUpdates } from "../../electron/contracts/live-content"
+export { reduceLiveUpdates as reduceAcpUpdates } from "@mako/sessions/live-content"

@@ -2,17 +2,19 @@ import { acpStore } from "@/state/acp-state"
 import { unloadLive } from "@/state/live-recovery"
 import { tabFor } from "@/state/session-panes"
 import { viewerStore } from "@/state/viewer"
+import { liveContentWeight, residencyPlan, type ResidencyBudget } from "../../electron/contracts/residency"
 
 /**
- * Conversations kept loaded besides the one on screen, most recently shown
- * first, so going back and forth between a few is instant.
+ * What this window holds of conversations off screen; see `ResidencyBudget`.
+ * The rest go back to how boot listed them and read again when opened.
  *
- * Every other conversation goes back to how boot listed it. Without this the
- * window kept the transcript of every conversation opened since it started:
- * a few days of long agent sessions, each tens of megabytes of blocks, is a
- * heap of gigabytes whose collection pauses land under typing.
+ * Without a bound the window kept the transcript of every conversation opened
+ * since it started: a few days of long agent sessions, each tens of megabytes
+ * of blocks, is a heap of gigabytes whose collection pauses land under typing.
+ * The projection a shown conversation renders adds about as much again as its
+ * blocks weigh, which this budget leaves room for.
  */
-const KEPT_RECENT = 2
+export const WINDOW_MEMORY: ResidencyBudget = { bytes: 64 * 1024 * 1024, recent: 2 }
 
 /** Conversations whose transcript something on screen or in flight still reads. */
 function inUse(): Set<string> {
@@ -34,20 +36,50 @@ function inUse(): Set<string> {
   return keys
 }
 
-/** Unload what nothing reads each time the active conversation changes. */
-export function watchLiveResidency(): () => void {
-  let recent: string[] = []
+/** Runs `work` when the window next has nothing to do, so a switch never pays for unloading. */
+function whenIdle(work: () => void): void {
+  if (globalThis.requestIdleCallback) globalThis.requestIdleCallback(work, { timeout: 2_000 })
+  else setTimeout(work, 0)
+}
+
+/** Unloads what the budget has no room for after the active conversation changes. */
+export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
+  /** In what order each conversation was last on screen; the one shown now is pinned instead. */
+  const shownAt = new Map<string, number>()
+  let shown = 0
   let active = acpStore.get().activeKey
+  let scheduled = false
+  let stopped = false
+  const sweep = () => {
+    scheduled = false
+    if (stopped) return
+    const pinned = inUse()
+    if (active) pinned.add(active)
+    const candidates = []
+    for (const conversation of Object.values(acpStore.get().conversations)) {
+      if (!conversation.hydrated) continue
+      candidates.push({
+        id: conversation.key,
+        usedAt: shownAt.get(conversation.key) ?? 0,
+        weight: liveContentWeight({ blocks: conversation.blocks, base: conversation.base, requests: conversation.requests }),
+        pinned: pinned.has(conversation.key),
+      })
+    }
+    for (const key of residencyPlan(candidates, budget).evict) unloadLive(key)
+    for (const key of shownAt.keys()) if (!acpStore.get().conversations[key]) shownAt.delete(key)
+  }
   const settle = () => {
     const next = acpStore.get().activeKey
     if (next === active) return
-    if (active) recent = [active, ...recent.filter((key) => key !== active)].slice(0, KEPT_RECENT)
+    if (active) shownAt.set(active, ++shown)
     active = next
-    const kept = inUse()
-    for (const key of recent) kept.add(key)
-    if (active) kept.add(active)
-    for (const conversation of Object.values(acpStore.get().conversations))
-      if (conversation.hydrated && !kept.has(conversation.key)) unloadLive(conversation.key)
+    if (scheduled) return
+    scheduled = true
+    whenIdle(sweep)
   }
-  return acpStore.subscribe(settle)
+  const unsubscribe = acpStore.subscribe(settle)
+  return () => {
+    stopped = true
+    unsubscribe()
+  }
 }

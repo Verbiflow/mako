@@ -4,7 +4,7 @@ import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot, EntryBlock } from "@/lib/types"
 import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistorySnapshot } from "../../electron/contracts/live-history"
-import { LiveBlockSchema, type LiveBlock } from "../../electron/contracts/live-content"
+import { LiveBlockSchema, type LiveBlock } from "@mako/sessions/live-content"
 
 /** Reassemble one explicitly requested value, validating part identity/order.
  * JSON is produced by the same typed host contract as the ordinary bridge. */

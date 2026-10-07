@@ -6,7 +6,7 @@ import { threadToMessages } from "@/lib/foreign-thread"
 import { reconcileMessages } from "@/lib/reconcile"
 import { foldTools } from "@/lib/tools"
 import { toExchanges, type Exchange } from "@/lib/exchanges"
-import { changedLiveBlockStart, isTurnStart } from "../../electron/contracts/live-content"
+import { changedLiveBlockStart, isTurnStart } from "@mako/sessions/live-content"
 import { touchedFiles, type TouchedFile } from "@/lib/context-files"
 import { nativePromptRequestIds } from "../../electron/contracts/native-prompt-identity"
 
