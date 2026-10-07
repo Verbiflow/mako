@@ -38,7 +38,7 @@ export {
 } from "./provider-turn.js"
 export { isOpenCodeInstruction, openCodeNoticeLabel, openCodeTurnFailed, type OpenCodeNotice } from "./providers/opencode-notice.js"
 export { OPENCODE_PLAN_AGENT, openCodePlan } from "./providers/opencode-plan.js"
-export { OpenCodeEditInput, OpenCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
+export { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
 export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, DevinPlanTracker, DevinPlanUpdates, type DevinPlanCall, type DevinProposedPlan } from "./providers/devin-plans.js"
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
@@ -109,10 +109,10 @@ export {
   cursorSdkSelection,
   normalizeCursorSdkModels,
   type CursorSdkModelListItem,
-  type CursorSdkModelSelection,
   type CursorSdkSelectionResult,
 } from "./providers/cursor-sdk-models.js"
-export { GrokProvider, grokErrorLabel, grokUpdateMarker } from "./providers/grok.js"
+export type { CursorSdkModelSelection } from "./cursor-sdk-content.js"
+export { GrokProvider, grokErrorLabel, grokHome, grokUpdateMarker, grokWorkspaceCwd } from "./providers/grok.js"
 export { ClaudeProvider } from "./providers/claude.js"
 export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
@@ -182,3 +182,5 @@ export * from "./settings.js"
 export * from "./events.js"
 
 export { openCodeDatabasePaths } from "./providers/opencode-location.js"
+export { devinCliDirectory, devinDataHome } from "./providers/devin-location.js"
+export { claudeTranscriptRoots } from "./providers/claude-location.js"

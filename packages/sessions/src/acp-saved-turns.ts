@@ -5,9 +5,7 @@ import { AcpContentBlockSchema } from "./acp-tool-details.js"
 import type { AttachmentContent } from "./content.js"
 import { cleanEntry, EntrySink, type ThreadEntry, type TurnUsage } from "./format.js"
 import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
-import { liveEvent, liveToolEntry } from "./live-entries.js"
-
-type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
+import { turnEntries, userEntry } from "./live-entries.js"
 
 /**
  * The saved updates the shared decoder reads, screened for every field
@@ -193,59 +191,4 @@ function promptUpdate(prompt: SavedPrompt): LiveUpdate {
 function promptEntry(prompt: SavedPrompt): ThreadEntry {
   if (prompt.opener) return { kind: "event", at: prompt.at, label: prompt.opener, opensTurn: true }
   return userEntry(prompt.at, prompt.id, prompt.steeringFor, prompt.text, prompt.attachments)
-}
-
-function userEntry(at: string | undefined, id: string | undefined, steeringFor: string | undefined, text: string, attachments: readonly AttachmentContent[] | undefined): ThreadEntry {
-  return { kind: "user", ...id && { id }, at, ...steeringFor && { steeringFor }, text, ...attachments?.length && { attachments: [...attachments] } }
-}
-
-/** A turn's blocks as saved entries: what the person said, what the agent did, and its markers. */
-function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveBlock, string | undefined>, usage?: TurnUsage): ThreadEntry[] {
-  const entries: ThreadEntry[] = []
-  let assistant: AssistantEntry | undefined
-  let replied: AssistantEntry | undefined
-  const reply = (block: LiveBlock): AssistantEntry => {
-    if (!assistant) {
-      assistant = { kind: "assistant", at: written.get(block), blocks: [] }
-      entries.push(assistant)
-      replied = assistant
-    }
-    return assistant
-  }
-  for (const block of blocks) {
-    const at = written.get(block)
-    switch (block.type) {
-      case "user":
-        assistant = undefined
-        entries.push(userEntry(at, block.requestId, block.steeringFor, block.text, block.attachments))
-        break
-      case "provider-turn":
-        assistant = undefined
-        entries.push({ kind: "event", at, label: block.reason, opensTurn: true })
-        break
-      case "event":
-        assistant = undefined
-        entries.push({ kind: "event", at, ...liveEvent(block) })
-        break
-      case "plan":
-        assistant = undefined
-        entries.push({ kind: "assistant", at, blocks: [{ type: "tool", name: "Plan", output: "", details: [{ type: "plan", entries: block.entries }] }] })
-        break
-      case "text":
-      case "thinking":
-        reply(block).blocks.push({ type: block.type, text: block.text })
-        break
-      case "attachment":
-        reply(block).blocks.push(block.attachment)
-        break
-      case "proposed-plan":
-        reply(block).blocks.push({ type: block.type, id: block.id, text: block.text, status: block.status, ...block.truncated && { truncated: true } })
-        break
-      case "tool":
-        reply(block).blocks.push(liveToolEntry(block))
-        break
-    }
-  }
-  if (usage && replied) replied.usage = usage
-  return entries
 }

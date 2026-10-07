@@ -495,6 +495,21 @@ function toolDelivery(block: Extract<LiveBlock, { type: "tool" }>, update: Extra
   return { update: sent, grows }
 }
 
+/** How an update names `block` within its turn, for those found by name. */
+function nameOf(block: LiveBlock): string | undefined {
+  switch (block.type) {
+    case "text":
+    case "thinking":
+    case "proposed-plan":
+    case "event":
+      return block.id === undefined ? undefined : `${block.type}:${block.id}`
+    case "plan":
+      return "plan"
+    default:
+      return undefined
+  }
+}
+
 function reduce(
   blocks: LiveBlock[],
   updates: LiveUpdate[],
@@ -505,11 +520,17 @@ function reduce(
   const next = [...blocks]
   let from = blocks.length
   let current = 0
+  // The current turn's blocks an update finds by name, where they sit: a
+  // replayed run reduces as one batch of hundreds of thousands of updates,
+  // so a scan of the turn per update was quadratic.
+  const named = new Map<string, number>()
   const replace = (index: number, block: LiveBlock) => {
     const at = index < 0 ? next.length : index
     from = Math.min(from, at)
     placed?.(block, index < 0 ? undefined : next[at], current)
     next[at] = block
+    const key = nameOf(block)
+    if (key !== undefined && !named.has(key)) named.set(key, at)
   }
   const rewrite = (index: number) => {
     if (!delivering) return
@@ -519,15 +540,18 @@ function reduce(
   const tools = new Map<string, number>()
   let turnStart = next.length - 1
   while (turnStart >= 0 && !isTurnStart(next[turnStart])) turnStart--
-  for (let index = turnStart + 1; index < next.length; index++) {
-    const block = next[index]!
-    if (block.type === "tool") tools.set(block.id, index)
+  const reindex = () => {
+    tools.clear()
+    named.clear()
+    for (let at = turnStart + 1; at < next.length; at++) {
+      const block = next[at]!
+      if (block.type === "tool") tools.set(block.id, at)
+      const key = nameOf(block)
+      if (key !== undefined && !named.has(key)) named.set(key, at)
+    }
   }
-  const findCurrent = (matches: (block: LiveBlock) => boolean) => {
-    for (let index = turnStart + 1; index < next.length; index++)
-      if (matches(next[index]!)) return index
-    return -1
-  }
+  reindex()
+  const findCurrent = (key: string) => named.get(key) ?? -1
   for (; current < updates.length; current++) {
     let update = updates[current]!
     const last = next.at(-1)
@@ -556,6 +580,7 @@ function reduce(
       case "user": {
         if (!update.steeringFor) {
           tools.clear()
+          named.clear()
           turnStart = next.length
         }
         const user: LiveBlock = {
@@ -573,9 +598,7 @@ function reduce(
       case "text":
       case "thinking": {
         const index = update.id
-          ? findCurrent(
-              (block) => block.type === update.kind && block.id === update.id
-            )
+          ? findCurrent(`${update.kind}:${update.id}`)
           : last?.type === update.kind
             ? next.length - 1
             : -1
@@ -589,9 +612,7 @@ function reduce(
         break
       }
       case "proposed-plan": {
-        const index = findCurrent(
-          (block) => block.type === "proposed-plan" && block.id === update.id
-        )
+        const index = findCurrent(`proposed-plan:${update.id}`)
         const previous = next[index]
         const text =
           previous?.type === "proposed-plan" && !update.replace
@@ -653,13 +674,14 @@ function reduce(
         break
       }
       case "plan": {
-        const index = findCurrent((block) => block.type === "plan")
+        const index = findCurrent("plan")
         const block: LiveBlock = { type: "plan", entries: update.entries }
         replace(index, block)
         break
       }
       case "provider-turn":
         tools.clear()
+        named.clear()
         turnStart = next.length
         replace(-1, { type: "provider-turn", reason: update.reason })
         break
@@ -682,15 +704,7 @@ function reduce(
         }
         if (update.setup) block.setup = true
         if (update.id) block.id = update.id
-        replace(
-          update.id
-            ? findCurrent(
-                (candidate) =>
-                  candidate.type === "event" && candidate.id === update.id
-              )
-            : -1,
-          block
-        )
+        replace(update.id ? findCurrent(`event:${update.id}`) : -1, block)
         break
       }
       case "retract": {
@@ -709,11 +723,7 @@ function reduce(
         }
         if (kept === next.length) break
         next.length = kept
-        tools.clear()
-        for (let index = turnStart + 1; index < next.length; index++) {
-          const block = next[index]!
-          if (block.type === "tool") tools.set(block.id, index)
-        }
+        reindex()
         break
       }
     }

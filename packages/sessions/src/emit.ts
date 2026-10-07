@@ -29,6 +29,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Thread, ThreadEntry } from "./format.js"
 import { refuseNativeWrite } from "./read-only-sqlite.js"
+import { devinCliDirectory } from "./providers/devin-location.js"
 
 export interface EmitResult {
   sessionId: string
@@ -367,10 +368,7 @@ export async function emitDevinSession(
   })
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
-  const data = options.home
-    ? join(home, ".local", "share")
-    : process.env.XDG_DATA_HOME || join(home, ".local", "share")
-  const path = join(data, "devin", "cli", "sessions.db")
+  const path = join(devinCliDirectory(options.home ? {} : process.env, home), "sessions.db")
   const messages = await flatten(
     (await persistThreadAttachments(thread, join(home, ".mako", "attachments")))
       .entries,
