@@ -107,6 +107,8 @@ function processLine(context: ProtocolContext, line: string): void {
     return
   }
   if (message.kind === "request") {
+    context.capture?.record({ request: message.method, id: message.id, params: message.params })
+    deliver(context, context.decoder.request(message.id, message.method, message.params))
     context.protocol.handleServerRequest(
       message.id,
       message.method,
@@ -492,7 +494,10 @@ export function sendRpcResult(
   id: JsonRpcId,
   result: JsonValue
 ): boolean {
-  return sendRpc(context, { jsonrpc: "2.0", id, result })
+  const sent = sendRpc(context, { jsonrpc: "2.0", id, result })
+  context.capture?.record({ answered: id, result })
+  deliver(context, context.decoder.answered(id, result))
+  return sent
 }
 
 export function sendRpcError(

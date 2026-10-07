@@ -5,7 +5,7 @@ import {
   liveToolFinished,
   type LiveBlock,
   type LiveUpdate,
-} from "./contracts/live-content.js"
+} from "@mako/sessions/live-content"
 import {
   MAX_INTERRUPTED_CALLS,
   type Interruption,

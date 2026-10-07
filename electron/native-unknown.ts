@@ -2,7 +2,7 @@ import { appendFile, mkdir, rename, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { hasVocabulary, isDeclaredTool } from "@mako/sessions/tool-identity"
 import type { JsonValue } from "./codex-app-json.js"
-import type { LiveUpdate } from "./contracts/live-content.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import { hostLog, hostLogPath } from "./host-log.js"
 import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
 

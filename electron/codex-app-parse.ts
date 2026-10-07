@@ -693,7 +693,10 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
       return { type, id, review: stringValue(root.review) ?? "" }
     case "hookPrompt":
       return { type, id }
-    case "imageView":
+    case "imageView": {
+      const path = stringValue(root.path)
+      return path === undefined ? { type: "unsupported", id, sourceType: type } : { type, id, path, attachment: attachmentFromCodexContent(root) }
+    }
     case "imageGeneration": {
       return {
         type: "attachment",

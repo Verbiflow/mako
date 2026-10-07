@@ -13,8 +13,8 @@ import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
  * `codex,claude` or `all`). One file per conversation goes to
  * `native-captures/` beside the host log: a header line with what the driver
  * knew when the first message arrived, then `{ "at", "message" }` lines,
- * and `{ "at", "prompted": true }` where Mako sent a prompt over a wire that
- * does not echo it, so a replay knows where each turn began. It holds
+ * and `{ "at", "prompted": true }` where a turn opened that the wire does
+ * not mark itself, so a replay knows where each turn began. It holds
  * conversation content and stays on this machine; bearer tokens and `token=`
  * values are scrubbed. A capture stops at `MAX_BYTES`.
  */
@@ -25,7 +25,7 @@ const MAX_BYTES = 64 * 1024 * 1024
 export interface NativeCapture {
   readonly path: string
   record(message: JsonValue): void
-  /** A prompt Mako sent: the turn the messages after it belong to. */
+  /** A turn opened, by a prompt Mako sent or by the harness itself: the turn the messages after it belong to. */
   prompted(): void
   /** Resolves once every recorded line is on disk. */
   flush(): Promise<void>

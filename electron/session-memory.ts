@@ -392,10 +392,7 @@ export class SessionMemory {
            ON CONFLICT (provider, native_id) DO UPDATE SET host_pid = excluded.host_pid, host_started_at = excluded.host_started_at, host_label = excluded.host_label, conversation_id = excluded.conversation_id, since = excluded.since, heartbeat_at = excluded.heartbeat_at`
         )
         .run(provider, nativeId, this.host.pid, this.host.startedAt, this.host.label, conversationId, since, at)
-      if (this.host.socket)
-        this.writer.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
-          .run(conversationId, provider, nativeId, this.host.socket, at)
+      if (this.host.socket) this.bind({ conversationId, provider, nativeId, socket: this.host.socket }, at)
       this.db.exec("COMMIT")
     } catch (error) {
       this.db.exec("ROLLBACK")
@@ -437,15 +434,26 @@ export class SessionMemory {
         this.db.exec("ROLLBACK")
         return false
       }
-      this.writer.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
-        .run(route.conversationId, route.provider, route.nativeId, route.socket, this.now())
+      this.bind(route, this.now())
       this.db.exec("COMMIT")
       return true
     } catch (error) {
       this.db.exec("ROLLBACK")
       throw error
     }
+  }
+
+  /**
+   * Where a conversation's journal is, and that it is bound to this native
+   * session. Builds before this one wrote `conversation_routes`, whose
+   * triggers fill both tables; that table and its triggers stay until no
+   * build that writes it can open this ledger.
+   */
+  private bind(route: ConversationRoute, at: number): void {
+    this.writer.prepare(`INSERT INTO conversation_bindings VALUES (?, ?, ?, ?)
+      ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=excluded.updated_at`)
+      .run(route.provider, route.nativeId, route.conversationId, at)
+    this.rememberJournal(route.conversationId, route.socket)
   }
 
   /** Journal location survives hibernation and host restart; a route grants no write ownership. */
@@ -458,11 +466,7 @@ export class SessionMemory {
   routeForConversation(conversationId: string): ConversationEndpoint | null {
     const journal = z.object({ conversationId: z.string(), socket: z.string() }).safeParse(
       this.db.prepare("SELECT conversation_id AS conversationId, socket FROM conversation_journals WHERE conversation_id = ?").get(conversationId))
-    if (journal.success) return journal.data.socket !== this.host.socket ? journal.data : null
-    const row = this.db.prepare(`SELECT conversation_id AS conversationId, provider, native_id AS nativeId, socket
-      FROM conversation_routes WHERE conversation_id = ?`).get(conversationId)
-    const parsed = RouteSchema.safeParse(row)
-    return parsed.success && parsed.data.socket !== this.host.socket ? parsed.data : null
+    return journal.success && journal.data.socket !== this.host.socket ? journal.data : null
   }
 
   routeForSession(provider: string, nativeId: string): ConversationRoute | null {

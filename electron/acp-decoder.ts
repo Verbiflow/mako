@@ -1,16 +1,8 @@
-import type { RequestPermissionRequest, SessionNotification } from "@agentclientprotocol/sdk"
-import type { SessionSettings } from "@mako/sessions/settings"
-import { z } from "zod"
-import { decodeAcpUpdate } from "./acp-notifications.js"
+import type { RequestPermissionRequest } from "@agentclientprotocol/sdk"
+import { AcpUpdateDecoder } from "@mako/sessions/acp-decoder"
 import type { JsonObject } from "./codex-app-json.js"
-import { decoded, type Decoded } from "./contracts/native-decoding.js"
 import type { LivePermissionResponse } from "./contracts/providers-acp.js"
 import type { AcpAsk, AcpPlanDecoder, AcpVendorRequest, ProviderAcpSource } from "./providers/acp-source.js"
-
-/** The provider hooks the decoder reads. */
-export type AcpDecoderHooks = Pick<ProviderAcpSource, "toolName" | "plans" | "requests" | "permissionTitle">
-
-const RawSchema = z.json().catch(null)
 
 /** What a plan approval asks when the agent gives it no title of its own. */
 export const PLAN_APPROVAL_TITLE = "Build the proposed plan?"
@@ -28,31 +20,16 @@ export interface AcpRequestRecord {
 }
 
 /**
- * One ACP session's messages from the agent, in the shared vocabulary: the
- * protocol's own updates, the provider's plan handover layered on them, and
- * the requests the agent waits on. Pure apart from the plan decoder's own
- * per-session state, so the live client and the fixture runner
- * (`npm run test:decoders`) decode the same messages the same way.
+ * One ACP session's messages from the agent: its updates, decoded as a
+ * store that saved them decodes them (`AcpUpdateDecoder`), and the requests
+ * the agent waits on, which only a live session answers.
  */
-export class AcpDecoder {
-  private readonly plans: AcpPlanDecoder | undefined
-  private readonly hooks: AcpDecoderHooks | undefined
-  private readonly settings: () => SessionSettings | undefined
+export class AcpDecoder extends AcpUpdateDecoder<AcpPlanDecoder> {
+  private readonly source: ProviderAcpSource | undefined
 
-  constructor(hooks: AcpDecoderHooks | undefined, settings: () => SessionSettings | undefined = () => undefined) {
-    this.hooks = hooks
-    this.settings = settings
-    this.plans = hooks?.plans?.()
-  }
-
-  /** A `session/update`. An unknown kind is `session/update/<kind>`, with the notification kept. */
-  update(notification: SessionNotification): Decoded[] {
-    const { update } = notification
-    const toolName = update.sessionUpdate === "tool_call" ? this.hooks?.toolName?.(update) : undefined
-    const out = decodeAcpUpdate(update, { settings: this.settings(), toolName }).map((item) =>
-      item.kind === "unknown" ? decoded.unknown(`session/update/${item.type}`, RawSchema.parse(notification)) : item)
-    for (const plan of this.plans?.update(update, notification.sessionId) ?? []) out.push(decoded.update(plan))
-    return out
+  constructor(source: ProviderAcpSource | undefined, settings?: ConstructorParameters<typeof AcpUpdateDecoder>[1]) {
+    super(source, settings)
+    this.source = source
   }
 
   /**
@@ -64,7 +41,7 @@ export class AcpDecoder {
     const plan = this.plans?.approval?.(request)
     const ask: AcpAsk = {
       request: {
-        title: request.toolCall.title ?? (plan ? PLAN_APPROVAL_TITLE : this.hooks?.permissionTitle?.(request)) ?? "The agent wants to use a tool",
+        title: request.toolCall.title ?? (plan ? PLAN_APPROVAL_TITLE : this.source?.permissionTitle?.(request)) ?? "The agent wants to use a tool",
         kind: request.toolCall.kind ?? (plan ? "switch_mode" : undefined),
         options: request.options.map(({ optionId, name, kind }) => ({ optionId, name, kind })),
       },
@@ -75,7 +52,7 @@ export class AcpDecoder {
 
   /** A vendor request; `undefined` when the provider does not own the method. */
   request(method: string, params: JsonObject): AcpVendorRequest | undefined {
-    return this.hooks?.requests?.decode(method, params)
+    return this.source?.requests?.decode(method, params)
   }
 }
 

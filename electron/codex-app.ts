@@ -12,7 +12,7 @@ import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch
 import { CodexAgents } from "./providers/codex/agents.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./providers/codex/settings.js"
+import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./providers/codex/settings.js"
 import { codexInput } from "./providers/codex/input.js"
 import { codexRuntimeVersion } from "./providers/codex/native-context.js"
 import type {
@@ -562,7 +562,7 @@ async function openThread(
 ): Promise<ThreadResponse> {
   const initialized = await trace.step("handshake", () => watch.step("initialize", rpcRequest(live, "initialize", {
     clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
-    capabilities: { experimentalApi: true, requestAttestation: false },
+    capabilities: CODEX_CLIENT_CAPABILITIES,
   })))
   sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
   if (live.state.executionContext) updateState(live, { executionContext: {

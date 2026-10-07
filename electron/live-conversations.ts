@@ -13,6 +13,7 @@ import { nativePromptReference } from "./contracts/native-prompt-identity.js"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import type {
+  ConversationMemory,
   ProviderResidencyEntry,
   ProviderResidencySnapshot,
 } from "./contracts/provider-residency.js"
@@ -77,7 +78,7 @@ import type {
   NativeActivity,
   NativeActivityObservation,
 } from "./shared.js"
-import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart } from "./contracts/live-content.js"
+import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart } from "@mako/sessions/live-content"
 import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "./contracts/live-conversations.js"
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, STOPPED_CALL_NOTE, TurnSteps } from "./interrupted-turn.js"
 import { controlNote } from "./control-launch.js"
@@ -92,11 +93,26 @@ import {
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
+import { liveContentWeight, residencyPlan, type ResidencyPlan } from "./contracts/residency.js"
 import type { JournalFacts, SourceRef } from "./thread-store.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "./contracts/thread-identity.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
+/**
+ * What the host holds of conversations nothing is using; see `ResidencyBudget`.
+ * Journals here run to 95MB, and a host that kept each one it loaded held
+ * 640MB minutes after starting.
+ */
+export const CONVERSATION_MEMORY = { bytes: 128 * 1024 * 1024, recent: 2, sweepMs: 15_000 }
+
+/** What an unloaded conversation keeps that its journal does not. */
+interface Unloaded {
+  generation: number
+  commands: LiveSnapshot["session"]["commands"]
+  activityAt?: number
+  nativeActivity?: NativeActivity
+}
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
@@ -111,7 +127,11 @@ export class LiveConversations {
   /** Which Sessions this environment may run, and moving Threads to another. */
   readonly moves: LiveMoves
   private readonly records = new Map<string, Resident>()
-  private readonly closedCache = new Map<string, { bytes: number; revision: number }>()
+  /** Conversations `sweep` let go this host life; `load` puts each back as it was. */
+  private readonly unloaded = new Map<string, Unloaded>()
+  /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
+  private readonly released = new WeakSet<Resident>()
+  private sweepTimer?: ReturnType<typeof setTimeout>
   private readonly bindingOwners = new Map<string, string>()
   private readonly captures = new Map<string, Promise<LiveSnapshot>>()
   // Refresh reads an already durable conversation; unlike an initial capture,
@@ -417,7 +437,15 @@ export class LiveConversations {
       warmLimit:
         this.dependencies.providerWarmLimit ?? PROVIDER_WARM_LIMIT,
       idleMs: this.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS,
+      memory: this.memory(),
     }
+  }
+
+  private memory(): ConversationMemory {
+    const plan = this.memoryPlan()
+    let bytes = 0
+    for (const resident of this.records.values()) bytes += residentWeight(resident)
+    return { loaded: this.records.size, unloaded: this.unloaded.size, bytes, pinnedBytes: plan.pinned, budget: this.memoryBudget().bytes }
   }
 
   lifecycleWork(): LifecycleWork[] {
@@ -465,15 +493,8 @@ export class LiveConversations {
     return [
       ...[...this.recovered.values()].map((summary) => ({ ...summary, epoch: this.epoch, ...this.placement(summary.session.id) })),
       ...[...this.records.values()].map(({ snapshot }) => ({
-        hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
-        nativePaths: snapshot.control?.bindings.flatMap((binding) =>
-          binding.path ? [binding.path] : []
-        ),
-        session: snapshot.session,
-        revision: snapshot.revision,
+        ...residentSummary(snapshot),
         epoch: this.epoch,
-        threadPath: snapshot.threadPath,
-        createdAt: snapshot.createdAt,
         ...this.placement(snapshot.session.id),
       })),
     ]
@@ -514,6 +535,11 @@ export class LiveConversations {
     const breakdown = resident?.driver?.contextBreakdown
     if (breakdown?.kind !== "itemized" || !bindingId || resident?.snapshot.session.connection !== "connected") return null
     return breakdown.read(bindingId)
+  }
+
+  /** The session as the listing has it, without reading an unloaded conversation's transcript back. */
+  session(id: string): LiveSessionState | undefined {
+    return this.records.get(id)?.snapshot.session ?? this.recovered.get(id)?.session
   }
 
   snapshot(id: string): LiveSnapshot | null {
@@ -2930,7 +2956,7 @@ export class LiveConversations {
       .then((checkpoint) => {
         if (
           !checkpoint ||
-          !this.records.has(resident.snapshot.session.id) ||
+          this.records.get(resident.snapshot.session.id) !== resident ||
           this.control(resident).activeBindingId !== bindingId ||
           resident.snapshot.session.status !== "ready" ||
           resident.snapshot.blocks !== blocks ||
@@ -3296,40 +3322,116 @@ export class LiveConversations {
     } finally {
       resident.closing = false
       this.drain(resident)
-      this.cacheClosed(resident)
+      this.scheduleSweep()
     }
   }
 
-  private cacheClosed(resident: Resident): void {
-    if (!this.closedLeaf(resident)) return
-    const id = resident.snapshot.session.id
-    const cached = this.closedCache.get(id)
-    const size = cached?.revision === resident.snapshot.revision ? cached.bytes : JSON.stringify(resident.snapshot).length * 2
-    this.closedCache.delete(id)
-    this.closedCache.set(id, { bytes: size, revision: resident.snapshot.revision })
-    let bytes = [...this.closedCache.values()].reduce((total, entry) => total + entry.bytes, 0)
-    for (const [key, entry] of this.closedCache) {
-      if (key === id || (this.closedCache.size <= 8 && bytes <= 64 * 1024 * 1024)) break
-      this.closedCache.delete(key)
-      bytes -= entry.bytes
-      const held = this.records.get(key)
-      if (!held || !this.closedLeaf(held)) continue
-      this.flush(held)
-      const snapshot = held.snapshot
-      this.recovered.set(key, { session: snapshot.session, revision: snapshot.revision, createdAt: snapshot.createdAt, threadPath: snapshot.threadPath, nativePaths: snapshot.control?.bindings.flatMap((binding) => binding.path ? [binding.path] : []) })
-      held.journal.close()
-      this.records.delete(key)
-      for (const binding of snapshot.control?.bindings ?? []) if (this.bindingOwners.get(binding.id) === key) this.bindingOwners.delete(binding.id)
-    }
+  private memoryBudget() {
+    return this.dependencies.conversationMemory ?? CONVERSATION_MEMORY
   }
 
-  private closedLeaf(resident: Resident): boolean {
-    return resident.snapshot.session.status === "closed" && !resident.driver && !resident.connections.size && !resident.closing && !resident.opening && !resident.hibernating && !resident.waking && !resident.transferring && !resident.checkpointing && !resident.rewinding && !resident.snapshot.control?.children.length
+  /** Runs `sweep` once things settle, so letting go never lands on a hot path. */
+  private scheduleSweep(): void {
+    if (this.sweepTimer || this.shutdown) return
+    this.sweepTimer = setTimeout(() => {
+      this.sweepTimer = undefined
+      this.sweep()
+    }, this.memoryBudget().sweepMs)
+    this.sweepTimer.unref?.()
+  }
+
+  private memoryPlan(): ResidencyPlan {
+    return residencyPlan(
+      [...this.records.values()].map((resident) => ({
+        id: resident.snapshot.session.id,
+        usedAt: resident.usedAt ?? 0,
+        weight: residentWeight(resident),
+        pinned: this.pinned(resident),
+      })),
+      this.memoryBudget()
+    )
+  }
+
+  /** Lets go of what the memory budget has no room for; see `ResidencyBudget`. */
+  private sweep(): void {
+    const plan = this.memoryPlan()
+    let freed = 0
+    let count = 0
+    for (const id of plan.evict) {
+      const resident = this.records.get(id)
+      const weight = resident ? residentWeight(resident) : 0
+      if (resident && this.unload(resident)) {
+        freed += weight
+        count++
+      }
+    }
+    if (count)
+      hostLog("residency", "conversations unloaded", {
+        count, freed, kept: plan.kept, pinned: plan.pinned, budget: this.memoryBudget().bytes, loaded: this.records.size, unloaded: this.unloaded.size,
+      })
+  }
+
+  /**
+   * What memory must keep: anything running, waiting on the person, partway
+   * through an operation, or holding a change its journal does not have.
+   */
+  private pinned(resident: Resident): boolean {
+    const { snapshot } = resident
+    const id = snapshot.session.id
+    const control = this.control(resident)
+    return Boolean(
+      resident.driver || resident.connections.size || resident.starting || resident.exited?.size ||
+        resident.opening || resident.closing || resident.hibernating || resident.waking ||
+        resident.transferring || resident.checkpointing || resident.rewinding ||
+        resident.accountSwitching || resident.signInResume || resident.autoContinue || resident.stopping ||
+        resident.storageFault || resident.timer || resident.updates.length ||
+        resident.journalSnapshot !== snapshot ||
+        snapshot.session.status === "running" || snapshot.session.status === "starting" ||
+        snapshot.permissions.length || control.questions?.length ||
+        snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching") ||
+        snapshot.nativeAgents?.agents.some(isActiveNativeAgent) ||
+        this.transfers.pending(resident) ||
+        control.children.some((child) =>
+          child.status === "starting" || child.status === "working" || child.status === "needs-permission" ||
+          child.delivery === "pending" || child.delivery === "queued") ||
+        this.starts.has(id) || this.refreshes.has(id) || this.stops.has(id)
+    )
+  }
+
+  /** Lets go of a conversation nothing is using; `load` brings it back as it was. */
+  private unload(resident: Resident): boolean {
+    try {
+      this.flush(resident)
+    } catch (error) {
+      this.storageFailed(resident, { error })
+      return false
+    }
+    if (this.pinned(resident)) return false
+    const { snapshot } = resident
+    const id = snapshot.session.id
+    this.recovered.set(id, residentSummary(snapshot))
+    this.unloaded.set(id, {
+      generation: resident.generation,
+      commands: snapshot.session.commands,
+      activityAt: snapshot.activityAt,
+      nativeActivity: snapshot.nativeActivity,
+    })
+    this.records.delete(id)
+    this.released.add(resident)
+    resident.journal.close()
+    return true
+  }
+
+  /** Bindings route their driver's events by owner; the owner is not in the journal's index. */
+  private ownBindings(resident: Resident): void {
+    for (const binding of this.control(resident).bindings) this.bindingOwners.set(binding.id, resident.snapshot.session.id)
   }
 
   stop(): Promise<void> {
     if (this.shutdown) return this.shutdown
     const closing: Promise<unknown>[] = []
+    clearTimeout(this.sweepTimer)
+    this.sweepTimer = undefined
     this.actions.stop()
     for (const resident of this.records.values()) {
       for (const pending of [resident.hibernating, resident.waking, resident.openingOperation, resident.transferOperation])
@@ -3750,6 +3852,10 @@ export class LiveConversations {
   }
 
   private flush(resident: Resident): void {
+    if (this.released.has(resident)) {
+      hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })
+      return
+    }
     const session = resident.snapshot.session
     if (session.executionContext?.identity.kind === "pending" &&
       (session.status === "closed" || session.connection === "hibernated" || session.connection === "disconnected")) {
@@ -3779,6 +3885,8 @@ export class LiveConversations {
     resident.pendingCharacters = 0
     resident.snapshot = snapshot
     resident.journalSnapshot = snapshot
+    resident.usedAt = this.dependencies.now?.() ?? Date.now()
+    this.scheduleSweep()
     this.syncMemory(previous.session, snapshot.session)
     if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
       this.registerThread(snapshot, undefined)
@@ -3854,13 +3962,22 @@ export class LiveConversations {
 
   private load(id: string): Resident | undefined {
     const existing = this.records.get(id)
-    if (existing) { this.cacheClosed(existing); return existing }
+    if (existing) {
+      existing.usedAt = this.dependencies.now?.() ?? Date.now()
+      return existing
+    }
     if (!this.recovered.has(id)) return undefined
     const journal = new LiveJournal(this.dependencies.root, id)
+    const started = performance.now()
     const previous = journal.read()
     if (!previous) {
       journal.close()
       return undefined
+    }
+    const unloaded = this.unloaded.get(id)
+    if (unloaded) {
+      hostLog("residency", "conversation reloaded", { conversation: id, ms: Math.round(performance.now() - started), blocks: previous.blocks.length })
+      return this.reload(journal, previous, unloaded)
     }
     const strandedTransfers = new Set(
       previous.control?.transfers
@@ -3981,12 +4098,73 @@ export class LiveConversations {
       pendingCharacters: 0,
       updates: [],
       timer: null,
+      usedAt: this.dependencies.now?.() ?? Date.now(),
     }
     this.records.set(id, resident)
     this.recovered.delete(id)
+    this.ownBindings(resident)
     this.children.recover(resident)
-    this.cacheClosed(resident)
+    this.scheduleSweep()
     return resident
+  }
+
+  /**
+   * A conversation `unload` let go, back exactly as it left. None of a
+   * restart's recovery applies: only what nothing was running could go.
+   */
+  private reload(journal: LiveJournal, saved: LiveSnapshot, unloaded: Unloaded): Resident {
+    const id = saved.session.id
+    const session = { ...saved.session }
+    if (unloaded.commands) session.commands = unloaded.commands
+    const snapshot: LiveSnapshot = { ...saved, session }
+    if (unloaded.activityAt !== undefined) snapshot.activityAt = unloaded.activityAt
+    if (unloaded.nativeActivity) snapshot.nativeActivity = unloaded.nativeActivity
+    const resident: Resident = {
+      connections: new Map(),
+      bindingGenerations: new Map(),
+      transferring: false,
+      snapshot,
+      journal,
+      journalSnapshot: snapshot,
+      driver: null,
+      // Past every generation a continuation of the resident it replaces could hold.
+      generation: unloaded.generation + 1,
+      opening: false,
+      pendingCharacters: 0,
+      updates: [],
+      timer: null,
+      usedAt: this.dependencies.now?.() ?? Date.now(),
+    }
+    this.records.set(id, resident)
+    this.recovered.delete(id)
+    this.unloaded.delete(id)
+    this.ownBindings(resident)
+    this.scheduleSweep()
+    return resident
+  }
+}
+
+function residentWeight({ snapshot }: Resident): number {
+  return liveContentWeight({
+    blocks: snapshot.blocks,
+    base: snapshot.base,
+    requests: snapshot.requests,
+    control: snapshot.control,
+    configOptions: snapshot.session.configOptions,
+  })
+}
+
+/** The listing's line for a conversation, loaded or not. */
+function residentSummary(snapshot: LiveSnapshot): LiveSummary {
+  return {
+    hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
+    nativePaths: snapshot.control?.bindings.flatMap((binding) =>
+      binding.path ? [binding.path] : []
+    ),
+    session: snapshot.session,
+    revision: snapshot.revision,
+    threadPath: snapshot.threadPath,
+    createdAt: snapshot.createdAt,
   }
 }
 

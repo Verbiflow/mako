@@ -28,6 +28,7 @@ import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { PlanBuild } from "./contracts/plan-builds.js"
 import type { SignInResume } from "./contracts/live-conversations.js"
+import type { ResidencyBudget } from "./contracts/residency.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
   session: LiveSessionState
@@ -60,6 +61,8 @@ export interface Resident {
   activityAt?: number
   timer: ReturnType<typeof setTimeout> | null
   displayPrompt?: string
+  /** When anything last loaded or changed it; the memory budget lets the oldest go first. */
+  usedAt?: number
   /** When this ready provider became eligible to leave the bounded warm pool. */
   idleSince?: number
   idleTimer?: ReturnType<typeof setTimeout>
@@ -141,6 +144,8 @@ export interface Dependencies {
   providerIdleMs?: number
   /** Test override for the number of ready transports retained for fast reuse. */
   providerWarmLimit?: number
+  /** Test override for `CONVERSATION_MEMORY` and the wait before a sweep. */
+  conversationMemory?: ResidencyBudget & { sweepMs: number }
   /** Test clock for deterministic residency decisions. */
   now?: () => number
 }

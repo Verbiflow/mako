@@ -8,13 +8,13 @@ import { randomUUID } from "node:crypto"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderStartOptions, type ProviderSteerInput, type ProviderSteerResult } from "./providers/live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
-import { AcpCompaction } from "./acp-compaction.js"
-import { COMPACTION_FAILED, CONTEXT_COMPACTED } from "@mako/sessions/events"
+import { AcpCompaction, compactionOutcome } from "./acp-compaction.js"
+import { manualCompaction } from "@mako/sessions/events"
 import type { NativeNotice } from "./contracts/native-activity.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
-import type { AcpLaunchOptions, AcpAgentObserver } from "./providers/acp-source.js"
+import { acpClientCapabilities, type AcpLaunchOptions, type AcpAgentObserver } from "./providers/acp-source.js"
 import { accessModeId, accessTierOfModeId, type AccessTier } from "./contracts/access.js"
 /**
  * Interactive foreign agents, over ACP.
@@ -72,7 +72,8 @@ import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { errorMessage } from "./live-runtime.js"
 import { basename, join } from "node:path"
-import { acpObservedSettings, applyAcpSettings } from "./acp-config.js"
+import { applyAcpSettings } from "./acp-config.js"
+import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord } from "./acp-decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
@@ -517,12 +518,8 @@ async function startAcp(
     if (notices && state) update(live, state)
     const compacted = notices?.flatMap((notice) => notice.kind === "compacted" ? [{ kind: "compacted" as const, after: notice.compaction?.tokensAfter }] : []) ?? []
     if (notices && (decoded.usage?.length || compacted.length)) observeUsage([...compacted, ...decoded.usage ?? []])
-    if (live.compaction && notices) {
-      const failed = notices.find((notice) => notice.kind === "event" && notice.event.label === COMPACTION_FAILED)
-      if (failed?.kind === "event") live.compaction.confirm({ kind: "failed", reason: failed.event.detail ?? "Compaction failed" })
-      else if (compacted.length || decoded.usage?.some((observation) => observation.kind === "compacted"))
-        live.compaction.confirm({ kind: "completed" })
-    }
+    const outcome = live.compaction && notices ? compactionOutcome(notices, decoded.usage) : undefined
+    if (outcome) live.compaction?.confirm(outcome)
   }
   /** Spend reported before the session opened is history `session/load` replays, already counted when it happened. */
   function observeUsage(observations: UsageObservation[]): void {
@@ -580,12 +577,7 @@ async function startAcp(
   try {
     const initialized = await trace.step("handshake", () => watch.step("initialize", connection.initialize({
         protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          session: { configOptions: { boolean: {} } },
-          elicitation: { form: {} },
-          ...providerHost.acpSources.get(harness)?.clientCapabilities,
-        },
+        clientCapabilities: acpClientCapabilities(providerHost.acpSources.get(harness)),
       })))
     let runtime = reportedRuntime(initialized.agentInfo?.version, "ACP initialize.agentInfo")
     const versionArgs = spec.versionArgs
@@ -1124,12 +1116,7 @@ function update(live: Live, patch: Partial<LiveSessionState>): void {
   if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
 }
 
-/**
- * A compaction that ends while one Mako asked for is pending is that one:
- * harnesses that report both kinds through their automatic notifications
- * (Grok) would otherwise label it automatic.
- */
+/** A compaction that ends while one Mako asked for is pending is that one. */
 function asManualCompaction(notice: NativeNotice): NativeNotice {
-  if (notice.kind !== "event" || notice.event.label !== CONTEXT_COMPACTED || !notice.event.detail?.startsWith("Automatic")) return notice
-  return { ...notice, event: { ...notice.event, detail: notice.event.detail.replace(/^Automatic/, "Manual") } }
+  return notice.kind === "event" ? { ...notice, event: manualCompaction(notice.event) } : notice
 }

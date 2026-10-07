@@ -831,7 +831,7 @@ function noteSpend(event: HostEvent) {
   let throttle: number | undefined
   const status = event.type === "live-batch" ? (event.batch.session ?? event.batch.sessionChanges)?.status : undefined
   if (event.type === "live-batch" && status) {
-    const harness = event.batch.session?.harness ?? liveConversations?.snapshot(event.batch.id)?.session.harness
+    const harness = event.batch.session?.harness ?? liveConversations?.session(event.batch.id)?.harness
     if (status === "running" && harness) spending.set(event.batch.id, harness)
     else if (status !== "running") { ended = spending.get(event.batch.id); spending.delete(event.batch.id) }
   } else if (event.type === "thread-run" && event.run.status !== "running") {
@@ -1922,7 +1922,7 @@ function bindIpc() {
       const parsed = TransferInputSchema.parse(input)
       const tuning = await resolveHarnessLaunch(
         parsed.provider,
-        liveConversations.snapshot(id)?.session.cwd,
+        liveConversations.session(id)?.cwd,
         parsed.tuning
       )
       return liveConversations.transfer(id, { ...parsed, tuning })
@@ -1949,10 +1949,10 @@ function bindIpc() {
     liveConversations.bind(id, path)
   )
   handle("mako:read-live-file", (_event, id: string, path: string) => {
-    const snapshot = liveConversations.snapshot(id)
-    if (!snapshot) throw new Error("That conversation is unavailable")
-    const dataDir = threadEnvironments ? () => threadEnvironments.fileDataDir({ conversationId: id, cwd: snapshot.session.cwd }) : undefined
-    return readConversationFile(snapshot.session.cwd, path, dataDir)
+    const session = liveConversations.session(id)
+    if (!session) throw new Error("That conversation is unavailable")
+    const dataDir = threadEnvironments ? () => threadEnvironments.fileDataDir({ conversationId: id, cwd: session.cwd }) : undefined
+    return readConversationFile(session.cwd, path, dataDir)
   })
   handle("mako:live-snapshot", (_event, id: string) =>
     liveConversations.refreshedSnapshot(id)
@@ -1965,7 +1965,7 @@ function bindIpc() {
   )
   handle(
     "mako:live-state",
-    (_event, id: string) => liveConversations.snapshot(id)?.session ?? null
+    (_event, id: string) => liveConversations.session(id) ?? null
   )
   handle("mako:live-continue", async (_event, id: string, bindingId: string,
     requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) => {
@@ -1985,7 +1985,7 @@ function bindIpc() {
       attachments?: PromptAttachment[],
       tuning?: SessionSettings
     ) => {
-      const session = liveConversations.snapshot(id)?.session
+      const session = liveConversations.session(id)
       if (!session) throw new Error("This conversation is no longer available")
       const selected = await resolveHarnessLaunch(
         session.harness,
@@ -2396,11 +2396,11 @@ app.whenReady().then(async () => {
   })
   workspaceMoves = moves
   const appTools = threadEnvironments && threadProcesses ? environmentTools({
-    cwd: (id) => liveConversations.snapshot(id)?.session.cwd,
-    environment: (id, cwd) => threadEnvironments.forConversation(id, liveConversations.snapshot(id)?.session.title, cwd),
+    cwd: (id) => liveConversations.session(id)?.cwd,
+    environment: (id, cwd) => threadEnvironments.forConversation(id, liveConversations.session(id)?.title, cwd),
     launchedWith: (id) => threadEnvironments.launchedWith(id),
     conversation: (id) => {
-      const session = liveConversations.snapshot(id)?.session
+      const session = liveConversations.session(id)
       return session && {
         title: session.title || "Untitled conversation",
         harness: session.harness,
@@ -2415,7 +2415,7 @@ app.whenReady().then(async () => {
     history: fileHistory,
     owner: appOwner,
   }) : undefined
-  const conversationCwd = (id: string) => liveConversations.snapshot(id)?.session.cwd
+  const conversationCwd = (id: string) => liveConversations.session(id)?.cwd
   // An agent's tool changed a branch or its pull request: windows read both again at once.
   const branchChanged = () => {
     threadWorktrees?.forgetPulls()

@@ -79,6 +79,8 @@ export type ThreadItem =
   /** Text a hook added to the conversation; Codex itself does not show it. */
   | { type: "hookPrompt"; id: string }
   | { type: "attachment"; id: string; attachment: AttachmentContent }
+  /** The model's `view_image` call, which Codex shows as the image it viewed. */
+  | { type: "imageView"; id: string; path: string; attachment: AttachmentContent }
   | { type: "plan"; id: string; text: string }
   | { type: "contextCompaction"; id: string }
   | { type: "unsupported"; id: string; sourceType: string }
@@ -189,6 +191,8 @@ export type ItemTracker = {
   thinkingDelta: boolean
   thinking: string | null
   output: string
+  /** A tool's item that has started and not finished. */
+  running?: boolean
 }
 
 export interface ProtocolCallbacks {

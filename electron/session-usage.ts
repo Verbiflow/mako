@@ -48,6 +48,11 @@ export class SessionUsage {
     return empty(this.reading) ? undefined : this.reading
   }
 
+  /** The tokens in context as last reported, which a compaction starts from whether or not the window is known yet. */
+  get context(): number | undefined {
+    return this.used
+  }
+
   /** The new reading, or `undefined` when these observations changed nothing. */
   observe(...observations: UsageObservation[]): LiveSessionUsage | undefined {
     const before = this.reading

@@ -21,7 +21,7 @@ export * from "./contracts/runtime.js"
 export * from "./contracts/app-lifecycle.js"
 
 export * from "./contracts/live-conversations.js"
-export * from "./contracts/live-content.js"
+export * from "@mako/sessions/live-content"
 
 export * from "./contracts/conversation-control.js"
 export * from "./contracts/message-anchor.js"

@@ -25,7 +25,7 @@ import {
   changedLiveBlockStart,
   growTool,
   type ToolGrowth,
-} from "./contracts/live-content.js"
+} from "@mako/sessions/live-content"
 import { RunSnapshotsSchema } from "./contracts/workspace-snapshots.js"
 import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "./contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "./contracts/provider-failure.js"

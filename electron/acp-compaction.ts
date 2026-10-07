@@ -2,8 +2,11 @@ import type {
   PromptResponse,
   SessionNotification,
 } from "@agentclientprotocol/sdk"
+import { COMPACTION_FAILED } from "@mako/sessions/events"
 import type { LiveActionResult } from "./contracts/live-actions.js"
+import type { NativeNotice } from "./contracts/native-activity.js"
 import { COMPACTION_CONFIRMATION_MS } from "./contracts/recovery.js"
+import type { UsageObservation } from "./session-usage.js"
 
 /** Protocol differences belong to the provider, not to the shared prompt loop. */
 export type AcpCompactionSpec =
@@ -19,6 +22,15 @@ export type AcpCompactionSpec =
         ) => LiveActionResult | undefined
       }
     }
+
+/** How the harness's own decoded notices settle a compaction Mako asked for, when they do. */
+export function compactionOutcome(notices: readonly NativeNotice[], usage: readonly UsageObservation[] = []): LiveActionResult | undefined {
+  const failed = notices.find((notice) => notice.kind === "event" && notice.event.label === COMPACTION_FAILED)
+  if (failed?.kind === "event") return { kind: "failed", reason: failed.event.detail ?? "Compaction failed" }
+  if (notices.some((notice) => notice.kind === "compacted") || usage.some((observation) => observation.kind === "compacted"))
+    return { kind: "completed" }
+  return undefined
+}
 
 /**
  * One explicitly requested operation; notifications can precede the RPC reply.

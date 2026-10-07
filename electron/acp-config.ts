@@ -1,6 +1,7 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
+import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { z } from "zod"
 import { accessTierOfModeId } from "./contracts/access.js"
 
@@ -18,20 +19,6 @@ export function resolveAcpConfigValue(
         candidate.value === requested || candidate.name === requested
     )?.value ?? requested
   )
-}
-
-export function acpObservedSettings(
-  options: SessionConfigOption[],
-  model?: string
-): SessionSettings {
-  const settings: SessionSettings = { model, options: {} }
-  for (const option of normalizeAcpOptions(options)) {
-    if (option.current === undefined) continue
-    if (option.id === "model" && option.kind === "select")
-      settings.model = option.current
-    else settings.options![option.id] = option.current
-  }
-  return settings
 }
 
 interface ApplyAcpSettingsInput {

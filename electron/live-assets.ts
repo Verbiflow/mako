@@ -13,7 +13,7 @@ import {
 import { join, relative, isAbsolute } from "node:path"
 import type { AttachmentContent } from "@mako/sessions"
 import type { PromptAttachment } from "./shared.js"
-import type { LiveUpdate } from "./contracts/live-content.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 
 export function promptFingerprint(
   text: string,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import type { BlockAddress, EntryBlock, ThreadEntry, ThreadPage } from "@mako/sessions"
-import { isTurnStart, type LiveBlock } from "./contracts/live-content.js"
+import { isTurnStart, type LiveBlock } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "./contracts/live-conversations.js"
 import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
