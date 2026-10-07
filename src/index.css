@@ -938,6 +938,59 @@ diffs-container {
 }
 
 /*
+ * Settings › Account: this Mac wired to Mako, the picture the sign-in pages in
+ * the browser draw too. The wire takes its colour from `color`; waiting flows
+ * toward Mako, connected fills from this Mac's end, broken is cut in the middle.
+ */
+.cloud-wire {
+  position: relative;
+  height: 2px;
+}
+
+.cloud-wire::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 1px;
+  background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 9px);
+  opacity: 0.55;
+}
+
+.cloud-wire[data-state="waiting"]::before {
+  opacity: 0.9;
+  animation: cloud-wire-flow 800ms linear infinite;
+}
+
+.cloud-wire[data-state="connected"]::before {
+  background: currentColor;
+  opacity: 1;
+  transform-origin: left;
+  animation: cloud-wire-fill 420ms var(--ease-out) both;
+}
+
+.cloud-wire[data-state="broken"]::before {
+  mask: linear-gradient(90deg, #000 0 38%, transparent 38% 62%, #000 62%);
+}
+
+@keyframes cloud-wire-flow {
+  to {
+    background-position: 9px 0;
+  }
+}
+
+@keyframes cloud-wire-fill {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cloud-wire::before {
+    animation: none !important;
+  }
+}
+
+/*
  * Switching threads.
  *
  * Occasional rather than constant — tens of times a day, not hundreds — so it

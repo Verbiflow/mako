@@ -13,6 +13,7 @@ import {
   GitCompareIcon,
   TerminalSquareIcon,
 } from "lucide-react"
+import { planFeedbackOf } from "@mako/sessions/harnesses"
 import { registerSlot, registerToolKindView, type ToolCall } from "@/extend/slots"
 import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
@@ -116,6 +117,12 @@ export function installBuiltins(): () => void {
     registerToolKindView("read", {
       summary: (call: ToolCall) => fileSummary(call),
       openPath: (call: ToolCall) => call.tool.path,
+    }),
+    registerToolKindView("plan-exit", {
+      summary: (call: ToolCall) => {
+        const feedback = planFeedbackOf(call.result)
+        return feedback ? `You asked for changes: ${feedback}` : call.tool.target
+      },
     }),
     registerToolKindView("skill", { body: SkillBody }),
     ...(["shell-output", "wait"] as const).map((kind) => registerToolKindView(kind, { body: WaitBody })),
