@@ -13,6 +13,7 @@ const apply = (entries, update) =>
     ? [...entries.slice(0, update.replaceFrom ?? 0), ...update.entries]
     : [...entries, ...update.entries]
 
+let events = 0
 const notification = (method, update, timestamp, metadata = {}) =>
   jsonl({
     timestamp,
@@ -20,7 +21,7 @@ const notification = (method, update, timestamp, metadata = {}) =>
     params: {
       sessionId: "modern-session",
       update,
-      _meta: { agentTimestampMs: timestamp * 1000, ...metadata },
+      _meta: { eventId: `event-${events++}`, agentTimestampMs: timestamp * 1000, ...metadata },
     },
   })
 
@@ -169,10 +170,15 @@ try {
       "session/update",
       {
         sessionUpdate: "agent_thought_chunk",
-        content: [
-          { type: "text", text: "think " },
-          { type: "content", content: { type: "text", text: "carefully" } },
-        ],
+        content: { type: "text", text: "think " },
+      },
+      1_767_225_601
+    ) +
+    notification(
+      "session/update",
+      {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "carefully" },
       },
       1_767_225_601
     ) +
@@ -180,7 +186,7 @@ try {
       "session/update",
       {
         sessionUpdate: "agent_message_chunk",
-        content: { type: "content", content: { type: "text", text: "working" } },
+        content: { type: "text", text: "working" },
       },
       1_767_225_602
     ) +
@@ -203,21 +209,29 @@ try {
         toolCallId: "tool-1",
         title: "shell",
         status: "completed",
-        content: { type: "text", text: "/work" },
+        content: [{ type: "content", content: { type: "text", text: "/work" } }],
       },
       1_767_225_604
     ) +
     notification(
       "session/update",
       {
-        sessionUpdate: "tool_call_update",
+        sessionUpdate: "tool_call",
         toolCallId: "tool-2",
         title: "fetch",
         rawInput: { url: "https://example.test" },
+      },
+      1_767_225_605
+    ) +
+    notification(
+      "session/update",
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-2",
         status: "completed",
         content: [
-          { type: "content", content: { type: "text", text: "fetched " } },
-          { type: "text", text: "body" },
+          { type: "content", content: { type: "text", text: "fetched" } },
+          { type: "content", content: { type: "text", text: "body" } },
         ],
       },
       1_767_225_605
@@ -298,12 +312,13 @@ try {
   assert.deepEqual(assistants[0].blocks, [
     { type: "thinking", text: "think carefully" },
     { type: "text", text: "working" },
-    { type: "tool", name: "shell", input: '{"command":"pwd"}', output: "/work" },
+    { type: "tool", id: "tool-1", name: "shell", input: '{\n  "command": "pwd"\n}', output: "/work" },
     {
       type: "tool",
+      id: "tool-2",
       name: "fetch",
-      input: '{"url":"https://example.test"}',
-      output: "fetched body",
+      input: '{\n  "url": "https://example.test"\n}',
+      output: "fetched\nbody",
     },
   ])
   assert.deepEqual(assistants[1].blocks, [{type: "tool", name: "Plan", output: "", details: [{type: "plan", entries: [{content: "Verify result", status: "completed"}]}]}])

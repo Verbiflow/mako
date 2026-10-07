@@ -355,7 +355,7 @@ const CASES = [
           notification("tool_call_update", {
             toolCallId: "tool-1",
             status: "completed",
-            content: { text: "done" },
+            content: [{ type: "content", content: { type: "text", text: "done" } }],
           }),
         ],
       }

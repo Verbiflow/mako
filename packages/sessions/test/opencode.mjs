@@ -592,6 +592,7 @@ try {
           name: "read",
           id: "tool_1",
           input: '{"path":"README.md"}',
+          details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
           output: "current tool output",
         },
         { type: "text", text: "current answer" },
@@ -801,6 +802,7 @@ try {
     name: "read",
     id: "tool_1",
     input: '{"path":"README.md"}',
+    details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
     output: "read failed",
     error: true,
   })

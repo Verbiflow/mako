@@ -88,9 +88,9 @@ try {
  ]
  for (const [name,path,provider,wrap] of [
   ['devin',dpath,new DevinLocalProvider(devin),(update)=>({notification:update})],
-  ['grok',gpath,new GrokProvider(root),(update)=>({method:'session/update',params:{sessionId:'session',update}})],
+  ['grok',gpath,new GrokProvider(root),(update,index)=>({method:'session/update',params:{sessionId:'session',update,_meta:{eventId:`event-${index}`}}})],
  ]) {
-  await writeFile(path,toolUpdates.map(update=>JSON.stringify(wrap(update))).join('\n')+'\n')
+  await writeFile(path,toolUpdates.map((update,index)=>JSON.stringify(wrap(update,index))).join('\n')+'\n')
   const loaded=await provider.read(path)
   const tools=loaded.entries.filter(entry=>entry.kind==='assistant').flatMap(entry=>entry.blocks).filter(block=>block.type==='tool')
   assert.deepEqual(tools.find(tool=>tool.details?.some(detail=>detail.type==='diff')).details,[{type:'diff',path:'/fixture/app.ts',oldText:null,newText:'after'},{type:'terminal',terminalId:'terminal-proof'}])
@@ -114,8 +114,8 @@ try {
  await writeFile(gpath,[
   {sessionUpdate:'user_message_chunk',content:{type:'text',text:'Plan it'}},
   {sessionUpdate:'tool_call',toolCallId:'call-1',title:'exit_plan_mode',kind:'other',rawInput:{planContent:'model copy'},_meta:grokTool},
-  {sessionUpdate:'tool_call_update',toolCallId:'call-1',status:'completed',rawOutput:{PlanReady:{plan_content:'# Plan\n\nAs saved'}},_meta:grokTool},
- ].map(update=>JSON.stringify({method:'session/update',params:{sessionId:'session',update}})).join('\n')+'\n')
+  {sessionUpdate:'tool_call_update',toolCallId:'call-1',status:'completed',rawOutput:{type:'ExitPlanMode',PlanReady:{plan_content:'# Plan\n\nAs saved'}},_meta:grokTool},
+ ].map((update,index)=>JSON.stringify({method:'session/update',params:{sessionId:'session',update,_meta:{eventId:`event-${index}`}}})).join('\n')+'\n')
  assert.deepEqual(planCards(await new GrokProvider(root).read(gpath)),[{type:'proposed-plan',id:'grok:session:call-1',text:'# Plan\n\nAs saved',status:'proposed'}])
  console.log('PASS Devin and Grok saved plans read as their live cards')
 
