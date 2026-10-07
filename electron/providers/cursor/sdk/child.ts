@@ -452,14 +452,12 @@ async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
       model: result.model,
       durationMs: result.durationMs,
       usage: result.usage,
-      settled: checkpointedResults(open, run.id, unended),
+      settled: settledCalls(checkpoints.results(unended)),
     },
   })
 }
 
-/** What the run's checkpoint kept for calls its stream never ended; undefined when it kept none. */
-function checkpointedResults(open: OpenAgent, runId: string, callIds: ReadonlySet<string>): SdkRunResult["settled"] {
-  const results = readCursorSdkRunResults(open.stateRoot, open.agentId, runId, callIds)
+function settledCalls(results: ReadonlyMap<string, CursorToolResult>): SdkSettledCalls | undefined {
   return results.size ? [...results].map(([callId, result]) => ({ callId, ...result })) : undefined
 }
 
