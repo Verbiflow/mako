@@ -1,0 +1,18 @@
+{
+  "harness": "codex",
+  "version": "0.159.3",
+  "on": "2026-10-06",
+  "searched": "codex",
+  "probed": 14,
+  "missing": [],
+  "skills": {
+    "via": "its own listing",
+    "listed": [
+      "~/.codex/skills",
+      "~/.agents/skills",
+      ".codex/skills",
+      ".agents/skills"
+    ],
+    "missing": []
+  }
+}

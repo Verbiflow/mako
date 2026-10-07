@@ -1,0 +1,25 @@
+{
+  "harness": "cursor",
+  "version": "1.0.31",
+  "on": "2026-10-06",
+  "searched": "23 SDK modules",
+  "probed": 25,
+  "missing": [],
+  "skills": {
+    "via": "the SDK's skill-root table",
+    "listed": [
+      ".cursor/skills",
+      ".agents/skills",
+      ".claude/skills",
+      ".codex/skills",
+      ".grok/skills",
+      "~/.cursor/skills",
+      "~/.agents/skills",
+      "~/.claude/skills",
+      "~/.codex/skills",
+      "~/.grok/skills",
+      "~/.cursor/skills-cursor"
+    ],
+    "missing": []
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "harness": "claude",
+  "version": "2.1.290",
+  "on": "2026-10-06",
+  "searched": "2.1.290",
+  "probed": 36,
+  "missing": [],
+  "mcpConfig": {
+    "via": "its own listing",
+    "listed": [
+      "~/.claude.json",
+      ".mcp.json"
+    ],
+    "missing": []
+  }
+}

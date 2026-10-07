@@ -1,0 +1,20 @@
+{
+  "harness": "grok",
+  "version": "1.0.46",
+  "on": "2026-10-06",
+  "searched": "grok-1.0.46",
+  "probed": 21,
+  "missing": [],
+  "mcpConfig": {
+    "via": "its own listing",
+    "listed": [
+      "~/.grok/config.toml",
+      ".grok/config.toml",
+      "~/.claude.json",
+      "~/.cursor/mcp.json",
+      ".cursor/mcp.json",
+      ".mcp.json"
+    ],
+    "missing": []
+  }
+}

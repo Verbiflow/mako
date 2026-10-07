@@ -1,0 +1,31 @@
+{
+  "harness": "opencode",
+  "version": "2.0.1",
+  "on": "2026-10-06",
+  "searched": "opencode",
+  "probed": 1,
+  "missing": [],
+  "skills": {
+    "via": "its own listing",
+    "listed": [
+      "~/.config/opencode/skills",
+      "~/.config/opencode/skill",
+      ".opencode/skills",
+      ".opencode/skill",
+      "~/.claude/skills",
+      ".claude/skills",
+      "~/.agents/skills",
+      ".agents/skills"
+    ],
+    "missing": []
+  },
+  "mcpConfig": {
+    "via": "its own listing",
+    "listed": [
+      "~/.config/opencode/opencode.json",
+      "opencode.json",
+      ".opencode/opencode.json"
+    ],
+    "missing": []
+  }
+}
