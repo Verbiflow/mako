@@ -1,4 +1,5 @@
 import type { OpenCodeEvent } from "@opencode/client"
+import { openCodeTurnFailed } from "@mako/sessions"
 import { z } from "zod"
 import type { AccessTier } from "../../contracts/access.js"
 import type { Decoded } from "../../contracts/native-decoding.js"
@@ -177,6 +178,9 @@ export class OpenCodeDecoder {
       for (const update of this.content.settle(event.data.sessionID, event.type === "session.execution.failed" ? "failed" : "cancelled", "The subagent stopped before this call finished."))
         decoded.push({ kind: "update", update })
     if (event.type === "session.compaction.failed" && event.data.sessionID === this.root) decoded.push({ kind: "activity", activity: null })
+    // A stopped turn reads as interrupted, from the driver, which knows whether the person stopped it.
+    if (event.type === "session.execution.failed" && event.data.sessionID === this.root && event.data.error.type !== "aborted")
+      decoded.push({ kind: "marker", marker: openCodeTurnFailed(event.data.error.type, event.data.error.message), source: event.id })
     decoded.push({ kind: "effect", effect: { type: "turn" } })
     return decoded
   }
@@ -213,7 +217,7 @@ export class OpenCodeDecoder {
       case "session.compaction.ended":
         return [{
           kind: "compacted",
-          compaction: { trigger: event.data.reason === "auto" ? "automatic" : "manual", tokensBefore: this.meter.current?.used, summary: event.data.text },
+          compaction: { trigger: event.data.reason === "auto" ? "automatic" : "manual", tokensBefore: this.meter.context, summary: event.data.text },
           source: event.id,
         }, ...this.usage({ kind: "compacted" })]
       default:

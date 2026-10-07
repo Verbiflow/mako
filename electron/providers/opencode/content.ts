@@ -1,11 +1,9 @@
 import type { OpenCodeEvent } from "@opencode/client"
-import { clip, normalizeToolOutput, openCodePlan } from "@mako/sessions"
+import { clip, normalizeToolOutput, OpenCodeEditInput, OpenCodeFailedExit, openCodeFileName, openCodePlan, openCodeToolDetails } from "@mako/sessions"
 import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "@mako/sessions/content"
-import { isAbsolute, join } from "node:path"
 import { z } from "zod"
 import type { LiveUpdate } from "../../shared.js"
 
-const Edit = z.object({ path: z.string().optional(), filePath: z.string().optional(), oldString: z.string().optional(), newString: z.string().optional(), content: z.string().optional() })
 const Todo = z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() })) })
 const Titled = z.object({ command: z.string().optional(), path: z.string().optional(), filePath: z.string().optional(), pattern: z.string().optional(), url: z.string().optional(), query: z.string().optional(), description: z.string().optional(),
   questions: z.array(z.object({ question: z.string() })).optional() })
@@ -205,8 +203,10 @@ export class OpenCodeContent {
           ? [event.data.error.message, text].filter(Boolean).join("\n")
           : text
         const attachments: AttachmentContent[] = content.flatMap(part =>
-          part.type === "file" ? [attachmentFromUrl(part.name ?? "Attachment", part.mime, part.uri)] : [])
-        const status = event.type === "session.tool.success" ? "completed" : event.data.error.type === "aborted" ? "cancelled" : "failed"
+          part.type === "file" ? [attachmentFromUrl(openCodeFileName(part.name), part.mime, part.uri)] : [])
+        const status = event.type === "session.tool.failed"
+          ? event.data.error.type === "aborted" ? "cancelled" : "failed"
+          : OpenCodeFailedExit.safeParse(event.data.metadata).success ? "failed" : "completed"
         updates.push({ kind: "tool-update", id, status,
           output: clip(normalizeToolOutput(output)), attachments: attachments.length ? attachments : undefined })
         return updates
@@ -215,16 +215,6 @@ export class OpenCodeContent {
   }
 
   private details(tool: Tool): ToolDetail[] | undefined {
-    const edit = Edit.safeParse(tool.input)
-    if (!edit.success) return undefined
-    const relative = edit.data.path ?? edit.data.filePath
-    if (!relative) return undefined
-    const path = isAbsolute(relative) ? relative : join(this.cwd, relative)
-    const details: ToolDetail[] = [{ type: "location", path }]
-    if (tool.name === "write" && edit.data.content !== undefined)
-      details.push({ type: "diff", path, oldText: null, newText: edit.data.content })
-    else if (edit.data.oldString !== undefined && edit.data.newString !== undefined)
-      details.push({ type: "diff", path, oldText: edit.data.oldString, newText: edit.data.newString })
-    return details
+    return openCodeToolDetails(tool.name, OpenCodeEditInput.safeParse(tool.input).data, this.cwd)
   }
 }
