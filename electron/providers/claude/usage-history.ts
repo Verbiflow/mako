@@ -1,12 +1,13 @@
-import { basename, join } from "node:path"
+import { basename } from "node:path"
+import { claudeTranscriptRoots } from "@mako/sessions"
 import { z } from "zod"
+import { claudeHourCacheWrites, claudeTokens, ClaudeUsage } from "@mako/sessions/harnesses"
 import { objectValue, stringValue } from "../../codex-app-json.js"
+import type { UsageTokenCounts } from "../../usage-pricing.js"
 import {
   fingerprint,
   parseObject,
-  tokenCounts,
   tokenTotal,
-  tokenValue,
   validTimestamp,
   type JsonlReader,
   type UsageEvent,
@@ -22,7 +23,7 @@ export const claudeUsageHistory: ProviderUsageHistory = {
       restore: (state) => z.null().parse(state),
       line: (line, _state, file) => parseClaudeEvent(scan.source, line, basename(file.path, ".jsonl"), file.mtimeMs),
     }
-    await scan.jsonl([join(scan.homeRoot, ".claude", "projects"), join(scan.homeRoot, ".claude", "transcripts")], reader)
+    await scan.jsonl(claudeTranscriptRoots(scan.homeRoot), reader)
   },
 }
 
@@ -34,18 +35,13 @@ function parseClaudeEvent(
 ): UsageEvent | null {
   const root = parseObject(line)
   const message = objectValue(root?.message)
-  const usage = objectValue(message?.usage)
-  if (!root || stringValue(root.type) !== "assistant" || !message || !usage)
+  const fields = objectValue(message?.usage)
+  if (!root || stringValue(root.type) !== "assistant" || !message || !fields)
     return null
-  const counts = tokenCounts(
-    usage,
-    "input_tokens",
-    "output_tokens",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens"
-  )
+  const usage = ClaudeUsage.parse(fields)
+  const counts: UsageTokenCounts = claudeTokens(usage)
   if (tokenTotal(counts) === 0) return null
-  const hour = tokenValue(objectValue(usage.cache_creation)?.ephemeral_1h_input_tokens)
+  const hour = claudeHourCacheWrites(usage)
   if (hour) counts.cacheWrite1h = hour
   const timestamp = validTimestamp(root.timestamp, fallbackTime)
   const messageId = stringValue(message.id)

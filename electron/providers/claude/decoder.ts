@@ -1,5 +1,6 @@
 import type { HookCallback, ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { isDeclaredTool } from "@mako/sessions/tool-identity"
+import { claudeTokens } from "@mako/sessions/harnesses"
 import type { JsonValue } from "../../codex-app-json.js"
 import { decoded, decodedNotices, type Decoded } from "../../contracts/native-decoding.js"
 import type { LiveSessionCommand, LiveSessionState, NativeTotals, TokenCounts } from "../../contracts/providers-acp.js"
@@ -136,19 +137,14 @@ export class ClaudeDecoder {
       const { model, usage } = message.message
       if (message.parent_tool_use_id || model === "<synthetic>") return []
       this.lastModel = model
-      return this.usage({ kind: "call", tokens: {
-        input: usage.input_tokens,
-        cacheRead: usage.cache_read_input_tokens ?? 0,
-        cacheWrite: usage.cache_creation_input_tokens ?? 0,
-        output: usage.output_tokens,
-      } })
+      return this.usage({ kind: "call", tokens: claudeTokens(usage) })
     }
     if (message.type === "result") {
       const size = this.lastModel && contextWindow(message.modelUsage, this.lastModel)
       const observations: UsageObservation[] = Object.keys(message.modelUsage).length
         ? this.resultSpend(
           { tokens: sessionTokens(message.modelUsage), ...message.total_cost_usd > 0 && { cost: message.total_cost_usd } },
-          turnTokens(message.usage)
+          claudeTokens(message.usage)
         )
         : []
       if (size) observations.push({ kind: "window", size })
@@ -199,16 +195,6 @@ function sessionTokens(models: Record<string, ModelUsage>): TokenCounts {
     if (usage.thinkingTokens) tokens.reasoning = (tokens.reasoning ?? 0) + usage.thinkingTokens
   }
   return tokens
-}
-
-/** The main loop's spend in one turn, which a result reports for that turn alone. */
-function turnTokens(usage: { input_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; output_tokens: number }): TokenCounts {
-  return {
-    input: usage.input_tokens,
-    cacheRead: usage.cache_read_input_tokens ?? 0,
-    cacheWrite: usage.cache_creation_input_tokens ?? 0,
-    output: usage.output_tokens,
-  }
 }
 
 /** The answering model's window. Usage can key it with a suffix the reply's model id lacks (`[1m]`). */

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/approval-response.js"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
+import { planFeedbackMessage } from "@mako/sessions/harnesses"
 import type { CanUseTool, OnElicitation, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk"
 import { ElicitRequestFormParamsSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
@@ -173,7 +174,10 @@ export class ClaudePermissions {
           },
         ],
       }
-    if (name === "ExitPlanMode") request.implementsPlan = { plan: options.toolUseID, approve: "allow_once" }
+    if (name === "ExitPlanMode") {
+      request.implementsPlan = { plan: options.toolUseID, approve: "allow_once" }
+      request.feedbackOption = "reject_once"
+    }
     const response = await this.ask(request, options.signal)
     if (
       response.kind !== "choice" ||
@@ -184,9 +188,11 @@ export class ClaudePermissions {
         decisionClassification: response.kind === "choice" && response.optionId === "reject_once"
           ? "user_reject" : undefined,
         message:
-          name === "ExitPlanMode"
-            ? "The user has not approved implementation. Continue planning."
-            : "The user declined this tool request",
+          name !== "ExitPlanMode"
+            ? "The user declined this tool request"
+            : response.kind === "choice" && response.feedback
+              ? planFeedbackMessage(response.feedback)
+              : "The user has not approved implementation. Continue planning.",
       }
     const leavePlan: PermissionUpdate[] | undefined =
       name === "ExitPlanMode" && this.planReturn && this.planReturn !== "plan"
