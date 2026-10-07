@@ -1,6 +1,6 @@
 import type { RequestPermissionRequest, SessionUpdate } from "@agentclientprotocol/sdk"
 import { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, DevinPlanTracker } from "@mako/sessions"
-import type { LiveUpdate } from "../../contracts/live-content.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { AcpPlanApproval, AcpPlanDecoder } from "../acp-source.js"
 
 /**

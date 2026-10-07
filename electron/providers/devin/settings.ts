@@ -4,7 +4,7 @@ import {
   PROTOCOL_VERSION,
 } from "@agentclientprotocol/sdk"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
-import { acpObservedSettings } from "../../acp-config.js"
+import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { withDiscoveryProcess } from "../discovery-process.js"
 import { withDevinProbeWorkspace } from "./probe-workspace.js"
 import { devinEnvironment } from "./environment.js"
