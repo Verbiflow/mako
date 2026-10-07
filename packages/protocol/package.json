@@ -1,0 +1,23 @@
+{
+  "name": "@mako/protocol",
+  "version": "0.1.0",
+  "license": "Elastic-2.0",
+  "description": "The wire contract between Mako's clients, runtimes and gateway: versioned operations, numbered events, runtime frames, a fake gateway and the conformance suite every gateway passes.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./fake-gateway": "./dist/fake-gateway.js",
+    "./conformance": "./dist/conformance.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsgo -b"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  }
+}
