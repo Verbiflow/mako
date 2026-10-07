@@ -895,7 +895,7 @@ export async function livePrompt(
   live.providerTurnCause = undefined
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
   engine.emitUpdate(live, { kind: "user", text })
-  live.capture?.prompted()
+  live.capture?.prompted(text)
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
   dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
   void turn.send(() => connection.prompt({ sessionId, prompt })).then(
@@ -945,12 +945,14 @@ export async function liveSteer(id: string, input: ProviderSteerInput): Promise<
   if (steering !== "concurrent-prompt" && steering !== "interrupting-prompt") {
     if (input.attachments.length) return { kind: "not-accepted", reason: "This agent takes only text in the middle of a turn" }
     const reply = await connection.extMethod(steering.extension, { sessionId, text: input.text })
-    return steering.taken.safeParse(reply).success
-      ? { kind: "accepted" }
-      : { kind: "not-accepted", reason: `The agent did not take the message: ${JSON.stringify(reply)?.slice(0, 200)}` }
+    if (!steering.taken.safeParse(reply).success)
+      return { kind: "not-accepted", reason: `The agent did not take the message: ${JSON.stringify(reply)?.slice(0, 200)}` }
+    live.capture?.steered(input.text)
+    return { kind: "accepted" }
   }
   const prompt = acpPromptBlocks(input.text, input.attachments, live.promptCapabilities)
   await turn.send(() => connection.prompt({ sessionId, prompt }), "steer")
+  live.capture?.steered(input.text)
   return { kind: "accepted" }
 }
 

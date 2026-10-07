@@ -13,8 +13,10 @@ import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
  * `codex,claude` or `all`). One file per conversation goes to
  * `native-captures/` beside the host log: a header line with what the driver
  * knew when the first message arrived, then `{ "at", "message" }` lines,
- * and `{ "at", "prompted": true }` where a turn opened that the wire does
- * not mark itself, so a replay knows where each turn began. It holds
+ * `{ "at", "prompted": true, "text" }` where a turn opened that the wire
+ * does not mark itself, so a replay knows where each turn began and what
+ * Mako drew for it, and `{ "at", "steered": true, "text" }` where the harness
+ * took a message Mako steered into the running turn. It holds
  * conversation content and stays on this machine; bearer tokens and `token=`
  * values are scrubbed. A capture stops at `MAX_BYTES`.
  */
@@ -25,8 +27,13 @@ const MAX_BYTES = 64 * 1024 * 1024
 export interface NativeCapture {
   readonly path: string
   record(message: JsonValue): void
-  /** A turn opened, by a prompt Mako sent or by the harness itself: the turn the messages after it belong to. */
-  prompted(): void
+  /**
+   * A turn opened: the turn the messages after it belong to. `text` is what
+   * Mako drew for the prompt it sent; a turn the harness opened itself has none.
+   */
+  prompted(text?: string): void
+  /** The harness took `text`, which Mako steered into the running turn. */
+  steered(text: string): void
   /** Resolves once every recorded line is on disk. */
   flush(): Promise<void>
 }
@@ -82,7 +89,8 @@ export function nativeCapture(
   return {
     path,
     record: (message) => line({ message }),
-    prompted: () => line({ prompted: true }),
+    prompted: (text) => line(text === undefined ? { prompted: true } : { prompted: true, text }),
+    steered: (text) => line({ steered: true, text }),
     flush: () => queue,
   }
 }
