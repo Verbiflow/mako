@@ -2165,6 +2165,16 @@
           "kind": "state",
           "patch": {
             "usage": {
+              "native": {
+                "tokens": {
+                  "input": 934,
+                  "cacheRead": 104011,
+                  "cacheWrite": 20628,
+                  "output": 687,
+                  "reasoning": 71
+                },
+                "cost": 0.05
+              },
               "tokens": {
                 "input": 934,
                 "cacheRead": 104011,
@@ -2172,12 +2182,12 @@
                 "output": 687,
                 "reasoning": 71
               },
-              "used": 32813,
-              "size": 1000000,
               "cost": {
                 "amount": 0.05,
                 "currency": "USD"
-              }
+              },
+              "used": 32813,
+              "size": 1000000
             }
           }
         }
