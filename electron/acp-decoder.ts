@@ -59,6 +59,7 @@ export class AcpDecoder extends AcpUpdateDecoder<AcpPlanDecoder> {
 /** What the agent is sent for the user's choice on a vendor request. */
 export function acpAnswer(ask: AcpAsk, response: LivePermissionResponse): JsonObject {
   if (response.kind === "answers") return ask.answered?.(response.answers) ?? ask.dismissed ?? {}
+  if (response.feedback && ask.feedback && response.optionId === ask.request.feedbackOption) return ask.feedback(response.feedback)
   const chosen = response.optionId === null ? undefined : ask.answers?.find((answer) => answer.optionId === response.optionId)
   return chosen?.result ?? ask.dismissed ?? {}
 }

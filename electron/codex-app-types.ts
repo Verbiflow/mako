@@ -15,6 +15,7 @@ import type { ThreadCompactStartParams } from "./providers/codex/generated/v2/Th
 import type { TurnInterruptParams } from "./providers/codex/generated/v2/TurnInterruptParams.js"
 import type { NativeCapture } from "./native-capture.js"
 import type { CodexDecoder } from "./providers/codex/decoder.js"
+import type { CodexRolloutCalls } from "./providers/codex/rollout-calls.js"
 
 export type Tuning = SessionSettings
 
@@ -235,6 +236,8 @@ export interface ProtocolContext {
   pending: Map<string, PendingRpc>
   /** What Codex's notifications mean; holds stream assembly for this session. */
   decoder: CodexDecoder
+  /** The thread's rollout, read for the commands Codex ran without sending an item. */
+  rollout?: CodexRolloutCalls
   /** Records each notification as it arrived when `MAKO_NATIVE_CAPTURE` asks. */
   capture?: NativeCapture | null
   /**

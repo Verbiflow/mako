@@ -2,8 +2,9 @@ import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { exclusiveTokens, tokenCount } from "@mako/sessions/harnesses"
 import { z } from "zod"
-import { numberValue, objectValue, stringValue } from "./codex-app-json.js"
+import { objectValue, stringValue } from "./codex-app-json.js"
 import { hostWarn } from "./host-log.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
 import type { ProviderHost } from "./providers/host.js"
@@ -17,8 +18,8 @@ import {
   fingerprint,
   parseObject,
   readAppended,
-  tokenCounts,
   tokenTotal,
+  usageCounts,
   validTimestamp,
   yieldToMain,
   type JsonlReader,
@@ -55,6 +56,14 @@ export interface UsageSummaryOptions {
   /** Kept between summaries so each reads only what changed; a summary without one reads everything once. */
   ledger?: UsageLedger
   now?: number
+  /** The environment harnesses run with; the process's own for the default home, none for another (a fixture's). */
+  env?: NodeJS.ProcessEnv
+}
+
+/** Where the harnesses' stores are: the home, and the variables that move a store from it. */
+interface UsageHome {
+  homeRoot: string
+  env: NodeJS.ProcessEnv
 }
 
 /** A record some reader could not read. */
@@ -73,7 +82,8 @@ export async function usageSummary(
 ): Promise<UsageSummary> {
   const ledger = options.ledger ?? new UsageLedger()
   try {
-    return await ledger.exclusive(() => summarize(ledger, harnesses, sessionsRoot, homeRoot, conversationsRoot, options.now ?? Date.now()))
+    const env = options.env ?? (homeRoot === homedir() ? process.env : {})
+    return await ledger.exclusive(() => summarize(ledger, harnesses, sessionsRoot, { homeRoot, env }, conversationsRoot, options.now ?? Date.now()))
   } finally {
     if (!options.ledger) ledger.close()
   }
@@ -83,7 +93,7 @@ async function summarize(
   ledger: UsageLedger,
   harnesses: readonly UsageHarness[],
   sessionsRoot: string,
-  homeRoot: string,
+  home: UsageHome,
   conversationsRoot: string | undefined,
   now: number
 ): Promise<UsageSummary> {
@@ -91,10 +101,10 @@ async function summarize(
   const unread: Unread[] = []
   const recorded = new Map(harnesses.flatMap((harness) => harness.history ? [] : [[harness.provider, harness.label] as const]))
   await Promise.all([
-    scanSource(ledger, "Mako", homeRoot, since, unread, (scan) => scan.jsonl([sessionsRoot], BUILT_IN)),
-    ...harnesses.flatMap(({ label, history }) => history ? [scanSource(ledger, label, homeRoot, since, unread, (scan) => history.scan(scan))] : []),
+    scanSource(ledger, "Mako", home, since, unread, (scan) => scan.jsonl([sessionsRoot], BUILT_IN)),
+    ...harnesses.flatMap(({ label, history }) => history ? [scanSource(ledger, label, home, since, unread, (scan) => history.scan(scan))] : []),
     conversationsRoot && recorded.size
-      ? scanSource(ledger, "Mako journals", homeRoot, since, unread, (scan) => scanRecorded(scan, conversationsRoot, recorded))
+      ? scanSource(ledger, "Mako journals", home, since, unread, (scan) => scanRecorded(scan, conversationsRoot, recorded))
       : undefined,
   ])
   ledger.forgetBefore(since)
@@ -113,7 +123,7 @@ function windowStart(now: number): number {
 async function scanSource(
   ledger: UsageLedger,
   source: string,
-  homeRoot: string,
+  home: UsageHome,
   since: number,
   unread: Unread[],
   read: (scan: UsageScan) => Promise<void>
@@ -124,7 +134,8 @@ async function scanSource(
     unread.push({ source, path, reason })
   }
   const scan: UsageScan = {
-    homeRoot,
+    homeRoot: home.homeRoot,
+    env: home.env,
     source,
     since,
     record: (event) => {
@@ -140,7 +151,7 @@ async function scanSource(
           const state = resumes ? reader.restore(cursor.state) : reader.start(file)
           if (resumes && cursor.offset === file.size) continue
           const events: UsageEvent[] = []
-          const read = await readAppended(file.path, resumes ? cursor.offset : 0, reader.needles, (line) => {
+          const read = await readAppended(file.path, resumes ? cursor.offset : 0, reader, (line) => {
             const out = reader.line(line, state, file)
             if (Array.isArray(out)) events.push(...out)
             else if (out) events.push(out)
@@ -179,6 +190,14 @@ async function scanSource(
 
 /** Mako's built-in sessions: a `session` header names the session and its folder, and each message may carry usage. */
 const BuiltInContextSchema = z.object({ cwd: z.string(), session: z.string() })
+/** A built-in message's `usage`, in Mako's own names: `input` leaves out what the cache supplied. */
+const BuiltInUsage = z.object({
+  input: tokenCount,
+  output: tokenCount,
+  cacheRead: tokenCount,
+  cacheWrite: tokenCount,
+  cost: z.object({ total: z.number().nonnegative() }).nullish().catch(undefined),
+})
 const BUILT_IN: JsonlReader<z.infer<typeof BuiltInContextSchema>> = {
   needles: ['"usage"', '"type":"session"'],
   start: (file) => ({ cwd: "unknown", session: basename(file.path, ".jsonl") }),
@@ -192,11 +211,11 @@ const BUILT_IN: JsonlReader<z.infer<typeof BuiltInContextSchema>> = {
       return null
     }
     const message = objectValue(root.message)
-    const usage = objectValue(message?.usage)
+    const usage = BuiltInUsage.safeParse(message?.usage).data
     if (!message || !usage) return null
-    const counts = tokenCounts(usage, "input", "output", "cacheRead", "cacheWrite")
-    const cost = numberValue(objectValue(usage.cost)?.total)
-    if (tokenTotal(counts) === 0 && (!cost || cost <= 0)) return null
+    const counts = usageCounts(exclusiveTokens(usage))
+    const cost = usage.cost?.total
+    if (tokenTotal(counts) === 0 && !cost) return null
     const id = stringValue(root.id)
     const timestamp = validTimestamp(root.timestamp, file.mtimeMs)
     const event: UsageEvent = {
@@ -224,6 +243,7 @@ const RecordedSpendSchema = z.object({
     at: z.number(),
     tokens: z.object({ input: z.number(), cacheRead: z.number(), cacheWrite: z.number(), output: z.number() }).optional(),
     cost: z.number().optional(),
+    unrecorded: z.enum(["tokens", "cost"]).optional(),
   }),
 })
 
@@ -286,6 +306,7 @@ function readJournal(scan: UsageScan, path: string, conversation: string, record
         summed: true,
       }
       if (spend.cost !== undefined && spend.cost >= 0) event.reportedCost = spend.cost
+      if (spend.unrecorded) event.incomplete = true
       scan.record(event)
     }
   } finally {
@@ -305,6 +326,7 @@ function aggregate(
   const models = new Map<string, Bucket>()
   const projects = new Map<string, Bucket>()
   const sources = new Map<string, Bucket>()
+  const incomplete = new Set<string>()
 
   for (const event of events) {
     add(total, event)
@@ -312,9 +334,10 @@ function aggregate(
     addTo(models, event.model, event)
     addTo(projects, event.cwd, event)
     addTo(sources, event.source, event)
+    if (event.incomplete) incomplete.add(event.source)
   }
 
-  return {
+  const summary: UsageSummary = {
     total: totalsOf(total),
     days: recentDays(days, now),
     models: rank(models).map((bucket) => ({
@@ -333,6 +356,8 @@ function aggregate(
     sessions,
     truncated,
   }
+  if (incomplete.size) summary.incomplete = [...incomplete].sort()
+  return summary
 }
 
 function empty(key: string): Bucket {

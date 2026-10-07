@@ -290,6 +290,7 @@ import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "./contracts/live-history.js"
 import { installSessionIpc } from "./ipc/session.js"
 import { installWorkspaceIpc, stopWorkspaceIpc } from "./ipc/workspace.js"
+import { installCloudAccountIpc, stopCloudAccountIpc } from "./ipc/cloud-account.js"
 import type {
   LivePermissionResponse,
   PromptAttachment,
@@ -1526,6 +1527,7 @@ function bindIpc() {
       void listConnections().then((connections) => emit({ type: "provider-connections", connections }))
     })
   }
+  installCloudAccountIpc({ emit, fixture: fixtureDesk })
   /* Harness accounts: several logins per CLI, Orca-style isolated homes. */
   handle("mako:accounts", () => accountCatalog())
   handle("mako:account-login-start", (_e, harness: AccountHarness, renew?: string) => startAccountLogin(harness, renew))
@@ -2666,6 +2668,7 @@ const quitLifecycle = backgroundLifecycle({
       }
       powerMonitor.removeListener("resume", emitTerminalWake)
       powerMonitor.removeListener("unlock-screen", emitTerminalWake)
+      stopCloudAccountIpc()
       terminalClients?.dispose()
       void controlSessions.close()
       stopCuaEmbedded()

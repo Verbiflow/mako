@@ -10,6 +10,7 @@ import { preparePrompt, type PromptDispatch } from "./providers/prompt-dispatch.
 import { ProviderStartupWatch } from "./provider-startup.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./providers/codex/agents.js"
+import { CodexRolloutCalls } from "./providers/codex/rollout-calls.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./providers/codex/settings.js"
@@ -108,6 +109,7 @@ type Live = {
   pending: Map<string, PendingRpc>
   serverRequests: Map<string, PendingServerRequest>
   decoder: CodexDecoder
+  rollout?: CodexRolloutCalls
   capture: NativeCapture | null
   background: ProtocolContext["background"]
   subagentTurns: Map<string, Array<() => void>>
@@ -276,6 +278,7 @@ async function startCodex(
     const response = await openThread(live, watch, trace, options.resume, options.fork)
     clearStartupWatch(live)
     live.threadId = response.thread.id
+    live.rollout = response.thread.path ? new CodexRolloutCalls(response.thread.path) : undefined
     if (options.resume === response.thread.id && !options.fork)
       live.agents.restore(options.observedAgents ?? [])
     if (response.thread.cwd !== undefined) live.cwd = response.thread.cwd

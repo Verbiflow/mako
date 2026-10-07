@@ -19,6 +19,7 @@ import {
   type JsonRpcEnvelope,
 } from "./codex-app-parse.js"
 import { deliverDecoded, type DecodedSink } from "./contracts/native-decoding.js"
+import { codexRolloutDue } from "./providers/codex/rollout-calls.js"
 import type {
   PendingRpc,
   ProtocolContext,
@@ -116,8 +117,16 @@ function processLine(context: ProtocolContext, line: string): void {
     )
     return
   }
+  if (context.rollout && codexRolloutDue(message.method, message.params, context.threadId)) drawRolloutCalls(context)
   context.capture?.record({ method: message.method, params: message.params })
   deliver(context, context.decoder.decode({ method: message.method, params: message.params }))
+}
+
+function drawRolloutCalls(context: ProtocolContext): void {
+  const calls = context.rollout?.read() ?? []
+  if (!calls.length) return
+  context.capture?.record({ rollout: calls })
+  deliver(context, context.decoder.rolloutCalls(calls))
 }
 
 /** Decoded events to the driver's callbacks, in order. */

@@ -81,6 +81,7 @@ import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
 import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpTuning } from "./providers/acp-source.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
+import { acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import type { JsonObject } from "./codex-app-json.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
@@ -159,6 +160,8 @@ interface Live {
   launchAccess: AccessTier | null
   /** Re-read the admitted store after native persistence, never on token updates. */
   locateNativePath(): string | undefined
+  /** Where a native fork after the turn that just ended starts, for an agent that forks natively. */
+  checkpoint?(): string | undefined
   /** The opt-in recording of this session's wire, when capture is on for the harness. */
   capture?: NativeCapture
 }
@@ -289,6 +292,10 @@ async function startAcp(
   applyThreadEnvironment(env, options.threadEnvironment)
   const executable = resolveExecutable(spec.command, env)
   if (!executable) throw new Error(`${harness} is not installed`)
+  // Before MCP preparation: a native fork only copies the session, so it starts none of the conversation's servers.
+  const forkEnvironment = options.fork ? environmentForExecutable(executable, env) : undefined
+  const fork = source?.fork
+  if (options.fork && fork?.kind !== "native") throw new Error(`${harness} has no native fork`)
 
   const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
   const tools = options.conversationTools
@@ -342,9 +349,15 @@ async function startAcp(
     turn: null,
     launchAccess: runAccess,
     locateNativePath: () => located(),
+    checkpoint: fork?.kind === "native"
+      ? () => live.sessionId ? fork.checkpoint({ nativeId: live.sessionId, env, cwd: workingDir }) : undefined
+      : undefined,
     emit: send,
   }
   sessions.set(id, live)
+  let open: (sessionId: string | null) => void = () => undefined
+  const opened = new Promise<string | null>((resolve) => { open = resolve })
+  live.startup.signal.addEventListener("abort", () => open(null), { once: true })
 
   let stderr = ""
   child.stderr.on("data", (chunk: Buffer) => {
@@ -418,7 +431,9 @@ async function startAcp(
     async extMethod(method: string, params: JsonObject) {
       record({ request: method, params })
       const vendor = decoder.request(method, params)
-      if (!vendor || vendor.sessionId !== live.sessionId) {
+      // Grok asks about folder trust from a task it starts with the session, so the request can land before session/new's reply.
+      const sessionId = live.sessionId ?? (vendor ? await opened : null)
+      if (!vendor || vendor.sessionId !== sessionId) {
         engine.unknown(live, method, vendor ? "unreadable" : "unknown", params)
         throw RequestError.methodNotFound(method)
       }
@@ -440,16 +455,8 @@ async function startAcp(
       announceProviderTurn(providerTurns?.updateCause?.(params))
       // Before the child filter: a subagent's reading is never transcript, and its spend is the conversation's.
       if (params.update.sessionUpdate === "usage_update") {
-        const reading = params.update
-        const read = source?.usageUpdate?.(UsageMetaSchema.safeParse(reading._meta).data) ?? { of: "agent", observations: [] }
-        if (read.of === "repeat") return
-        if (read.of === "subagent") {
-          observeUsage(read.observations)
-          return
-        }
-        const observations: UsageObservation[] = [{ kind: "context", used: reading.used, size: reading.size }, ...read.observations]
-        if (reading.cost) observations.push({ kind: "cost", amount: reading.cost.amount, currency: reading.cost.currency })
-        observeUsage(observations)
+        const read = acpUsageReading(source, params.update)
+        if (read.of !== "repeat") observeUsage(read.observations)
         return
       }
       if (live.agents?.observe(params) === "child") return
@@ -515,8 +522,8 @@ async function startAcp(
     const marked = live.compaction ? notices?.map(asManualCompaction) : notices
     engine.observe(live, kind, marked, source)
     if (notices && state) update(live, state)
-    const compacted = notices?.flatMap((notice) => notice.kind === "compacted" ? [{ kind: "compacted" as const, after: notice.compaction?.tokensAfter }] : []) ?? []
-    if (notices && (decoded.usage?.length || compacted.length)) observeUsage([...compacted, ...decoded.usage ?? []])
+    const observations = notices ? acpNotificationUsage(decoded) : []
+    if (observations.length) observeUsage(observations)
     const outcome = live.compaction && notices ? compactionOutcome(notices, decoded.usage) : undefined
     if (outcome) live.compaction?.confirm(outcome)
   }
@@ -567,6 +574,24 @@ async function startAcp(
       update(live, { backgroundTasks: report.running })
   }
 
+  const from = options.fork
+  // Runs alongside the handshake, in its own agent process; the session opens once it has the copy.
+  const forking = from && forkEnvironment && fork?.kind === "native"
+    ? trace.step("session-fork", () => fork.open({
+        nativeId: from.nativeId,
+        checkpoint: from.runId,
+        executable,
+        args: spec.args,
+        env: forkEnvironment,
+        cwd: workingDir,
+        clientCapabilities: acpClientCapabilities(source),
+        owner: id,
+        signal: live.startup.signal,
+      }))
+    : undefined
+  // Awaited when the session opens; a launch that fails before then reports its own error.
+  forking?.catch(() => undefined)
+
   const connection = new ClientSideConnection(
     () => client,
     await screenSessionUpdates(ndJsonStream(acpWritable(child.stdin), acpReadable(child.stdout)), refusedUpdate, lossyUpdate)
@@ -600,7 +625,8 @@ async function startAcp(
         )
       : []
     if (mcpCapabilities?.http) live.mcpServers.push(...makoMcp)
-    const resume = options.resume
+    const resume = forking ? await forking : options.resume
+    if (forking) hostLog("acp", "forked natively", { harness, conversation: id, from: options.fork?.nativeId, session: resume })
     const session = await openAuthenticatedSession({
       methods: initialized.authMethods ?? [],
       signal: live.startup.signal,
@@ -642,6 +668,7 @@ async function startAcp(
           ),
     })
     live.sessionId = session.sessionId
+    open(session.sessionId)
     for (const decoded of opening.splice(0))
       if ((decoded.sessionId ?? session.sessionId) === session.sessionId)
         applyNotification({ ...decoded, sessionId: session.sessionId, usage: decoded.usage?.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") })
@@ -758,8 +785,6 @@ function loadSessionRequest(
   return request
 }
 
-/** A `usage_update`'s `_meta`, as the harness's own reader takes it. */
-const UsageMetaSchema = z.record(z.string(), z.json())
 const LegacyAcpModelsSchema = z.object({ models: z.object({ currentModelId: z.string() }).nullish() })
 
 function legacyAcpModel(response: NewSessionResponse | LoadSessionResponse): string | undefined {
@@ -882,7 +907,7 @@ export async function livePrompt(
         stop: verdict.lastStop,
         error: verdict.error,
       })
-    update(live, { ...verdict, nativePath: live.locateNativePath() })
+    update(live, { ...verdict, nativePath: live.locateNativePath(), nativeForkId: verdict.status === "ready" ? live.checkpoint?.() : undefined })
   })
   live.turn = turn
   live.turnReceipt = () => {
@@ -892,7 +917,7 @@ export async function livePrompt(
   }
   live.providerTurn = false
   live.providerTurnCause = undefined
-  update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
+  update(live, { status: "running", nativeRunId: turn.id, nativeForkId: undefined, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
   engine.emitUpdate(live, { kind: "user", text })
   live.capture?.prompted({ text, attachments })
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)

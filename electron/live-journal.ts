@@ -52,6 +52,7 @@ const TokenCountsSchema = z.object({
   reasoning: z.number().optional(),
 })
 const CostSchema = z.object({ amount: z.number(), currency: z.string() })
+const UnrecordedSchema = z.object({ tokens: z.number().int().nonnegative(), cost: z.number().int().nonnegative() })
 
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
@@ -111,6 +112,7 @@ export const LiveRequestSchema = z.object({
   usageFrom: z.object({
     tokens: TokenCountsSchema.optional(),
     cost: CostSchema.optional(),
+    unrecorded: UnrecordedSchema.optional(),
   }).optional(),
   /** What answering this request spent, for harnesses whose own store keeps no usage. */
   spend: z.object({
@@ -119,6 +121,7 @@ export const LiveRequestSchema = z.object({
     at: z.number(),
     tokens: TokenCountsSchema.optional(),
     cost: z.number().nonnegative().optional(),
+    unrecorded: z.enum(["tokens", "cost"]).optional(),
   }).optional(),
   continues: z
     .object({
@@ -180,6 +183,7 @@ const MetadataSchema = z.object({
       id: z.string(),
       sessionId: z.string(),
       title: z.string(),
+      detail: z.string().optional(),
       kind: z.string().optional(),
       options: z.array(
         z.object({
@@ -190,6 +194,7 @@ const MetadataSchema = z.object({
       ),
       questions: z.array(LiveInputQuestionSchema).optional(),
       implementsPlan: z.object({ plan: z.string(), approve: z.string() }).optional(),
+      feedbackOption: z.string().optional(),
     })
   ),
 })

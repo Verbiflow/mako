@@ -43,17 +43,6 @@ export function isJsonObject(
   )
 }
 
-/** Equal JSON, compared in place: no serialization, and it stops at the first difference. */
-export function sameJson(left: JsonValue | undefined, right: JsonValue | undefined): boolean {
-  if (left === right) return true
-  if (Array.isArray(left))
-    return Array.isArray(right) && left.length === right.length && left.every((item, index) => sameJson(item, right[index]))
-  if (!isJsonObject(left) || !isJsonObject(right)) return false
-  const keys = Object.keys(left)
-  if (keys.length !== Object.keys(right).length) return false
-  return keys.every((key) => Object.hasOwn(right, key) && sameJson(left[key], right[key]))
-}
-
 export function isString(value: JsonValue | undefined): value is string {
   return Object.prototype.toString.call(value) === "[object String]"
 }

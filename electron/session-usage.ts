@@ -28,6 +28,12 @@ export type UsageObservation =
   | { kind: "costSpent"; amount: number; currency: string }
   /** The harness's own totals for the native session, kept for the next process that may restore them. */
   | { kind: "native"; totals: NativeTotals }
+  /**
+   * The harness said what it just reported leaves spend out: `tokens` when
+   * its counts miss calls (and its cost is left out with them), `cost` when
+   * only some calls' cost is.
+   */
+  | { kind: "unrecorded"; of: "tokens" | "cost" }
   /** The context was compacted; `after` when the harness says how much is left. */
   | { kind: "compacted"; after?: number }
   /** The harness started a new conversation in place: nothing is in context. */
@@ -91,6 +97,12 @@ export class SessionUsage {
       case "native":
         next.native = observation.totals
         break
+      case "unrecorded":
+        next.unrecorded = {
+          tokens: (next.unrecorded?.tokens ?? 0) + (observation.of === "tokens" ? 1 : 0),
+          cost: (next.unrecorded?.cost ?? 0) + 1,
+        }
+        break
       case "compacted":
         if (observation.after !== undefined) {
           this.used = observation.after
@@ -117,6 +129,8 @@ function sameUsage(left: LiveSessionUsage, right: LiveSessionUsage): boolean {
   return left.used === right.used &&
     left.size === right.size &&
     left.compacted === right.compacted &&
+    left.unrecorded?.tokens === right.unrecorded?.tokens &&
+    left.unrecorded?.cost === right.unrecorded?.cost &&
     left.cost?.amount === right.cost?.amount &&
     left.cost?.currency === right.cost?.currency &&
     sameTokens(left.tokens, right.tokens) &&
@@ -194,31 +208,8 @@ export function addTokens(left: TokenCounts | undefined, right: TokenCounts): To
   return sum
 }
 
-/**
- * Counts where input includes cached input and output includes reasoning,
- * the OpenAI convention Codex, Grok's turn totals, Cursor and Devin follow.
- */
-export function fromInclusiveCounts(counts: {
-  input: number
-  cacheRead?: number
-  cacheWrite?: number
-  output: number
-  reasoning?: number
-}): TokenCounts {
-  const cacheRead = counts.cacheRead ?? 0
-  const cacheWrite = counts.cacheWrite ?? 0
-  const tokens: TokenCounts = {
-    input: Math.max(0, counts.input - cacheRead - cacheWrite),
-    cacheRead,
-    cacheWrite,
-    output: counts.output,
-  }
-  if (counts.reasoning) tokens.reasoning = counts.reasoning
-  return tokens
-}
-
 function empty(reading: LiveSessionUsage): boolean {
-  return reading.used === undefined && reading.tokens === undefined && reading.cost === undefined
+  return reading.used === undefined && reading.tokens === undefined && reading.cost === undefined && reading.unrecorded === undefined
 }
 
 /** What a running total added since an earlier reading of it, or `undefined` when any kind went down: the total started over. */
@@ -238,6 +229,8 @@ export function tokensSince(before: TokenCounts, after: TokenCounts): TokenCount
 export interface RequestSpend {
   tokens?: TokenCounts
   cost?: number
+  /** The harness said this request's own turns left spend out, so `tokens`, or only `cost`, may be low. */
+  unrecorded?: "tokens" | "cost"
 }
 
 const TOKEN_KINDS = ["input", "cacheRead", "cacheWrite", "output", "reasoning"] as const
@@ -253,10 +246,14 @@ export function spendBetween(
 ): RequestSpend {
   const spend: RequestSpend = {}
   const now = to?.tokens
-  if (now) {
-    const tokens = (from?.tokens && tokensSince(from.tokens, now)) ?? { ...now }
-    if (contextOf(tokens) > 0) spend.tokens = tokens
-  }
+  const tokens = now && ((from?.tokens && tokensSince(from.tokens, now)) ?? { ...now })
+  if (tokens && contextOf(tokens) > 0) spend.tokens = tokens
+  const marks = to?.unrecorded ?? { tokens: 0, cost: 0 }
+  const marked = from?.unrecorded ?? { tokens: 0, cost: 0 }
+  const restarted = (from?.tokens && now && !tokensSince(from.tokens, now)) || marks.tokens < marked.tokens || marks.cost < marked.cost
+  const base = restarted ? { tokens: 0, cost: 0 } : marked
+  if (marks.tokens > base.tokens) spend.unrecorded = "tokens"
+  else if (marks.cost > base.cost) spend.unrecorded = "cost"
   if (to?.cost && to.cost.currency === "USD") {
     const base = from?.cost?.currency === "USD" ? from.cost.amount : 0
     const cost = to.cost.amount >= base ? to.cost.amount - base : to.cost.amount

@@ -1,7 +1,8 @@
 import { open, readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
-import { numberValue, objectValue, stringValue } from "./codex-app-json.js"
+import { objectValue, stringValue } from "./codex-app-json.js"
+import type { HarnessTokens } from "@mako/sessions/harnesses"
 import type { UsageTokenCounts } from "./usage-pricing.js"
 
 /**
@@ -35,15 +36,27 @@ export interface UsageEvent extends UsageTokenCounts {
   model: string
   cwd: string
   reportedCost?: number
+  /** The harness says its own record of this usage misses some calls, so the counts may be low. */
+  incomplete?: boolean
+}
+
+/** Which lines are worth decoding. */
+export interface LineScreen {
+  /** Lines holding none of these strings are skipped without being decoded. */
+  needles: readonly string[]
+  /**
+   * The needles sit in a line's first this many bytes, where the format puts
+   * the record's type, so the rest of a long line is never searched: lines
+   * are found by their newlines alone. A needle further in is not seen.
+   */
+  within?: number
 }
 
 /**
  * One append-only JSONL format. A file is read once and then from where the
  * last read stopped, so its state is kept between reads and must be JSON.
  */
-export interface JsonlReader<State extends JsonValue> {
-  /** Lines holding none of these strings are skipped without being decoded. */
-  needles: readonly string[]
+export interface JsonlReader<State extends JsonValue> extends LineScreen {
   /** The state the file's first line starts from. */
   start(file: FileCandidate): State
   /** Validates a persisted cursor's state before this reader continues from it. */
@@ -56,6 +69,8 @@ export interface JsonlReader<State extends JsonValue> {
 export interface UsageScan {
   /** The user's home, under which each harness keeps its own store. */
   homeRoot: string
+  /** The environment Mako launches harnesses with: a store moved by the harness's own variable is read where it moved. */
+  env: NodeJS.ProcessEnv
   /** The harness's name as the usage table shows it; keys start with it. */
   source: string
   /** Epoch ms of the summary's first day: older records are not read. */
@@ -117,20 +132,24 @@ export interface AppendedRead {
 /**
  * A line that runs past the chunk it began in. Its pieces are joined only
  * if it holds a needle; past `MAX_LINE_BYTES` they are dropped and only
- * whether it held one is kept.
+ * whether it held one is kept. Screened by its head alone, a line whose
+ * head holds no needle keeps none of its pieces.
  */
 class LongLine {
   private pieces: Buffer[] = []
   private bytes = 0
   private tail: Buffer = Buffer.alloc(0)
+  private head: Buffer = Buffer.alloc(0)
   private readonly patterns: readonly Buffer[]
   private readonly overlap: number
+  private readonly within: number | undefined
   matches = false
   overlong = false
 
-  constructor(patterns: readonly Buffer[], overlap: number) {
+  constructor(patterns: readonly Buffer[], overlap: number, within: number | undefined) {
     this.patterns = patterns
     this.overlap = overlap
+    this.within = within
   }
 
   get empty(): boolean {
@@ -138,6 +157,28 @@ class LongLine {
   }
 
   add(piece: Buffer): void {
+    if (this.within !== undefined) this.screenHead(piece, this.within)
+    else this.screen(piece)
+    if (this.overlong) return
+    if (this.within !== undefined && this.head.length >= this.within && !this.matches) {
+      this.bytes += piece.length
+      this.pieces = []
+      return
+    }
+    this.bytes += piece.length
+    if (this.bytes > MAX_LINE_BYTES) {
+      this.overlong = true
+      this.pieces = []
+    } else this.pieces.push(Buffer.from(piece))
+  }
+
+  private screenHead(piece: Buffer, within: number): void {
+    if (this.head.length >= within) return
+    this.head = Buffer.concat([this.head, piece.subarray(0, within - this.head.length)])
+    this.matches = holds(this.head, this.patterns)
+  }
+
+  private screen(piece: Buffer): void {
     if (!this.matches) {
       const seam = this.tail.length ? Buffer.concat([this.tail, piece.subarray(0, this.overlap)]) : undefined
       this.matches = holds(piece, this.patterns) || (seam !== undefined && holds(seam, this.patterns))
@@ -146,12 +187,6 @@ class LongLine {
       const joined = piece.length >= this.overlap ? piece : Buffer.concat([this.tail, piece])
       this.tail = Buffer.from(joined.subarray(Math.max(joined.length - this.overlap, 0)))
     }
-    if (this.overlong) return
-    this.bytes += piece.length
-    if (this.bytes > MAX_LINE_BYTES) {
-      this.overlong = true
-      this.pieces = []
-    } else this.pieces.push(Buffer.from(piece))
   }
 
   text(): string {
@@ -171,7 +206,7 @@ function holds(data: Buffer, patterns: readonly Buffer[]): boolean {
 export async function readAppended(
   path: string,
   start: number,
-  needles: readonly string[],
+  { needles, within }: LineScreen,
   visit: (line: string) => void
 ): Promise<AppendedRead> {
   const patterns = needles.map((needle) => Buffer.from(needle))
@@ -181,7 +216,7 @@ export async function readAppended(
   let position = start
   let end = start
   let oversized = 0
-  let line = new LongLine(patterns, overlap)
+  let line = new LongLine(patterns, overlap, within)
   try {
     for (;;) {
       const { bytesRead } = await handle.read(chunk, 0, CHUNK_BYTES, position)
@@ -198,11 +233,12 @@ export async function readAppended(
         line.add(data.subarray(0, first))
         if (line.matches && line.overlong) oversized += 1
         else if (line.matches) visit(line.text())
-        line = new LongLine(patterns, overlap)
+        line = new LongLine(patterns, overlap, within)
         from = first + 1
       }
       const last = data.lastIndexOf(NEWLINE)
-      matchingLines(data, from, last + 1, patterns, visit)
+      if (within === undefined) matchingLines(data, from, last + 1, patterns, visit)
+      else headedLines(data, from, last + 1, patterns, within, visit)
       end = position - (bytesRead - last - 1)
       if (last + 1 < bytesRead) line.add(data.subarray(last + 1))
     }
@@ -237,6 +273,15 @@ function matchingLines(data: Buffer, from: number, to: number, patterns: readonl
   }
 }
 
+/** The lines in `data[from, to)` whose first `within` bytes hold a pattern, in order; `to` follows a newline. */
+function headedLines(data: Buffer, from: number, to: number, patterns: readonly Buffer[], within: number, visit: (line: string) => void): void {
+  for (let start = from; start < to;) {
+    const end = data.indexOf(NEWLINE, start)
+    if (holds(data.subarray(start, Math.min(end, start + within)), patterns)) visit(data.toString("utf8", start, end))
+    start = end + 1
+  }
+}
+
 export function parseObject(line: string): JsonObject | undefined {
   try {
     const value: JsonValue = JSON.parse(line)
@@ -246,24 +291,9 @@ export function parseObject(line: string): JsonObject | undefined {
   }
 }
 
-export function tokenCounts(
-  usage: JsonObject,
-  inputKey: string,
-  outputKey: string,
-  cacheReadKey: string,
-  cacheWriteKey: string
-): UsageTokenCounts {
-  return {
-    input: tokenValue(usage[inputKey]),
-    output: tokenValue(usage[outputKey]),
-    cacheRead: tokenValue(usage[cacheReadKey]),
-    cacheWrite: tokenValue(usage[cacheWriteKey]),
-  }
-}
-
-export function tokenValue(value: JsonValue | undefined): number {
-  const parsed = numberValue(value)
-  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+/** A harness's tokens as a usage record counts them, which keeps no reasoning split. */
+export function usageCounts(tokens: HarnessTokens): UsageTokenCounts {
+  return { input: tokens.input, output: tokens.output, cacheRead: tokens.cacheRead, cacheWrite: tokens.cacheWrite }
 }
 
 export function fingerprint(

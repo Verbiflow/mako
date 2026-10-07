@@ -3630,7 +3630,9 @@ export class LiveConversations {
       ...request,
       nativePrompt: undefined,
       nativeDelivery,
-      usageFrom: usage?.tokens || usage?.cost ? { ...(usage.tokens && { tokens: usage.tokens }), ...(usage.cost && { cost: usage.cost }) } : undefined,
+      usageFrom: usage?.tokens || usage?.cost || usage?.unrecorded
+        ? { ...(usage.tokens && { tokens: usage.tokens }), ...(usage.cost && { cost: usage.cost }), ...(usage.unrecorded && { unrecorded: usage.unrecorded }) }
+        : undefined,
       status: "dispatching" as const,
       context: [
         ...(request.context ?? []),
@@ -4285,7 +4287,7 @@ function settleRequest(request: LiveRequest, session: LiveSessionState, ended: b
   } else if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
   const spend = spendBetween(request.usageFrom, session.usage)
-  if (spend.tokens || spend.cost !== undefined)
+  if (spend.tokens || spend.cost !== undefined || spend.unrecorded)
     settled.spend = { provider: session.harness, model: session.settings?.model, at: Date.now(), ...spend }
   return settled
 }

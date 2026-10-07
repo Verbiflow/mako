@@ -6,8 +6,8 @@ import {
 } from "./providers/codex/agents.js"
 import { attachmentFromCodexContent } from "./providers/codex/content.js"
 import { z } from "zod"
+import { codexTokens, CodexWireUsage } from "@mako/sessions/harnesses"
 import type { TokenCounts } from "./contracts/providers-acp.js"
-import { fromInclusiveCounts } from "./session-usage.js"
 import {
   booleanValue,
   isJsonObject,
@@ -227,28 +227,9 @@ export type ProtocolNotification =
   | SummaryPartNotification
   | InvalidNotification
 
-const count = z.number().nonnegative()
-/** Codex 0.159's `TokenUsageBreakdown`: input includes cached input, and output includes reasoning. */
-const BreakdownSchema = z.object({
-  totalTokens: count,
-  inputTokens: count,
-  cachedInputTokens: count,
-  cacheWriteInputTokens: count.optional(),
-  outputTokens: count,
-  reasoningOutputTokens: count,
-})
-function codexCounts(breakdown: z.infer<typeof BreakdownSchema>): TokenCounts {
-  return fromInclusiveCounts({
-    input: breakdown.inputTokens,
-    cacheRead: breakdown.cachedInputTokens,
-    cacheWrite: breakdown.cacheWriteInputTokens,
-    output: breakdown.outputTokens,
-    reasoning: breakdown.reasoningOutputTokens,
-  })
-}
 const TokenUsageSchema = z.object({
-  last: z.object({ totalTokens: count }).and(BreakdownSchema.partial()),
-  total: BreakdownSchema.optional().catch(undefined),
+  last: CodexWireUsage,
+  total: CodexWireUsage.optional().catch(undefined),
   modelContextWindow: z.number().positive().nullish(),
 })
 const ConfigNoticeSchema = z.object({ summary: z.string().min(1), details: z.string().nullish() })
@@ -397,12 +378,11 @@ export function parseNotification(
       const usage = TokenUsageSchema.safeParse(params.tokenUsage)
       if (threadId === undefined || !usage.success) return null
       const { last, total, modelContextWindow } = usage.data
-      const parsed: TokenUsageNotification = { method, threadId, used: last.totalTokens, size: modelContextWindow ?? undefined }
+      if (last.total === undefined) return null
+      const parsed: TokenUsageNotification = { method, threadId, used: last.total, size: modelContextWindow ?? undefined, call: codexTokens(last) }
       const turnId = stringValue(params.turnId)
       if (turnId) parsed.turnId = turnId
-      if (total) parsed.total = codexCounts(total)
-      const call = BreakdownSchema.safeParse(last)
-      if (call.success) parsed.call = codexCounts(call.data)
+      if (total) parsed.total = codexTokens(total)
       return parsed
     }
     case "warning":

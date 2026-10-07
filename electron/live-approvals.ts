@@ -171,6 +171,8 @@ export class LiveApprovals {
     if (response.kind === "choice") {
       if (response.optionId !== null && !request.options.some(option => option.optionId === response.optionId))
         throw new Error("That approval option is unavailable")
+      if (response.feedback !== undefined && (response.optionId === null || response.optionId !== request.feedbackOption))
+        throw new Error("That answer can't carry a message")
     } else if (!request.questions || Object.keys(response.answers).some(key => !request.questions?.some(question => question.id === key))) {
       throw new Error("Those answers do not belong to this approval")
     }
