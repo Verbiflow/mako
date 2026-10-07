@@ -127,6 +127,13 @@ export interface LiveSessionUsage {
   tokens?: TokenCounts
   /** Spend since this live session started, as the harness reports it. */
   cost?: { amount: number; currency: string }
+  /**
+   * How many of the harness's reports said they left spend out: `tokens`
+   * counts reports whose token counts miss calls, `cost` every report that
+   * left cost out, those included. Either makes `tokens` or `cost` a floor,
+   * not the total.
+   */
+  unrecorded?: { tokens: number; cost: number }
   /** The harness's own totals for the native session, from a harness whose totals outlive its process. */
   native?: NativeTotals
 }
@@ -228,6 +235,8 @@ export interface LivePermissionRequest {
   id: string
   sessionId: string
   title: string
+  /** What a request that isn't for a tool asks, and what each answer does, in a sentence or three. */
+  detail?: string
   kind?: string
   options: Array<{ optionId: string; name: string; kind?: string }>
   questions?: LiveInputQuestion[]
@@ -237,8 +246,13 @@ export interface LivePermissionRequest {
    * this request rather than sending a second prompt.
    */
   implementsPlan?: { plan: string; approve: string }
+  /**
+   * The option whose answer can carry what the person typed, which then
+   * reaches the agent with the refusal instead of as the next message.
+   */
+  feedbackOption?: string
 }
 
 export type LivePermissionResponse =
-  | { kind: "choice"; optionId: string | null }
+  | { kind: "choice"; optionId: string | null; feedback?: string }
   | { kind: "answers"; answers: Record<string, string[]> }

@@ -37,6 +37,12 @@ export const hostCallInputs = {
   "mako:clear-crashes": z.tuple([]),
   "mako:clear-queue": z.tuple([]),
   "mako:close-tab": z.tuple([z.string()]),
+  "mako:cloud-account": z.tuple([]),
+  "mako:cloud-device-remove": z.tuple([z.string()]),
+  "mako:cloud-devices": z.tuple([]),
+  "mako:cloud-sign-in": z.tuple([]),
+  "mako:cloud-sign-in-cancel": z.tuple([]),
+  "mako:cloud-sign-out": z.tuple([]),
   "mako:compact": z.tuple([z.string().optional()]),
   "mako:computer-driver": z.tuple([]),
   "mako:computer-driver-update": z.tuple([]),
@@ -307,6 +313,7 @@ export const hostCallInputs = {
       z.object({
         kind: z.literal("choice"),
         optionId: z.union([z.null(), z.string()]),
+        feedback: z.string().trim().min(1).optional(),
       }),
       z.object({
         kind: z.literal("answers"),

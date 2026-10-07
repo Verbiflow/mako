@@ -56,6 +56,7 @@ import type { ContextBreakdown } from "./providers-acp.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
+import type { CloudAccount, CloudDevice } from "./cloud-account.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type {
   Automation,
@@ -434,6 +435,14 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<ProviderConnection[]>("mako:provider-connections", refresh),
     providerConnectionAction: (provider: string, action: ProviderConnectionAction) =>
       invokeTrustedHost<ProviderConnection>("mako:provider-connection-action", provider, action),
+
+    /* This Mac's Mako account; the host pushes `cloud-account` events as it changes. */
+    cloudAccount: () => invokeTrustedHost<CloudAccount>("mako:cloud-account"),
+    cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
+    cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
+    cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
+    cloudDeviceRemove: (id: string) => invokeTrustedHost<CloudAccount>("mako:cloud-device-remove", id),
+    cloudSignOut: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-out"),
 
     /* Harness accounts: several logins per CLI. */
     accounts: () => invokeTrustedHost<AccountCatalog>("mako:accounts"),

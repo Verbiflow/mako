@@ -49,6 +49,20 @@ const fixtureReads = [
 export const fixtureDeskHostCalls: ReadonlySet<string> = new Set<string>(fixtureReads)
 
 /**
+ * The Mako account, so agents can look at signing in. These reach the network, but only a
+ * cloud on this Mac's loopback: on a fixture desk `CloudAccounts` refuses any other, and it
+ * keeps the sign-in in memory, so the profile isn't written.
+ */
+export const fixtureCloudHostCalls: ReadonlySet<string> = new Set<string>([
+  "mako:cloud-account",
+  "mako:cloud-sign-in",
+  "mako:cloud-sign-in-cancel",
+  "mako:cloud-devices",
+  "mako:cloud-device-remove",
+  "mako:cloud-sign-out",
+])
+
+/**
  * Calls the launcher makes on the host's socket to replace a fixture host
  * built from older source. They stop only that host. Pages never get them:
  * the dev proxy refuses them and in-process windows are not on the socket.
@@ -63,7 +77,7 @@ export class FixtureDeskRefusedError extends Error {}
 
 /** The refusal for a channel a fixture desk may not call, or undefined when it may. */
 export function fixtureDeskRefusal(channel: string, transport: "page" | "socket" = "page"): string | undefined {
-  if (fixtureDeskHostCalls.has(channel)) return undefined
+  if (fixtureDeskHostCalls.has(channel) || fixtureCloudHostCalls.has(channel)) return undefined
   if (transport === "socket" && fixtureLauncherHostCalls.has(channel)) return undefined
   return `The fixture desk refused ${channel.slice(0, 80)} before it reached the host: a fixture desk only reads, and writes, provider calls and processes are not available in it.`
 }

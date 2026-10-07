@@ -203,9 +203,9 @@ export interface LiveRequest {
    */
   failure?: ProviderFailureKind
   /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
-  usageFrom?: Pick<LiveSessionUsage, "tokens" | "cost">
+  usageFrom?: Pick<LiveSessionUsage, "tokens" | "cost" | "unrecorded">
   /** What answering this request spent, kept for harnesses whose own store records no usage. */
-  spend?: { provider: string; model?: string; at: number; tokens?: TokenCounts; cost?: number }
+  spend?: { provider: string; model?: string; at: number; tokens?: TokenCounts; cost?: number; unrecorded?: "tokens" | "cost" }
   /** Set when this request continues an interrupted turn; see `TurnContinuation`. */
   continues?: TurnContinuation
   displayText?: string

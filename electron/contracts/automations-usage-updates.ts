@@ -55,6 +55,8 @@ export interface UsageSummary {
   sessions: number
   /** True when some records in the window could not be read, so the totals may be low; the host log names them. */
   truncated: boolean
+  /** Harnesses whose own records say some of their usage in the window is missing, so the totals may be low. */
+  incomplete?: string[]
 }
 
 /**
