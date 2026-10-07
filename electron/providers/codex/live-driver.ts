@@ -18,7 +18,8 @@ export const codexLiveDriver: ProviderLiveDriver = {
   nativeExclusion: NO_NATIVE_EXCLUSION,
   nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["tool-permission"], coverage: "Native codex.tool_decision user events confirm once/session/decline/abort for a unique command or file approval. Repeated tool IDs, amendments and other request families remain unconfirmed. Normalized decisions survive reconnect; request-resolved alone is not confirmation." },
-  planning: { via: "setting", option: CODEX_PLAN_OPTION.id, proposal: "The Plan collaboration mode's plan item, built by a message that asks for the implementation" },
+  planning: { via: "setting", option: CODEX_PLAN_OPTION.id, proposal: "The Plan collaboration mode's plan item, built by a message that asks for the implementation",
+    feedback: { kind: "next-message", reason: "the plan arrives as the turn ends and nothing waits on an answer." } },
   resume: {
     kind: "native",
     via: "`thread/resume` on the app-server with the thread ID.",

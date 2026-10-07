@@ -3,6 +3,7 @@ import {
   codexCommand,
   codexCommandOutput,
   codexErrorClass,
+  codexExecOutput,
   codexFailureEvent,
   codexPatchInput,
   codexPatchText,
@@ -31,6 +32,7 @@ import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../
 import type { CodexAgentItem } from "./agents.js"
 import { codexAnsweredQuestions, codexAsyncQuestion } from "./questions.js"
 import { codexUpdatedWindows } from "./rate-limits.js"
+import type { RolloutCall } from "./rollout-calls.js"
 import { codexInteractiveConfig } from "./settings.js"
 
 /**
@@ -195,6 +197,27 @@ const REFRESHING_SIGN_IN = "Refreshing sign-in"
 const REROUTE_REASONS = new Map([["highRiskCyberActivity", "cybersecurity safety check"]])
 /** Codex 0.159's `McpServerStartupFailureReason`, in plain words. */
 const MCP_FAILURES = new Map([["reauthenticationRequired", "sign-in required"]])
+/** What a capture calls the commands the driver read from the rollout. */
+export const CODEX_ROLLOUT_CALLS = "(rollout calls)"
+/** `exec_command`'s arguments, as the JSON text a rollout keeps. */
+const ExecArgumentsSchema = z.string().transform((text, context) => {
+  try {
+    return z.object({ cmd: z.string() }).loose().parse(JSON.parse(text)).cmd
+  } catch {
+    context.addIssue({ code: "custom", message: "not exec_command arguments" })
+    return z.NEVER
+  }
+})
+/** What macOS `sandbox-exec` says when it runs inside another sandbox, so Codex's own can't start. */
+const NESTED_SANDBOX = "sandbox-exec: sandbox_apply: Operation not permitted"
+const RolloutExecSchema = z.object({
+  call: z.object({
+    call_id: z.string(),
+    arguments: z.string().pipe(ExecArgumentsSchema.catch("")),
+    internal_chat_message_metadata_passthrough: z.object({ turn_id: z.string() }).nullish().catch(undefined),
+  }),
+  output: z.object({ output: z.string() }),
+})
 const PatchKindSchema = z.object({
   type: z.enum(["add", "delete", "update"]),
   move_path: z.string().nullish(),
@@ -277,6 +300,40 @@ export class CodexDecoder {
     if (item === undefined) return []
     this.questions.delete(String(id))
     return [decoded.update({ kind: "tool-update", id: item, status: "completed", output: JSON.stringify(result) })]
+  }
+
+  /**
+   * Commands the thread's rollout kept that the wire never named
+   * (`CodexRolloutCalls`), drawn where the driver read them. Only the running
+   * turn's: its items are still tracked, so a call the wire drew is known.
+   */
+  rolloutCalls(calls: readonly RolloutCall[]): CodexDecoded[] {
+    const out: CodexDecoded[] = []
+    const turnId = this.currentTurnId
+    if (!turnId) return out
+    for (const entry of calls) {
+      const read = RolloutExecSchema.safeParse(entry)
+      if (!read.success) {
+        out.push(decoded.unknown(CODEX_ROLLOUT_CALLS, entry, "unreadable"))
+        continue
+      }
+      const { call, output } = read.data
+      if ((call.internal_chat_message_metadata_passthrough?.turn_id ?? turnId) !== turnId) continue
+      if (this.items.has(`${turnId}\u0000${call.call_id}`)) continue
+      const command = call.arguments
+      const exec = codexExecOutput(output.output)
+      const tracker = this.tracker(turnId, call.call_id)
+      startTool(out, tracker, command || "Command", "exec_command", "inProgress", { command })
+      finishTool(out, tracker, exec?.exitCode ? "failed" : "completed",
+        exec ? codexCommandOutput(exec.output, exec.exitCode) : boundedText(output.output, MAX_TOOL_OUTPUT))
+      if (output.output.includes(NESTED_SANDBOX))
+        this.notice(out, CODEX_ROLLOUT_CALLS, {
+          ...event("Codex can't sandbox commands", "Mako is running inside a macOS sandbox, so Codex's own sandbox can't start.",
+            "Every command Codex sandboxes fails. Switch to Full access, or start Mako outside the sandbox."),
+          tone: "warning",
+        })
+    }
+    return out
   }
 
   /** A resumed thread's items, as the transcript it already had. */

@@ -1,20 +1,21 @@
 import { basename, join } from "node:path"
 import { z } from "zod"
+import { CodexRolloutUsage, codexTokens } from "@mako/sessions/harnesses"
 import { objectValue, stringValue, type JsonObject, type JsonValue } from "../../codex-app-json.js"
-import type { UsageTokenCounts } from "../../usage-pricing.js"
 import {
   parseObject,
-  tokenValue,
+  usageCounts,
   validTimestamp,
   type JsonlReader,
   type UsageEvent,
 } from "../../usage-scan.js"
 import type { ProviderUsageHistory } from "../usage-history.js"
 
+/** Codex's own counts, as the rollout reports them: `input` includes both caches. */
 const RawCodexUsageSchema = z.object({
   input: z.number().nonnegative(),
   output: z.number().nonnegative(),
-  cacheRead: z.number().nonnegative(),
+  cachedInput: z.number().nonnegative(),
   cacheWrite: z.number().nonnegative(),
 })
 type RawCodexUsage = z.infer<typeof RawCodexUsageSchema>
@@ -34,6 +35,9 @@ export const codexUsageHistory: ProviderUsageHistory = {
   async scan(scan) {
     const reader: JsonlReader<CodexContext> = {
       needles: ['"session_meta"', '"turn_context"', '"token_count"'],
+      // A rollout line opens with its time and type, and an event's payload with its own: `{"timestamp":…,"type":"event_msg","payload":{"type":"token_count"`.
+      // 350 rollouts (6.2 GB) put every one within 94 bytes; reading only that far skips the images and outputs a line carries after it.
+      within: 256,
       start: (file) => ({ session: basename(file.path, ".jsonl"), cwd: "unknown", model: "unknown", previous: null }),
       restore: (state) => CodexContextSchema.parse(state),
       line: (line, context, file) => parseCodexRecord(scan.source, line, context, file.mtimeMs),
@@ -73,16 +77,8 @@ function parseCodexRecord(
 
   const timestamp = validTimestamp(root.timestamp, fallbackTime)
   const model = codexModel(payload) ?? context.model
-  const cacheRead = Math.min(delta.cacheRead, delta.input)
-  const cacheWrite = Math.min(delta.cacheWrite, Math.max(delta.input - cacheRead, 0))
-  const counts: UsageTokenCounts = {
-    input: Math.max(delta.input - cacheRead - cacheWrite, 0),
-    output: delta.output,
-    cacheRead,
-    cacheWrite,
-  }
   return {
-    ...counts,
+    ...usageCounts(codexTokens({ ...delta, reasoning: 0 })),
     key: `${source}:${timestamp}:${rawCodexTuple(total)}:${rawCodexTuple(last)}`,
     source,
     session: context.session,
@@ -132,16 +128,8 @@ function codexDelta(
 }
 
 function rawCodexUsage(value: JsonValue | undefined): RawCodexUsage | null {
-  const usage = objectValue(value)
-  if (!usage) return null
-  return {
-    input: tokenValue(usage.input_tokens),
-    output: tokenValue(usage.output_tokens),
-    cacheRead: tokenValue(
-      usage.cached_input_tokens ?? usage.cache_read_input_tokens
-    ),
-    cacheWrite: tokenValue(usage.cache_write_input_tokens),
-  }
+  const usage = CodexRolloutUsage.safeParse(value).data
+  return usage ? { input: usage.input, output: usage.output, cachedInput: usage.cachedInput, cacheWrite: usage.cacheWrite } : null
 }
 
 function codexModel(payload: JsonObject): string | undefined {
@@ -160,7 +148,7 @@ function rawCodexEqual(left: RawCodexUsage, right: RawCodexUsage): boolean {
   return (
     left.input === right.input &&
     left.output === right.output &&
-    left.cacheRead === right.cacheRead &&
+    left.cachedInput === right.cachedInput &&
     left.cacheWrite === right.cacheWrite
   )
 }
@@ -169,7 +157,7 @@ function rawCodexMonotonic(left: RawCodexUsage, right: RawCodexUsage): boolean {
   return (
     left.input >= right.input &&
     left.output >= right.output &&
-    left.cacheRead >= right.cacheRead &&
+    left.cachedInput >= right.cachedInput &&
     left.cacheWrite >= right.cacheWrite
   )
 }
@@ -181,7 +169,7 @@ function subtractCodex(
   return {
     input: Math.max(left.input - right.input, 0),
     output: Math.max(left.output - right.output, 0),
-    cacheRead: Math.max(left.cacheRead - right.cacheRead, 0),
+    cachedInput: Math.max(left.cachedInput - right.cachedInput, 0),
     cacheWrite: Math.max(left.cacheWrite - right.cacheWrite, 0),
   }
 }
@@ -190,7 +178,7 @@ function addCodex(left: RawCodexUsage, right: RawCodexUsage): RawCodexUsage {
   return {
     input: left.input + right.input,
     output: left.output + right.output,
-    cacheRead: left.cacheRead + right.cacheRead,
+    cachedInput: left.cachedInput + right.cachedInput,
     cacheWrite: left.cacheWrite + right.cacheWrite,
   }
 }
@@ -201,6 +189,6 @@ function rawCodexTotal(usage: RawCodexUsage): number {
 
 function rawCodexTuple(usage: RawCodexUsage | null): string {
   return usage
-    ? `${usage.input},${usage.output},${usage.cacheRead},${usage.cacheWrite}`
+    ? `${usage.input},${usage.output},${usage.cachedInput},${usage.cacheWrite}`
     : ""
 }
