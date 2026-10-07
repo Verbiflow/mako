@@ -1,5 +1,4 @@
 import type { AcpCompactionSpec } from "../../acp-compaction.js"
-import type { ProviderAcpSource } from "../acp-source.js"
 
 /** Devin 3000.6.14 returns end_turn before starting /compact. Its command's
  * own transcript notifications confirm the result. Only installed while this
@@ -37,12 +36,3 @@ export const devinCompaction: AcpCompactionSpec = {
     },
   },
 }
-
-/**
- * Devin's own status line for its client, `_meta["cognition.ai/displayMessage"]`:
- * 3000.10.23 reports /compact's result this way ("Context compacted") beside
- * `_cognition.ai/compaction`, and keeps it out of its store. The compaction
- * spec above still reads it.
- */
-export const devinTransient: NonNullable<ProviderAcpSource["transient"]> = (notification) =>
-  notification.update.sessionUpdate === "agent_message_chunk" && notification.update._meta?.["cognition.ai/displayMessage"] === true

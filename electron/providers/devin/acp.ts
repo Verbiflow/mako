@@ -1,12 +1,11 @@
-import { DEVIN_TOOL_READING } from "@mako/sessions/harnesses"
+import { DEVIN_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { prepareDevinMcp } from "./session-mcp.js"
 import { devinResumePolicy } from "./resume.js"
 import type { ProviderAcpSource } from "../acp-source.js"
 import { devinExecutable } from "./executable.js"
 import { devinPermissionTitle } from "./permissions.js"
 import { configureDevinEnvironment } from "./environment.js"
-import { devinCompaction, devinTransient } from "./compaction.js"
-import { devinToolName } from "./tool-name.js"
+import { devinCompaction } from "./compaction.js"
 import { DevinAgents } from "./agents.js"
 import { devinBackground } from "./background.js"
 import { devinProviderTurns } from "./provider-turns.js"
@@ -33,9 +32,7 @@ export const devinAcpSource: ProviderAcpSource = {
   provider: "devin",
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question"], coverage: "Structured question selections from exact native tool events and the saved main branch. Tool permission choices remain submission-only." },
   planning: { via: "mode", mode: "plan", proposal: "write_plan's rendered plan file, built by answering exit_plan_mode's permission request" },
-  toolName: devinToolName,
-  toolReading: DEVIN_TOOL_READING,
-  transient: devinTransient,
+  ...DEVIN_ACP_HOOKS,
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
   agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", observe: input => new DevinAgents(input) },
   observeBackground: devinBackground,

@@ -10,7 +10,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 | Codex | 2026-10-06 | 0.159.3 | its own listing (skills) |
 | Cursor | 2026-10-06 | SDK 1.0.31 | the SDK's skill-root table (skills) |
 | OpenCode | 2026-10-06 | 2.0.1 | its own listing (skills, MCP) |
-| Grok | 2026-10-06 | 1.0.46 | its own listing (MCP) |
+| Grok | 2026-10-06 | 1.0.46 | its own listing (skills, MCP) |
 | Devin | 2026-10-06 | 3000.10.23 | its own listing (skills, MCP) |
 
 ## Instructions
@@ -37,7 +37,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **Codex**: `~/.codex/skills`, `~/.agents/skills`, `.codex/skills`, `.agents/skills`
 - **Cursor**: `.cursor/skills`, `.agents/skills`, `.claude/skills`, `.codex/skills`, `.grok/skills`, `~/.cursor/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.grok/skills`, `~/.cursor/skills-cursor`
 - **OpenCode**: `~/.config/opencode/skills`, `~/.config/opencode/skill`, `.opencode/skills`, `.opencode/skill`, `~/.claude/skills`, `.claude/skills`, `~/.agents/skills`, `.agents/skills`
-- **Grok**: `.grok/skills`, `.claude/skills`, `.cursor/skills`, `.agents/skills`, `~/.grok/skills`, `~/.claude/skills`, `~/.cursor/skills`
+- **Grok**: `.grok/skills`, `.claude/skills`, `.cursor/skills`, `.agents/skills`, `~/.grok/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.cursor/skills`
 - **Devin**: `.agents/skills`, `.devin/skills`, `.cognition/skills`, `.windsurf/skills`, `.claude/skills`, `~/.agents/skills`, `~/.config/devin/skills`, `~/.config/cognition/skills`
 
 ## Commands
@@ -46,7 +46,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **Codex**: `~/.codex/prompts`. Deprecated for skills; /prompts:<name> with $1–$9 and $ARGUMENTS.
 - **Cursor**: none. The SDK loads no command folder; Cursor moved commands into skills (disable-model-invocation).
 - **OpenCode**: `~/.config/opencode/commands`, `~/.config/opencode/command`, `.opencode/commands`, `.opencode/command`. Also the commands config key; $1…$N, $ARGUMENTS and !`cmd`.
-- **Grok**: `.grok/commands`, `.claude/commands`, `.agents/commands`, `~/.grok/commands`, `~/.claude/commands`
+- **Grok**: `.grok/commands`, `.agents/commands`, `.claude/commands`, `.cursor/commands`, `~/.grok/commands`, `~/.agents/commands`, `~/.claude/commands`, `~/.cursor/commands`
 - **Devin**: none. Skills are its slash commands; .claude/commands are imported as skills.
 
 ## Subagent definitions
