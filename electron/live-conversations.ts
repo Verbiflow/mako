@@ -607,6 +607,26 @@ export class LiveConversations {
     return work
   }
 
+  /**
+   * The harness dropped its history from native run `run` on, as OpenCode's
+   * revert does, whoever asked for it. The live blocks still hold what it
+   * dropped; its store holds what remains, so the transcript is read back.
+   */
+  private nativeRewound(resident: Resident, run: string): void {
+    const id = resident.snapshot.session.id
+    const request = resident.snapshot.requests.find((candidate) => candidate.nativeRun?.runId === run)
+    hostLog("live", "native history rewound", { conversation: id, request: request?.id ?? "none" })
+    const before = resident.snapshot.base
+    void this.refreshedSnapshot(id).then(() => {
+      if (this.records.get(id) !== resident || resident.snapshot.base !== before) return
+      const binding = this.activeBinding(resident)
+      hostWarn("live", "a native rewind stays drawn until the store is read again", {
+        conversation: id, status: resident.snapshot.session.status,
+        covered: binding?.coveredBlocks ?? 0, blocks: resident.snapshot.blocks.length,
+      })
+    })
+  }
+
   hibernateIfIdle(id: string, reason = "explicit"): boolean {
     const resident = this.load(id)
     if (!resident || !this.canHibernate(resident)) return false
@@ -1998,6 +2018,8 @@ export class LiveConversations {
           this.scheduleAutoContinue(resident, finishedRequest.id)
         }
       }
+    } else if (event.type === "live-rewound") {
+      this.nativeRewound(resident, event.run)
     } else if (event.type === "live-action-result") {
       this.actions.result(resident, bindingId, event.actionId, event.result)
     } else if (event.type === "live-agent") {

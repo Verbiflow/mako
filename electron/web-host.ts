@@ -1,18 +1,20 @@
-import { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http"
+import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { chmod } from "node:fs/promises"
 import { z } from "zod"
 import type { HostEvent, TerminalEvent } from "./shared.js"
-import { RuntimeCallSchema, type RuntimeInfo, type RuntimeReplySchema } from "./contracts/runtime.js"
+import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "./contracts/runtime.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import { hostLog } from "./host-log.js"
-import { FIXTURE_REFUSED_CODE, FixtureDeskRefusedError } from "./contracts/fixture-desk-policy.js"
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
+
+/** How the host runs one call: the encoded reply for `channel(...args)`, on behalf of `client`. */
+export type HostInvoke = (channel: string, args: unknown[], client?: string, history?: boolean, correlationId?: string) => Promise<string>
 
 /** Sent to every call still waiting when the host closes, so no client is left to infer a reset. */
 const FAREWELL = JSON.stringify({ ok: false, error: HOST_RECONNECTING_MESSAGE, code: HOST_RESTARTING_CODE })
@@ -35,7 +37,7 @@ async function readRequest(request: IncomingMessage) {
 /** Host transport shared by desktop and browser gateways on a private Unix socket. */
 export async function startWebHost(
   socket: string,
-  invoke: (channel: string, args: unknown[], client?: string, history?: boolean) => Promise<string>,
+  invoke: HostInvoke,
   file: (request: Request, client?: string) => Promise<Response>,
   disconnected?: (client: string) => void,
   runtime?: RuntimeInfo,
@@ -128,8 +130,13 @@ export async function startWebHost(
     pending.add(response)
     response.once("finish", () => pending.delete(response))
     response.once("close", () => pending.delete(response))
+    // An older client sends none; minting one here still ties the host's lines for this call together.
+    const correlationId = CorrelationIdSchema.safeParse(request.headers[CORRELATION_HEADER]).data ?? randomUUID()
+    response.setHeader(CORRELATION_HEADER, correlationId)
     void readRequest(request)
-      .then(async ({ channel, args, attempt }) => {
+      .then(async (call) => {
+        const { channel, attempt } = call
+        const args = decodeRuntimeArgs(call)
         if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
           if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
           if (media.size >= 16 || [...media.values()].filter(owner => owner === clientId).length >= 2)
@@ -140,7 +147,7 @@ export async function startWebHost(
           const release = () => { clearTimeout(deadline); media.delete(response) }
           response.once("finish", release)
           response.once("close", release)
-          const value = await preview(args.map(arg => arg.kind === "absent" ? undefined : arg.value), clientId)
+          const value = await preview(args, clientId)
           if (response.destroyed || response.headersSent) return
           const packet = encodePreviewMedia(value)
           response.writeHead(200, { "content-type": PREVIEW_MEDIA_TYPE,
@@ -152,29 +159,21 @@ export async function startWebHost(
         }
         // A replayed mutation is answered by its id; the line is the receipt
         // that a dropped call was settled rather than repeated.
-        if (attempt !== undefined && attempt > 1) hostLog("rpc", "replayed call", { channel, client: clientId, attempt })
+        if (attempt !== undefined && attempt > 1) hostLog("rpc", "replayed call", { channel, client: clientId, attempt, correlationId })
         const encoded = await invoke(
           channel,
-          args.map((arg) => (arg.kind === "absent" ? undefined : arg.value)),
+          args,
           clientId,
-          request.headers["x-mako-history"] === "1"
+          request.headers["x-mako-history"] === "1",
+          correlationId
         )
         // close() may already have answered this call with the farewell.
         if (response.destroyed || response.headersSent) return
         response.writeHead(200, { "content-type": "application/json" }).end(encoded)
       })
       .catch((error) => {
-        const reply: z.input<typeof RuntimeReplySchema> = {
-          ok: false, error: error instanceof Error ? error.message : "Mako host request failed",
-        }
-        if (error instanceof RuntimeDisconnectedError) {
-          reply.code = error.conversationId ? "owner-unavailable" : error.unconfirmed ? HOST_RESTARTING_CODE : HOST_CLOSED_CODE
-          reply.unconfirmed = error.unconfirmed
-          reply.conversationId = error.conversationId
-        }
-        if (error instanceof FixtureDeskRefusedError) reply.code = FIXTURE_REFUSED_CODE
         if (!response.destroyed && !response.headersSent)
-          response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(reply))
+          response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(runtimeFailure(error)))
       })
   })
   await new Promise<void>((resolve, reject) => {

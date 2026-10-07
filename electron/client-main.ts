@@ -252,7 +252,8 @@ async function start() {
       if (!runtime.info.methods.includes(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
       if (channel === "mako:control-preview")
         return invokeWithRecovery(channel, () => invokeRuntimePreview(runtime.socket, client.id, runtime.info.previewSizing ? args : args.slice(0, 3)), client.link)
-      const result = await invokeWithRecovery(channel, (attempt) => invokeRuntime(runtime.socket, client.id, channel, args, attempt, { history: true }), client.link)
+      const correlationId = randomUUID()
+      const result = await invokeWithRecovery(channel, (attempt) => invokeRuntime(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
       if (channel === "mako:boot") {
         if (pendingCommand) { event.sender.send("mako:event", { type: "app-command", command: pendingCommand }); pendingCommand = null }
         return { ...z.record(z.string(), z.json()).parse(result), sourceRoot: isDev ? app.getAppPath() : undefined }

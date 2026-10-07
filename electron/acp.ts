@@ -39,7 +39,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
-import { pathToFileURL } from "node:url"
+import { acpPromptBlocks } from "./acp-prompt.js"
 import { acpReadable, acpWritable, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
 import { app } from "electron"
 import {
@@ -50,7 +50,6 @@ import {
   RequestError,
   type Client,
   type ClientSideConnection as Connection,
-  type ContentBlock,
   type CreateElicitationRequest,
   type CreateElicitationResponse,
   type LoadSessionRequest,
@@ -895,7 +894,7 @@ export async function livePrompt(
   live.providerTurnCause = undefined
   update(live, { status: "running", nativeRunId: turn.id, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
   engine.emitUpdate(live, { kind: "user", text })
-  live.capture?.prompted(text)
+  live.capture?.prompted({ text, attachments })
   const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
   dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
   void turn.send(() => connection.prompt({ sessionId, prompt })).then(
@@ -954,21 +953,6 @@ export async function liveSteer(id: string, input: ProviderSteerInput): Promise<
   await turn.send(() => connection.prompt({ sessionId, prompt }), "steer")
   live.capture?.steered(input.text)
   return { kind: "accepted" }
-}
-
-function acpPromptBlocks(text: string, attachments: PromptAttachment[], capabilities: Live["promptCapabilities"]): ContentBlock[] {
-  const prompt: ContentBlock[] = [{ type: "text", text }]
-  for (const attachment of attachments) {
-    if (attachment.data && attachment.mimeType.startsWith("image/") && capabilities.image) {
-      prompt.push({ type: "image", data: attachment.data, mimeType: attachment.mimeType })
-    } else if (attachment.path) {
-      prompt.push({
-        type: "resource_link", name: attachment.name, uri: pathToFileURL(attachment.path).href,
-        mimeType: attachment.mimeType, size: attachment.size,
-      })
-    }
-  }
-  return prompt
 }
 
 export function acpRespondPermission(

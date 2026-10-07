@@ -1,8 +1,8 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions"
-import { RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, type RuntimeCall } from "./contracts/runtime.js"
-import { RuntimeDisconnectedError, HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
+import { CORRELATION_HEADER, RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue, type RuntimeCall } from "./contracts/runtime.js"
+import { RuntimeDisconnectedError } from "./contracts/host-connection.js"
 import type { z } from "zod"
 import { hostCallReplay } from "./contracts/host-call-policy.js"
 import { requestRuntimePreview } from "./runtime-preview.js"
@@ -48,6 +48,7 @@ interface RuntimeRequest<Schema extends z.ZodType> {
   timeoutMs?: number
   onTransfer?: (transfer: RuntimeTransfer) => void
   history?: boolean
+  correlationId?: string
 }
 
 export async function runtimeRequest<Schema extends z.ZodType>({
@@ -59,11 +60,13 @@ export async function runtimeRequest<Schema extends z.ZodType>({
   timeoutMs = 45_000,
   onTransfer,
   history = false,
+  correlationId,
 }: RuntimeRequest<Schema>): Promise<z.output<Schema>> {
   return new Promise((resolve, reject) => {
     const headers = new Map([["content-type", "application/json"]])
     if (client) headers.set("x-mako-window", client)
     if (history) headers.set("x-mako-history", "1")
+    if (correlationId) headers.set(CORRELATION_HEADER, correlationId)
     let receivedReply = false
     const req = request(
       {
@@ -191,16 +194,11 @@ export async function invokeRuntime(
     timeoutMs?: number
     onTransfer?: (transfer: RuntimeTransfer) => void
     history?: boolean
+    /** The same for every attempt of one call, so its replay is found beside the first try. */
+    correlationId?: string
   }
 ) {
-  const encoded = JSON.stringify({
-    channel,
-    args: args.map((value) =>
-      value === undefined ? { kind: "absent" } : { kind: "value", value }
-    ),
-    attempt: attempt > 1 ? attempt : undefined,
-  })
-  const body = RuntimeCallSchema.parse(JSON.parse(encoded))
+  const body = encodeRuntimeCall(channel, args, attempt)
   let reply: z.output<typeof RuntimeReplySchema>
   try {
     reply = await runtimeRequest({
@@ -212,23 +210,12 @@ export async function invokeRuntime(
       timeoutMs: options?.timeoutMs ?? 5 * 60_000,
       onTransfer: options?.onTransfer,
       history: options?.history ?? false,
+      correlationId: options?.correlationId,
     })
   } catch (error) {
     throw error instanceof Error ? (disconnection(error) ?? error) : error
   }
-  if (!reply.ok) {
-    if (reply.code === "owner-unavailable")
-      throw new RuntimeDisconnectedError(
-        reply.unconfirmed ?? true,
-        reply.conversationId
-      )
-    if (reply.code === HOST_RESTARTING_CODE)
-      throw new RuntimeDisconnectedError(true)
-    if (reply.code === HOST_CLOSED_CODE)
-      throw new RuntimeDisconnectedError(false)
-    throw new Error(reply.error)
-  }
-  return reply.value
+  return runtimeReplyValue(reply)
 }
 
 export function invokeRuntimePreview(socket: string, client: string, args: unknown[],

@@ -250,6 +250,7 @@ export function createLiveEngine<
         else if (item.kind === "compacted")
           compacted(live, item.compaction, item.source)
         else if (item.kind === "marker") event(live, item.marker, item.source)
+        else if (item.kind === "rewound") live.emit({ type: "live-rewound", id: live.state.id, run: item.run })
       }
     },
     unhandled: unhandledEvent,
@@ -272,6 +273,7 @@ export function createLiveEngine<
         marker: (marker, source) => event(live, marker, source),
         compacted: (compaction, source) => compacted(live, compaction, source),
         usage: (windows) => handlers.usage?.(windows),
+        rewound: (run) => live.emit({ type: "live-rewound", id: live.state.id, run }),
         unknown: (kind, reason, raw) =>
           retainUnknown(live.state.harness, kind, reason, raw),
         effect: (effect) => handlers.effect(effect),

@@ -1,6 +1,7 @@
 import { appendFile, mkdir, rename, stat } from "node:fs/promises"
 import { dirname } from "node:path"
 import { format } from "node:util"
+import { hostCorrelation } from "./host-client.js"
 
 /**
  * The host's durable record of what it did.
@@ -112,11 +113,11 @@ export function installHostLog(
     const original = { warn: console.warn.bind(console), error: console.error.bind(console) }
     console.warn = (...args: unknown[]) => {
       original.warn(...args)
-      active?.write("warn", "console", format(...args))
+      active?.write("warn", "console", format(...args), withCorrelation())
     }
     console.error = (...args: unknown[]) => {
       original.error(...args)
-      active?.write("error", "console", format(...args))
+      active?.write("error", "console", format(...args), withCorrelation())
     }
   }
   return active
@@ -126,16 +127,23 @@ export function hostLogPath(): string | null {
   return active?.path ?? null
 }
 
+/** A line written while a call runs names that call, so one request's lines are found together. */
+function withCorrelation(fields?: HostLogFields): HostLogFields | undefined {
+  const correlationId = hostCorrelation()
+  if (!correlationId || fields?.correlationId !== undefined) return fields
+  return { ...fields, correlationId }
+}
+
 export function hostLog(scope: string, message: string, fields?: HostLogFields): void {
-  active?.write("info", scope, message, fields)
+  active?.write("info", scope, message, withCorrelation(fields))
 }
 
 export function hostWarn(scope: string, message: string, fields?: HostLogFields): void {
-  active?.write("warn", scope, message, fields)
+  active?.write("warn", scope, message, withCorrelation(fields))
 }
 
 export function hostError(scope: string, message: string, fields?: HostLogFields): void {
-  active?.write("error", scope, message, fields)
+  active?.write("error", scope, message, withCorrelation(fields))
 }
 
 export function flushHostLog(): Promise<void> {

@@ -96,6 +96,8 @@ export function webHostProxy(socket, { refuse } = {}) {
         if (request.headers.accept === "application/vnd.mako.preview.v1") headers.accept = request.headers.accept
         if (request.headers["x-mako-window"]) headers["x-mako-window"] = request.headers["x-mako-window"]
         if (request.headers["x-mako-history"] === "1") headers["x-mako-history"] = "1"
+        // The host validates it and mints its own when it's missing or malformed.
+        if (request.headers["x-mako-correlation-id"]) headers["x-mako-correlation-id"] = request.headers["x-mako-correlation-id"]
         if (preview && request.headers.range)
           headers.range = request.headers.range
         const open = () => {

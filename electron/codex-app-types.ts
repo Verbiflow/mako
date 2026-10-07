@@ -211,6 +211,8 @@ export interface ProtocolCallbacks {
   unhandled?(kind: string, reason?: "unknown" | "unreadable", raw?: JsonValue): void
   /** `account/rateLimits/updated`: the windows the session's account just reported. */
   usage?(windows: import("./account-types.js").UsageWindow[]): void
+  /** Codex dropped its history from the turn `run` on. */
+  rewound?(run: string): void
   observeAgents(item: CodexAgentItem, replay: boolean, toolId: string): void
   observeAgentTurn?(nativeId: string): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void

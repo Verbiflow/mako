@@ -246,6 +246,7 @@ async function startCodex(
         void account.then((name) =>
           observeAccountUsage("codex", name, (previous) => mergeWindows(previous, windows, Date.now())))
       },
+      rewound: (run) => emit({ type: "live-rewound", id: live.id, run }),
       observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
       observeAgents: (item, replay, toolId) => {
         for (const agent of live.agents.project(item, replay, toolId))
@@ -354,7 +355,7 @@ export async function codexAppPrompt(
     lastStop: undefined,
   })
   emitUpdate(live, { kind: "user", text })
-  live.capture?.prompted(text)
+  live.capture?.prompted({ text, attachments })
   try {
     dispatch.report({ kind: "submitted", source: "transport-call" })
     const result = await rpcRequest(live, "turn/start", {

@@ -136,6 +136,7 @@ function protocolSink(context: ProtocolContext): DecodedSink<CodexEffect> {
     marker: (marker, source) => protocol.event?.(marker, source),
     compacted: (compaction, source) => protocol.compacted?.(compaction, source),
     usage: (windows) => protocol.usage?.(windows),
+    rewound: (run) => protocol.rewound?.(run),
     unknown: (kind, reason, raw) => protocol.unhandled?.(kind, reason, raw),
     effect: (effect) => applyEffect(context, effect),
   }
