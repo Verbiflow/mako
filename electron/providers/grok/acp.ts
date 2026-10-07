@@ -1,13 +1,15 @@
 import { z } from "zod"
-import { backgroundCommandLabel } from "@mako/sessions"
-import { existsSync, readdirSync } from "node:fs"
+import { backgroundCommandLabel, grokHome } from "@mako/sessions"
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { GrokAgents } from "./agents.js"
 import { grokLaunchPolicy, grokPermissionPolicy } from "./permission-policy.js"
 import { grokMcpStartup } from "./mcp-startup.js"
 import { grokNotification } from "./notifications.js"
+import { GROK_FOLDER_TRUST_CAPABILITY } from "./folder-trust.js"
+import { grokCheckpoint, grokFork } from "./fork.js"
 import { grokRequests } from "./plans.js"
+import { GROK_TRANSCRIPTS, grokSessionSource } from "./session-source.js"
 import { GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { resolveExecutable } from "../../executable.js"
 import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
@@ -43,35 +45,6 @@ import { grokProcessProbe } from "./process-probe.js"
  * with it. The default tier is pinned explicitly: without it an unchosen
  * session ran Grok's own default while the desk reported nothing.
  */
-/**
- * Grok writes `<workspace>/<id>/updates.jsonl` (`chat_history.jsonl` before
- * 1.0) under ~/.grok/sessions, one folder per URL-encoded launch directory;
- * the other folders are searched when the directory was spelled differently,
- * as a macOS temporary path is under /private.
- */
-const GROK_TRANSCRIPTS = ["updates.jsonl", "chat_history.jsonl"]
-
-export function grokSessionSource(
-  nativeId: string,
-  cwd: string,
-  root = join(homedir(), ".grok", "sessions")
-): string | undefined {
-  if (!/^[\w-]+$/.test(nativeId)) return undefined
-  let workspaces: string[]
-  try {
-    workspaces = readdirSync(root)
-  } catch {
-    return undefined
-  }
-  const launched = encodeURIComponent(cwd)
-  for (const workspace of [launched, ...workspaces.filter((name) => name !== launched)])
-    for (const transcript of GROK_TRANSCRIPTS) {
-      const path = join(root, workspace, nativeId, transcript)
-      if (existsSync(path)) return path
-    }
-  return undefined
-}
-
 function grokPermissionMode(tier: AccessTier): string | undefined {
   switch (tier) {
     case "ask":
@@ -139,11 +112,15 @@ export const grokAcpSource: ProviderAcpSource = {
     via: "ACP `session/load` with the session ID.",
     wake: "The next message starts a new `grok` ACP agent that loads the session, replaying its history.",
     ...fileResumeEvidence(grokProcessProbe),
-    locate: ({ nativeId, cwd, env }) => grokSessionSource(nativeId, cwd, join(env.GROK_HOME ?? join(homedir(), ".grok"), "sessions")),
+    locate: ({ nativeId, cwd, env }) => grokSessionSource(nativeId, cwd, join(grokHome(env), "sessions")),
   },
-  // Grok forks natively with `x.ai/session/fork` at a `targetPromptIndex`, its own count of turns, but
-  // that count is only in the saved file: the live wire names no prompt, so Mako has no run to give it.
-  fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new Grok session and resumes it: Grok's own fork takes a turn number its live connection never sends." },
+  fork: {
+    kind: "native",
+    point: "checkpoint",
+    via: "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, is imported.",
+    checkpoint: grokCheckpoint,
+    open: grokFork,
+  },
   questions: { kind: "request", via: "`_x.ai/ask_user_question` requests from the `ask_user_question` tool." },
   // grok 1.0.46 writes chat_history.jsonl from the first prompt and updates.jsonl
   // when a turn ends, so a session saved mid-turn names the other file.
@@ -154,12 +131,13 @@ export const grokAcpSource: ProviderAcpSource = {
   },
   provider: "grok",
   approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
-  planning: { via: "mode", mode: "plan", proposal: "exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request" },
+  planning: { via: "mode", mode: "plan", proposal: "exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request",
+    feedback: { kind: "in-refusal", via: "the `feedback` of a cancelled `_x.ai/exit_plan_mode` answer, while a plan file exists; with none, Grok drops the words, so they go as the next message" } },
   agents: {
     kind: "observed",
     via: "`spawn_subagent` calls and the sessions they start.",
     async observe({ env, ...input }) {
-      const observer = new GrokAgents({ ...input, home: env.GROK_HOME ?? join(homedir(), ".grok") })
+      const observer = new GrokAgents({ ...input, home: grokHome(env) })
       await observer.ready
       return observer
     },
@@ -223,6 +201,7 @@ export const grokAcpSource: ProviderAcpSource = {
   mcpStartup: grokMcpStartup,
   ...GROK_ACP_HOOKS,
   requests: grokRequests,
+  clientCapabilities: { _meta: GROK_FOLDER_TRUST_CAPABILITY },
   steering: { kind: "supported", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
   launchOptionIds: ["effort"],
   access: {
@@ -237,7 +216,7 @@ export const grokAcpSource: ProviderAcpSource = {
     const permissionMode = options.access ? grokPermissionMode(options.access) : undefined
     const home = options.env?.HOME || homedir()
     const policy = grokLaunchPolicy(
-      grokPermissionPolicy({ cwd: options.cwd, home, grokHome: options.env?.GROK_HOME || join(home, ".grok") }),
+      grokPermissionPolicy({ cwd: options.cwd, home, grokHome: grokHome(options.env ?? {}, home) }),
       options.access,
       home
     )

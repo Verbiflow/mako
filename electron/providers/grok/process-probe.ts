@@ -1,5 +1,5 @@
+import { grokHome } from "@mako/sessions"
 import { readFile, stat } from "node:fs/promises"
-import { homedir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { processIdentityMatches } from "../process-liveness.js"
@@ -55,10 +55,6 @@ async function validatedSessions<Value>(
   return { sessions: active, pids }
 }
 
-function grokHome(): string {
-  return process.env.GROK_HOME ?? join(homedir(), ".grok")
-}
-
 export const grokProcessProbe: ProviderProcessProbe = {
   provider: "grok",
   pollIntervalMs: 3_000,
@@ -66,7 +62,7 @@ export const grokProcessProbe: ProviderProcessProbe = {
   async probe(signal, target) {
     const marker = target?.path.lastIndexOf("/sessions/") ?? -1
     if (target && marker < 0) return { kind: "unavailable", reason: "unsupported" }
-    const root = target && marker > 0 ? target.path.slice(0, marker) : grokHome()
+    const root = target && marker > 0 ? target.path.slice(0, marker) : grokHome(process.env)
     const path = join(root, "active_sessions.json")
     let info
     try {

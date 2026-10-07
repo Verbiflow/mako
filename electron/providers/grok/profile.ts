@@ -1,4 +1,3 @@
-import { homedir } from "node:os"
 import { join } from "node:path"
 import {
   normalizeGrokModels,
@@ -10,6 +9,7 @@ import {
 } from "../profile-loader.js"
 import { resolveExecutable } from "../../executable.js"
 import { readJson, runDiscovery } from "../profile-transport.js"
+import { grokHome } from "@mako/sessions"
 
 export const grokProfileLoader: ProviderProfileLoader = {
   provider: "grok",
@@ -31,7 +31,7 @@ export const grokProfileLoader: ProviderProfileLoader = {
       context?.signal
     )
     const cached = await readJson<GrokModelCache>(
-      join(env.GROK_HOME ?? join(homedir(), ".grok"), "models_cache.json")
+      join(grokHome(env), "models_cache.json")
     )
     return availableProviderProfile(
       grokProfileLoader,

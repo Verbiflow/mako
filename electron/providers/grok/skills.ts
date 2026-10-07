@@ -1,8 +1,9 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ProviderSkillSource } from "../skill-source.js"
+import { grokHome } from "@mako/sessions"
 
-const root = () => join(process.env.GROK_HOME ?? join(homedir(), ".grok"), "skills")
+const root = () => join(grokHome(process.env), "skills")
 
 export const grokSkillSource: ProviderSkillSource = {
   provider: "grok",

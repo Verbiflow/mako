@@ -22,7 +22,8 @@ import type { AccessTier } from "../../contracts/access.js"
  * - Project files count only in a folder Grok trusts: its real path, or its
  *   repository's root, is `trusted = true` in `~/.grok/trusted_folders.toml`.
  *   Mako launches without `--trust`, so an untrusted project's rules and mode
- *   are skipped.
+ *   are skipped until the person answers Grok's trust request
+ *   (`folder-trust.ts`), which names them among what it skips.
  * - Claude's `permissions.defaultMode` (or a top-level `defaultMode`) from
  *   the nearest file, project local first, replaces `--permission-mode
  *   default`, which is Mako's Ask. An explicit `auto` or `bypassPermissions`
@@ -42,8 +43,6 @@ export interface GrokPermissionPolicy {
   /** The Claude-compatible default mode in force, and the file it came from. */
   mode?: { mode: string; file: string }
   rules: GrokRule[]
-  /** Project settings that would change permissions but are skipped: Grok hasn't trusted the folder. */
-  untrusted: string[]
 }
 
 export interface GrokPermissionPaths {
@@ -123,10 +122,7 @@ export function grokPermissionPolicy(paths: GrokPermissionPaths): GrokPermission
   const projectFiles = [...claudeProject.map(readClaude), ...grokProject.map(readGrok)].filter(changesPermissions)
   const userFiles = [...claudeUser.map(readClaude), ...grokUser.map(readGrok)].filter(changesPermissions)
   const applied = trusted ? [...projectFiles, ...userFiles] : userFiles
-  const policy: GrokPermissionPolicy = {
-    rules: applied.flatMap((file) => file.rules),
-    untrusted: trusted ? [] : projectFiles.map((file) => file.file),
-  }
+  const policy: GrokPermissionPolicy = { rules: applied.flatMap((file) => file.rules) }
   const mode = applied.find((file) => file.mode !== undefined)
   if (mode?.mode) policy.mode = { mode: mode.mode, file: mode.file }
   return policy
@@ -151,7 +147,6 @@ export function grokLaunchPolicy(policy: GrokPermissionPolicy, access: AccessTie
     if (tier) launch.access = tier
   }
   if (policy.rules.length) launch.notices.push(rulesNotice(policy.rules, home))
-  if (policy.untrusted.length) launch.notices.push(untrustedNotice(policy.untrusted, home))
   return launch
 }
 
@@ -177,17 +172,6 @@ function rulesNotice(rules: readonly GrokRule[], home: string): TranscriptEvent 
       "Grok permission rules",
       `${counts.join(", ")} · ${files.length === 1 ? files[0] : `${files.length} files`}`,
       `Grok merges these rules from its own and Claude Code's settings. Deny beats ask, and ask beats allow, whichever file a rule is in.\n\n${sections.join("\n\n")}`
-    ),
-    setup: true,
-  }
-}
-
-function untrustedNotice(files: readonly string[], home: string): TranscriptEvent {
-  return {
-    ...event(
-      "Grok skips project permissions",
-      `${files.map((file) => tilde(file, home)).join(", ")} · this folder isn't trusted in Grok`,
-      "Grok applies a project's permission settings only in a folder it trusts. Trust this folder from Grok's own terminal app (`/hooks-trust`) to apply them."
     ),
     setup: true,
   }

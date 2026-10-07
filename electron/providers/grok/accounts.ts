@@ -32,6 +32,7 @@ import type { JsonValue } from "../../codex-app-json.js"
 import { resolveExecutable } from "../../executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"
+import { grokHome } from "@mako/sessions"
 
 /** Grok rotates an entry's `key`, `refresh_token` and `expires_at` in place; a key with no refresh token is the login itself. */
 const GrokPrincipal = z.record(z.string(), z.object({
@@ -48,7 +49,7 @@ const GrokPrincipal = z.record(z.string(), z.object({
 function authPath(env: NodeJS.ProcessEnv): string {
   return (
     env.GROK_AUTH_PATH ??
-    join(env.GROK_HOME ?? join(homedir(), ".grok"), "auth.json")
+    join(grokHome(env), "auth.json")
   )
 }
 
