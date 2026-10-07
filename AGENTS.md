@@ -84,7 +84,12 @@ same session wrote, and each known difference with its reason;
 whichever side is wrong; one is listed only when the harness itself stores
 something other than what it streamed. ACP captures mark where Mako sent a
 prompt (`prompted`), because the wire doesn't echo it and the reducer scopes
-plans and tool ids to the turn.
+plans and tool ids to the turn. When the wire leaves out what the store
+keeps, the driver reads the store at a point the wire is known complete and
+records the read in the capture, and the decoder draws only what the wire
+never named: Codex 0.159.3 sends no item for a command its sandbox refused,
+so `CodexRolloutCalls` reads the rollout as each model response starts and
+as the turn ends (`write-outside` pair, `refused-command.json`).
 
 A marker about the harness's setup rather than the current turn (an MCP
 server that didn't start, a configuration warning, an imported setting, a
@@ -1289,10 +1294,13 @@ is Ask; explicit Auto and Full still win, and Grok's own `[ui]
 permission_mode` does not. `grok/permission-policy.ts` reads the same
 sources with the same trust rule at launch: the session reports the tier Grok
 really runs at, a "Grok overrides Ask" warning names the file, a "Grok
-permission rules" setup notice lists the rules by effect and file, and a
-"Grok skips project permissions" notice names project files an untrusted
-folder ignores. An ACP source reports this through `AcpLaunch.access` and
-`notices`. OpenCode supports v2 only (2.x and known v2 prereleases); runtime
+permission rules" setup notice lists the rules by effect and file. An ACP
+source reports this through `AcpLaunch.access` and `notices`. In a folder it
+doesn't trust, Grok also ignores the project's MCP servers, hooks, plugins,
+agents, instructions and skills. Mako sets `x.ai/folderTrust.interactive` at
+`initialize`, so Grok asks with `_x.ai/folder_trust/request` and its own list
+of what it skips; `grok/folder-trust.ts` shows that as a card, and Grok saves
+"Trust project" itself (`test-grok-folder-trust-live.ts`). OpenCode supports v2 only (2.x and known v2 prereleases); runtime
 admission and update policy share `isOpenCodeV2`. Do not restore v1 execution,
 model discovery or update feeds. OpenCode Ask/Edit/Full presets use per-process native JSONC configuration on the Build agent;
 Plan and custom agents retain their native policies. Existing inline fields survive the merge.
@@ -1356,6 +1364,24 @@ current approval. "Build in new session" cancels the planning session, then
 opens a session in the same Thread with the plan attached and plan off.
 `scripts/test-plan-mode.ts` covers the mapping, locks, pending choices and
 both build paths.
+
+A reply typed while a plan approval waits asks for changes. Where the harness
+takes words with its refusal, the approval names that answer
+(`LivePermissionRequest.feedbackOption`). The composer then sends a text-only
+reply as `feedback` on that answer, through `submitDraft`'s `deliver`, so the
+draft is cleared and restored the same way as a message. Claude's deny message
+and Grok's cancelled `_x.ai/exit_plan_mode` answer carry the words. Grok's
+needs a plan file: with none it drops them, so its decoder names no feedback
+answer. Both use Grok's `revise_plan_message` wording (`planFeedbackMessage`
+in `@mako/sessions/harnesses`), and the plan-exit row reads the words back
+from the call's result with `planFeedbackOf`, live and saved. Elsewhere, and
+for a reply with attachments, the plan is refused first and the reply is the
+next message. Each driver declares which as `planning.feedback`, with what
+carries the words or why they can't go with the refusal. `LiveApprovals`
+refuses words on any other answer, and a receipt's digest leaves them out. The
+IPC schema keeps them. `scripts/test-grok-plan-feedback-live.ts` checks the
+real grok, sealed, with a stand-in model: the words come back as the result
+of `exit_plan_mode`, live and in the saved session.
 
 A build is recorded in `src/state/plan-builds.ts` once it is confirmed: an
 `implementsPlan` approval answered with its approve option, or a sent message
