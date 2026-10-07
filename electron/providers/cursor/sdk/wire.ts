@@ -101,6 +101,10 @@ export const SdkMcpServerSchema = z.union([
 ])
 export type SdkMcpServer = z.infer<typeof SdkMcpServerSchema>
 
+/** Results a run's checkpoints kept for calls its stream never ended (`CursorSdkRunCheckpoints`). */
+export const SdkSettledCallsSchema = z.array(z.object({ callId: z.string(), output: z.string(), failed: z.boolean() }))
+export type SdkSettledCalls = z.infer<typeof SdkSettledCallsSchema>
+
 export const SdkRunResultSchema = z.object({
   runId: z.string(),
   status: z.enum(["finished", "error", "cancelled"]),
@@ -108,8 +112,8 @@ export const SdkRunResultSchema = z.object({
   model: CursorSdkModelSelectionSchema.optional(),
   durationMs: z.number().optional(),
   usage: CursorSdkTokenUsageSchema.optional(),
-  /** Results the run's checkpoint kept for calls its stream never ended (`readCursorSdkRunResults`). */
-  settled: z.array(z.object({ callId: z.string(), output: z.string(), failed: z.boolean() })).optional(),
+  /** What the run's last checkpoint kept for calls still open when it ended. */
+  settled: SdkSettledCallsSchema.optional(),
 })
 export type SdkRunResult = z.infer<typeof SdkRunResultSchema>
 
