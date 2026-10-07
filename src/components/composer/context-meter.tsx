@@ -162,7 +162,7 @@ export function UsageDetails({
         )}
       </section>
       {breakdown ? <Categories breakdown={breakdown} /> : null}
-      {usage.tokens || usage.cost ? <Spent tokens={usage.tokens} cost={usage.cost} /> : null}
+      {usage.tokens || usage.cost ? <Spent tokens={usage.tokens} cost={usage.cost} unrecorded={usage.unrecorded} harness={harness} /> : null}
       <div className="border-t border-hairline p-1">
         <CompactionControl onStart={onCompact} />
       </div>
@@ -273,7 +273,23 @@ function Categories({ breakdown }: { breakdown: ContextBreakdown }) {
   )
 }
 
-function Spent({ tokens, cost }: { tokens?: TokenCounts; cost?: LiveSessionUsage["cost"] }) {
+function Spent({
+  tokens,
+  cost,
+  unrecorded,
+  harness,
+}: {
+  tokens?: TokenCounts
+  cost?: LiveSessionUsage["cost"]
+  unrecorded?: LiveSessionUsage["unrecorded"]
+  harness: string
+}) {
+  const shownCost = cost && cost.amount > 0 ? cost : undefined
+  const note = tokens && unrecorded?.tokens
+    ? `${harnessLabel(harness)} left some calls out of its usage count, so these totals may be low.`
+    : shownCost && unrecorded?.cost
+      ? `${harnessLabel(harness)} didn't report the cost of every call, so the cost may be low.`
+      : undefined
   return (
     <section className="flex flex-col gap-1 border-t border-hairline px-3 py-2.5" data-session-spend>
       <span className="text-label text-faint">This session</span>
@@ -290,9 +306,10 @@ function Spent({ tokens, cost }: { tokens?: TokenCounts; cost?: LiveSessionUsage
           <Row label="Total" value={formatTokens(total(tokens))} strong />
         </>
       ) : null}
-      {cost && cost.amount > 0 ? (
-        <Row label="Cost" value={cost.currency === "USD" ? formatCost(cost.amount) : `${cost.amount} ${cost.currency}`} strong />
+      {shownCost ? (
+        <Row label="Cost" value={shownCost.currency === "USD" ? formatCost(shownCost.amount) : `${shownCost.amount} ${shownCost.currency}`} strong />
       ) : null}
+      {note ? <span className="mt-0.5 text-label text-faint" data-unrecorded-spend>{note}</span> : null}
     </section>
   )
 }

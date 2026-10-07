@@ -39,7 +39,7 @@ import { ComposerActionButton } from "@/components/composer/composer-action-butt
 import { ComposerRouting } from "@/components/composer/composer-routing"
 import { ContextMeter } from "@/components/composer/context-meter"
 import type { PlanHandle } from "@/components/composer/plan-toggle"
-import { keepPlanning, recordSentPlanBuilds, usePlanDecision } from "@/state/plan-mode"
+import { keepPlanning, planTakesFeedback, recordSentPlanBuilds, usePlanDecision } from "@/state/plan-mode"
 import { steeringTitle } from "@/components/composer/steering"
 import { ROUTING_COMPACT_LEVELS, useCompactRow } from "@/components/composer/use-compact-row"
 
@@ -421,7 +421,8 @@ export function Composer() {
   }, [addAttachments])
 
   const submitDraft = useCallback(
-    async (mode?: "steer" | "followUp") => {
+    /** `deliver` takes the message instead of the routing below; false keeps the draft. */
+    async (mode?: "steer" | "followUp", deliver?: (message: string) => Promise<boolean>) => {
       if (hostConnectionStore.get().kind === "disconnected") {
         toast.error(
           "Reconnect the Mako host before sending. Your draft is saved."
@@ -529,7 +530,9 @@ export function Composer() {
       setMention(null)
       let ok: boolean
       try {
-        if (continuesViewing) {
+        if (deliver) {
+          ok = await deliver(full)
+        } else if (continuesViewing) {
           // An archived conversation has no native session to resume — a
           // reply re-materializes it: the emitters write a fresh native
           // session (same harness or any other) from the archived history,
@@ -629,8 +632,14 @@ export function Composer() {
     if (preparingSends.current.has(draftKey)) return
     preparingSends.current.add(draftKey)
     try {
-      // A reply to a plan the harness is waiting on asks for changes: turn
-      // the plan down first, so the reply isn't queued behind its approval.
+      // A reply to a plan the harness is waiting on asks for changes. A
+      // harness that takes words with its refusal gets them there, the way
+      // its own terminal sends them; otherwise the plan is turned down first,
+      // so the reply isn't queued behind its approval.
+      if (planDecision?.approval && draft.trim() && attachments.items.length === 0 && planTakesFeedback(planDecision.approval)) {
+        await submitDraft(mode, (message) => keepPlanning(planDecision, message))
+        return
+      }
       if (planDecision?.approval && (draft.trim() || attachments.items.length > 0)) await keepPlanning(planDecision)
       await submitDraft(mode)
     } catch (error) {
