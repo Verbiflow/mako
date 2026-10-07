@@ -1,3 +1,5 @@
+import { z } from "zod"
+import { inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /**
@@ -90,3 +92,61 @@ export const CODEX_VOCABULARY = defineVocabulary({
     ],
   },
 })
+
+/**
+ * Codex's `TokenUsage` in its own terms, from either wire: `input` includes
+ * cached input and cache writes, and `output` includes reasoning.
+ */
+export interface CodexTokenUsage {
+  input: number
+  cachedInput: number
+  cacheWrite: number
+  output: number
+  reasoning: number
+  /** Input and output together: the context the call filled. */
+  total?: number
+}
+
+/** `TokenUsageBreakdown` on the app-server wire (`thread/tokenUsage/updated`'s `last` and `total`). */
+export const CodexWireUsage = z.object({
+  inputTokens: tokenCount,
+  cachedInputTokens: tokenCount,
+  cacheWriteInputTokens: tokenCount,
+  outputTokens: tokenCount,
+  reasoningOutputTokens: tokenCount,
+  totalTokens: tokenCount,
+}).transform((usage): CodexTokenUsage => ({
+  input: usage.inputTokens ?? 0,
+  cachedInput: usage.cachedInputTokens ?? 0,
+  cacheWrite: usage.cacheWriteInputTokens ?? 0,
+  output: usage.outputTokens ?? 0,
+  reasoning: usage.reasoningOutputTokens ?? 0,
+  total: usage.totalTokens ?? undefined,
+}))
+
+/** A rollout `token_count` event's `info.last_token_usage` and `info.total_token_usage`. */
+export const CodexRolloutUsage = z.object({
+  input_tokens: tokenCount,
+  cached_input_tokens: tokenCount,
+  cache_write_input_tokens: tokenCount,
+  output_tokens: tokenCount,
+  reasoning_output_tokens: tokenCount,
+  total_tokens: tokenCount,
+}).transform((usage): CodexTokenUsage => ({
+  input: usage.input_tokens ?? 0,
+  cachedInput: usage.cached_input_tokens ?? 0,
+  cacheWrite: usage.cache_write_input_tokens ?? 0,
+  output: usage.output_tokens ?? 0,
+  reasoning: usage.reasoning_output_tokens ?? 0,
+  total: usage.total_tokens ?? undefined,
+}))
+
+export function codexTokens(usage: CodexTokenUsage): HarnessTokens {
+  return inclusiveTokens({
+    input: usage.input,
+    cacheRead: usage.cachedInput,
+    cacheWrite: usage.cacheWrite,
+    output: usage.output,
+    reasoning: usage.reasoning,
+  })
+}

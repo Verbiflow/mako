@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { AcpDecoderHooks } from "../acp-decoder.js"
 import type { LiveUpdate } from "../live-content.js"
+import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /**
@@ -80,7 +81,7 @@ export const GROK_VOCABULARY = defineVocabulary({
       { name: "X search", via: "x_keyword_search and x_semantic_search tools" },
       { name: "Image and video generation", via: "image_gen, /imagine, /imagine-video" },
       { name: "Announcements", via: "_x.ai/announcements/update" },
-      { name: "Folder trust", via: "_x.ai/folder_trust/request, ~/.grok/trusted_folders.toml" },
+      { name: "Folder trust", via: "_x.ai/folder_trust/request to a client that sets x.ai/folderTrust.interactive, saved in ~/.grok/trusted_folders.toml" },
     ],
   },
 })
@@ -164,3 +165,78 @@ export const GROK_ACP_HOOKS = {
     },
   }),
 } satisfies AcpDecoderHooks
+
+/** Grok's cost unit: its own documentation says 1 USD is 10^10 ticks. */
+export const GROK_TICKS_PER_USD = 10_000_000_000
+
+/**
+ * What a turn spent, OpenAI-style (`inputTokens` includes cached input): a
+ * `turn_completed` update's `usage`, and each model's entry in its
+ * `modelUsage`. Live and in `updates.jsonl` alike.
+ */
+export const GrokSpend = z.object({
+  inputTokens: tokenCount,
+  outputTokens: tokenCount,
+  cachedReadTokens: tokenCount,
+  cacheCreationTokens: tokenCount,
+  reasoningTokens: tokenCount,
+  costUsdTicks: tokenCount,
+})
+export type GrokSpend = z.infer<typeof GrokSpend>
+
+/**
+ * A turn's `usage`, with the spend of each model it used when Grok itemizes
+ * it, and what Grok says its own count of the turn left out (Grok 1.0.46's
+ * headless guide): `usageIsIncomplete` when a subagent's usage could not be
+ * applied or the turn's usage drain timed out, so the tokens may be low and
+ * the cost is omitted; `costIsPartial` when some calls reported no cost, so
+ * all of it is omitted rather than summed into a bill that looks complete.
+ */
+export const GrokTurnUsage = GrokSpend.extend({
+  modelUsage: z.record(z.string(), GrokSpend.nullable().catch(null)).nullish().catch(undefined),
+  usageIsIncomplete: z.boolean().nullish().catch(undefined),
+  costIsPartial: z.boolean().nullish().catch(undefined),
+})
+export type GrokTurnUsage = z.infer<typeof GrokTurnUsage>
+
+/** What a turn's own count left out, by `GrokTurnUsage`'s flags: its tokens (and so its cost), or its cost alone. */
+export function grokUnrecorded(usage: GrokTurnUsage): "tokens" | "cost" | undefined {
+  if (usage.usageIsIncomplete === true) return "tokens"
+  if (usage.costIsPartial === true) return "cost"
+  return undefined
+}
+
+export function grokTokens(spend: GrokSpend): HarnessTokens {
+  return inclusiveTokens({
+    input: spend.inputTokens,
+    cacheRead: spend.cachedReadTokens,
+    cacheWrite: spend.cacheCreationTokens,
+    output: spend.outputTokens,
+    reasoning: spend.reasoningTokens,
+  })
+}
+
+/** The spend's cost in dollars, when Grok reports one. */
+export function grokCost(spend: GrokSpend): number | undefined {
+  return spend.costUsdTicks === null || spend.costUsdTicks === undefined ? undefined : spend.costUsdTicks / GROK_TICKS_PER_USD
+}
+
+/** One model call, from `response_completed`'s `usage`, Anthropic-style: `input_tokens` leaves out what the cache supplied. */
+export const GrokCallUsage = z.object({
+  input_tokens: tokenCount,
+  output_tokens: tokenCount,
+  cache_read_input_tokens: tokenCount,
+  cache_creation_input_tokens: tokenCount,
+  reasoning_tokens: tokenCount,
+})
+export type GrokCallUsage = z.infer<typeof GrokCallUsage>
+
+export function grokCallTokens(usage: GrokCallUsage): HarnessTokens {
+  return exclusiveTokens({
+    input: usage.input_tokens,
+    cacheRead: usage.cache_read_input_tokens,
+    cacheWrite: usage.cache_creation_input_tokens,
+    output: usage.output_tokens,
+    reasoning: usage.reasoning_tokens,
+  })
+}

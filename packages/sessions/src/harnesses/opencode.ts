@@ -1,3 +1,5 @@
+import { z } from "zod"
+import { exclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /** The server lists agents, commands and skills but not its tools; these come from its events and stores. */
@@ -66,3 +68,29 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
     ],
   },
 })
+
+/**
+ * A step's `tokens`, on the live event (`session.step.ended`) and in a saved
+ * assistant message alike. OpenCode counts cached input beside `input` and
+ * reasoning beside `output`.
+ */
+export const OpenCodeTokens = z.object({
+  input: tokenCount,
+  output: tokenCount,
+  reasoning: tokenCount,
+  cache: z.object({ read: tokenCount, write: tokenCount }).nullish().catch(undefined),
+})
+export type OpenCodeTokens = z.infer<typeof OpenCodeTokens>
+
+/** A saved message's `tokens`, which one that never finished a step lacks. */
+export const OpenCodeSavedTokens = OpenCodeTokens.nullish().catch(undefined)
+
+export function openCodeTokens(tokens: OpenCodeTokens): HarnessTokens {
+  return exclusiveTokens({
+    input: tokens.input,
+    cacheRead: tokens.cache?.read,
+    cacheWrite: tokens.cache?.write,
+    output: (tokens.output ?? 0) + (tokens.reasoning ?? 0),
+    reasoning: tokens.reasoning,
+  })
+}

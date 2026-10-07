@@ -8,9 +8,19 @@ import type { HarnessVocabulary } from "./vocabulary.js"
 
 export type { ConceptAbsent, ConceptPath, HarnessConcepts, HarnessVocabulary, NativeTool, McpNaming } from "./vocabulary.js"
 export { CLAUDE_VOCABULARY, CODEX_VOCABULARY, CURSOR_VOCABULARY, DEVIN_VOCABULARY, GROK_VOCABULARY, OPENCODE_VOCABULARY }
-export { CLAUDE_HOOK_EVENTS } from "./claude.js"
-export { DEVIN_ACP_HOOKS, DEVIN_TOOL_READING } from "./devin.js"
-export { GROK_ACP_HOOKS, grokCommandFailed, grokPlanId, grokProposedPlan, GrokToolMeta, grokToolName } from "./grok.js"
+export { exclusiveTokens, inclusiveTokens, tokenCount, tokenSum, type HarnessTokens, type ReportedTokens } from "./tokens.js"
+export { CLAUDE_HOOK_EVENTS, claudeHourCacheWrites, claudeTokens, ClaudeUsage } from "./claude.js"
+export { CodexRolloutUsage, codexTokens, CodexWireUsage, type CodexTokenUsage } from "./codex.js"
+export {
+  DEVIN_ACP_HOOKS, DEVIN_TOOL_READING, DevinCallMetrics, DevinStoredCall, devinStoredTokens, DevinUsageMeta, devinUsageReading,
+  type DevinUsageReading,
+} from "./devin.js"
+export {
+  GROK_ACP_HOOKS, GROK_TICKS_PER_USD, GrokCallUsage, grokCallTokens, grokCommandFailed, grokCost, grokPlanId, grokProposedPlan,
+  GrokSpend, GrokToolMeta, grokTokens, grokToolName, GrokTurnUsage, grokUnrecorded,
+} from "./grok.js"
+export { OpenCodeSavedTokens, openCodeTokens, OpenCodeTokens } from "./opencode.js"
+export { planFeedbackMessage, planFeedbackOf } from "./plan-feedback.js"
 
 /** Every harness's declaration. A harness without one gets the names all of these share. */
 export const VOCABULARIES: readonly HarnessVocabulary[] = [

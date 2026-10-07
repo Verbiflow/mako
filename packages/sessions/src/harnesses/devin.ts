@@ -2,6 +2,7 @@ import { z } from "zod"
 import type { AcpDecoderHooks } from "../acp-decoder.js"
 import type { AcpToolReading } from "../acp-tool-details.js"
 import { DevinPlanUpdates } from "../providers/devin-plans.js"
+import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /** Names are `_meta["cognition.ai/inferenceToolName"]` live and in the IDE journal, and the chat tool name in the CLI store. */
@@ -70,10 +71,86 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       { name: "Cloud handoff", via: "/handoff, /cloud-attach" },
       { name: "Step revert and fork", via: "cognition.ai/revert/*" },
       { name: "Editable approvals", via: "cognition.ai/editableCommand, command/revise" },
-      { name: "Credits and ACUs", via: "usage_update _meta totalCreditCost, totalAcuCost" },
+      { name: "Credits and ACUs", via: "usage_update _meta totalCreditCost and totalAcuCost, for an account billed in credits or ACUs rather than quota; never seen sent, so unread" },
     ],
   },
 })
+
+/**
+ * A live `usage_update._meta` (3000.10.23): one call's
+ * `cognition.ai/inputTokens`, which includes the input either cache
+ * supplied, `outputTokens` and, once the cache is warm, `cachedReadTokens`
+ * and `cachedWriteTokens`. A main-agent call is reported twice, the second
+ * time with `cognition.ai/subagent_context.parentAgentId` set to `root`; a
+ * subagent's call comes once, naming its parent there.
+ */
+export const DevinUsageMeta = z.object({
+  "cognition.ai/inputTokens": tokenCount,
+  "cognition.ai/outputTokens": tokenCount,
+  "cognition.ai/cachedReadTokens": tokenCount,
+  "cognition.ai/cachedWriteTokens": tokenCount,
+  "cognition.ai/subagent_context": z.object({ parentAgentId: z.string().min(1) }).nullish().catch(undefined),
+})
+
+/** What one live usage reading counts: a repeat counts nothing; a call without both counts has no tokens. */
+export type DevinUsageReading = { of: "repeat" } | { of: "agent" | "subagent"; tokens?: HarnessTokens }
+
+const ROOT_AGENT = "root"
+
+export function devinUsageReading(meta: z.input<typeof DevinUsageMeta> | undefined): DevinUsageReading {
+  const read = DevinUsageMeta.safeParse(meta ?? {}).data
+  if (!read) return { of: "agent" }
+  // A tag Mako can't read is taken for the root's repeat, which counts nothing, rather than counted twice.
+  const tagged = meta !== undefined && Object.hasOwn(meta, "cognition.ai/subagent_context")
+  const parent = read["cognition.ai/subagent_context"]?.parentAgentId
+  if (tagged && (parent === undefined || parent === ROOT_AGENT)) return { of: "repeat" }
+  const of = parent === undefined ? "agent" : "subagent"
+  const input = read["cognition.ai/inputTokens"]
+  const output = read["cognition.ai/outputTokens"]
+  if (input == null || output == null) return { of }
+  return {
+    of,
+    tokens: inclusiveTokens({
+      input,
+      output,
+      cacheRead: read["cognition.ai/cachedReadTokens"],
+      cacheWrite: read["cognition.ai/cachedWriteTokens"],
+    }),
+  }
+}
+
+/**
+ * A call's `metadata.metrics` in Devin's CLI store (3000.10.23). Unlike the
+ * live reading, `input_tokens` leaves out what the cache supplied: a call
+ * reported live as 11,496 input with 327 read from cache is stored as 11,169
+ * and 327. The store keeps one call in several rows (two sibling rows, and
+ * a copy in each chain plan mode rebuilds), all with the call's
+ * `metadata.request_id`.
+ */
+export const DevinCallMetrics = z.object({
+  input_tokens: tokenCount,
+  output_tokens: tokenCount,
+  cache_read_tokens: tokenCount,
+  cache_creation_tokens: tokenCount,
+})
+export type DevinCallMetrics = z.infer<typeof DevinCallMetrics>
+
+/** What a stored call's `metadata` says about its spend: the call, when it was written, the model that answered (`compactor` for a compaction), and its metrics. */
+export const DevinStoredCall = z.object({
+  request_id: z.string().min(1).nullish().catch(undefined),
+  created_at: z.string().nullish().catch(undefined),
+  generation_model: z.string().min(1).nullish().catch(undefined),
+  metrics: DevinCallMetrics,
+})
+
+export function devinStoredTokens(metrics: DevinCallMetrics): HarnessTokens {
+  return exclusiveTokens({
+    input: metrics.input_tokens,
+    output: metrics.output_tokens,
+    cacheRead: metrics.cache_read_tokens,
+    cacheWrite: metrics.cache_creation_tokens,
+  })
+}
 
 /**
  * Devin's tool updates (3000.10.23): a command's call carries the command

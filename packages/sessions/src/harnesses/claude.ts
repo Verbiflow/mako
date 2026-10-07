@@ -1,3 +1,5 @@
+import { z } from "zod"
+import { exclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /** Claude Code's hook events, held to the SDK's `HOOK_EVENTS` by `electron/providers/claude/vocabulary-check.ts`. */
@@ -102,3 +104,33 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
     ],
   },
 })
+
+/**
+ * The `usage` Claude's API reports on each assistant message and on a
+ * turn's result, as the SDK streams it and the session file saves it.
+ * `input_tokens` leaves out what the cache supplied.
+ */
+export const ClaudeUsage = z.object({
+  input_tokens: tokenCount,
+  output_tokens: tokenCount,
+  cache_read_input_tokens: tokenCount,
+  cache_creation_input_tokens: tokenCount,
+  cache_creation: z.object({ ephemeral_1h_input_tokens: tokenCount }).nullish().catch(undefined),
+  /** `standard` or `fast`: the mode the call was made in. */
+  speed: z.string().nullish().catch(undefined),
+})
+export type ClaudeUsage = z.infer<typeof ClaudeUsage>
+
+export function claudeTokens(usage: ClaudeUsage): HarnessTokens {
+  return exclusiveTokens({
+    input: usage.input_tokens,
+    output: usage.output_tokens,
+    cacheRead: usage.cache_read_input_tokens,
+    cacheWrite: usage.cache_creation_input_tokens,
+  })
+}
+
+/** The part of `cacheWrite` written to the one-hour cache, which Anthropic prices apart from the five-minute one. */
+export function claudeHourCacheWrites(usage: ClaudeUsage): number {
+  return usage.cache_creation?.ephemeral_1h_input_tokens ?? 0
+}
