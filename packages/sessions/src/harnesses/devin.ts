@@ -1,3 +1,5 @@
+import { z } from "zod"
+import type { AcpToolReading } from "../acp-tool-details.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /** Names are `_meta["cognition.ai/inferenceToolName"]` live and in the IDE journal, and the chat tool name in the CLI store. */
@@ -70,3 +72,19 @@ export const DEVIN_VOCABULARY = defineVocabulary({
     ],
   },
 })
+
+/**
+ * Devin's tool updates (3000.10.23): a command's call carries the command
+ * again as an embedded `tool://preview` resource, for Devin's own client to
+ * draw; the call's input already holds it. A call the person stopped ends
+ * `failed` with `_meta["cognition.ai/canceled"]`. A `write_plan` call
+ * (`cognition.ai/isPlanFileEdit`) sends the plan as `rawInput.content` beside
+ * a diff of the whole file; its saved `tool_call_state` keeps only the path.
+ */
+export const DEVIN_TOOL_READING: AcpToolReading = {
+  input: (update) => update._meta?.["cognition.ai/isPlanFileEdit"] === true ? PlanFileInputSchema.safeParse(update.rawInput).data : undefined,
+  omits: (part) => part.type === "content" && part.content.type === "resource" && part.content.resource.uri === "tool://preview",
+  status: (update) => update._meta?.["cognition.ai/canceled"] === true ? "canceled" : undefined,
+}
+
+const PlanFileInputSchema = z.object({ file_path: z.string() })
