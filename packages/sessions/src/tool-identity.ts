@@ -1,4 +1,6 @@
 import { z } from "zod"
+import { VOCABULARIES } from "./harnesses/index.js"
+import type { ArgumentWrapper, FieldKeys, McpNaming, NativeTool, ScriptWrapper, ToolField } from "./harnesses/vocabulary.js"
 
 /**
  * What a tool call is, whichever harness made it.
@@ -7,10 +9,13 @@ import { z } from "zod"
  * `run_terminal_command`, `exec`), wraps other tools in its own way (Grok's
  * `use_tool`, Cursor's `CallDynamicTool`, Codex's and OpenCode's code-mode
  * scripts) and spells arguments its own way (`path`, `file_path`,
- * `target_file`). Each harness declares that here, once, and `identifyTool`
- * resolves any call to one shared kind, label and target. The transcript,
- * the work summary and the activity line read the identity, never a native
- * name, so a harness's new tool needs one line here and nothing in the desk.
+ * `target_file`). Each harness declares that once, in its vocabulary under
+ * `harnesses/`, and `identifyTool` resolves any call to one shared kind,
+ * label and target. The transcript, the work summary and the activity line
+ * read the identity, never a native name, so a harness's new tool needs one
+ * line in its vocabulary and nothing in the desk. The names below are the
+ * fallback for a tool a harness hasn't declared and for a harness with no
+ * vocabulary.
  *
  * `npx tsx scripts/audit-native-tools.ts` lists the names in this machine's
  * own stores that resolve to `other`.
@@ -123,35 +128,8 @@ export interface ToolSource {
   title?: string
 }
 
-type Field = "path" | "command" | "pattern" | "query" | "url" | "description" | "prompt" | "code"
-
-type FieldKeys = { readonly [Name in Field]?: readonly string[] }
-
-/** Another tool runs inside this one, named and argued by these keys. */
-interface ArgumentWrapper {
-  form: "arguments"
-  tool: string
-  args: string
-  server?: string
-  /** A server name that means the harness's own built-in tools. */
-  builtin?: string
-  /** This native projection retains the exact server/tool title when input is clipped. */
-  titleRoute?: true
-}
-
-/** A script calls the real tools; the script is under `key`, or is the whole input. */
-interface ScriptWrapper {
-  form: "script"
-  key?: string
-}
-
-interface ToolSpec {
-  kind: ToolKind
-  label?: string
-  keys?: FieldKeys
-  wraps?: ArgumentWrapper | ScriptWrapper
-}
-
+type Field = ToolField
+type ToolSpec = NativeTool
 type Vocabulary = ReadonlyMap<string, ToolSpec>
 
 const SHARED_KEYS = {
@@ -208,31 +186,17 @@ const SHARED = vocabulary([
   [["readlints", "read_lints"], { kind: "read", label: "Lints" }],
 ])
 
-/** Where a harness differs from the shared names. */
-const HARNESSES: ReadonlyMap<string, Vocabulary> = new Map([
-  ["codex", vocabulary([
-    [["exec"], { kind: "code", wraps: { form: "script" } }],
-    [["wait"], { kind: "shell-output", label: "Command output" }],
-    [["js"], { kind: "computer" }],
-  ])],
-  ["opencode", vocabulary([
-    [["execute"], { kind: "code", wraps: { form: "script", key: "code" } }],
-    [["search"], { kind: "tool-search" }],
-  ])],
-  ["cursor", vocabulary([
-    [["calldynamictool"], { kind: "mcp", wraps: { form: "arguments", server: "namespace", tool: "toolName", args: "arguments", builtin: "cursor" } }],
-    // SDK 1.0.31 McpArgsSchema; Desktop's CallDynamicTool is a separate wire shape.
-    [["mcp"], { kind: "mcp", label: "MCP tool", wraps: { form: "arguments", server: "providerIdentifier", tool: "toolName", args: "args", titleRoute: true } }],
-  ])],
-  ["grok", vocabulary([
-    [["use_tool"], { kind: "mcp", wraps: { form: "arguments", tool: "tool_name", args: "tool_input" } }],
-    [["get_command_or_subagent_output"], { kind: "shell-output", label: "Command output" }],
-  ])],
-  ["devin", vocabulary([
-    [["exec"], { kind: "shell" }],
-    [["subagent"], { kind: "agent-wait", label: "Agent status" }],
-  ])],
-])
+/** Each harness's declared tools, by lower-cased name and alias. */
+const HARNESSES: ReadonlyMap<string, Vocabulary> = new Map(VOCABULARIES.map((declared) => {
+  const names = new Map<string, ToolSpec>()
+  for (const [name, tool] of Object.entries<NativeTool>(declared.tools))
+    for (const spelling of [name, ...(tool.aliases ?? [])]) names.set(spelling.toLowerCase(), tool)
+  return [declared.harness, names]
+}))
+
+/** How each harness names MCP tools; a harness with no vocabulary may use any form but Cursor's. */
+const MCP_NAMING: ReadonlyMap<string, readonly McpNaming[]> = new Map(VOCABULARIES.map((declared) => [declared.harness, declared.mcp]))
+const ANY_MCP_NAMING: readonly McpNaming[] = ["s__t", "s: t", "s.t"]
 
 /** Mako's own `mako` server, by tool; the `workspace_` names are the worktree tools' earlier ones, in saved history. */
 const MAKO_TOOLS: ReadonlyMap<string, string> = new Map([
@@ -293,6 +257,7 @@ function parseArguments(input: string | undefined): JsonRecord | undefined {
 }
 
 function textOf(value: JsonValue | undefined): string | undefined {
+  if (value === undefined || value === null) return undefined
   const text = Text.safeParse(value)
   if (text.success) return text.data.trim() || undefined
   const parts = Texts.safeParse(value)
@@ -349,18 +314,24 @@ interface McpName {
   tool: string
 }
 
+const MCP_FORMS = {
+  "s__t": /^([\w-]+)__(\w.*)$/,
+  "s: t": /^([\w-]+): (.+)$/,
+  "s.t": /^([\w-]+)\.(\w+)$/,
+  "s-t": /^([\w-]+)-(\w+)$/,
+} as const satisfies Record<McpNaming, RegExp>
+
 /**
- * The MCP server and tool behind a name: Claude Code's `mcp__mako__app_start`,
- * Grok's `mako__app_start`, Devin's and Codex's `mako.app_start`, and Codex's
- * live `mako: app_start`.
+ * The MCP server and tool behind a name in the forms the harness uses
+ * (`HarnessVocabulary.mcp`), or Mako's own `mcp__mako__app_start`.
  */
-function mcpName(name: string): McpName | undefined {
-  const match =
-    /^mcp__(.+?)__(.+)$/.exec(name) ??
-    /^([\w-]+)__(\w.*)$/.exec(name) ??
-    /^([\w-]+): (.+)$/.exec(name) ??
-    /^([\w-]+)\.(\w+)$/.exec(name)
+function mcpName(name: string, forms: readonly McpNaming[]): McpName | undefined {
+  const match = /^mcp__(.+?)__(.+)$/.exec(name) ?? forms.reduce<RegExpExecArray | null>((found, form) => found ?? MCP_FORMS[form].exec(name), null)
   return match ? { server: match[1]!, tool: match[2]! } : undefined
+}
+
+function mcpForms(harness: string | undefined): readonly McpNaming[] {
+  return (harness ? MCP_NAMING.get(harness) : undefined) ?? ANY_MCP_NAMING
 }
 
 function specFor(harness: string | undefined, name: string): ToolSpec | undefined {
@@ -383,7 +354,7 @@ export function identifyTool(source: ToolSource): ToolIdentity {
     if (inner) return inner
   }
   if (spec) return describe(source, name, spec)
-  const mcp = mcpName(name)
+  const mcp = mcpName(name, mcpForms(source.harness))
   if (mcp) return describeMcp(source, name, mcp, parseArguments(source.input))
   return describe(source, name, { kind: acp ?? "other", label: acp ? undefined : humanToolName(name) })
 }
@@ -534,7 +505,7 @@ function unwrapArguments(source: ToolSource, name: string, wrapper: ArgumentWrap
   const tool = textOf(args?.[wrapper.tool])
   if (!args || !tool) {
     const title = wrapper.titleRoute ? nameFromTitle(source.title) : undefined
-    const route = title ? mcpName(title) : undefined
+    const route = title ? mcpName(title, ["s: t"]) : undefined
     if (!route) return undefined
     const identity = describeMcp(source, name, route, undefined)
     identity.via = name
@@ -664,7 +635,29 @@ function unquote(raw: string): string {
   return body.replace(/\\(.)/g, (_, escaped: string) => (escaped === "n" ? "\n" : escaped === "t" ? "\t" : escaped))
 }
 
-/** The vocabulary a harness declares, for audits and tests. */
+/** The vocabulary a harness declares, lower-cased with its aliases, for audits and tests. */
 export function declaredToolNames(harness: string): string[] {
   return [...(HARNESSES.get(harness)?.keys() ?? [])]
+}
+
+export function hasVocabulary(harness: string): boolean {
+  return HARNESSES.has(harness)
+}
+
+/**
+ * Whether the harness's vocabulary accounts for a native tool name: a
+ * declared tool or alias, or an MCP tool in a form it declares. A name it
+ * doesn't is a tool the harness gained or renamed. False for a harness with
+ * no vocabulary.
+ */
+export function isDeclaredTool(harness: string, name: string): boolean {
+  const declared = HARNESSES.get(harness)
+  if (!declared) return false
+  return declared.has(name.toLowerCase()) || mcpName(name, mcpForms(harness)) !== undefined
+}
+
+/** What a harness calls its tools of one kind, by their primary native names: how to name them to that harness. */
+export function nativeToolNames(harness: string, kind: ToolKind): string[] {
+  const declared = VOCABULARIES.find((vocabulary) => vocabulary.harness === harness)
+  return declared ? Object.entries<NativeTool>(declared.tools).filter(([, tool]) => tool.kind === kind).map(([name]) => name) : []
 }

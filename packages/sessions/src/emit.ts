@@ -40,6 +40,8 @@ export interface EmitOptions {
   home?: string
   /** The provider's own root when an account moves it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). */
   store?: string
+  /** Codex's `model_provider` for the home it writes into; `openai` when unset. */
+  codexModelProvider?: string
 }
 
 interface Message {
@@ -215,7 +217,8 @@ export async function emitCodexSession(
       timestamp: iso,
       type: "session_meta",
       // cli_version is required by Codex's session-meta schema; without it
-      // the resume machinery refuses the file outright.
+      // the resume machinery refuses the file outright. Since 0.159 a resume
+      // also loads its provider from model_provider and fails on an empty one.
       payload: {
         id: sessionId,
         timestamp: iso,
@@ -223,6 +226,7 @@ export async function emitCodexSession(
         originator: "mako",
         cli_version: "0.147.0",
         source: "exec",
+        model_provider: options.codexModelProvider ?? "openai",
       },
     }),
   ]
