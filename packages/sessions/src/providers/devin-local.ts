@@ -1,6 +1,6 @@
 import { z } from "zod"
-import { acpToolDetails } from "../acp-tool-details.js"
-import { acpAttachments } from "../acp-attachments.js"
+import { AcpToolCalls, acpAttachments, acpShownDetails, acpToolDetails, acpToolFields, AcpToolUpdateSchema } from "../acp-tool-details.js"
+import { DEVIN_TOOL_READING } from "../harnesses/devin.js"
 import { ProposedPlans, type AttachmentContent, type ToolDetail } from "../content.js"
 import { DevinPlanCallSchema, DevinPlanTracker } from "./devin-plans.js"
 /** Devin IDE journals: legacy ACP NDJSON and the current per-session SQLite
@@ -25,7 +25,6 @@ import {
 import {
   createJsonlFollower,
   readLines,
-  snapshotSink,
   type LineTranslator,
 } from "../jsonl.js"
 import { SessionUnreadable, type NativeFile, type SessionProvider } from "./types.js"
@@ -100,6 +99,7 @@ interface AcpMetadata {
 
 interface AcpEventBase {
   details?: ToolDetail[]
+  locations?: ToolDetail[]
   attachments?: AttachmentContent[]
   at?: string
 }
@@ -125,8 +125,11 @@ interface AcpToolCall extends AcpEventBase {
 
 interface AcpToolCallUpdate extends AcpEventBase {
   sessionUpdate: "tool_call_update"
-  output: string
+  /** Each replaces the tool's field when the update carries it, as ACP and the live reducer have it. */
+  input?: string
+  output?: string
   status?: string
+  exitCode?: number
   toolCallId?: string
   notification: JsonRecord
 }
@@ -446,7 +449,10 @@ function translator(journal: string): DevinTranslator {
   const cards = new ProposedPlans()
   let assistant: AssistantEntry | null = null
   let userId: string | null = null
-  const toolsById = new Map<string, ToolBlock>()
+  const toolsById = new Map<string, { block: ToolBlock; entry: AssistantEntry }>()
+  /** The entry each plan card sits in, which a revision rewrites. */
+  const cardOwners = new WeakMap<AssistantEntry["blocks"][number], AssistantEntry>()
+  const tools = new AcpToolCalls()
   let started = false
   let needsReset = false
 
@@ -473,8 +479,16 @@ function translator(journal: string): DevinTranslator {
 
   const propose = (notification: JsonRecord, at?: string) => {
     const plan = plans.observe(DevinPlanCallSchema.safeParse(notification).data, journal)
-    const block = plan && cards.propose(plan.id, plan.text)
-    if (block) ensureAssistant(at).blocks.push(block)
+    const proposed = plan && cards.propose(plan.id, plan.text)
+    if (!proposed) return
+    if (proposed.revised) {
+      const entry = cardOwners.get(proposed.card)
+      if (entry) sink.edited(entry)
+      return
+    }
+    const entry = ensureAssistant(at)
+    cardOwners.set(proposed.card, entry)
+    entry.blocks.push(proposed.card)
   }
 
   const push = (raw: string): void => {
@@ -496,6 +510,7 @@ function translator(journal: string): DevinTranslator {
               ...(lastEntry.attachments ?? []),
               ...event.attachments,
             ]
+          sink.edited(lastEntry)
           return
         }
         flushAssistant()
@@ -528,24 +543,28 @@ function translator(journal: string): DevinTranslator {
         const entry = ensureAssistant(event.at)
         const block = createToolBlock(event.name, event.input)
         block.id = event.toolCallId
-        if (event.details?.length) block.details = event.details
+        const details = event.toolCallId ? tools.read(event.toolCallId, event).details : acpShownDetails(event)
+        if (details?.length) block.details = details
         if (event.attachments?.length) block.attachments = event.attachments
         entry.blocks.push(block)
-        if (event.toolCallId) toolsById.set(event.toolCallId, block)
+        if (event.toolCallId) toolsById.set(event.toolCallId, { block, entry })
         propose(event.notification, event.at)
         return
       }
       case "tool_call_update": {
-        const block = event.toolCallId
+        const call = event.toolCallId
           ? toolsById.get(event.toolCallId)
           : undefined
-        if (block) {
-          if (event.details?.length) block.details = event.details
+        if (call) {
+          const { block } = call
+          const update = event.toolCallId ? tools.read(event.toolCallId, event) : undefined
+          if (update?.details?.length) block.details = update.details
           if (event.attachments?.length) block.attachments = event.attachments
-          if (event.output)
-            block.output = clip(`${block.output ?? ""}${event.output}`)
-          if (event.status === "failed") block.error = true
-          if (/cancel/i.test(event.status ?? "")) block.canceled = true
+          if (event.input !== undefined) block.input = event.input
+          if (event.output !== undefined) block.output = clip(event.output)
+          if (update?.status === "failed") block.error = true
+          if (/cancel/i.test(update?.status ?? "")) block.canceled = true
+          sink.edited(call.entry)
         } else if (event.toolCallId) {
           needsReset = true
         }
@@ -614,19 +633,21 @@ function translator(journal: string): DevinTranslator {
       sink.push({ kind: "event", label: "Message unavailable", detail: "This native record exceeds the history read limit. The original remains in the IDE store.", source: { harness: "devin", record: `${journal}:messages/${position}` } })
     },
     snapshot: () => {
-      const entries = snapshotSink(sink)
+      const entries = sink.snapshot()
       return assistant ? [...entries, assistant] : entries
     },
     done: () => {
       flushAssistant()
-      return snapshotSink(sink)
+      return sink.snapshot()
     },
-    commitBatch: () => flushAssistant(true),
     get title() {
       return state.title
     },
     get needsReset() {
       return needsReset
+    },
+    get unchanged() {
+      return sink.unchanged
     },
   }
 }
@@ -723,31 +744,39 @@ function parseAcpEvent(raw: string): AcpEvent | null {
         attachments: acpAttachments(notification["content"]),
         details: acpToolDetails(notification["content"]),
       }
-    case "tool_call":
+    case "tool_call": {
+      const fields = acpToolFields(AcpToolUpdateSchema.parse(notification), DEVIN_TOOL_READING)
       return {
         sessionUpdate,
         at,
         name:
           metadata.inferenceToolName ??
-          readString(notification, "title") ??
+          fields.title ??
           "tool",
-        input: formatJson(notification["rawInput"]),
-        attachments: acpAttachments(notification["content"]),
-        details: acpToolDetails(notification["content"]),
+        input: fields.input,
+        attachments: fields.attachments ?? [],
+        details: fields.details,
+        locations: fields.locations,
         toolCallId: readString(notification, "toolCallId"),
         notification,
       }
-    case "tool_call_update":
+    }
+    case "tool_call_update": {
+      const fields = acpToolFields(AcpToolUpdateSchema.parse(notification), DEVIN_TOOL_READING)
       return {
         sessionUpdate,
         at,
-        output: parseAcpContent(notification["content"]),
-        status: readString(notification, "status"),
-        attachments: acpAttachments(notification["content"]),
-        details: acpToolDetails(notification["content"]),
+        input: fields.input,
+        output: fields.output,
+        status: fields.status,
+        exitCode: fields.exitCode,
+        attachments: fields.attachments ?? [],
+        details: fields.details,
+        locations: fields.locations,
         toolCallId: readString(notification, "toolCallId"),
         notification,
       }
+    }
     case "plan":
       return {
         sessionUpdate,
@@ -808,12 +837,6 @@ function parseAcpContent(value: JsonValue | undefined): string {
   if (text) return text
   const content = parseAcpContent(value["content"])
   return content || parseAcpContent(value["resource"])
-}
-
-function formatJson(value: JsonValue | undefined): string | undefined {
-  if (value === undefined) return undefined
-  if (isStringValue(value)) return value
-  return JSON.stringify(value)
 }
 
 function parseJson(raw: string): JsonValue | undefined {

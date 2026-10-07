@@ -53,7 +53,6 @@ import {
   parseLine,
   readHead,
   readLines,
-  snapshotSink,
   walkFiles,
   type LineTranslator,
 } from "../jsonl.js"
@@ -643,7 +642,7 @@ export class ClaudeProvider implements SessionProvider {
 function translator(): ClaudeTranslator {
   const sink = new EntrySink()
   let assistant: AssistantEntry | null = null
-  const toolsById = new Map<string, ClaudeToolBlock>()
+  const toolsById = new Map<string, { block: ClaudeToolBlock; entry: AssistantEntry }>()
   let started = false
   let needsReset = false
   /** The prompt that opened the running turn; a prompt Claude folds into the turn steers it. */
@@ -713,8 +712,10 @@ function translator(): ClaudeTranslator {
         const earlier = line.requestId
           ? fallbacks.get(line.requestId)
           : undefined
-        if (earlier) Object.assign(earlier, marker)
-        else mark(marker, line.timestamp, line.uuid)
+        if (earlier) {
+          Object.assign(earlier, marker)
+          sink.edited(earlier)
+        } else mark(marker, line.timestamp, line.uuid)
         return
       }
       case "model_refusal_no_fallback":
@@ -748,8 +749,10 @@ function translator(): ClaudeTranslator {
         const marker: TranscriptEvent = local.failed
           ? { ...printed, tone: "warning" }
           : printed
-        if (command) Object.assign(command.entry, marker)
-        else mark(marker, line.timestamp, line.uuid)
+        if (command) {
+          Object.assign(command.entry, marker)
+          sink.edited(command.entry)
+        } else mark(marker, line.timestamp, line.uuid)
         command = null
         return
       }
@@ -813,12 +816,14 @@ function translator(): ClaudeTranslator {
             onlyResults = false
             continue
           }
-          const block = toolsById.get(part.toolUseId)
-          if (block) {
+          const call = toolsById.get(part.toolUseId)
+          if (call) {
+            const { block, entry } = call
             block.output = clip(normalizeToolOutput(plainText(part.content)))
             block.attachments = attachmentParts(part.content)
             if (part.isError) block.error = true
             toolsById.delete(part.toolUseId)
+            sink.edited(entry)
           } else if (part.toolUseId) {
             needsReset = true
           }
@@ -827,12 +832,13 @@ function translator(): ClaudeTranslator {
       }
       if (line.isCompactSummary) {
         const summary = claudeCompactSummary(plainText(content))
-        if (compaction)
+        if (compaction) {
           Object.assign(
             compaction.entry,
             compactionEvent({ ...compaction.kept, summary })
           )
-        else mark(compactionEvent({ summary }), line.timestamp, line.uuid)
+          sink.edited(compaction.entry)
+        } else mark(compactionEvent({ summary }), line.timestamp, line.uuid)
         compaction = null
         return
       }
@@ -922,7 +928,7 @@ function translator(): ClaudeTranslator {
         blocks: [],
       }
       sink.push(assistant)
-    }
+    } else sink.edited(assistant)
     const turn: AssistantEntry = assistant
     for (const part of message.content) {
       switch (part.type) {
@@ -947,7 +953,7 @@ function translator(): ClaudeTranslator {
           }
           if (part.name === "TodoWrite")
             block.details = todoDetails(block.input)
-          if (part.id !== undefined) toolsById.set(part.id, block)
+          if (part.id !== undefined) toolsById.set(part.id, { block, entry: turn })
           turn.blocks.push(block)
           const plan =
             part.name === "ExitPlanMode" && part.id
@@ -968,13 +974,13 @@ function translator(): ClaudeTranslator {
 
   return {
     push,
-    snapshot: () => snapshotSink(sink),
-    done: () => snapshotSink(sink),
-    commitBatch: () => {
-      assistant = null
-    },
+    snapshot: () => sink.snapshot(),
+    done: () => sink.snapshot(),
     get needsReset() {
       return needsReset
+    },
+    get unchanged() {
+      return sink.unchanged
     },
   }
 }

@@ -1,7 +1,12 @@
 import { z } from "zod"
 import type { AttachmentContent } from "../content.js"
 
-/** Keep quoted/code examples literal while interpreting the provider's reference markup. */
+/**
+ * Devin's reference markup as Devin 3000.10.23 streams it to its client,
+ * outside code: `<ref_file file="P" />` becomes `[name](file://P)` and
+ * `<ref_snippet file="P" lines="2-4" />` becomes `[name:2-4](file://P)`.
+ * Its store keeps the model's tags.
+ */
 export function devinReferences(text: string): string {
   return text
     .split(/(`{3,}[\s\S]*?`{3,}|~{3,}[\s\S]*?~{3,}|`[^`\n]*`)/g)
@@ -9,18 +14,11 @@ export function devinReferences(text: string): string {
       index % 2
         ? part
         : part.replace(
-            /<ref_snippet\s+file="([^"\n]+)"\s+lines="(\d+)(?:-(\d+))?"\s*\/>/g,
-            (_match, path: string, start: string, end: string | undefined) => {
-              const href = encodeURI(path)
-                .replaceAll("(", "%28")
-                .replaceAll(")", "%29")
-              const label =
-                path
-                  .split("/")
-                  .at(-1)
-                  ?.replaceAll("[", "\\[")
-                  .replaceAll("]", "\\]") ?? "File"
-              return `[${label}:${start}${end ? `-${end}` : ""}](<${href}#L${start}${end ? `-L${end}` : ""}>)`
+            /<ref_(?:file\s+file="([^"\n]+)"|snippet\s+file="([^"\n]+)"\s+lines="([^"\n]+)")\s*\/>/g,
+            (_match, file: string | undefined, snippet: string | undefined, lines: string | undefined) => {
+              const path = file ?? snippet ?? ""
+              const name = path.split("/").at(-1) ?? path
+              return `[${lines ? `${name}:${lines}` : name}](file://${path})`
             }
           )
     )

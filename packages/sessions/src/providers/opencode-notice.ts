@@ -1,3 +1,4 @@
+import { turnFailedEvent, type TranscriptEvent } from "../events.js"
 import { backgroundCommandLabel, PROVIDER_TURN_FALLBACK, subagentLabel } from "../provider-turn.js"
 
 /** A synthetic message OpenCode writes to a session, live or stored; `source` and `state` come from its metadata. */
@@ -44,4 +45,40 @@ export function openCodeNoticeLabel(notice: OpenCodeNotice): string {
  */
 export function isOpenCodeInstruction(notice: OpenCodeNotice): boolean {
   return notice.source === undefined && /^\s*<system-reminder>/.test(notice.text ?? "")
+}
+
+/** An error that ended an OpenCode turn, by its type (OpenCode 2) or name (OpenCode 1), live or stored. */
+export function openCodeTurnFailed(kind: string | undefined, message: string): TranscriptEvent {
+  const line = message.trim().split("\n", 1)[0]!.trim()
+  return turnFailedEvent(kind ? failureClass(kind) : line.length > 160 ? `${line.slice(0, 159)}…` : line, message)
+}
+
+/** OpenCode 2 error types and OpenCode 1 error names, in plain words. */
+const FAILURE_CLASSES = new Map([
+  ["provider.invalid-output", "Invalid model response"],
+  ["provider.invalid-request", "Request rejected"],
+  ["provider.rate-limit", "Rate limited"],
+  ["provider.quota", "Quota exceeded"],
+  ["provider.auth", "Authentication failed"],
+  ["provider.content-filter", "Blocked by content filter"],
+  ["provider.transport", "Connection failed"],
+  ["provider.connect", "Connection failed"],
+  ["provider.no-route", "Model unavailable"],
+  ["provider.unsupported-operation", "Not supported by the provider"],
+  ["provider.internal", "Provider error"],
+  ["provider.error", "Provider error"],
+  ["provider.unknown", "Provider error"],
+  ["ProviderAuthError", "Authentication failed"],
+  ["APIError", "Provider error"],
+  ["MessageOutputLengthError", "Output too long"],
+  ["ContextOverflowError", "Context too long"],
+  ["StructuredOutputError", "Invalid structured output"],
+  ["UnknownError", "Unknown error"],
+])
+
+function failureClass(kind: string): string {
+  const known = FAILURE_CLASSES.get(kind)
+  if (known) return known
+  const words = kind.replace(/Error$/, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[._-]+/g, " ").trim().toLowerCase()
+  return words ? words[0]!.toUpperCase() + words.slice(1) : "Error"
 }

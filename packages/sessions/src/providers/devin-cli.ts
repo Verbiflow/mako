@@ -10,6 +10,8 @@ import {
   ProposedPlans,
   type AttachmentContent,
 } from "../content.js"
+import { acpShownDetails, acpToolFields, AcpToolUpdateSchema, mergeAcpTool, type AcpToolFields } from "../acp-tool-details.js"
+import { DEVIN_TOOL_READING } from "../harnesses/devin.js"
 import {
   DevinPlanCallSchema,
   DevinPlanTracker,
@@ -38,7 +40,7 @@ import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { nativeStoreVersion, openNativeStore } from "../read-only-sqlite.js"
 import { homedir } from "node:os"
-import { basename, isAbsolute, join, sep } from "node:path"
+import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
@@ -119,6 +121,8 @@ interface MessageRow {
   chatMessage?: string
   createdAt: StoredTimestamp
   usage?: TurnUsage
+  /** On a compaction's summary, the node the history it summarizes ends at. */
+  summarizedFrom?: number
 }
 
 interface MessageTranslator {
@@ -405,12 +409,29 @@ function mainChainId(db: DatabaseSync, sessionId: string): number {
     : -1
 }
 
+/**
+ * The main chain, each compaction's earlier history read before it: Devin
+ * 3000.10.23 starts a new chain after compacting, whose summary row's
+ * `summarized_from` names the node the earlier chain ends at.
+ */
 function mainChainRows(
+  db: DatabaseSync,
+  sessionId: string,
+  leafId: number,
+  read = new Set<number>()
+): MessageRow[] {
+  if (leafId < 0 || read.has(leafId)) return []
+  read.add(leafId)
+  const rows = chainRows(db, sessionId, leafId)
+  const from = rows.find((row) => row.summarizedFrom !== undefined)?.summarizedFrom
+  return from === undefined ? rows : [...mainChainRows(db, sessionId, from, read), ...rows]
+}
+
+function chainRows(
   db: DatabaseSync,
   sessionId: string,
   leafId: number
 ): MessageRow[] {
-  if (leafId < 0) return []
   const metadata = db
     .prepare("PRAGMA table_info(message_nodes)")
     .all()
@@ -446,7 +467,8 @@ function translatedMainChain(
   sessionId: string,
   leafId: number
 ): ThreadEntry[] {
-  const into = translator(sessionId, acpToolCalls(db, sessionId))
+  const cwd = sqliteText(db.prepare("SELECT working_directory AS cwd FROM sessions WHERE id = ?").get(sessionId)?.cwd)
+  const into = translator(sessionId, acpToolCalls(db, sessionId), cwd)
   for (const row of mainChainRows(db, sessionId, leafId)) into.push(row)
   return into.snapshot()
 }
@@ -454,6 +476,41 @@ function translatedMainChain(
 interface AcpToolCallState {
   call?: DevinPlanCall
   update?: DevinPlanCall
+  /** The tool as Devin showed its client: the stored call with its final update over it, read as the live decoder reads them. */
+  shown: AcpToolFields
+}
+
+function storedTool(value: SQLOutputValue | undefined): AcpToolFields {
+  const text = sqliteText(value)
+  if (!text) return {}
+  try {
+    const parsed = AcpToolUpdateSchema.safeParse(JSON.parse(text))
+    return parsed.success ? acpToolFields(parsed.data, DEVIN_TOOL_READING) : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * The input Devin showed its client. Its stored call can drop arguments the
+ * model gave (an edit's strings, which its diff holds); when every field it
+ * kept matches the model's, the model's arguments are what was shown.
+ */
+function shownInput(stored: string | undefined, model: string | undefined): string | undefined {
+  if (stored === undefined || model === undefined) return stored ?? model
+  const kept = jsonObject(stored)
+  const given = jsonObject(model)
+  if (!kept || !given) return stored
+  const abridged = Object.entries(kept).every(([key, value]) => key in given && JSON.stringify(given[key]) === JSON.stringify(value))
+  return abridged ? model : stored
+}
+
+function jsonObject(text: string): Record<string, JsonValue> | undefined {
+  try {
+    return z.record(z.string(), z.json()).safeParse(JSON.parse(text)).data
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -483,6 +540,7 @@ function acpToolCalls(
       calls.set(id, {
         call: planCall(row.tool_call_json),
         update: planCall(row.tool_call_update_json),
+        shown: mergeAcpTool(storedTool(row.tool_call_json), storedTool(row.tool_call_update_json)),
       })
   }
   return calls
@@ -533,6 +591,72 @@ async function lockedSessionIds(
   return locked
 }
 
+/** A read's result as the model saw it, the file between line-number gutters. */
+const FILE_VIEW = /^<file-view\b[^>]*\bstart_line="(\d+)"[^>]*\bend_line="(\d+)"[^>]*\btotal_lines="(\d+)"[^>]*>[\s\S]*<\/file-view>\s*$/
+
+const ReadRange = z.object({ offset: z.number().optional(), limit: z.number().optional() }).loose()
+
+/**
+ * A result Devin showed its client but didn't keep in its stored update
+ * (devin 3000.10.23): a read was "N lines", and "N lines (truncated)" when
+ * Devin cut it short of both the file's end and the lines asked for (about
+ * 30 KB of a file read whole); the file itself stays the model's. Any other
+ * such result showed no words.
+ */
+function devinClientResult(output: string, input: string | undefined): string {
+  const view = FILE_VIEW.exec(output)
+  if (!view) return ""
+  const [start, end, total] = [Number(view[1]), Number(view[2]), Number(view[3])]
+  const asked = ReadRange.safeParse(input === undefined ? undefined : jsonObject(input)).data
+  const askedEnd = asked?.limit === undefined ? total : (asked.offset ?? 1) + asked.limit - 1
+  return `${end - start + 1} lines${end < Math.min(total, askedEnd) ? " (truncated)" : ""}`
+}
+
+/**
+ * A question's picks (devin 3000.10.23), which its client was shown as the
+ * call's result: "Friday" for one question answered with one option. The
+ * model read them as JSON in the result's text.
+ */
+const DEVIN_QUESTION_ANSWERS = "chisel/user_question_answers"
+const DevinQuestionAnswers = z.object({ answers: z.array(z.object({ selected: z.array(z.string()) }).loose()) }).loose()
+
+function devinPicks(answers: JsonValue | undefined): string | undefined {
+  const picked = DevinQuestionAnswers.safeParse(answers).data
+  return picked && picked.answers.map((answer) => answer.selected.join(", ")).join("\n")
+}
+
+const ImageSize = z.object({ width: z.number(), height: z.number() }).loose()
+
+/**
+ * What a read of an image showed Devin's client (devin 3000.10.23): `View
+ * image ./swatch.png (32x32)`, the path from the session's folder. The
+ * model got the image itself.
+ */
+function viewedImage(input: string | undefined, images: JsonValue | undefined, cwd: string | undefined): string | undefined {
+  const size = ImageSize.safeParse(Array.isArray(images) ? images[0] : undefined).data
+  const path = input === undefined ? undefined : jsonObject(input)?.["file_path"]
+  if (!size || !isTextValue(path)) return undefined
+  const inside = cwd ? relative(cwd, path) : undefined
+  const shown = inside && !inside.startsWith("..") && !isAbsolute(inside) ? `./${inside}` : path
+  return `View image ${shown} (${size.width}x${size.height})`
+}
+
+/** A grep result's header for each file it matched in. */
+const GREP_FILE = /^-- \d+ match(?:es)? in (\/.+)$/gm
+
+/**
+ * The files a search showed its client as links, which its stored update
+ * dropped (devin 3000.10.23): a find's result lists one path a line, a
+ * grep's heads each file's matches with its path.
+ */
+function devinFoundFiles(name: string | undefined, output: string): AttachmentContent[] {
+  const paths =
+    name === "find_file_by_name" ? output.split("\n").filter((line) => line.startsWith("/"))
+    : name === "grep" ? [...output.matchAll(GREP_FILE)].map((match) => match[1] ?? "")
+    : []
+  return paths.map((path) => attachmentFromUrl(basename(path), "application/octet-stream", `file://${path}`))
+}
+
 /** The system message Devin appends to a turn the user stopped. */
 const DEVIN_STOP_NOTICE = "[Response interrupted by user]"
 /**
@@ -542,6 +666,15 @@ const DEVIN_STOP_NOTICE = "[Response interrupted by user]"
  */
 const DEVIN_SUMMARY = "devin-rs/summary"
 const DEVIN_TOOL_FAILURE = "chisel/tool_failure"
+/** Why a tool failed; a call the person stopped failed `Canceled`. */
+const DevinToolFailure = z.object({ reason: z.string() }).loose()
+/**
+ * A command's output and exit (devin 3000.10.23). A command that exited
+ * non-zero isn't a `chisel/tool_failure`, though it failed: `cat` of a
+ * missing file is kept `success: true` with exit code 1.
+ */
+const DEVIN_TERMINAL_OUTPUT = "chisel/terminal_output"
+const DevinTerminalOutput = z.object({ exit: z.object({ exit_code: z.number().nullish() }).loose().nullish() }).loose()
 
 /** The summary a compaction message holds, after the preamble that names where the full history went. */
 function compactionSummary(text: string): string {
@@ -551,7 +684,8 @@ function compactionSummary(text: string): string {
 
 function translator(
   sessionId: string,
-  acp: ReadonlyMap<string, AcpToolCallState>
+  acp: ReadonlyMap<string, AcpToolCallState>,
+  cwd: string | undefined
 ): MessageTranslator {
   const sink = new EntrySink()
   const tools = new Map<string, ToolBlock>()
@@ -653,19 +787,31 @@ function translator(
         if (thinking.trim())
           blocks.push({ type: "thinking", text: devinReferences(thinking) })
         running = (message.tool_calls?.length ?? 0) > 0
+        // The model's words come before the calls they introduce.
+        const text = contentText(message.content)
+        if (text.trim())
+          blocks.push({ type: "text", text: devinReferences(text) })
         for (const call of message.tool_calls ?? []) {
           const name = call.name ?? call.function?.name ?? "tool"
           const rawInput = call.arguments ?? call.function?.arguments
+          // Over ACP a todo list arrives as a plan, never as the call that wrote it.
+          if (name === "todo_write") {
+            blocks.push({ type: "tool", name: "Plan", output: "", details: todoDetails(toolInputText(rawInput)) })
+            continue
+          }
           const title =
             name === "run_subagent" ? subagentTitle(rawInput) : undefined
           if (call.id && title) subagentCalls.set(call.id, title)
+          const shown = call.id ? acp.get(call.id)?.shown : undefined
           const block: ToolBlock = {
             type: "tool",
             id: call.id,
             name,
-            input: toolInputText(rawInput),
+            input: shownInput(shown?.input, toolInputText(rawInput)),
           }
-          if (name === "todo_write") block.details = todoDetails(block.input)
+          const details = shown && acpShownDetails(shown)
+          if (details) block.details = details
+          if (shown?.attachments) block.attachments = shown.attachments
           const mcp =
             name === "mcp_call_tool" ? devinMcpCall(block.input) : undefined
           if (mcp) {
@@ -677,12 +823,9 @@ function translator(
           const plan = call.id
             ? plans.observe(acp.get(call.id)?.call, sessionId)
             : undefined
-          const card = plan && cards.propose(plan.id, plan.text)
-          if (card) blocks.push(card)
+          const proposed = plan && cards.propose(plan.id, plan.text)
+          if (proposed && !proposed.revised) blocks.push(proposed.card)
         }
-        const text = contentText(message.content)
-        if (text.trim())
-          blocks.push({ type: "text", text: devinReferences(text) })
         const usage = message.usage ?? row.usage
         if (blocks.length > 0 || usage) {
           const entry: Extract<ThreadEntry, { kind: "assistant" }> = {
@@ -713,11 +856,18 @@ function translator(
             )?.[1]
           : undefined
         if (title && agent) subagentTitles.set(agent, title)
-        block.output = clip(normalizeToolOutput(output))
-        if (message.extensions?.[DEVIN_TOOL_FAILURE] !== undefined)
-          block.error = true
+        const shown = message.tool_call_id ? acp.get(message.tool_call_id)?.shown : undefined
+        const viewed = block.name === "read" ? viewedImage(block.input, message.images, cwd) : undefined
+        const picks = devinPicks(message.extensions?.[DEVIN_QUESTION_ANSWERS])
+        block.output = clip(normalizeToolOutput(shown ? shown.output ?? viewed ?? picks ?? devinClientResult(output, block.input) : output))
+        const failure = message.extensions?.[DEVIN_TOOL_FAILURE]
+        const exitCode = DevinTerminalOutput.safeParse(message.extensions?.[DEVIN_TERMINAL_OUTPUT]).data?.exit?.exit_code
+        if (failure !== undefined && DevinToolFailure.safeParse(failure).data?.reason === "Canceled") block.canceled = true
+        else if (failure !== undefined || (exitCode != null && exitCode !== 0)) block.error = true
         const attachments = devinAttachments(message.content)
         if (attachments.length) block.attachments = attachments
+        const found = shown && !shown.attachments ? devinFoundFiles(block.name, output) : []
+        if (found.length) block.attachments = [...block.attachments ?? [], ...found]
       }
     },
     snapshot() {
@@ -769,13 +919,17 @@ function parseSessionRow(fields: SqliteFields): SessionRow {
 }
 
 function parseMessageRow(fields: SqliteFields): MessageRow {
+  const metadata = parseMetadata(sqliteText(fields.metadata))
   return {
     rowId: isSqliteNumber(fields.row_id) ? fields.row_id : 0,
     chatMessage: sqliteText(fields.chat_message),
     createdAt: sqliteNumber(fields.created_at),
-    usage: parseUsage(sqliteText(fields.metadata)),
+    usage: usageFromMetadata(metadata),
+    summarizedFrom: SummarizedFromSchema.safeParse(metadata).data?.summarized_from,
   }
 }
+
+const SummarizedFromSchema = z.object({ summarized_from: z.number() })
 
 function usageFromMetadata(
   metadata: JsonValue | undefined
@@ -796,11 +950,11 @@ function usageFromMetadata(
   return Object.keys(usage).length > 0 ? usage : undefined
 }
 
-function parseUsage(text: string | undefined): TurnUsage | undefined {
+function parseMetadata(text: string | undefined): JsonValue | undefined {
   if (!text) return undefined
   try {
     const metadata: JsonValue = JSON.parse(text)
-    return usageFromMetadata(metadata)
+    return metadata
   } catch {
     return undefined
   }

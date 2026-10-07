@@ -6,9 +6,10 @@ import { openNativeStore } from "../read-only-sqlite.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { openCodeDatabasePaths } from "./opencode-location.js"
-import { isOpenCodeInstruction, openCodeNoticeLabel } from "./opencode-notice.js"
+import { isOpenCodeInstruction, openCodeNoticeLabel, openCodeTurnFailed } from "./opencode-notice.js"
 import { openCodePlan } from "./opencode-plan.js"
-import { compactionEvent, compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "../events.js"
+import { OpenCodeEditInput, OpenCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./opencode-tools.js"
+import { compactionEvent, compactionFailedEvent, event, type TranscriptEvent } from "../events.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
@@ -239,8 +240,8 @@ export class OpenCodeProvider implements SessionProvider {
       }
       const entries =
         kind === "current"
-          ? currentEntries(database, row.id)
-          : legacyEntries(database, row.id)
+          ? currentEntries(database, row.id, row.directory ?? row.projectWorktree ?? "")
+          : legacyEntries(database, row.id, row.directory ?? row.projectWorktree ?? "")
       const model =
         modelFromSession(row) ??
         latestModel(database, kind, row.id) ??
@@ -602,7 +603,8 @@ function latestModel(
 
 function currentEntries(
   database: DatabaseSync,
-  sessionId: string
+  sessionId: string,
+  cwd: string
 ): ThreadEntry[] {
   const stored = database
     .prepare(
@@ -616,14 +618,15 @@ function currentEntries(
   const execution: Execution = { running: false }
   for (const fields of stored) {
     const row = parseStoredRow(fields)
-    if (row) pushCurrent(sink, row, execution)
+    if (row) pushCurrent(sink, row, execution, cwd)
   }
   return sink.done()
 }
 
 function legacyEntries(
   database: DatabaseSync,
-  sessionId: string
+  sessionId: string,
+  cwd: string
 ): ThreadEntry[] {
   const messages = database
     .prepare(
@@ -659,7 +662,7 @@ function legacyEntries(
   }
   const sink = new EntrySink()
   for (const message of messages)
-    pushLegacy(sink, message, byMessage.get(message.id) ?? [])
+    pushLegacy(sink, message, byMessage.get(message.id) ?? [], cwd)
   return sink.done()
 }
 
@@ -678,7 +681,7 @@ interface Execution {
  * `system` rows (instructions and date updates OpenCode tells the model) and
  * `skill` rows are protocol, not conversation, and are left out.
  */
-function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): void {
+function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, cwd: string): void {
   const type = row.type ?? jsonText(row.data.type)
   const at = isoOf(timeCreated(row.data) ?? row.timeCreated)
   if (type === "user") execution.running = true
@@ -712,7 +715,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
     return
   }
   if (type === "assistant") {
-    const blocks = withPlanCard(row.id, row.data, assistantContent(row.data.content))
+    const blocks = withPlanCard(row.id, row.data, assistantContent(row.data.content, cwd))
     const usage = usageFrom(row.data)
     const model = modelFromData(row.data)
     if (blocks.length > 0 || usage)
@@ -760,30 +763,15 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution): voi
       }), row.id)
     return
   }
-  if (type === "model-switched") {
-    const model = jsonObject(row.data.model)
-    const id = model ? jsonText(model.id) : undefined
-    const provider = model ? jsonText(model.providerID) : undefined
-    sink.push({
-      kind: "event",
-      at,
-      id: row.id,
-      source: { harness: "opencode", record: row.id },
-      label: "Model changed",
-      detail: modelLabel(id, provider),
-    })
-    return
-  }
-  if (type === "agent-switched") {
-    const agent = jsonText(row.data.agent)
-    pushEvent(sink, at, { label: "Agent changed", detail: agent }, row.id)
-  }
+  // `model-switched` and `agent-switched` are the person's own picks, which the
+  // composer shows as its model and mode; the live session draws neither.
 }
 
 function pushLegacy(
   sink: EntrySink,
   message: StoredRow,
-  parts: StoredRow[]
+  parts: StoredRow[],
+  cwd: string
 ): void {
   const role = jsonText(message.data.role)
   const at = isoOf(timeCreated(message.data) ?? message.timeCreated)
@@ -841,7 +829,7 @@ function pushLegacy(
       continue
     }
     if (type === "tool") {
-      blocks.push(toolBlock(part.data, "legacy"))
+      blocks.push(toolBlock(part.data, "legacy", cwd))
       continue
     }
     if (type === "step-finish") usage = usageFrom(part.data) ?? usage
@@ -883,7 +871,7 @@ function withPlanCard(messageId: string, data: JsonObject, blocks: EntryBlock[])
   return card ? [...blocks.filter((block) => block.type !== "text"), card] : blocks
 }
 
-function assistantContent(value: JsonValue | undefined): EntryBlock[] {
+function assistantContent(value: JsonValue | undefined, cwd: string): EntryBlock[] {
   if (!Array.isArray(value)) return []
   const blocks: EntryBlock[] = []
   for (const part of value) {
@@ -900,12 +888,12 @@ function assistantContent(value: JsonValue | undefined): EntryBlock[] {
       continue
     }
     if (type === "file") blocks.push(...fileParts([part]))
-    if (type === "tool") blocks.push(toolBlock(part, "current"))
+    if (type === "tool") blocks.push(toolBlock(part, "current", cwd))
   }
   return blocks
 }
 
-function toolBlock(data: JsonObject, kind: StoreKind): ToolBlock {
+function toolBlock(data: JsonObject, kind: StoreKind, cwd: string): ToolBlock {
   const state = jsonObject(data.state)
   const status = state ? jsonText(state.status) : undefined
   const name = jsonText(data.tool) ?? jsonText(data.name) ?? "tool"
@@ -915,6 +903,8 @@ function toolBlock(data: JsonObject, kind: StoreKind): ToolBlock {
     name,
     input: clip(formatJson(input)),
   }
+  const details = openCodeToolDetails(name, OpenCodeEditInput.safeParse(input).data, cwd)
+  if (details) block.details = details
   const id = jsonText(data.callID) ?? jsonText(data.id)
   if (id) block.id = id
   if (!state) return block
@@ -926,6 +916,7 @@ function toolBlock(data: JsonObject, kind: StoreKind): ToolBlock {
         ? jsonText(state.output)
         : contentText(state.content) || formatJson(state.result)
     block.output = clip(normalizeToolOutput(output))
+    if (OpenCodeFailedExit.safeParse(state.metadata).success) block.error = true
     return block
   }
   if (status === "error") {
@@ -1030,38 +1021,9 @@ function failedTurn(error: JsonObject | undefined): TranscriptEvent | undefined 
   const kind = jsonText(error.type) ?? jsonText(error.name)
   const message = errorText(error)
   if (!kind && !message) return undefined
-  return turnFailedEvent(kind ? failureClass(kind) : oneLine(message), message)
+  return openCodeTurnFailed(kind, message)
 }
 
-/** OpenCode 2 error types and OpenCode 1 error names, in plain words. */
-const FAILURE_CLASSES = new Map([
-  ["provider.invalid-output", "Invalid model response"],
-  ["provider.invalid-request", "Request rejected"],
-  ["provider.rate-limit", "Rate limited"],
-  ["provider.quota", "Quota exceeded"],
-  ["provider.auth", "Authentication failed"],
-  ["provider.content-filter", "Blocked by content filter"],
-  ["provider.transport", "Connection failed"],
-  ["provider.connect", "Connection failed"],
-  ["provider.no-route", "Model unavailable"],
-  ["provider.unsupported-operation", "Not supported by the provider"],
-  ["provider.internal", "Provider error"],
-  ["provider.error", "Provider error"],
-  ["provider.unknown", "Provider error"],
-  ["ProviderAuthError", "Authentication failed"],
-  ["APIError", "Provider error"],
-  ["MessageOutputLengthError", "Output too long"],
-  ["ContextOverflowError", "Context too long"],
-  ["StructuredOutputError", "Invalid structured output"],
-  ["UnknownError", "Unknown error"],
-])
-
-function failureClass(kind: string): string {
-  const known = FAILURE_CLASSES.get(kind)
-  if (known) return known
-  const words = kind.replace(/Error$/, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[._-]+/g, " ").trim().toLowerCase()
-  return words ? words[0]!.toUpperCase() + words.slice(1) : "Error"
-}
 
 /** The first line of a message, short enough to sit beside a label. */
 function oneLine(text: string, max = 160): string {
@@ -1192,14 +1154,6 @@ function parseSessionPath(
   }
 }
 
-function modelLabel(
-  id: string | undefined,
-  provider: string | undefined
-): string | undefined {
-  if (id && provider) return `${provider}/${id}`
-  return id ?? provider
-}
-
 function formatJson(value: JsonValue | undefined): string | undefined {
   if (value === undefined) return undefined
   return isStringValue(value) ? value : JSON.stringify(value)
@@ -1261,7 +1215,7 @@ function fileParts(value: JsonValue | undefined): AttachmentContent[] {
     const type = jsonText(part.type)
     const url = jsonText(part.url) ?? jsonText(part.uri)
     if (type !== "file" && (type !== undefined || !url)) continue
-    const name = jsonText(part.filename) ?? "Attachment"
+    const name = openCodeFileName(jsonText(part.filename) ?? jsonText(part.name))
     const mime =
       jsonText(part.mime) ??
       jsonText(part.mediaType) ??

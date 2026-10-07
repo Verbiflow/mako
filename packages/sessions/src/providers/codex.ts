@@ -1,7 +1,13 @@
 import { readPromptAttachments, legacyTextAttachment, type PromptAttachmentProjection } from "../prompt-attachments.js"
 import { existsSync, statSync, type Stats } from "node:fs"
 import {
+  codexCommand,
+  codexCommandOutput,
+  codexAborted,
+  codexExecOutput,
   codexFailureEvent,
+  codexPatchInput,
+  codexPatchText,
   codexPrompt,
   codexPromptImages,
   codexPresentation,
@@ -42,6 +48,7 @@ import { attachmentFromUrl, ProposedPlans, type AttachmentContent } from "../con
  */
 
 import { homedir } from "node:os"
+import { z } from "zod"
 import { basename, join } from "node:path"
 import { stat, rm } from "node:fs/promises"
 import type { SQLOutputValue } from "node:sqlite"
@@ -60,7 +67,6 @@ import {
   createJsonlFollower,
   parseLine,
   readLines,
-  snapshotSink,
   walkFiles,
   type LineTranslator,
 } from "../jsonl.js"
@@ -177,6 +183,28 @@ interface CodexFunctionOutputResponse extends CodexRolloutBase {
   output: string
 }
 
+/** A tool's typed item: what Codex ran and how it ended, over the call's raw arguments and output. */
+interface CodexToolItem extends CodexRolloutBase {
+  kind: "tool_item"
+  callId: string
+  /** The tool the model would have called for it, which names a call a code cell made. */
+  name: "exec_command" | "apply_patch"
+  input?: string
+  output?: string
+  error: boolean
+}
+
+/**
+ * A code-mode cell (`exec`, the gpt-6 models' only way to the shell and
+ * patches): JavaScript whose tool calls Codex records as their own items.
+ * Live, the app-server shows those calls and never the cell (codex
+ * 0.159.3), so the window draws the calls alone.
+ */
+interface CodexCodeCell extends CodexRolloutBase {
+  kind: "code_cell"
+  callId?: string
+}
+
 interface CodexEventLine extends CodexRolloutBase {
   kind: "event"
   event: TranscriptEvent
@@ -214,6 +242,8 @@ type CodexRolloutEvent =
   | CodexReasoningResponse
   | CodexFunctionCallResponse
   | CodexFunctionOutputResponse
+  | CodexToolItem
+  | CodexCodeCell
   | CodexEventLine
   | CodexCompactedLine
   | CodexIgnoredRolloutLine
@@ -224,7 +254,6 @@ type ToolBlock = EntryBlock & { type: "tool" }
 
 interface CodexTranslator extends LineTranslator {
   done(): ThreadEntry[]
-  commitBatch(): void
   readonly needsReset: boolean
 }
 
@@ -284,6 +313,16 @@ function functionName(payload: JsonObject): string {
   const namespace = stringValue(payload["namespace"])?.trim()
   return namespace?.startsWith("mcp__") ? `${namespace}__${name}` : name
 }
+
+/** `view_image`'s arguments, as the JSON text a rollout keeps. */
+const ViewImageArguments = z.string().transform((text, context) => {
+  try {
+    return z.object({ path: z.string() }).loose().parse(JSON.parse(text))
+  } catch {
+    context.addIssue({ code: "custom", message: "not view_image arguments" })
+    return z.NEVER
+  }
+})
 
 function completedTool(status: string | undefined): CodexToolCompletion {
   const normalized = status?.toLowerCase()
@@ -423,8 +462,16 @@ function parseResponseItem(
         input: text ? JSON.stringify({ command: text }) : undefined,
       }
     }
-    case "function_call":
     case "custom_tool_call":
+      if (stringValue(payload["name"]) === "exec") return { kind: "code_cell", at, callId: stringValue(payload["call_id"]) }
+      return {
+        kind: "function_call_response",
+        at,
+        callId: stringValue(payload["call_id"]),
+        name: functionName(payload),
+        input: stringValue(payload["input"]),
+      }
+    case "function_call":
       return {
         kind: "function_call_response",
         at,
@@ -564,6 +611,30 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
               return { kind: "event", at, event: reviewStarted(stringValue(item?.["user_facing_hint"])) }
             case "ExitedReviewMode":
               return { kind: "event", at, event: reviewEnded(item?.["review_output"]) }
+            case "CommandExecution": {
+              const command = CommandItem.safeParse(item).data
+              if (!command) return { kind: "ignored", at }
+              return {
+                kind: "tool_item", at, callId: command.id, name: "exec_command",
+                input: JSON.stringify({ command: codexCommand(command.command) }),
+                output: codexCommandOutput(command.aggregated_output, command.exit_code),
+                error: command.status !== "completed",
+              }
+            }
+            case "FileChange": {
+              const patch = FileChangeItem.safeParse(item).data
+              if (!patch) return { kind: "ignored", at }
+              const changes = Object.entries(patch.changes).map(([path, change]) => ({
+                path, type: change.type, movePath: change.move_path, diff: change.unified_diff ?? change.content ?? "",
+              }))
+              const input = codexPatchInput(changes.map((change) => change.path))
+              return {
+                kind: "tool_item", at, callId: patch.id, name: "apply_patch",
+                input: input && JSON.stringify(input),
+                output: codexPatchText(changes),
+                error: patch.status !== "completed",
+              }
+            }
             case "Plan": {
               // Every history mode records a plan here; its id matches the app-server's.
               const turn = stringValue(payload["turn_id"])
@@ -593,6 +664,32 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
       return { kind: "ignored", at }
   }
 }
+
+/** `event_msg/item_completed` items, as Codex's core serializes them. */
+const CommandItem = z.object({
+  id: z.string(),
+  command: z.union([z.array(z.string()), z.string()]),
+  status: z.string(),
+  aggregated_output: z.string().nullish(),
+  exit_code: z.number().nullish(),
+})
+const FileChangeItem = z.object({
+  id: z.string(),
+  status: z.string(),
+  changes: z.record(z.string(), z.object({
+    type: z.enum(["add", "delete", "update"]),
+    unified_diff: z.string().nullish(),
+    content: z.string().nullish(),
+    move_path: z.string().nullish(),
+  })),
+})
+
+/** An `exec_command` call's arguments as the live wire draws them: the command alone. */
+function execInput(input: string | undefined): string | undefined {
+  const cmd = input === undefined ? undefined : ExecArguments.safeParse(parseLine(input)).data?.cmd
+  return cmd === undefined ? input : JSON.stringify({ command: cmd })
+}
+const ExecArguments = z.object({ cmd: z.string() })
 
 function elapsedBetween(from: string | undefined, to: string | undefined): number | undefined {
   if (!from || !to) return undefined
@@ -1016,6 +1113,19 @@ function translator(): CodexTranslator {
   const sink = new EntrySink()
   let assistant: AssistantEntry | null = null
   const callsById = new Map<string, ToolBlock>()
+  // A call's typed item comes before or after its output; either way it wins.
+  const blocksById = new Map<string, ToolBlock>()
+  const itemsById = new Map<string, CodexToolItem>()
+  const itemized = new WeakSet<ToolBlock>()
+  /** Code cells whose output hasn't come yet. */
+  const cells = new Set<string>()
+  const applyItem = (block: ToolBlock, item: CodexToolItem) => {
+    itemized.add(block)
+    if (item.input !== undefined) block.input = clip(item.input)
+    if (item.output === undefined) delete block.output
+    else block.output = clip(item.output)
+    if (item.error) block.error = true
+  }
   let started = false
   let needsReset = false
   let model: string | undefined
@@ -1032,6 +1142,8 @@ function translator(): CodexTranslator {
   let turnOpen = false
   let lastAt: string | undefined
   const plans = new ProposedPlans()
+  /** The entry each call and plan card sits in, which a later record can still change. */
+  const owners = new WeakMap<EntryBlock, AssistantEntry>()
 
   const openAssistant = (at?: string): AssistantEntry => {
     compaction = undefined
@@ -1040,6 +1152,15 @@ function translator(): CodexTranslator {
       sink.push(assistant)
     }
     return assistant
+  }
+  const place = (at: string | undefined, block: EntryBlock): void => {
+    const entry = openAssistant(at)
+    owners.set(block, entry)
+    entry.blocks.push(block)
+  }
+  const edited = (block: EntryBlock): void => {
+    const entry = owners.get(block)
+    if (entry) sink.edited(entry)
   }
 
   const pushMarker = (marker: TranscriptEvent, at: string | undefined): void => {
@@ -1121,7 +1242,7 @@ function translator(): CodexTranslator {
           type: "tool",
           id: event.callId,
           name: event.name,
-          input: clip(event.input),
+          input: clip(event.name === "exec_command" ? execInput(event.input) : event.input),
         }
         if (
           event.name === "update_plan" ||
@@ -1131,18 +1252,56 @@ function translator(): CodexTranslator {
         if (event.output !== undefined) block.output = event.output
         if (event.error) block.error = true
         if (event.canceled) block.canceled = true
-        if (event.callId) callsById.set(event.callId, block)
-        openAssistant(event.at).blocks.push(block)
+        if (event.callId) {
+          callsById.set(event.callId, block)
+          blocksById.set(event.callId, block)
+          const item = itemsById.get(event.callId)
+          if (item) applyItem(block, item)
+        }
+        place(event.at, block)
+        return
+      }
+      case "code_cell":
+        if (event.callId) cells.add(event.callId)
+        return
+      case "tool_item": {
+        const block = blocksById.get(event.callId)
+        if (block) {
+          applyItem(block, event)
+          return edited(block)
+        }
+        if (!cells.size) return void itemsById.set(event.callId, event)
+        // A call the open cell made, which has no call of its own.
+        if (!started) needsReset = true
+        started = true
+        const call: ToolBlock = { type: "tool", id: event.callId, name: event.name }
+        applyItem(call, event)
+        blocksById.set(event.callId, call)
+        place(event.at, call)
         return
       }
       case "function_output_response": {
         const id = event.callId ?? ""
+        if (cells.delete(id)) return
         const block = callsById.get(id)
         if (block) {
-          block.output = clip(event.output)
-          if (block && event.attachments?.length)
-            block.attachments = event.attachments
+          const exec = block.name === "exec_command" ? codexExecOutput(event.output) : undefined
+          // `view_image`'s output is the image itself, shown as the call's attachment and named for the file.
+          const viewed = block.name === "view_image" ? ViewImageArguments.safeParse(block.input).data?.path : undefined
+          if (viewed !== undefined) {
+            block.output = ""
+          } else if (codexAborted(event.output)) {
+            // Live, a stopped call ends with its turn and no output.
+            block.canceled = true
+            block.output = ""
+          } else if (!itemized.has(block)) {
+            block.output = clip(exec ? codexCommandOutput(exec.output, exec.exitCode) ?? "" : event.output)
+            if (exec?.exitCode) block.error = true
+          }
+          if (event.attachments?.length)
+            block.attachments = viewed === undefined ? event.attachments : event.attachments.map((attachment) => ({ ...attachment, name: basename(viewed) }))
           callsById.delete(id)
+          edited(block)
         } else if (id) {
           needsReset = true
         }
@@ -1152,8 +1311,9 @@ function translator(): CodexTranslator {
         pushMarker(event.event, event.at)
         return
       case "plan": {
-        const card = plans.propose(event.id, event.text)
-        if (card) openAssistant(event.at).blocks.push(card)
+        const proposed = plans.propose(event.id, event.text)
+        if (proposed?.revised) edited(proposed.card)
+        else if (proposed) place(event.at, proposed.card)
         return
       }
       case "compacted":
@@ -1184,13 +1344,13 @@ function translator(): CodexTranslator {
 
   return {
     push,
-    snapshot: () => snapshotSink(sink),
-    done: () => snapshotSink(sink),
-    commitBatch: () => {
-      assistant = null
-    },
+    snapshot: () => sink.snapshot(),
+    done: () => sink.snapshot(),
     get needsReset() {
       return needsReset
+    },
+    get unchanged() {
+      return sink.unchanged
     },
   }
 }

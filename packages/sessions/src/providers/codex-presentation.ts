@@ -185,3 +185,104 @@ export function codexPromptImages(text: string): AttachmentContent[] {
     }
   })
 }
+
+/**
+ * The command Codex's model asked for. Codex runs it as `[shell, "-lc",
+ * script]`; the app-server reports that argv shell-quoted into one string,
+ * the rollout keeps it as an array. Either way the script is what was asked.
+ */
+export function codexCommand(command: string | string[]): string {
+  const words = Array.isArray(command) ? command : shellWords(command)
+  const [shell, flag, script, ...rest] = words ?? []
+  if (shell && script !== undefined && !rest.length && /(?:^|\/)(?:zsh|bash|sh)$/.test(shell) && (flag === "-lc" || flag === "-c")) return script
+  return Array.isArray(command) ? command.join(" ") : command
+}
+
+/** POSIX shell words, or `undefined` for text no shell would split the same way. */
+function shellWords(text: string): string[] | undefined {
+  const words: string[] = []
+  let word: string | undefined
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]!
+    if (char === " " || char === "\t" || char === "\n") {
+      if (word !== undefined) words.push(word)
+      word = undefined
+    } else if (char === "'") {
+      const end = text.indexOf("'", index + 1)
+      if (end < 0) return undefined
+      word = (word ?? "") + text.slice(index + 1, end)
+      index = end
+    } else if (char === "\"") {
+      word ??= ""
+      for (index++; index < text.length && text[index] !== "\""; index++) {
+        if (text[index] === "\\" && /["\\$`\n]/.test(text[index + 1] ?? "")) index++
+        word += text[index]
+      }
+      if (index >= text.length) return undefined
+    } else if (char === "\\") {
+      word = (word ?? "") + (text[++index] ?? "")
+    } else word = (word ?? "") + char
+  }
+  if (word !== undefined) words.push(word)
+  return words
+}
+
+/** What a finished command shows: its output, or its exit code when it failed without any. */
+export function codexCommandOutput(output: string | null | undefined, exitCode: number | null | undefined): string | undefined {
+  if (output) return output
+  return exitCode ? `Exited with code ${exitCode}` : undefined
+}
+
+/**
+ * The text Codex writes before an `exec_command` call's output in what it
+ * sends its model, and the exit code in it. A rollout without typed items
+ * keeps only this.
+ */
+const EXEC_HEADER = /^Chunk ID: \S+\nWall time: [^\n]*\n(?:Process exited with code (-?\d+)\n)?(?:Process running with session ID \d+\n)?Original token count: \d+\nOutput:\n/
+
+export function codexExecOutput(text: string): { output: string; exitCode?: number } | undefined {
+  const header = EXEC_HEADER.exec(text)
+  if (!header) return undefined
+  return { output: text.slice(header[0].length), exitCode: header[1] === undefined ? undefined : Number(header[1]) }
+}
+
+/**
+ * What Codex tells its model of a call the person stopped (`abort_message`,
+ * codex-rs/core/src/tools/parallel.rs): `Wall time: 1.2 seconds\naborted by
+ * user` for `exec_command`, `aborted by user after 1.2s` for any other tool.
+ */
+const ABORTED = /^(?:Wall time: [\d.]+ seconds\naborted by user|aborted by user after [\d.]+s)$/
+
+export function codexAborted(text: string): boolean {
+  return ABORTED.test(text)
+}
+
+export interface CodexPatchChange {
+  path: string
+  type: "add" | "delete" | "update"
+  movePath?: string | null
+  diff: string
+}
+
+/** A patch as one text: each file's change, a unified diff for an update. */
+export function codexPatchText(changes: readonly CodexPatchChange[]): string {
+  return changes.map(({ path, type, movePath, diff }) => {
+    switch (type) {
+      case "add":
+        return `Add ${path}\n${prefixLines(diff, "+")}`
+      case "delete":
+        return `Delete ${path}\n${prefixLines(diff, "-")}`
+      case "update":
+        return `Update ${movePath ? `${path} → ${movePath}` : path}\n${diff.trimEnd()}`
+    }
+  }).join("\n\n")
+}
+
+function prefixLines(text: string, prefix: string): string {
+  return text.trimEnd().split("\n").map((line) => `${prefix}${line}`).join("\n")
+}
+
+/** A patch tool's arguments: the files it changed. */
+export function codexPatchInput(paths: readonly string[]): { path: string; paths: string[] } | undefined {
+  return paths.length ? { path: paths[0]!, paths: [...paths] } : undefined
+}
