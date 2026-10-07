@@ -91,8 +91,8 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **Codex**: Rate-limit reset credits (account/rateLimits/read rateLimitResetCredits, account/rateLimitResetCredit/consume); Review mode (review/start; enteredReviewMode and exitedReviewMode items); Goals (thread/goal/*); Session questions (item/tool/requestUserInput, answered in the session)
 - **Cursor**: Artifact preview (SDKArtifact (listArtifacts is empty in local runs)); Server-side summarization (a task message carrying the summary); Image generation and screen recording (generateImage, recordScreen tools); Cloud agents (AgentOptions.cloud, bc- agent ids)
 - **OpenCode**: Staged revert (revert/stage, commit, clear); Inbox (a prompt sent while busy is steered or queued (inbox/:id/steer|queue)); Code Mode MCP (MCP tools through the code tool, on by default)
-- **Grok**: X search (x_keyword_search and x_semantic_search tools); Image and video generation (image_gen, /imagine, /imagine-video); Announcements (_x.ai/announcements/update); Folder trust (_x.ai/folder_trust/request, ~/.grok/trusted_folders.toml)
-- **Devin**: Cloud handoff (/handoff, /cloud-attach); Step revert and fork (cognition.ai/revert/*); Editable approvals (cognition.ai/editableCommand, command/revise); Credits and ACUs (usage_update _meta totalCreditCost, totalAcuCost)
+- **Grok**: X search (x_keyword_search and x_semantic_search tools); Image and video generation (image_gen, /imagine, /imagine-video); Announcements (_x.ai/announcements/update); Folder trust (_x.ai/folder_trust/request to a client that sets x.ai/folderTrust.interactive, saved in ~/.grok/trusted_folders.toml)
+- **Devin**: Cloud handoff (/handoff, /cloud-attach); Step revert and fork (cognition.ai/revert/*); Editable approvals (cognition.ai/editableCommand, command/revise); Credits and ACUs (usage_update _meta totalCreditCost and totalAcuCost, for an account billed in credits or ACUs rather than quota; never seen sent, so unread)
 
 ## Tool definitions
 
