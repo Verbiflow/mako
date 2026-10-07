@@ -9,8 +9,8 @@ import { type Problem, OperationNameSchema, problemType } from "./envelope.js"
  */
 export type Replay = "read" | "replay" | "never"
 
-/** Who orders the operation: the Thread object, the Account object, or the device that runs it. */
-export type Scope = "thread" | "account" | "device"
+/** Where it runs; the operation's `target` names which Thread or which runtime. */
+export type Scope = "thread" | "runtime"
 
 export type OperationSpec = {
   scope: Scope

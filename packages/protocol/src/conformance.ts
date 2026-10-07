@@ -3,6 +3,7 @@ import {
   type Actor,
   type Operation,
   type Reply,
+  problem,
   problemType,
 } from "./envelope.js"
 import { type EventFrame, threadStream } from "./events.js"
@@ -216,6 +217,128 @@ export function runGatewayConformance(
       const lost = failure(await replied)
       assert.equal(problemType(lost.problem), "owner-unavailable")
       assert.equal(lost.problem.outcome, "unknown")
+    }
+  )
+
+  scenario(
+    "a repeat after the runtime dropped is sent again to whoever runs the Thread, and admitted once",
+    async (gateway) => {
+      const old = await enroll(gateway, "rt-a")
+      await take(gateway, old, "th-1", "rt-a")
+      const client = await gateway.connectClient(desktop)
+      const sent = operation("th-1", { text: "carry on" })
+      const lost = client.call(sent)
+      expect(await old.next(), "operation")
+      old.close()
+      assert.equal((await lost).ok, false)
+
+      const next = await enroll(gateway, "rt-b")
+      await take(gateway, next, "th-1", "rt-b")
+      const retried = client.call({ ...sent, attempt: 2 })
+      const delivered = expect(await next.next(), "operation")
+      assert.equal(delivered.operation.attempt, 2)
+      assert.equal(delivered.operation.id, sent.id)
+      next.send({
+        type: "reply",
+        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "done" },
+      })
+      const reply = success(await retried)
+      assert.equal(reply.value, "done")
+
+      const stream = client.subscribe({
+        stream: threadStream("th-1"),
+        after: 0,
+      })
+      assert.equal((await stream.next()).seq, reply.seq)
+      await nothingArrives(stream)
+    }
+  )
+
+  scenario(
+    "an operation for a runtime reaches that runtime alone and isn't numbered in any Thread",
+    async (gateway) => {
+      const laptop = await enroll(gateway, "rt-laptop")
+      const other = await enroll(gateway, "rt-other")
+      const client = await gateway.connectClient(phone)
+      const sent = runtimeOperation("rt-laptop", { path: "README.md" })
+      const replied = client.call(sent)
+
+      const delivered = expect(await laptop.next(), "operation")
+      assert.deepEqual(delivered.operation, sent)
+      assert.equal(delivered.generation, undefined)
+      laptop.send({
+        type: "reply",
+        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "# Mako" },
+      })
+      const reply = success(await replied)
+      assert.equal(reply.value, "# Mako")
+      assert.equal(reply.seq, undefined)
+      await nothingArrives(other)
+    }
+  )
+
+  scenario(
+    "an operation for a runtime that isn't connected isn't applied, and a repeat reaches it once it is",
+    async (gateway) => {
+      const client = await gateway.connectClient(desktop)
+      const sent = runtimeOperation("rt-laptop", {})
+      const refused = failure(await client.call(sent))
+      assert.equal(problemType(refused.problem), "owner-unavailable")
+      assert.equal(refused.problem.outcome, "not-applied")
+
+      const laptop = await enroll(gateway, "rt-laptop")
+      const retried = client.call({ ...sent, attempt: 2 })
+      expect(await laptop.next(), "operation")
+      laptop.send({
+        type: "reply",
+        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true },
+      })
+      assert.equal((await retried).ok, true)
+    }
+  )
+
+  scenario(
+    "a runtime's failure is its answer: a repeat gets the same failure without running again",
+    async (gateway) => {
+      const laptop = await enroll(gateway, "rt-laptop")
+      const client = await gateway.connectClient(desktop)
+      const sent = runtimeOperation("rt-laptop", {})
+      const first = client.call(sent)
+      expect(await laptop.next(), "operation")
+      const failed: Reply = {
+        v: PROTOCOL_VERSION,
+        id: sent.id,
+        ok: false,
+        problem: problem("failed", "It failed", sent.correlationId, "unknown", {
+          detail: "the file is gone",
+        }),
+      }
+      laptop.send({ type: "reply", reply: failed })
+      assert.deepEqual(await first, failed)
+      assert.deepEqual(await client.call({ ...sent, attempt: 2 }), failed)
+      await nothingArrives(laptop)
+    }
+  )
+
+  scenario(
+    "a reply from a runtime the operation wasn't sent to is ignored",
+    async (gateway) => {
+      const laptop = await enroll(gateway, "rt-laptop")
+      const intruder = await enroll(gateway, "rt-intruder")
+      const client = await gateway.connectClient(desktop)
+      const sent = runtimeOperation("rt-laptop", {})
+      const replied = client.call(sent)
+      expect(await laptop.next(), "operation")
+      intruder.send({
+        type: "reply",
+        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "forged" },
+      })
+      await settle()
+      laptop.send({
+        type: "reply",
+        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "real" },
+      })
+      assert.equal(success(await replied).value, "real")
     }
   )
 
@@ -463,7 +586,23 @@ function operation(threadId: string, input: Operation["input"]): Operation {
     v: PROTOCOL_VERSION,
     id: crypto.randomUUID(),
     op: "thread.send",
-    threadId,
+    target: { kind: "thread", threadId },
+    input,
+    correlationId: crypto.randomUUID(),
+    actor: desktop,
+    attempt: 1,
+  }
+}
+
+function runtimeOperation(
+  runtimeId: string,
+  input: Operation["input"]
+): Operation {
+  return {
+    v: PROTOCOL_VERSION,
+    id: crypto.randomUUID(),
+    op: "files.read",
+    target: { kind: "runtime", runtimeId },
     input,
     correlationId: crypto.randomUUID(),
     actor: desktop,

@@ -6,6 +6,7 @@ import {
   type Problem,
   type Reply,
   problem,
+  problemType,
 } from "./envelope.js"
 import {
   type EventFrame,
@@ -30,6 +31,29 @@ import { PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
 
 const NIL_ID = "00000000-0000-0000-0000-000000000000"
 
+/** One line per thing the gateway did, for tests and for reading a request's path by its correlation ID. */
+export type GatewayLogLine = {
+  event: "operation" | "enrolled" | "refused" | "disconnected"
+  correlationId?: string
+  operationId?: string
+  op?: string
+  /** `thread:<id>` or `runtime:<id>`. */
+  target?: string
+  attempt?: number
+  /** `ok`, or the problem type. */
+  outcome?: string
+  /** Where the answer came from: the runtime, the gateway itself, or the first attempt's answer. */
+  answeredBy?: "runtime" | "gateway" | "earlier-attempt"
+  ms?: number
+  runtimeId?: string
+}
+
+export type FakeGatewayOptions = {
+  now?: () => Date
+  heartbeatMs?: number
+  log?: (line: GatewayLogLine) => void
+}
+
 type Thread = {
   stream: StreamId
   owner: string | undefined
@@ -50,26 +74,33 @@ type Connection = {
   close(): void
 }
 
-type Pending = {
+type Running = {
   runtimeId: string
   correlationId: string
-  resolve(reply: Reply): void
+  reply: Promise<Reply>
+  settle(reply: Reply, final: boolean): void
 }
 
 /**
  * An in-memory gateway with the semantics the real one must have, for runtimes and clients to test
  * against without a network. It passes the conformance suite, which is how it stays honest.
+ *
+ * An operation id is answered once: a repeat gets the runtime's answer to the first attempt, or
+ * waits for it while it runs. Only a failure on the way (the runtime gone, nobody running the
+ * Thread) isn't kept, so a repeat after one is forwarded again to whoever runs it now.
  */
 export function createFakeGateway(
-  options: { now?: () => Date; heartbeatMs?: number } = {}
+  options: FakeGatewayOptions = {}
 ): GatewayUnderTest {
   const now = options.now ?? (() => new Date())
   const heartbeatMs = options.heartbeatMs ?? 15_000
+  const log = options.log ?? (() => {})
   const threads = new Map<string, Thread>()
   const runtimes = new Map<string, Connection>()
   const connections = new Set<Connection>()
-  const admitted = new Map<string, Promise<Reply>>()
-  const pending = new Map<string, Pending>()
+  const answers = new Map<string, Reply>()
+  const running = new Map<string, Running>()
+  const admissions = new Map<string, number>()
 
   const thread = (threadId: string): Thread => {
     let found = threads.get(threadId)
@@ -116,31 +147,37 @@ export function createFakeGateway(
 
   const disconnect = (connection: Connection) => {
     connections.delete(connection)
+    connection.inbox.close()
     if (
       !connection.runtimeId ||
       runtimes.get(connection.runtimeId) !== connection
     )
       return
     runtimes.delete(connection.runtimeId)
-    for (const [id, waiting] of pending)
-      if (waiting.runtimeId === connection.runtimeId) {
-        pending.delete(id)
-        waiting.resolve(
+    log({ event: "disconnected", runtimeId: connection.runtimeId })
+    for (const [id, waiting] of running)
+      if (waiting.runtimeId === connection.runtimeId)
+        waiting.settle(
           failure(
             id,
             problem(
               "owner-unavailable",
-              "The Thread's runtime disconnected before answering",
+              "The runtime disconnected before answering",
               waiting.correlationId,
               "unknown",
               { status: 503 }
             )
-          )
+          ),
+          false
         )
-      }
   }
 
   const refuse = (connection: Connection, reason: Problem) => {
+    log({
+      event: "refused",
+      correlationId: reason.correlationId,
+      outcome: problemType(reason),
+    })
     connection.deliver({ type: "refused", problem: reason })
     connection.close()
   }
@@ -178,6 +215,11 @@ export function createFakeGateway(
     runtimes.get(frame.runtimeId)?.close()
     connection.runtimeId = frame.runtimeId
     runtimes.set(frame.runtimeId, connection)
+    log({
+      event: "enrolled",
+      runtimeId: frame.runtimeId,
+      correlationId: connection.correlationId,
+    })
     connection.deliver({ type: "enrolled", version, heartbeatMs })
     const current = new Set<string>()
     for (const claim of frame.threads) {
@@ -277,63 +319,108 @@ export function createFakeGateway(
       )
     if (frame.type === "event") return record(connection, frame)
     if (frame.type === "reply") {
-      const waiting = pending.get(frame.reply.id)
+      const waiting = running.get(frame.reply.id)
       if (!waiting || waiting.runtimeId !== connection.runtimeId) return
-      pending.delete(frame.reply.id)
-      waiting.resolve(frame.reply)
+      waiting.settle(frame.reply, true)
     }
   }
 
-  const admit = (operation: Operation): Promise<Reply> => {
-    const correlationId = operation.correlationId
-    if (!operation.threadId)
-      return Promise.resolve(
-        failure(
-          operation.id,
-          problem(
-            "not-found",
-            "The fake gateway routes only Thread operations",
-            correlationId,
-            "not-applied",
-            { status: 404 }
-          )
-        )
-      )
-    const target = thread(operation.threadId)
-    const owner = target.owner ? runtimes.get(target.owner) : undefined
-    if (!owner?.runtimeId)
-      return Promise.resolve(
-        failure(
-          operation.id,
-          problem(
-            "owner-unavailable",
-            "No runtime is running this Thread",
-            correlationId,
-            "not-applied",
-            { status: 503 }
-          )
-        )
-      )
-    const admission = append(
-      target,
-      {
-        type: "operation-admitted",
-        operationId: operation.id,
-        op: operation.op,
-        actor: operation.actor,
+  const forward = (
+    owner: Connection,
+    runtimeId: string,
+    operation: Operation,
+    generation: number | undefined,
+    seq: number | undefined
+  ): Promise<Reply> => {
+    let resolve: (reply: Reply) => void = () => {}
+    const reply = new Promise<Reply>((settled) => {
+      resolve = settled
+    })
+    running.set(operation.id, {
+      runtimeId,
+      correlationId: operation.correlationId,
+      reply,
+      settle: (answer, final) => {
+        running.delete(operation.id)
+        const numbered =
+          answer.ok && seq !== undefined ? { ...answer, seq } : answer
+        if (final) answers.set(operation.id, numbered)
+        resolve(numbered)
       },
-      undefined,
-      correlationId
+    })
+    owner.deliver(
+      generation === undefined
+        ? { type: "operation", operation }
+        : { type: "operation", generation, operation }
     )
-    const runtimeId = owner.runtimeId
-    const reply = new Promise<Reply>((resolve) =>
-      pending.set(operation.id, { runtimeId, correlationId, resolve })
-    ).then((answer) => (answer.ok ? { ...answer, seq: admission.seq } : answer))
-    admitted.set(operation.id, reply)
-    owner.deliver({
-      type: "operation",
-      generation: target.generation,
-      operation,
+    return reply
+  }
+
+  const route = (operation: Operation): Promise<Reply> | Reply => {
+    const answered = answers.get(operation.id)
+    if (answered) return answered
+    const inFlight = running.get(operation.id)
+    if (inFlight) return inFlight.reply
+    const nobody = (title: string) =>
+      failure(
+        operation.id,
+        problem(
+          "owner-unavailable",
+          title,
+          operation.correlationId,
+          "not-applied",
+          { status: 503 }
+        )
+      )
+    if (operation.target.kind === "runtime") {
+      const owner = runtimes.get(operation.target.runtimeId)
+      if (!owner?.runtimeId) return nobody("That runtime isn't connected")
+      return forward(owner, owner.runtimeId, operation, undefined, undefined)
+    }
+    const target = thread(operation.target.threadId)
+    const owner = target.owner ? runtimes.get(target.owner) : undefined
+    if (!owner?.runtimeId) return nobody("No runtime is running this Thread")
+    let seq = admissions.get(operation.id)
+    if (seq === undefined) {
+      seq = append(
+        target,
+        {
+          type: "operation-admitted",
+          operationId: operation.id,
+          op: operation.op,
+          actor: operation.actor,
+        },
+        undefined,
+        operation.correlationId
+      ).seq
+      admissions.set(operation.id, seq)
+    }
+    return forward(owner, owner.runtimeId, operation, target.generation, seq)
+  }
+
+  const admit = async (operation: Operation): Promise<Reply> => {
+    const started = Date.now()
+    const earlier = answers.has(operation.id) || running.has(operation.id)
+    const routed = route(operation)
+    const forwarded = routed instanceof Promise
+    const reply = await routed
+    log({
+      event: "operation",
+      correlationId: operation.correlationId,
+      operationId: operation.id,
+      op: operation.op,
+      target:
+        operation.target.kind === "thread"
+          ? `thread:${operation.target.threadId}`
+          : `runtime:${operation.target.runtimeId}`,
+      attempt: operation.attempt,
+      outcome: reply.ok ? "ok" : problemType(reply.problem),
+      answeredBy: earlier
+        ? "earlier-attempt"
+        : forwarded
+          ? "runtime"
+          : "gateway",
+      ms: Date.now() - started,
     })
     return reply
   }
@@ -363,6 +450,7 @@ export function createFakeGateway(
         send: (frame: RuntimeFrame) => send(frame),
         sendUnchecked: send,
         next: (timeoutMs) => inbox.next(timeoutMs),
+        frames: () => inbox,
         close: () => connection.close(),
         get closed() {
           return connection.closed
@@ -392,7 +480,7 @@ export function createFakeGateway(
               )
             )
           }
-          return admitted.get(parsed.data.id) ?? admit(parsed.data)
+          return admit(parsed.data)
         },
         subscribe(request): Subscription {
           const { stream, after } = SubscribeSchema.parse(request)
@@ -404,7 +492,10 @@ export function createFakeGateway(
           target?.readers.add(reader)
           return {
             next: (timeoutMs) => reader.next(timeoutMs),
-            close: () => void target?.readers.delete(reader),
+            close: () => {
+              target?.readers.delete(reader)
+              reader.close()
+            },
           }
         },
       }

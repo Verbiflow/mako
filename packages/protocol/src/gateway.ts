@@ -3,13 +3,25 @@ import type { EventFrame, Subscribe } from "./events.js"
 import type { Json } from "./ids.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 
+export class LinkClosedError extends Error {
+  constructor() {
+    super("The link to the gateway closed")
+    this.name = "LinkClosedError"
+  }
+}
+
 /** One side of a connection: frames it sends, and the frames the other side sent, in order. */
 export interface Link<Incoming, Outgoing> {
   send(frame: Outgoing): void
   /** Sends a value without checking it, to prove the other side refuses what isn't a frame. */
   sendUnchecked(value: Json): void
-  /** The next frame from the other side; rejects if none arrives within `timeoutMs`. */
+  /**
+   * The next frame from the other side. Rejects with `LinkClosedError` once the link has closed
+   * and every frame sent before is read, or if `timeoutMs` passes first.
+   */
   next(timeoutMs?: number): Promise<Incoming>
+  /** Every frame, in order, until the link closes. */
+  frames(): AsyncIterable<Incoming>
   close(): void
   readonly closed: boolean
 }
@@ -39,30 +51,64 @@ export interface GatewayUnderTest {
   close(): Promise<void>
 }
 
-/** Frames waiting to be read, in arrival order. */
+type Waiter<T> = { resolve(item: T): void; reject(error: Error): void }
+
+/** Frames waiting to be read, in arrival order. Closing it lets what's queued be read, then ends. */
 export class Inbox<T> {
   private readonly items: T[] = []
-  private readonly waiters: Array<(item: T) => void> = []
+  private readonly waiters: Waiter<T>[] = []
+  private ended = false
+
+  get closed(): boolean {
+    return this.ended
+  }
 
   push(item: T): void {
+    if (this.ended) return
     const waiter = this.waiters.shift()
-    if (waiter) waiter(item)
+    if (waiter) waiter.resolve(item)
     else this.items.push(item)
   }
 
-  next(timeoutMs = 1_000): Promise<T> {
+  close(): void {
+    this.ended = true
+    for (const waiter of this.waiters.splice(0))
+      waiter.reject(new LinkClosedError())
+  }
+
+  next(timeoutMs?: number): Promise<T> {
     const item = this.items.shift()
     if (item !== undefined) return Promise.resolve(item)
+    if (this.ended) return Promise.reject(new LinkClosedError())
     return new Promise((resolve, reject) => {
-      const waiter = (value: T) => {
-        clearTimeout(timer)
-        resolve(value)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const waiter: Waiter<T> = {
+        resolve: (value) => {
+          clearTimeout(timer)
+          resolve(value)
+        },
+        reject: (error) => {
+          clearTimeout(timer)
+          reject(error)
+        },
       }
-      const timer = setTimeout(() => {
-        this.waiters.splice(this.waiters.indexOf(waiter), 1)
-        reject(new Error(`nothing arrived within ${timeoutMs} ms`))
-      }, timeoutMs)
+      if (timeoutMs !== undefined)
+        timer = setTimeout(() => {
+          this.waiters.splice(this.waiters.indexOf(waiter), 1)
+          reject(new Error(`nothing arrived within ${timeoutMs} ms`))
+        }, timeoutMs)
       this.waiters.push(waiter)
     })
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<T> {
+    for (;;) {
+      try {
+        yield await this.next()
+      } catch (error) {
+        if (error instanceof LinkClosedError) return
+        throw error
+      }
+    }
   }
 }

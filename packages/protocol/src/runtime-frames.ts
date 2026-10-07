@@ -68,7 +68,8 @@ export const GatewayFrameSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("operation"),
-      generation: GenerationSchema,
+      /** For a Thread operation: the generation it was admitted under. */
+      generation: GenerationSchema.optional(),
       operation: OperationSchema,
     })
     .strict(),
