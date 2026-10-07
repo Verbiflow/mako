@@ -7,8 +7,8 @@ import { GrokAgents } from "./agents.js"
 import { grokLaunchPolicy, grokPermissionPolicy } from "./permission-policy.js"
 import { grokMcpStartup } from "./mcp-startup.js"
 import { grokNotification } from "./notifications.js"
-import { grokPlans, grokRequests } from "./plans.js"
-import { grokToolName } from "./tool-name.js"
+import { grokRequests } from "./plans.js"
+import { GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { resolveExecutable } from "../../executable.js"
 import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
 import type { AccessTier } from "../../contracts/access.js"
@@ -141,7 +141,9 @@ export const grokAcpSource: ProviderAcpSource = {
     ...fileResumeEvidence(grokProcessProbe),
     locate: ({ nativeId, cwd, env }) => grokSessionSource(nativeId, cwd, join(env.GROK_HOME ?? join(homedir(), ".grok"), "sessions")),
   },
-  fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new Grok session and resumes it, as its ACP agent has no fork." },
+  // Grok forks natively with `x.ai/session/fork` at a `targetPromptIndex`, its own count of turns, but
+  // that count is only in the saved file: the live wire names no prompt, so Mako has no run to give it.
+  fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new Grok session and resumes it: Grok's own fork takes a turn number its live connection never sends." },
   questions: { kind: "request", via: "`_x.ai/ask_user_question` requests from the `ask_user_question` tool." },
   // grok 1.0.46 writes chat_history.jsonl from the first prompt and updates.jsonl
   // when a turn ends, so a session saved mid-turn names the other file.
@@ -212,15 +214,15 @@ export const grokAcpSource: ProviderAcpSource = {
       if (!parsed.success) return undefined
       return {
         sessionId: parsed.data.sessionId,
-        interrupted: /cancel|interrupt|abort/i.test(parsed.data.update.stop_reason ?? ""),
+        // `interrupted` is a turn lost with Grok's process, which the host sees for itself.
+        interrupted: parsed.data.update.stop_reason === "cancelled",
       }
     },
   }),
   decodeNotification: grokNotification,
   mcpStartup: grokMcpStartup,
-  plans: grokPlans,
+  ...GROK_ACP_HOOKS,
   requests: grokRequests,
-  toolName: grokToolName,
   steering: { kind: "supported", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
   launchOptionIds: ["effort"],
   access: {

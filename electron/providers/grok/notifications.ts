@@ -1,6 +1,5 @@
 import { z } from "zod"
-import { plainWords } from "@mako/sessions/events"
-import { grokUpdateMarker } from "@mako/sessions"
+import { grokErrorLabel, grokUpdateMarker } from "@mako/sessions"
 import { objectValue, type JsonObject } from "../../codex-app-json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
 import type { AcpNotificationDecoding } from "../acp-source.js"
@@ -13,9 +12,10 @@ type Retrying = Extract<NativeActivityObservation, { kind: "retrying" }>
  * arrive on `_x.ai/session_notification` and are saved as
  * `_x.ai/session/update`, both as `{ sessionId, update: { sessionUpdate, … } }`;
  * one sent on ACP's own `session/update` reaches here after the SDK refuses its kind.
- * Field names come from the recorded auto-compaction payloads and, for the
- * rest, from the binary's serde variants: `retry_state` is flattened with a
- * `state` tag of `retrying` (4 fields), `failed` or `exhausted`.
+ * Shapes are checked against Grok's source (xai-org/grok-build 1.0.45,
+ * `xai-grok-shell/src/extensions/notification.rs`) and the recorded pairs:
+ * `retry_state` is flattened with a `type` tag: `retrying` with the
+ * attempt and the error kind, then `failed` with the error that ends the turn.
  */
 const SESSION_METHODS = new Set(["_x.ai/session_notification", "_x.ai/session/update", "session/update"])
 
@@ -34,7 +34,11 @@ const WORKSPACE_METHODS = new Set([
  */
 const OBSERVED = new Set(["background_tasks", "task_completed", "turn_completed", "subagent_spawned", "subagent_finished"])
 
-/** Grok's own bookkeeping and streaming detail, already shown through ACP's updates or not about the conversation. */
+/**
+ * Grok's own bookkeeping and streaming detail, already shown through ACP's
+ * updates or not about the conversation. The kinds are those of its
+ * `SessionUpdate` (xai-org/grok-build 1.0.45 `extensions/notification.rs`).
+ */
 const IGNORED = new Set([
   "task_backgrounded",
   "compaction_checkpoint",
@@ -53,20 +57,26 @@ const IGNORED = new Set([
   "goal_updated",
   "workflow_updated",
   "rewind_marker",
+  "hook_run_started",
+  "hook_execution",
   "hooks_changed",
   "plugins_changed",
   "plugin_updates_installed",
-  "project_trusted",
-  "load_errors",
   "session_status",
   "relay_sync_status",
   "last_turn_summary",
   "served_model",
   "image_compressed",
+  // The end of the turn Grok continues after compacting; its `turn_completed` follows.
+  "auto_continue_completed",
+  // Grok asking for a rating of the session, which it shows only in its own pager.
+  "feedback_request",
+  // A monitor's output lines, which reach the model in its reminders.
+  "monitor_event",
   // `session/set_config_option` answers with the model, and `config_option_update` shows it.
   "model_changed",
 ])
-const IGNORED_PREFIXES = ["memory_", "hook_", "response_"]
+const IGNORED_PREFIXES = ["memory_", "response_"]
 
 const GrokUpdate = z.looseObject({ sessionUpdate: z.string() })
 /** `_meta.eventId` is Grok's own id for the update, the same live and saved. */
@@ -75,11 +85,11 @@ const Session = z.object({ sessionId: z.string() })
 const count = z.number().int().nonnegative().nullish()
 const text = z.string().nullish()
 const RetryState = z.object({
-  state: z.string(),
+  type: z.string(),
   attempt: count,
   max_retries: count,
+  reason: text,
   error_type: text,
-  is_rate_limited: z.boolean().nullish(),
 })
 const SummaryGenerated = z.object({ session_summary: text })
 
@@ -136,6 +146,8 @@ function grokSessionUpdate(sessionUpdate: string, update: JsonObject): DecodedUp
       return { notices: [{ kind: "activity", activity: null }, ...markers] }
     case "retry_state":
       return retryState(update, markers)
+    case "scheduled_task_deleted":
+      return { notices: markers }
     case "session_summary_generated": {
       const title = SummaryGenerated.safeParse(update).data?.session_summary?.trim()
       return title ? { notices: [], state: { title } } : { notices: [] }
@@ -148,18 +160,17 @@ function grokSessionUpdate(sessionUpdate: string, update: JsonObject): DecodedUp
 function retryState(update: JsonObject, markers: NativeNotice[]): DecodedUpdate {
   const parsed = RetryState.safeParse(update)
   if (!parsed.success) return { notices: undefined }
-  const { state, attempt, max_retries: maxRetries, error_type: errorType, is_rate_limited: rateLimited } = parsed.data
-  switch (state.toLowerCase()) {
+  const { type: state, attempt, max_retries: maxRetries, reason: words, error_type: errorType } = parsed.data
+  switch (state) {
     case "retrying": {
       const activity: Retrying = { kind: "retrying" }
-      const reason = rateLimited ? "Rate limited" : errorType ? plainWords(errorType) : undefined
+      const reason = grokErrorLabel(errorType ?? undefined) ?? words ?? undefined
       if (attempt) activity.attempt = attempt
       if (maxRetries) activity.maxAttempts = maxRetries
       if (reason) activity.reason = reason
       return { notices: [{ kind: "activity", activity }] }
     }
     case "failed":
-      return { notices: [{ kind: "activity", activity: null }] }
     case "exhausted":
       return { notices: [{ kind: "activity", activity: null }, ...markers] }
     default:

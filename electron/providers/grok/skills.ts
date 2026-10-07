@@ -2,7 +2,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ProviderSkillSource } from "../skill-source.js"
 
-const root = () => join(homedir(), ".grok", "skills")
+const root = () => join(process.env.GROK_HOME ?? join(homedir(), ".grok"), "skills")
 
 export const grokSkillSource: ProviderSkillSource = {
   provider: "grok",
@@ -10,5 +10,6 @@ export const grokSkillSource: ProviderSkillSource = {
   userRoots: () => [root()],
   workspaceFolder: ".grok",
   targetUserRoot: root,
-  readsUniversalRoot: false,
+  // grok 1.0.46 listed skills from `~/.agents/skills` and `.agents/skills` (`npm run harness:self-report -- grok`).
+  readsUniversalRoot: true,
 }
