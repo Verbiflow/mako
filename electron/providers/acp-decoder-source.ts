@@ -1,7 +1,7 @@
 import type { RequestPermissionRequest, SessionNotification } from "@agentclientprotocol/sdk"
 import { z } from "zod"
 import { AcpDecoder } from "../acp-decoder.js"
-import { decoded, type Decoded } from "../contracts/native-decoding.js"
+import { decoded, decodedNotices, type Decoded } from "../contracts/native-decoding.js"
 import type { AcpAsk, ProviderAcpSource } from "./acp-source.js"
 import type { DecoderEffect, ProviderDecoderSource } from "./decoder-source.js"
 
@@ -12,8 +12,9 @@ import type { DecoderEffect, ProviderDecoderSource } from "./decoder-source.js"
  * request the agent waits on. Its kind is `session/update/<kind>` for an
  * update and the method otherwise.
  *
- * Vendor notifications are decoded by the provider's `decodeNotification`
- * and tested on their own (`test-acp-notifications.ts`); here they are unknown.
+ * Vendor notifications go through the provider's `decodeNotification`, as
+ * the live client reads them: their notices become the markers and activity
+ * the window draws, and one the provider does not know stays unknown.
  */
 const DECODED_UPDATES = ["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "tool_call",
   "tool_call_update", "plan", "current_mode_update", "config_option_update", "session_info_update"]
@@ -41,9 +42,11 @@ export interface AcpAskEffect extends DecoderEffect {
 const ask = (value: AcpAsk): Decoded<AcpAskEffect> => decoded.effect({ type: "ask", ask: value })
 
 export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSource {
+  const vendor = (message: z.infer<typeof RecordedSchema>) =>
+    "method" in message && message.method !== "session/update" ? source.decodeNotification?.(message.method, message.params) : undefined
   const kind = (message: z.infer<typeof RecordedSchema>) => {
     if ("request" in message) return message.request
-    if (message.method !== "session/update") return message.method
+    if (message.method !== "session/update") return vendor(message)?.kind ?? message.method
     return `session/update/${NotificationSchema.safeParse(message.params).data?.update.sessionUpdate ?? "(none)"}`
   }
   return {
@@ -54,6 +57,11 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
       const recorded = RecordedSchema.safeParse(message)
       return recorded.success ? kind(recorded.data) : "(unreadable)"
     },
+    declares(message) {
+      const recorded = RecordedSchema.safeParse(message)
+      const notices = recorded.success ? vendor(recorded.data)?.notices : undefined
+      return notices === undefined ? undefined : notices.length ? "decoded" : "silent"
+    },
     open(session) {
       const settings = SessionSchema.safeParse(session).data?.settings
       const decoder = new AcpDecoder(source, () => settings)
@@ -61,21 +69,25 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
         decode(message): Decoded<DecoderEffect>[] {
           const recorded = RecordedSchema.safeParse(message)
           if (!recorded.success) return [decoded.unknown("(unreadable)", message, "unreadable")]
-          const type = kind(recorded.data)
           if ("request" in recorded.data) {
-            if (recorded.data.request === PERMISSION) {
+            const type = recorded.data.request
+            if (type === PERMISSION) {
               const request = PermissionSchema.safeParse(recorded.data.params)
               // SAFETY: recorded from the live stream, which the SDK's own schema admitted; the shape is checked above.
               return request.success ? [ask(decoder.permission(request.data as RequestPermissionRequest))] : [decoded.unknown(type, message, "unreadable")]
             }
-            const vendor = decoder.request(recorded.data.request, recorded.data.params)
+            const vendor = decoder.request(type, recorded.data.params)
             if (!vendor) return [decoded.unknown(type, message, source.requests?.methods.has(type) ? "unreadable" : "unknown")]
             return [...vendor.updates.map(decoded.update), ask(vendor.ask)]
           }
-          if (recorded.data.method !== "session/update") return [decoded.unknown(type, message)]
+          if (recorded.data.method !== "session/update") {
+            const notified = vendor(recorded.data)
+            if (!notified?.notices) return [decoded.unknown(notified?.kind ?? recorded.data.method, message)]
+            return [...decodedNotices(notified.notices, notified.id), ...notified.state ? [decoded.state(notified.state)] : []]
+          }
           const notification = NotificationSchema.safeParse(recorded.data.params)
           // SAFETY: as above; the SDK admitted this update before it was recorded.
-          return notification.success ? decoder.update(notification.data as SessionNotification) : [decoded.unknown(type, message, "unreadable")]
+          return notification.success ? decoder.update(notification.data as SessionNotification) : [decoded.unknown(kind(recorded.data), message, "unreadable")]
         },
       }
     },

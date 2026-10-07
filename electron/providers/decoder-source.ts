@@ -22,6 +22,12 @@ export interface ProviderDecoderSource extends ProviderCapability {
   /** The kind one recorded message carries; what coverage counts. */
   kind(message: JsonValue): string
   /**
+   * How the harness's own tables class a message the two lists cannot name
+   * ahead, such as an ACP agent's vendor notifications; `undefined` leaves it
+   * to the lists.
+   */
+  declares?(message: JsonValue): "decoded" | "silent" | undefined
+  /**
    * A decoder for one recorded session. `session` holds what the driver
    * knew before the first message arrived (for Codex, the thread id).
    */
@@ -30,4 +36,6 @@ export interface ProviderDecoderSource extends ProviderCapability {
 
 export interface RecordedDecoder {
   decode(message: JsonValue): Decoded<DecoderEffect>[]
+  /** A turn opened where the capture says so, for a decoder whose driver starts one per turn. */
+  prompted?(): void
 }

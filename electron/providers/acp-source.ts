@@ -1,5 +1,6 @@
 import type { z } from "zod"
-import type { McpServer, ClientCapabilities, SessionNotification, SessionUpdate, CreateElicitationRequest } from "@agentclientprotocol/sdk"
+import type { AcpDecoderHooks, AcpPlanDecoder as AcpUpdatePlans } from "@mako/sessions/acp-decoder"
+import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
@@ -11,7 +12,7 @@ import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contract
 import type { JsonObject } from "../codex-app-json.js"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
-import type { LiveUpdate } from "../contracts/live-content.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { TranscriptEvent } from "@mako/sessions/events"
 import type { UsageObservation } from "../session-usage.js"
 
@@ -106,9 +107,22 @@ export type AcpAgents =
     }
   | DriverAbsent
 
-export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "fork" | "questions"> {
-  /** Native tool identity supplied by provider extensions to ACP metadata. */
-  toolName?(tool: Extract<SessionUpdate, { sessionUpdate: "tool_call" }>): string | undefined
+/**
+ * What Mako's ACP client offers an agent at `initialize`, before a source's
+ * own `clientCapabilities`. An agent offers some tools only to a client that
+ * can answer them: Devin 3000.10.23 hides `ask_user_question` from one
+ * without `elicitation.form`.
+ */
+export function acpClientCapabilities(source: Pick<ProviderAcpSource, "clientCapabilities"> | undefined): ClientCapabilities {
+  return {
+    fs: { readTextFile: false, writeTextFile: false },
+    session: { configOptions: { boolean: {} } },
+    elicitation: { form: {} },
+    ...source?.clientCapabilities,
+  }
+}
+
+export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "fork" | "questions"> {
   agents: AcpAgents
   compaction: import("../acp-compaction.js").AcpCompactionSpec
   /**
@@ -141,12 +155,6 @@ export interface ProviderAcpSource extends ProviderCapability, Pick<ProviderLive
    * connection's, so this session's, even said before the session has an id.
    */
   mcpStartup?(): AcpMcpStartupDecoder
-  /**
-   * How the agent's plan mode hands over its plan: the update that carries
-   * the plan document, and the request whose approval builds it. Opened once
-   * per session, since a provider may number a plan's revisions. Pure.
-   */
-  plans?(): AcpPlanDecoder
   /** Vendor requests (`_`-prefixed methods) the agent sends and waits on. */
   requests?: AcpVendorRequests
   /** A permission request's title when the agent leaves the tool call's title out. */
@@ -236,12 +244,10 @@ export interface AcpPlanApproval {
 }
 
 /**
- * One session's plan handover. `update` returns the proposed-plan updates a
- * session update carries, `[]` for any other; `approval` names the plan a
- * permission request builds.
+ * One session's plan handover: the proposed-plan updates a session update
+ * carries, and on the live side the plan a permission request builds.
  */
-export interface AcpPlanDecoder {
-  update(update: SessionUpdate, sessionId: string): LiveUpdate[]
+export interface AcpPlanDecoder extends AcpUpdatePlans {
   approval?(request: RequestPermissionRequest): AcpPlanApproval | undefined
 }
 
