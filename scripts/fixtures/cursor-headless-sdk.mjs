@@ -24,10 +24,18 @@ export const Agent = {
   async resume(agentId, options) {
     trace("open")
     if (phase === "open" || phase === "source") await gate("open-go")
+    if (!(await options.local.store.agents.get({ agentId }))) {
+      const now = Date.now()
+      await options.local.store.agents.create({ agent: { agentId, cwd: root, status: "idle", createdAt: now, updatedAt: now } })
+    }
     return {
       agentId, model: options.model,
       async send() {
+        const now = Date.now()
+        await options.local.store.runs.create({ run: { agentId, runId: "fixture-run", turnNumber: 1, status: "running", createdAt: now, updatedAt: now } })
+        await options.local.store.agents.update({ agent: { agentId, cwd: root, status: "running", activeRunId: "fixture-run", createdAt: now, updatedAt: now } })
         trace("send")
+        if (phase === "send-crash") process.exit(77)
         if (phase === "send") await gate("send-go")
         let stopped = false
         return {

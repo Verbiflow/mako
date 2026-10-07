@@ -8,6 +8,8 @@ import { AgentSideConnection, RequestError, ndJsonStream } from "@agentclientpro
 const sessionId = "provider-turn-fixture"
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 let cancelled
+let interjected
+let nativeMode = "default"
 
 new AgentSideConnection((connection) => {
   const update = (value) => connection.sessionUpdate({ sessionId, update: value })
@@ -105,6 +107,14 @@ new AgentSideConnection((connection) => {
     async "/compact"() {
       await grokUpdate({ sessionUpdate: "auto_compact_completed", tokens_before: 23278, tokens_after: 9100, summary_preview: null })
     },
+    // The running turn reads a message steered in through `_x.ai/interject`.
+    async steered() {
+      const text = await new Promise((resolve) => { interjected = resolve })
+      await chunk("agent_message_chunk", `Steered: ${text}`)
+    },
+    async "native-mode"() {
+      await chunk("agent_message_chunk", `Native mode ${nativeMode}.`)
+    },
     async "native-devin"() {
       await connection.extNotification("_cognition.ai/connection_retry", { sessionId, attempt: 1, maxAttempts: 5, isStreamRetry: true })
       await chunk("agent_message_chunk", "Reconnected.")
@@ -114,7 +124,14 @@ new AgentSideConnection((connection) => {
   }
   return {
     async initialize() {
-      return { protocolVersion: 1, agentCapabilities: { loadSession: false } }
+      return { protocolVersion: 1, agentCapabilities: { loadSession: process.env.FIXTURE_PROVIDER === "provider-turn-grok-load" } }
+    },
+    // grok 1.0.46 loading a session left in plan, probed 2026-10-05: the
+    // response lists no modes; the replay carries the mode it restored.
+    async loadSession() {
+      await update({ sessionUpdate: "current_mode_update", currentModeId: "plan" })
+      nativeMode = "plan"
+      return {}
     },
     // MCP servers failing while the session opens, before its id reaches
     // the client, as grok 1.0.44 and devin 3000.10.23 report them.
@@ -141,12 +158,21 @@ new AgentSideConnection((connection) => {
       }
       return { sessionId }
     },
+    // grok 1.0.46, probed 2026-10-05: the message is queued, echoed, and read by the running turn.
+    async extMethod(method, params) {
+      if (method !== "_x.ai/interject") throw RequestError.methodNotFound(method)
+      if (!interjected) return { result: { status: "rejected" } }
+      await connection.extNotification("_x.ai/session/interjection", { sessionId, text: params.text })
+      setTimeout(() => interjected(params.text), 10)
+      return { result: { status: "queued" } }
+    },
     async authenticate() {
       return {}
     },
     async setSessionMode({ modeId }) {
       if (modeId === "refused") throw new RequestError(-32000, "Native mode refused")
       if (modeId === "slow") await pause(300)
+      nativeMode = modeId
       return {}
     },
     async prompt(params) {

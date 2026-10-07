@@ -4,9 +4,10 @@
 // which only ever hangs before reporting its API) for
 // the real driver to reach the failure. MAKO_STANDIN_BEHAVIOR:
 // - "hang": never answers its first request, so startup is still pending.
-// - "exit-on-prompt": starts a child that keeps this process's stdout and
-//   stderr open, then exits as the prompt arrives, before acknowledging it.
-// Its pid and its child's are written to MAKO_STANDIN_PIDS.
+// - "exit-on-prompt": starts a child in its own process group that keeps
+//   this process's stdout and stderr open, and one in its group, then exits
+//   as the prompt arrives, before acknowledging it.
+// Its pid and its children's are written to MAKO_STANDIN_PIDS.
 import { spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
 import { createInterface } from "node:readline"
@@ -21,9 +22,14 @@ if (process.argv.includes("--version")) {
 }
 const pids = { pid: process.pid }
 if (behavior === "exit-on-prompt") {
-  const child = spawn("sleep", ["300"], { stdio: ["ignore", "inherit", "inherit"] })
+  // A child in its own process group, as a tool runner with job control
+  // leaves one, keeps the pipes; one in this process's group must end with it.
+  const child = spawn("sleep", ["300"], { stdio: ["ignore", "inherit", "inherit"], detached: true })
   child.unref()
   pids.child = child.pid
+  const grouped = spawn("sleep", ["301"], { stdio: "ignore" })
+  grouped.unref()
+  pids.grouped = grouped.pid
 }
 writeFileSync(process.env.MAKO_STANDIN_PIDS, JSON.stringify(pids))
 
