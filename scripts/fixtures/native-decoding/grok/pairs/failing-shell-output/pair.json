@@ -1,0 +1,9 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
+  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-7286-71d2-9b47-c8ce82d2631f/updates.jsonl",
+  "known": []
+}

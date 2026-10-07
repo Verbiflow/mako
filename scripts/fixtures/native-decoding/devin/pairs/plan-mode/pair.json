@@ -1,0 +1,30 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.10.23"
+  },
+  "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
+  "store": ".local/share/devin/cli/sessions.db#perpetual-patient",
+  "known": [
+    {
+      "side": "-",
+      "line": "tool #1 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct  6 21:16 .\\ndrwx------@ 5 mako  staff  160 Oct  6 21:16 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct  6 21:16 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct  6 21:16 notes.md",
+      "reason": "Devin ran the two calls at once. Its store keeps them in the model's order; the wire announced them in another order, and the live view draws calls as they start. The wire carries nothing that gives the model's order."
+    },
+    {
+      "side": "-",
+      "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+      "reason": "Devin ran the two calls at once. Its store keeps them in the model's order; the wire announced them in another order, and the live view draws calls as they start. The wire carries nothing that gives the model's order."
+    },
+    {
+      "side": "+",
+      "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+      "reason": "Devin ran the two calls at once. Its store keeps them in the model's order; the wire announced them in another order, and the live view draws calls as they start. The wire carries nothing that gives the model's order."
+    },
+    {
+      "side": "+",
+      "line": "tool #2 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct  6 21:16 .\\ndrwx------@ 5 mako  staff  160 Oct  6 21:16 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct  6 21:16 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct  6 21:16 notes.md",
+      "reason": "Devin ran the two calls at once. Its store keeps them in the model's order; the wire announced them in another order, and the live view draws calls as they start. The wire carries nothing that gives the model's order."
+    }
+  ]
+}

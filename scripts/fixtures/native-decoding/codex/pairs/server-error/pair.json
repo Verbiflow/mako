@@ -1,0 +1,15 @@
+{
+  "harness": "codex",
+  "native": {
+    "version": "0.159.3"
+  },
+  "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
+  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T19-45-44-01a11440-a941-7f40-937b-0dd3803db5b4.jsonl",
+  "known": [
+    {
+      "side": "-",
+      "line": "note: Warning \u2014 Falling back from WebSockets to HTTPS transport. We\u2019re currently experiencing high demand, which may cause temporary errors.",
+      "reason": "Codex 0.159.3 keeps no warning in its rollout: should_persist_event_msg (codex-rs/rollout/src/policy.rs) lists Warning among its transient events. Codex warns when it gives up on the scripted model's failing WebSocket for HTTPS, so whether a recording has the warning depends on its retry timing."
+    }
+  ]
+}

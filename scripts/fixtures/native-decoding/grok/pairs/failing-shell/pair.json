@@ -1,0 +1,9 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
+  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-6fcf-77b3-ba31-1904ed8c1367/updates.jsonl",
+  "known": []
+}

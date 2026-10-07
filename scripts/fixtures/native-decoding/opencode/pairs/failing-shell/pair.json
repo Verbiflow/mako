@@ -1,0 +1,9 @@
+{
+  "harness": "opencode",
+  "native": {
+    "version": "2.0.1"
+  },
+  "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
+  "store": ".local/share/opencode/opencode.db#v2:ses_eebbd0b57ffew1hT9Q67YHHkd1",
+  "known": []
+}

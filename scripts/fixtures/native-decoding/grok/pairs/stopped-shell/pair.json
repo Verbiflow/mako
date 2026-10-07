@@ -1,0 +1,20 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11492-336e-7112-a2d2-c9be546e91a0/updates.jsonl",
+  "known": [
+    {
+      "side": "-",
+      "line": "tool #1 shell run_terminal_command {\"command\":\"sleep 30\",\"description\":\"Wait thirty seconds\",\"is_background\":false,\"variant\":\"Bash\"} pending -> ",
+      "reason": "Grok 1.0.46 writes nothing to updates.jsonl once the person stops the turn: not the stopped call's last update, which carries its input again with is_background and variant and an empty output, nor an end of the turn."
+    },
+    {
+      "side": "+",
+      "line": "tool #1 shell run_terminal_command {\"command\":\"sleep 30\",\"description\":\"Wait thirty seconds\"} pending",
+      "reason": "Grok 1.0.46 writes nothing to updates.jsonl once the person stops the turn: not the stopped call's last update, which carries its input again with is_background and variant and an empty output, nor an end of the turn."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.10.23"
+  },
+  "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
+  "store": ".local/share/devin/cli/sessions.db#marshy-step",
+  "known": []
+}

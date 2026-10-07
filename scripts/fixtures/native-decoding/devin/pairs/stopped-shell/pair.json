@@ -1,0 +1,9 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.10.23"
+  },
+  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "store": ".local/share/devin/cli/sessions.db#torch-sunstone",
+  "known": []
+}

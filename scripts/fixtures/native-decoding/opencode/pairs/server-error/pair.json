@@ -1,0 +1,9 @@
+{
+  "harness": "opencode",
+  "native": {
+    "version": "2.0.1"
+  },
+  "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
+  "store": ".local/share/opencode/opencode.db#v2:ses_eebbd0717ffe141hieMWcANPxq",
+  "known": []
+}

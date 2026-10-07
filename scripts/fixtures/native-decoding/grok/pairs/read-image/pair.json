@@ -1,0 +1,9 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
+  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11492-2fad-7082-98f0-21d158259024/updates.jsonl",
+  "known": []
+}

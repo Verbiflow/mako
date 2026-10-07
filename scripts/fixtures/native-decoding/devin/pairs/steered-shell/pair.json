@@ -1,0 +1,9 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.10.23"
+  },
+  "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
+  "store": ".local/share/devin/cli/sessions.db#adorable-waitress",
+  "known": []
+}

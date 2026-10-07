@@ -1,0 +1,9 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
+  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-69b0-7a02-943a-1fd3fc4b0bc1/updates.jsonl",
+  "known": []
+}

@@ -1,0 +1,9 @@
+{
+  "harness": "codex",
+  "native": {
+    "version": "0.159.3"
+  },
+  "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
+  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T19-45-43-01a11440-a660-7472-bfcc-229241b1c1e5.jsonl",
+  "known": []
+}

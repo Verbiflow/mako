@@ -1,0 +1,9 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.10.23"
+  },
+  "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
+  "store": ".local/share/devin/cli/sessions.db#educated-ethernet",
+  "known": []
+}

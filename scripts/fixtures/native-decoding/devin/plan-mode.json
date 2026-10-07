@@ -94,8 +94,9 @@
             "title": "(undefined)",
             "status": "completed",
             "input": "(undefined)",
+            "output": "(undefined)",
             "details": "(undefined)",
-            "output": "(undefined)"
+            "attachments": "(undefined)"
           }
         }
       ]
@@ -186,8 +187,9 @@
             "title": "(undefined)",
             "status": "completed",
             "input": "(undefined)",
+            "output": "(undefined)",
             "details": "(undefined)",
-            "output": "(undefined)"
+            "attachments": "(undefined)"
           }
         }
       ]
@@ -228,6 +230,8 @@
             "name": "exit_plan_mode",
             "toolKind": "switch_mode",
             "status": "pending",
+            "input": "{\n  \"plan\": \"Add hello() and test it.\"\n}",
+            "output": "(undefined)",
             "details": [
               {
                 "type": "location",
@@ -235,7 +239,7 @@
                 "line": "(undefined)"
               }
             ],
-            "input": "{\n  \"plan\": \"Add hello() and test it.\"\n}"
+            "attachments": "(undefined)"
           }
         }
       ]

@@ -1,0 +1,9 @@
+{
+  "harness": "opencode",
+  "native": {
+    "version": "2.0.1"
+  },
+  "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
+  "store": ".local/share/opencode/opencode.db#v2:ses_eebbd140dffemrrhfF0J6bjURn",
+  "known": []
+}

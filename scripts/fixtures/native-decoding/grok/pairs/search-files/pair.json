@@ -1,0 +1,9 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Without the shell, use your file search tools to find the Markdown files in this project, then search them for the word Friday and tell me which ones mention it. A file search matching in two files of three, one in a subdirectory, then the answer naming them.",
+  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11492-39af-70a0-a686-4d0c3ef98c55/updates.jsonl",
+  "known": []
+}

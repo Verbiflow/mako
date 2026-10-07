@@ -1,0 +1,9 @@
+{
+  "harness": "opencode",
+  "native": {
+    "version": "2.0.1"
+  },
+  "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
+  "store": ".local/share/opencode/opencode.db#v2:ses_eeb802e4cffeUYE6T7xk1gmwi2",
+  "known": []
+}

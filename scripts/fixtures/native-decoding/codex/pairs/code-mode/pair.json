@@ -1,0 +1,9 @@
+{
+  "harness": "codex",
+  "native": {
+    "version": "0.159.3"
+  },
+  "about": "In one code cell, run `cat notes.md`, patch Friday to Monday, then run `wc -l notes.md`, and tell me what happened. One JavaScript cell that reads, patches and counts a file through the harness's own tools, then the answer.",
+  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-36-45-01a1146f-5ec8-75c1-897f-e41fb9f1d9bb.jsonl",
+  "known": []
+}

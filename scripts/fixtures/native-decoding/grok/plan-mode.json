@@ -64,8 +64,10 @@
             "name": "write",
             "toolKind": "(undefined)",
             "status": "pending",
+            "input": "{\n  \"file_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
+            "output": "(undefined)",
             "details": "(undefined)",
-            "input": "{\n  \"file_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}"
+            "attachments": "(undefined)"
           }
         }
       ]
@@ -286,16 +288,21 @@
             "title": "(undefined)",
             "status": "completed",
             "input": "(undefined)",
-            "output": "{\n  \"type\": \"SearchReplace\",\n  \"EditsApplied\": {\n    \"old_string\": \"\",\n    \"new_string\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\",\n    \"tool_output_for_prompt\": \"The file /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md has been created.\",\n    \"tool_output_for_prompt_concise\": \"The file /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md has been created.\",\n    \"absolute_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n    \"edits\": {\n      \"details\": [\n        {\n          \"old_string\": \"\",\n          \"old_line\": 1,\n          \"new_string\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\",\n          \"new_line\": 1,\n          \"context_before\": \"\",\n          \"context_after\": \"\",\n          \"line_prefix\": \"\"\n        }\n      ]\n    }\n  }\n}",
-            "attachments": "(undefined)",
+            "output": "(undefined)",
             "details": [
               {
                 "type": "diff",
                 "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
                 "oldText": "",
                 "newText": "# Plan: Add a greeting\n\nFrom the file.\n"
+              },
+              {
+                "type": "location",
+                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "line": "(undefined)"
               }
-            ]
+            ],
+            "attachments": "(undefined)"
           }
         }
       ]
@@ -335,8 +342,10 @@
             "name": "exit_plan_mode",
             "toolKind": "(undefined)",
             "status": "pending",
+            "input": "{\n  \"planContent\": \"# Plan: Add a greeting\\n\\n## Steps\\n1. Add `hello()`.\\n\"\n}",
+            "output": "(undefined)",
             "details": "(undefined)",
-            "input": "{\n  \"planContent\": \"# Plan: Add a greeting\\n\\n## Steps\\n1. Add `hello()`.\\n\"\n}"
+            "attachments": "(undefined)"
           }
         },
         {
@@ -387,8 +396,9 @@
             "title": "Plan: Exit",
             "status": "(undefined)",
             "input": "{\n  \"variant\": \"ExitPlanMode\"\n}",
-            "details": "(undefined)",
-            "output": "(undefined)"
+            "output": "(undefined)",
+            "details": [],
+            "attachments": "(undefined)"
           }
         }
       ]
@@ -453,7 +463,7 @@
                 {
                   "optionId": "keep-planning",
                   "result": {
-                    "outcome": "rejected"
+                    "outcome": "cancelled"
                   }
                 },
                 {
@@ -464,7 +474,7 @@
                 }
               ],
               "dismissed": {
-                "outcome": "rejected"
+                "outcome": "cancelled"
               }
             }
           }

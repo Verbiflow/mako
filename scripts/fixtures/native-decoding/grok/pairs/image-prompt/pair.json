@@ -1,0 +1,20 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
+  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11553-9c0c-7552-9af0-ea2d6ecf243c/updates.jsonl",
+  "known": [
+    {
+      "side": "-",
+      "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
+      "reason": "An ACP image block carries no name, and Grok keeps the prompt image as that block, so the reader names it image"
+    },
+    {
+      "side": "+",
+      "line": "user: What colour is the attached image? Don't run commands. [image image/png]",
+      "reason": "An ACP image block carries no name, and Grok keeps the prompt image as that block, so the reader names it image"
+    }
+  ]
+}

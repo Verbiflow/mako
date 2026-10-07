@@ -1,0 +1,9 @@
+{
+  "harness": "opencode",
+  "native": {
+    "version": "2.0.1"
+  },
+  "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
+  "store": ".local/share/opencode/opencode.db#v2:ses_eeaab45f3ffeugz26HOvwE6Vso",
+  "known": []
+}

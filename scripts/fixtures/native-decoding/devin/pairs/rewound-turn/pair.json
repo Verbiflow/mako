@@ -1,0 +1,9 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.10.23"
+  },
+  "about": "Read notes.md and tell me the release day. Don't run commands. / Which day does QA sign off? Answer without reading anything. / /rewind / Without reading anything, how many lines does notes.md have? Two turns, a rewind to before the second, then a turn that replaces it.",
+  "store": ".local/share/devin/cli/sessions.db#longhaired-secretary",
+  "known": []
+}

@@ -1,0 +1,77 @@
+{
+  "harness": "grok",
+  "source": "grok 1.0.44 `agent stdio`, the real request its model's ask_user_question sent in the session-flows baseline, 2026-10-05",
+  "native": {
+    "version": "1.0.44",
+    "origin": "captured"
+  },
+  "about": "A question card: Grok asks the client with `_x.ai/ask_user_question`, and Mako shows each question with its options; the answer goes back keyed by the question's text.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "request": "_x.ai/ask_user_question",
+        "params": {
+          "sessionId": "01a10e25-f0f4-77e3-be11-731fad235e23",
+          "toolCallId": "call-0fcf7d71-b5a5-42f0-add7-b3556cd2f3ce-0",
+          "questions": [
+            {
+              "question": "Which colour?",
+              "options": [
+                {
+                  "label": "Red",
+                  "description": "Red"
+                },
+                {
+                  "label": "Blue",
+                  "description": "Blue"
+                }
+              ],
+              "multiSelect": null
+            }
+          ],
+          "mode": "default"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "ask",
+            "ask": {
+              "request": {
+                "title": "Grok has a question",
+                "options": [],
+                "questions": [
+                  {
+                    "id": "0",
+                    "header": "Question",
+                    "question": "Which colour?",
+                    "isSecret": false,
+                    "allowOther": true,
+                    "required": true,
+                    "valueType": "string",
+                    "options": [
+                      {
+                        "label": "Red",
+                        "description": "Red"
+                      },
+                      {
+                        "label": "Blue",
+                        "description": "Blue"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "dismissed": {
+                "outcome": "skip_interview",
+                "partial_answers": {}
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

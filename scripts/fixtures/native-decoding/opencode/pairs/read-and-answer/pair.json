@@ -1,0 +1,9 @@
+{
+  "harness": "opencode",
+  "native": {
+    "version": "2.0.1"
+  },
+  "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
+  "store": ".local/share/opencode/opencode.db#v2:ses_eebbd189dffe781jk4yyxiOIGX",
+  "known": []
+}

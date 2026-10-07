@@ -1,0 +1,148 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.3 app-server (v2 protocol), shapes as codex/pairs/question captured them; the dismissal is Mako's answer to one",
+  "native": {
+    "version": "0.159.3",
+    "origin": "written"
+  },
+  "about": "request_user_input reaches Mako only as the item/tool/requestUserInput server request; its question row is drawn from the request and closed by Mako's answer, a dismissal answering no questions.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "request": "item/tool/requestUserInput",
+        "id": 0,
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "turn-1",
+          "itemId": "call_1",
+          "questions": [
+            {
+              "id": "release_day",
+              "header": "Release day",
+              "question": "Which day should the release ship?",
+              "isOther": true,
+              "isSecret": false,
+              "options": [
+                {
+                  "label": "Friday",
+                  "description": "Keep the day notes.md names."
+                },
+                {
+                  "label": "Monday",
+                  "description": "Move it past the weekend."
+                }
+              ]
+            }
+          ],
+          "isBlocking": false,
+          "autoResolutionMs": null
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_1",
+            "title": "request_user_input",
+            "name": "request_user_input",
+            "status": "pending",
+            "input": "{\n  \"questions\": [\n    {\n      \"id\": \"release_day\",\n      \"header\": \"Release day\",\n      \"question\": \"Which day should the release ship?\",\n      \"options\": [\n        {\n          \"label\": \"Friday\",\n          \"description\": \"Keep the day notes.md names.\"\n        },\n        {\n          \"label\": \"Monday\",\n          \"description\": \"Move it past the weekend.\"\n        }\n      ]\n    }\n  ]\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "answered": 0,
+        "result": {
+          "answers": {
+            "release_day": {
+              "answers": [
+                "Friday"
+              ]
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_1",
+            "status": "completed",
+            "output": "{\"answers\":{\"release_day\":{\"answers\":[\"Friday\"]}}}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "request": "item/tool/requestUserInput",
+        "id": 1,
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "turn-1",
+          "itemId": "call_2",
+          "questions": [
+            {
+              "id": "release_day",
+              "header": "Release day",
+              "question": "Which day should the release ship?",
+              "isOther": true,
+              "isSecret": false,
+              "options": [
+                {
+                  "label": "Friday",
+                  "description": "Keep the day notes.md names."
+                },
+                {
+                  "label": "Monday",
+                  "description": "Move it past the weekend."
+                }
+              ]
+            }
+          ],
+          "isBlocking": false,
+          "autoResolutionMs": null
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_2",
+            "title": "request_user_input",
+            "name": "request_user_input",
+            "status": "pending",
+            "input": "{\n  \"questions\": [\n    {\n      \"id\": \"release_day\",\n      \"header\": \"Release day\",\n      \"question\": \"Which day should the release ship?\",\n      \"options\": [\n        {\n          \"label\": \"Friday\",\n          \"description\": \"Keep the day notes.md names.\"\n        },\n        {\n          \"label\": \"Monday\",\n          \"description\": \"Move it past the weekend.\"\n        }\n      ]\n    }\n  ]\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "answered": 1,
+        "result": {
+          "answers": {}
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_2",
+            "status": "completed",
+            "output": "{\"answers\":{}}"
+          }
+        }
+      ]
+    }
+  ]
+}

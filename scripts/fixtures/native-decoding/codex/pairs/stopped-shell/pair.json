@@ -1,0 +1,15 @@
+{
+  "harness": "codex",
+  "native": {
+    "version": "0.159.3"
+  },
+  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-05-11-01a11452-78c6-7ca0-b96f-d1c50db2ccbd.jsonl",
+  "known": [
+    {
+      "side": "+",
+      "line": "note: Interrupted",
+      "reason": "The window draws a stopped turn's stop as its footer: live from the host's turn state, which the pair's live drawing doesn't include, and reopened from this marker, which it then hides beside the footer (notesBesideStop, src/lib/exchanges.ts)."
+    }
+  ]
+}

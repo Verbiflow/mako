@@ -1,0 +1,9 @@
+{
+  "harness": "codex",
+  "native": {
+    "version": "0.159.3"
+  },
+  "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
+  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T19-45-44-01a11440-a7cf-7db0-9c90-bcc859432e01.jsonl",
+  "known": []
+}

@@ -9,7 +9,7 @@
     },
     "origin": "written"
   },
-  "about": "Ordinary ACP traffic every ACP harness shares: a replayed user message, thinking, a reply, a plan of entries, a mode change, a model change, a title, and the usage and command lists Mako reads elsewhere.",
+  "about": "Ordinary ACP traffic every ACP harness shares: a replayed user message, thinking, a reply, a plan of entries, Grok's unkept turn-end plan that shows in-progress entries completed, a mode change, a model change, a title, and the usage and command lists Mako reads elsewhere.",
   "session": {},
   "steps": [
     {
@@ -103,6 +103,9 @@
                 "status": "in_progress"
               }
             ]
+          },
+          "_meta": {
+            "eventId": "grok-session-1-4"
           }
         }
       },
@@ -124,6 +127,30 @@
           }
         }
       ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Add the budget",
+                "priority": "high",
+                "status": "completed"
+              },
+              {
+                "content": "Test the cap",
+                "priority": "medium",
+                "status": "completed"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
     },
     {
       "message": {

@@ -1,10 +1,24 @@
 {
   "harness": "grok",
   "version": "1.0.46",
-  "on": "2026-10-06",
+  "on": "2026-10-07",
   "searched": "grok-1.0.46",
   "probed": 21,
   "missing": [],
+  "skills": {
+    "via": "its own listing",
+    "listed": [
+      ".grok/skills",
+      ".claude/skills",
+      ".cursor/skills",
+      ".agents/skills",
+      "~/.grok/skills",
+      "~/.agents/skills",
+      "~/.claude/skills",
+      "~/.cursor/skills"
+    ],
+    "missing": []
+  },
   "mcpConfig": {
     "via": "its own listing",
     "listed": [
