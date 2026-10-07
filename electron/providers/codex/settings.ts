@@ -74,6 +74,13 @@ export function codexCollaborationMode(
   }
 }
 
+/**
+ * What Mako's client offers the app-server at `initialize`. Codex 0.159.3
+ * refuses `turn/start.collaborationMode`, its plan mode, without
+ * `experimentalApi`.
+ */
+export const CODEX_CLIENT_CAPABILITIES = { experimentalApi: true, requestAttestation: false } as const
+
 type CodexInteractiveConfig = {
   "features.default_mode_request_user_input": true
   model_reasoning_effort?: string

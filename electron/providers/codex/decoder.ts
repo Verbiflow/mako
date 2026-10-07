@@ -1,7 +1,11 @@
 import { z } from "zod"
 import {
+  codexCommand,
+  codexCommandOutput,
   codexErrorClass,
   codexFailureEvent,
+  codexPatchInput,
+  codexPatchText,
   codexPresentation,
   codexPrompt,
   codexPromptImages,
@@ -19,7 +23,7 @@ import {
 } from "../../codex-app-parse.js"
 import type { ItemTracker, ThreadItem, Turn } from "../../codex-app-types.js"
 import { decoded, type Decoded } from "../../contracts/native-decoding.js"
-import { MAX_STREAMED_TOOL_OUTPUT } from "../../contracts/live-content.js"
+import { MAX_STREAMED_TOOL_OUTPUT } from "@mako/sessions/live-content"
 import type { NativeActivityObservation } from "../../contracts/native-activity.js"
 import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
 import type { LiveSessionState, TokenCounts } from "../../contracts/providers-acp.js"
@@ -27,6 +31,7 @@ import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../
 import type { CodexAgentItem } from "./agents.js"
 import { codexAnsweredQuestions, codexAsyncQuestion } from "./questions.js"
 import { codexUpdatedWindows } from "./rate-limits.js"
+import { codexInteractiveConfig } from "./settings.js"
 
 /**
  * Codex app-server notifications as Mako's shared decoded events. Pure: it
@@ -168,6 +173,16 @@ export const CODEX_DECODED_NOTIFICATIONS: ReadonlySet<string> = new Set([
   "account/rateLimits/updated",
 ])
 
+/** Server requests the decoder reads as conversation content; the transport answers every one. */
+export const CODEX_DECODED_REQUESTS: ReadonlySet<string> = new Set(["item/tool/requestUserInput"])
+/** Server requests that are approvals: the transport's card, nothing in the conversation. */
+export const CODEX_SILENT_REQUESTS: ReadonlySet<string> = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+  "mcpServer/elicitation/request",
+])
+
 const MAX_TOOL_OUTPUT = 32 * 1024
 const MAX_STREAM_COMPARE = 128 * 1024
 const MAX_TRACKED_ITEMS = 2048
@@ -190,6 +205,20 @@ const SearchActionSchema = z.object({
   url: z.string().nullish(),
 })
 const SearchResultSchema = z.object({ title: z.string().optional(), url: z.string().min(1) })
+/**
+ * `request_user_input`'s question, which reaches Mako only as this server
+ * request (codex 0.159.3): no item carries it. Its questions are the model's
+ * arguments, which the rollout keeps as the call's.
+ */
+const UserInputRequestSchema = z.object({
+  itemId: z.string(),
+  questions: z.array(z.object({
+    id: z.string(),
+    header: z.string(),
+    question: z.string(),
+    options: z.array(z.object({ label: z.string(), description: z.string() })).nullish(),
+  })),
+})
 type FileChange = Extract<ThreadItem, { type: "fileChange" }>["changes"][number]
 
 export class CodexDecoder {
@@ -205,6 +234,8 @@ export class CodexDecoder {
   private readonly meter = new SessionUsage()
   /** The thread's running total at its latest reading, which every process of the thread continues. */
   private threadTotal: TokenCounts | undefined
+  /** Each unanswered question's row, by its server request's id. */
+  private readonly questions = new Map<string, string>()
 
   private readonly view: CodexDecoderView
 
@@ -227,6 +258,25 @@ export class CodexDecoder {
       out.push(decoded.unknown(message.method, message.params, reason))
     } else this.notification(out, notification, message.params)
     return out
+  }
+
+  /** A server request that is the conversation's: a question the model asked, as its tool row. */
+  request(id: JsonRpcId, method: string, params: JsonValue): CodexDecoded[] {
+    if (!CODEX_DECODED_REQUESTS.has(method)) return []
+    const asked = UserInputRequestSchema.safeParse(params)
+    if (!asked.success) return [decoded.unknown(method, params, "unreadable")]
+    if (this.questions.size >= MAX_TRACKED_ITEMS) this.questions.clear()
+    this.questions.set(String(id), asked.data.itemId)
+    const questions = asked.data.questions.map(({ id, header, question, options }) => ({ id, header, question, options: options ?? [] }))
+    return [decoded.update({ kind: "tool", id: asked.data.itemId, title: "request_user_input", name: "request_user_input", status: "pending", input: boundedJson({ questions }) })]
+  }
+
+  /** Mako's answer to a server request; a question's is its row's output, the words the model reads. */
+  answered(id: JsonRpcId, result: JsonValue): CodexDecoded[] {
+    const item = this.questions.get(String(id))
+    if (item === undefined) return []
+    this.questions.delete(String(id))
+    return [decoded.update({ kind: "tool-update", id: item, status: "completed", output: JSON.stringify(result) })]
   }
 
   /** A resumed thread's items, as the transcript it already had. */
@@ -341,6 +391,7 @@ export class CodexDecoder {
         if (notification.method === "guardianWarning" &&
           notification.message.startsWith("Automatic approval review approved ("))
           return
+        if (notification.method === "warning" && onlyMakoFeatures(notification.message)) return
         // Outside a turn, Codex warns about what it loaded: its config, hooks,
         // skills. It repeats `configWarning` here in other words.
         const marker = codexWarningEvent(notification.message)
@@ -405,8 +456,12 @@ export class CodexDecoder {
       out.push(decoded.marker(codexFailureEvent(turn.error?.variant, error), `${turn.id}:failed`))
     this.currentTurnId = null
     this.waiting = undefined
-    for (const key of this.items.keys())
-      if (key.startsWith(`${turn.id}\u0000`)) this.items.delete(key)
+    for (const [key, tracker] of this.items) {
+      if (!key.startsWith(`${turn.id}\u0000`)) continue
+      // Codex ends a stopped turn without finishing the tools it stopped.
+      if (tracker.running && stop === "interrupted") out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, status: "canceled" }))
+      this.items.delete(key)
+    }
     const ended: CodexEffect = { type: "turn-ended", turnId: turn.id, stop }
     if (error) ended.error = error
     out.push(
@@ -501,6 +556,13 @@ export class CodexDecoder {
       case "attachment":
         if (completed) out.push(decoded.update({ kind: "attachment", attachment: item.attachment }))
         return
+      case "imageView":
+        startTool(out, tracker, `View ${item.attachment.name}`, "view_image", "inProgress", { path: item.path })
+        if (completed) {
+          finishTool(out, tracker, "completed")
+          out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, attachments: [item.attachment] }))
+        }
+        return
       case "agentMessage":
         if (!completed) return
         finalText(out, "text", item.text, tracker.acpId)
@@ -512,16 +574,15 @@ export class CodexDecoder {
         return
       case "commandExecution":
         if (!completed && !replay && thread) out.push(decoded.effect({ type: "command-started", threadId: thread, turnId, itemId: item.id, processId: item.processId }))
-        startTool(out, tracker, item.command || "Command", "exec_command", item.status, { command: item.command })
+        startTool(out, tracker, codexCommand(item.command) || "Command", "exec_command", item.status, { command: codexCommand(item.command) })
         if (completed) {
-          finishTool(out, tracker, item.status, (item.aggregatedOutput ?? tracker.output) || undefined)
+          finishTool(out, tracker, item.status, codexCommandOutput(item.aggregatedOutput ?? tracker.output, item.exitCode))
           if (!replay) out.push(decoded.effect({ type: "command-ended", itemId: item.id }))
         }
         return
       case "fileChange": {
         const paths = item.changes.flatMap((change) => (change.path === undefined ? [] : [change.path]))
-        startTool(out, tracker, paths.length ? `Edit ${paths.join(", ")}` : "File changes", "apply_patch", item.status,
-          paths.length ? { path: paths[0], paths } : undefined)
+        startTool(out, tracker, paths.length ? `Edit ${paths.join(", ")}` : "File changes", "apply_patch", item.status, codexPatchInput(paths))
         if (completed) finishTool(out, tracker, item.status, patchText(item.changes))
         return
       }
@@ -607,11 +668,11 @@ export class CodexDecoder {
         if (completed) {
           // Codex reports the compacted estimate before this item completes.
           const tokensBefore = this.compactingFrom
-          const tokensAfter = this.meter.current?.used
+          const tokensAfter = this.meter.context
           this.compactingFrom = undefined
           out.push(decoded.compacted(tokensBefore ? { tokensBefore, ...tokensAfter !== undefined && tokensAfter < tokensBefore && { tokensAfter } } : undefined, item.id))
         } else {
-          this.compactingFrom = this.meter.current?.used
+          this.compactingFrom = this.meter.context
           out.push(decoded.activity({ kind: "compacting" }))
         }
         return
@@ -708,6 +769,7 @@ function agentStatesText(states: Extract<CodexAgentItem, { type: "collabAgentToo
 function startTool(out: CodexDecoded[], tracker: ItemTracker, title: string, name: string, status: string, input?: JsonValue): void {
   if (tracker.started) return
   tracker.started = true
+  tracker.running = true
   out.push(decoded.update({
     kind: "tool",
     id: tracker.acpId,
@@ -719,6 +781,7 @@ function startTool(out: CodexDecoded[], tracker: ItemTracker, title: string, nam
 }
 
 function finishTool(out: CodexDecoded[], tracker: ItemTracker, status: string, output?: string): void {
+  tracker.running = false
   out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, status: toolStatus(status), output: output || undefined }))
 }
 
@@ -731,6 +794,15 @@ function finalText(out: CodexDecoded[], kind: "text" | "thinking", source: strin
   }
   for (let offset = 0; offset < final.length; offset += MAX_TOOL_OUTPUT)
     out.push(decoded.update({ kind, id, text: final.slice(offset, offset + MAX_TOOL_OUTPUT), replace: offset === 0 }))
+}
+
+const UNSTABLE_FEATURES = /^Under-development features enabled: ([\w, ]+)\./
+const MAKO_FEATURES = new Set(Object.keys(codexInteractiveConfig()).flatMap((key) => key.startsWith("features.") ? [key.slice("features.".length)] : []))
+
+/** Codex's warning about unstable features, when it names only those Mako's thread config turns on: the person chose none of them. */
+function onlyMakoFeatures(message: string): boolean {
+  const listed = UNSTABLE_FEATURES.exec(message)?.[1]?.split(",").map((name) => name.trim())
+  return Boolean(listed?.length && listed.every((name) => MAKO_FEATURES.has(name)))
 }
 
 /** A variant Mako has no words for yet, as lowercase words. */
@@ -761,26 +833,10 @@ function appendComparable(current: string | null, delta: string): string | null 
  * its unified diff, or its whole content for a file added or deleted.
  */
 function patchText(changes: FileChange[]): string {
-  const files = changes.map((change) => {
+  return boundedText(codexPatchText(changes.map((change) => {
     const kind = PatchKindSchema.safeParse(change.kind)
-    const type = kind.success ? kind.data.type : "update"
-    const moved = kind.success ? kind.data.move_path : undefined
-    const path = change.path ?? "file"
-    const diff = change.diff ?? ""
-    switch (type) {
-      case "add":
-        return `Add ${path}\n${prefixLines(diff, "+")}`
-      case "delete":
-        return `Delete ${path}\n${prefixLines(diff, "-")}`
-      case "update":
-        return `Update ${moved ? `${path} → ${moved}` : path}\n${diff.trimEnd()}`
-    }
-  })
-  return boundedText(files.join("\n\n"), MAX_TOOL_OUTPUT)
-}
-
-function prefixLines(text: string, prefix: string): string {
-  return text.trimEnd().split("\n").map((line) => `${prefix}${line}`).join("\n")
+    return { path: change.path ?? "file", type: kind.success ? kind.data.type : "update", movePath: kind.success ? kind.data.move_path : undefined, diff: change.diff ?? "" }
+  })), MAX_TOOL_OUTPUT)
 }
 
 function searchTarget(action: JsonObject | null): string | undefined {
