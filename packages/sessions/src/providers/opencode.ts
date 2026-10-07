@@ -1218,13 +1218,18 @@ function fileParts(value: JsonValue | undefined): AttachmentContent[] {
   for (const part of value) {
     if (!isJsonObject(part)) continue
     const type = jsonText(part.type)
-    const url = jsonText(part.url) ?? jsonText(part.uri)
-    if (type !== "file" && (type !== undefined || !url)) continue
-    const name = openCodeFileName(jsonText(part.filename) ?? jsonText(part.name))
     const mime =
       jsonText(part.mime) ??
       jsonText(part.mediaType) ??
       "application/octet-stream"
+    // OpenCode 2.x keeps a prompt's file on its message: the bytes, and the URI they came from unless inline.
+    const source = jsonObject(part.source)
+    const data = jsonText(part.data)
+    const url = jsonText(part.url) ?? jsonText(part.uri)
+      ?? (jsonText(source?.type) === "uri" ? jsonText(source?.uri) : undefined)
+      ?? (data ? `data:${mime};base64,${data}` : undefined)
+    if (type !== "file" && (type !== undefined || !url)) continue
+    const name = openCodeFileName(jsonText(part.filename) ?? jsonText(part.name))
     attachments.push(
       url
         ? attachmentFromUrl(name, mime, url)

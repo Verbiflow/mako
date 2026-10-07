@@ -4,7 +4,6 @@ import {
   claudeInterrupted,
 } from "./claude-presentation.js"
 import {
-  claudeApiErrorEvent,
   claudeCompactSummary,
   claudeLocalCommand,
 } from "./claude-events.js"
@@ -17,12 +16,12 @@ import {
   type Compaction,
   type TranscriptEvent,
 } from "../events.js"
-import { todoDetails } from "../tool-plan.js"
-import {
-  attachmentFromUrl,
-  proposedPlanBlock,
-  type AttachmentContent,
-} from "../content.js"
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import { z } from "zod"
+import { claudeAttachment, ClaudeProjection } from "../claude-projection.js"
+import type { AttachmentContent } from "../content.js"
+import { reduceLiveUpdates, type LiveBlock } from "../live-content.js"
+import { liveEvent, liveToolEntry } from "../live-entries.js"
 /**
  * Claude Code sessions.
  *
@@ -40,7 +39,6 @@ import { join } from "node:path"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { stat, rm } from "node:fs/promises"
 import {
-  clip,
   titleFrom,
   EntrySink,
   type EntryBlock,
@@ -56,7 +54,6 @@ import {
   walkFiles,
   type LineTranslator,
 } from "../jsonl.js"
-import { normalizeToolOutput } from "../tool-output.js"
 import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
@@ -74,23 +71,9 @@ interface ClaudeTextContent {
   text?: string
 }
 
-interface ClaudeThinkingContent {
-  type: "thinking"
-  thinking?: string
-}
-
-interface ClaudeToolUseContent {
-  type: "tool_use"
-  id?: string
-  name: string
-  input?: ClaudeJsonValue
-}
-
 interface ClaudeToolResultContent {
   type: "tool_result"
   toolUseId: string
-  content?: ClaudeContent
-  isError: boolean
 }
 
 interface ClaudeOtherContent {
@@ -106,8 +89,6 @@ interface ClaudeFallbackContent {
 
 type ClaudeContentBlock =
   | ClaudeTextContent
-  | ClaudeThinkingContent
-  | ClaudeToolUseContent
   | ClaudeToolResultContent
   | ClaudeFallbackContent
   | ClaudeOtherContent
@@ -149,6 +130,8 @@ interface ClaudeLine {
   isCompactSummary: boolean
   isAbortedMidStream: boolean
   message?: ClaudeMessage
+  /** The message as saved, which `savedMessage` screens for the shared decoder. */
+  saved?: ClaudeJsonObject
   subtype?: string
   requestId?: string
   /** The `error` of a message Claude Code composed to report an API failure. */
@@ -205,11 +188,6 @@ function numberValue(value: ClaudeJsonValue | undefined): number | undefined {
   return Number.isFinite(value) ? Number(value) : undefined
 }
 
-/** `ExitPlanMode`'s plan, as its live session reads it (`electron/providers/claude/sdk-plan.ts`). */
-function exitPlanText(input: ClaudeJsonValue | undefined): string {
-  return (isJsonObject(input) && stringValue(input["plan"])) || ""
-}
-
 /** Claude's own words on a refusal, then the API's explanation when it gave one. */
 function refusalText(record: ClaudeJsonObject): string | undefined {
   return (
@@ -222,67 +200,66 @@ function refusalText(record: ClaudeJsonObject): string | undefined {
   )
 }
 
+const SourceSchema = z.object({ type: z.string(), media_type: z.string().optional(), data: z.string().optional(), url: z.string().optional(), text: z.string().optional() })
+const AttachmentBlockSchema = z.object({ type: z.enum(["image", "document"]), title: z.string().nullish(), source: SourceSchema })
+const TextBlockSchema = z.object({ type: z.literal("text"), text: z.string() })
+const Dropped = z.unknown().transform(() => null)
+/** The reply blocks `ClaudeProjection` decodes, with every field it reads of each; others are left out. */
+const ReplyContentSchema = z.array(z.union([
+  TextBlockSchema,
+  z.object({ type: z.literal("thinking"), thinking: z.string() }),
+  z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string().transform((name) => name.trim() || "tool"), input: z.unknown() }),
+  Dropped,
+])).transform((blocks) => blocks.filter((block) => block !== null))
+/** A user line's tool results, which `ClaudeProjection` decodes into their calls. */
+const ResultContentSchema = z.array(z.union([
+  z.object({
+    type: z.literal("tool_result"),
+    tool_use_id: z.string(),
+    is_error: z.boolean().optional(),
+    content: z.union([
+      z.string(),
+      z.array(z.union([TextBlockSchema, AttachmentBlockSchema, Dropped])).transform((parts) => parts.filter((part) => part !== null)),
+    ]).optional(),
+  }),
+  Dropped,
+])).transform((blocks) => blocks.filter((block) => block !== null))
+
+/**
+ * A transcript line as the SDK message it saved, for the decoder the live
+ * session runs: Claude Code writes the SDK's assistant and user messages
+ * to its transcript, one content block a line.
+ */
+function savedMessage(line: ClaudeLine): SDKMessage | undefined {
+  const saved = line.saved
+  if (!saved || !line.uuid) return undefined
+  const base = { uuid: line.uuid, session_id: line.sessionId ?? "", parent_tool_use_id: null }
+  if (line.type === "assistant") {
+    const content = ReplyContentSchema.safeParse(saved["content"])
+    if (!content.success) return undefined
+    const message = { ...base, type: "assistant", message: { id: stringValue(saved["id"]) ?? line.uuid, model: stringValue(saved["model"]) ?? "", content: content.data }, ...line.apiError !== undefined && { error: line.apiError } }
+    // SAFETY: the screen kept every field `ClaudeProjection` reads of an assistant message, and only blocks it decodes.
+    return message as SDKMessage
+  }
+  const content = ResultContentSchema.safeParse(saved["content"])
+  if (!content.success) return undefined
+  const message = { ...base, type: "user", message: { role: "user", content: content.data } }
+  // SAFETY: the screen kept every field `ClaudeProjection` reads of a user message, and only its tool results.
+  return message as SDKMessage
+}
+
 function parseContentBlock(value: ClaudeJsonValue): ClaudeContentBlock {
   if (!isJsonObject(value)) return { type: "other" }
   switch (stringValue(value["type"])) {
     case "image":
     case "document": {
-      const source = isJsonObject(value["source"]) ? value["source"] : {}
-      const mimeType =
-        stringValue(source["media_type"]) ?? "application/octet-stream"
-      const name =
-        stringValue(value["title"]) ??
-        stringValue(value["type"]) ??
-        "Attachment"
-      const url = stringValue(source["url"])
-      const data = stringValue(source["data"])
-      const text = stringValue(source["text"])
-      const attachment: AttachmentContent = url
-        ? attachmentFromUrl(name, mimeType, url)
-        : {
-            type: "attachment",
-            name,
-            mimeType,
-            source:
-              data !== undefined
-                ? {
-                    kind: "inline",
-                    data:
-                      stringValue(source["type"]) === "text"
-                        ? Buffer.from(data).toString("base64")
-                        : data,
-                  }
-                : text !== undefined
-                  ? {
-                      kind: "inline",
-                      data: Buffer.from(text).toString("base64"),
-                    }
-                  : {
-                      kind: "unavailable",
-                      reason:
-                        "The provider did not retain attachment bytes or a readable URL",
-                    },
-          }
-      return { type: "attachment", value: attachment }
+      const block = AttachmentBlockSchema.safeParse(value)
+      return block.success ? { type: "attachment", value: claudeAttachment(block.data) } : { type: "other" }
     }
     case "text":
       return { type: "text", text: stringValue(value["text"]) }
-    case "thinking":
-      return { type: "thinking", thinking: stringValue(value["thinking"]) }
-    case "tool_use":
-      return {
-        type: "tool_use",
-        id: stringValue(value["id"]),
-        name: stringValue(value["name"])?.trim() || "tool",
-        input: value["input"],
-      }
     case "tool_result":
-      return {
-        type: "tool_result",
-        toolUseId: stringValue(value["tool_use_id"]) ?? "",
-        content: parseContent(value["content"]),
-        isError: value["is_error"] === true,
-      }
+      return { type: "tool_result", toolUseId: stringValue(value["tool_use_id"]) ?? "" }
     case "fallback":
       return {
         type: "fallback",
@@ -357,6 +334,7 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
     isCompactSummary: root["isCompactSummary"] === true,
     isAbortedMidStream: root["isAbortedMidStream"] === true,
     message: parseMessage(root["message"]),
+    saved: isJsonObject(root["message"]) ? root["message"] : undefined,
     subtype: stringValue(root["subtype"]),
     requestId: stringValue(root["requestId"]),
     apiError:
@@ -645,7 +623,9 @@ export class ClaudeProvider implements SessionProvider {
 function translator(): ClaudeTranslator {
   const sink = new EntrySink()
   let assistant: AssistantEntry | null = null
-  const toolsById = new Map<string, { block: ClaudeToolBlock; entry: AssistantEntry }>()
+  const projection = new ClaudeProjection()
+  /** Calls waiting on their result: the decoded call, and the saved block and entry its result completes. */
+  const tools = new Map<string, { live: Extract<LiveBlock, { type: "tool" }>; block: ClaudeToolBlock; entry: AssistantEntry }>()
   let started = false
   let needsReset = false
   /** The prompt that opened the running turn; a prompt Claude folds into the turn steers it. */
@@ -819,25 +799,22 @@ function translator(): ClaudeTranslator {
       // Tool results ride user-role messages; attach them to their calls
       // rather than showing them as turns the user took.
       if (Array.isArray(content)) {
-        let onlyResults = true
+        let results = 0
         for (const part of content) {
-          if (part.type !== "tool_result") {
-            onlyResults = false
-            continue
-          }
-          const call = toolsById.get(part.toolUseId)
-          if (call) {
-            const { block, entry } = call
-            block.output = clip(normalizeToolOutput(plainText(part.content)))
-            block.attachments = attachmentParts(part.content)
-            if (part.isError) block.error = true
-            toolsById.delete(part.toolUseId)
-            sink.edited(entry)
-          } else if (part.toolUseId) {
-            needsReset = true
-          }
+          if (part.type !== "tool_result") continue
+          results++
+          if (part.toolUseId && !tools.has(part.toolUseId)) needsReset = true
         }
-        if (onlyResults) return
+        const saved = results ? savedMessage(line) : undefined
+        for (const update of saved ? projection.project(saved) : []) {
+          const call = update.kind === "tool-update" ? tools.get(update.id) : undefined
+          if (!call) continue
+          const [live] = reduceLiveUpdates([call.live], [update])
+          if (live?.type === "tool") Object.assign(call.block, liveToolEntry(live))
+          tools.delete(call.live.id)
+          sink.edited(call.entry)
+        }
+        if (results === content.length) return
       }
       if (line.isCompactSummary) {
         const summary = claudeCompactSummary(plainText(content))
@@ -905,35 +882,26 @@ function translator(): ClaudeTranslator {
     const message = line.message
     if (line.isAbortedMidStream || line.apiError !== undefined) running = false
     else if (message?.stopReason) running = message.stopReason === "tool_use"
-    if (!message || !Array.isArray(message.content)) {
+    const saved = savedMessage(line)
+    if (!message || !Array.isArray(message.content) || !saved) {
       if (line.isAbortedMidStream) {
         sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
       }
       return
     }
-    if (line.apiError !== undefined) {
-      mark(
-        claudeApiErrorEvent(line.apiError, plainText(message.content)),
-        line.timestamp,
-        line.uuid
-      )
+    const blocks = reduceLiveUpdates([], projection.project(saved))
+    const failure = blocks.find((block) => block.type === "event")
+    if (failure) {
+      mark(liveEvent(failure), line.timestamp, line.uuid)
       return
     }
-    if (
-      message.model === "<synthetic>" &&
-      plainText(message.content).trim() === "No response requested."
-    )
-      return
     for (const part of message.content) {
       if (part.type !== "fallback" || !part.from || !part.to) continue
       const entry = mark(modelChangedEvent(part.from, part.to), line.timestamp)
       if (line.requestId) fallbacks.set(line.requestId, entry)
     }
-    if (
-      message.content.length &&
-      message.content.every((part) => part.type === "fallback")
-    )
-      return
+    // Claude Code's filler for a turn with nothing to answer decodes to nothing, as do fallback-only lines.
+    if (!blocks.length) return
     if (!assistant || (line.uuid && assistant.id !== line.uuid)) {
       conversing()
       assistant = {
@@ -946,36 +914,22 @@ function translator(): ClaudeTranslator {
       sink.push(assistant)
     } else sink.edited(assistant)
     const turn: AssistantEntry = assistant
-    for (const part of message.content) {
-      switch (part.type) {
+    for (const block of blocks) {
+      switch (block.type) {
         case "text":
-          if (part.text) turn.blocks.push({ type: "text", text: part.text })
-          break
         case "thinking":
-          if (part.thinking)
-            turn.blocks.push({ type: "thinking", text: part.thinking })
+          if (block.text) turn.blocks.push({ type: block.type, text: block.text })
           break
         case "attachment":
-          turn.blocks.push(part.value)
+          turn.blocks.push(block.attachment)
           break
-        case "tool_use": {
-          const block: ClaudeToolBlock = {
-            type: "tool",
-            id: part.id,
-            name: part.name,
-            input: clip(
-              part.input === undefined ? undefined : JSON.stringify(part.input)
-            ),
-          }
-          if (part.name === "TodoWrite")
-            block.details = todoDetails(block.input)
-          if (part.id !== undefined) toolsById.set(part.id, { block, entry: turn })
-          turn.blocks.push(block)
-          const plan =
-            part.name === "ExitPlanMode" && part.id
-              ? proposedPlanBlock(part.id, exitPlanText(part.input))
-              : undefined
-          if (plan) turn.blocks.push(plan)
+        case "proposed-plan":
+          turn.blocks.push({ type: block.type, id: block.id, text: block.text, status: block.status, ...block.truncated && { truncated: true } })
+          break
+        case "tool": {
+          const saved = liveToolEntry(block)
+          tools.set(block.id, { live: block, block: saved, entry: turn })
+          turn.blocks.push(saved)
           break
         }
       }
@@ -984,7 +938,7 @@ function translator(): ClaudeTranslator {
     if (line.isAbortedMidStream) {
       sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
       assistant = null
-      toolsById.clear()
+      tools.clear()
     }
   }
 

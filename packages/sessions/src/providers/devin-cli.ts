@@ -98,6 +98,8 @@ interface ChatMessage {
   usage?: TurnUsage
   /** Devin's per-message annotations, `metadata.extensions`. */
   extensions?: JsonObject
+  /** When Devin made the message, `metadata.created_at`; it writes a steered one after the step it waited for. */
+  writtenAt?: string
 }
 
 interface DiscoveryRow {
@@ -693,6 +695,10 @@ function translator(
   const cards = new ProposedPlans()
   /** A turn ends with an assistant message that calls no tool, or a stop. */
   let running = false
+  /** The prompt that opened the running turn, which a steered message names. */
+  let opener: string | undefined
+  /** When the message before this one was made. */
+  let previous = Number.NaN
   const subagentCalls = new Map<string, string>()
   const subagentTitles = new Map<string, string>()
 
@@ -702,6 +708,9 @@ function translator(
       const message = parseChatMessage(row.chatMessage)
       if (!message) return
       const at = isoOf(row.createdAt)
+      const written = Date.parse(message.writtenAt ?? "")
+      const before = previous
+      if (Number.isFinite(written)) previous = written
       if (message.role === "system") {
         const text = contentText(message.content)
         if (text.trim() === DEVIN_STOP_NOTICE) {
@@ -770,12 +779,17 @@ function translator(
           ...prompt.attachments.map(item => item.source.kind === "file" ? byPath.get(item.source.path) ?? item : item),
           ...images.filter(image => !image.path || !referenced.has(image.path)).map(image => image.attachment),
         ]
+        // Devin holds a message steered into a running turn until the step
+        // it arrived during ends, so it was made before the row it follows.
+        const steers = running && written < before ? opener : undefined
+        if (!steers) opener = String(row.rowId)
         running = true
         if (text.trim() || attachments.length)
           sink.push({
             kind: "user",
             id: String(row.rowId),
             at,
+            ...steers && { steeringFor: steers },
             text,
             attachments,
           })
@@ -977,6 +991,7 @@ function parseChatMessage(text: string): ChatMessage | null {
         isJsonObject(parsed.metadata.extensions)
           ? parsed.metadata.extensions
           : undefined,
+      writtenAt: isJsonObject(parsed.metadata) ? jsonText(parsed.metadata.created_at) : undefined,
     }
   } catch {
     return null
