@@ -20,7 +20,11 @@
     "./model-catalog": "./dist/model-catalog.js",
     "./codex-presentation": "./dist/providers/codex-presentation.js",
     "./tool-identity": "./dist/tool-identity.js",
-    "./read-only-sqlite": "./dist/read-only-sqlite.js"
+    "./acp-tool-details": "./dist/acp-tool-details.js",
+    "./harnesses": "./dist/harnesses/index.js",
+    "./read-only-sqlite": "./dist/read-only-sqlite.js",
+    "./cursor-sdk-index": "./dist/providers/cursor-sdk-index.js",
+    "./cursor-sdk-paths": "./dist/providers/cursor-sdk-paths.js"
   },
   "files": [
     "dist"
