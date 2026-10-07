@@ -13,6 +13,7 @@
     "./content": "./dist/content.js",
     "./prompt-attachments": "./dist/prompt-attachments.js",
     "./events": "./dist/events.js",
+    "./live-content": "./dist/live-content.js",
     "./transcript": "./dist/transcript.js",
     "./attachment-storage": "./dist/attachment-storage.js",
     "./thread-schema": "./dist/thread-schema.js",
@@ -21,6 +22,7 @@
     "./codex-presentation": "./dist/providers/codex-presentation.js",
     "./tool-identity": "./dist/tool-identity.js",
     "./acp-tool-details": "./dist/acp-tool-details.js",
+    "./acp-decoder": "./dist/acp-decoder.js",
     "./harnesses": "./dist/harnesses/index.js",
     "./read-only-sqlite": "./dist/read-only-sqlite.js",
     "./cursor-sdk-index": "./dist/providers/cursor-sdk-index.js",
@@ -36,5 +38,8 @@
   },
   "dependencies": {
     "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "@agentclientprotocol/sdk": "^1.3.0"
   }
 }
