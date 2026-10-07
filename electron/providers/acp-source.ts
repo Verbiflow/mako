@@ -4,7 +4,7 @@ import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitat
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
-import type { DriverAbsent, NativeResume, ProviderLiveDriver } from "./live-driver.js"
+import type { DriverAbsent, NativeFork, NativeResume, ProviderLiveDriver } from "./live-driver.js"
 import type { RequestPermissionRequest, NewSessionRequest } from "@agentclientprotocol/sdk"
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "../acp-access.js"
@@ -122,7 +122,37 @@ export function acpClientCapabilities(source: Pick<ProviderAcpSource, "clientCap
   }
 }
 
-export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "fork" | "questions"> {
+/** What a native fork has to work with: the session, the checkpoint it forks at, and the agent as the driver launches it. */
+export interface AcpForkInput {
+  nativeId: string
+  /** What `checkpoint` read when the turn the fork follows ended. */
+  checkpoint: string
+  executable: string
+  args: readonly string[]
+  env: NodeJS.ProcessEnv
+  cwd: string
+  clientCapabilities: ClientCapabilities
+  /** The conversation the fork is for, which owns any process it starts. */
+  owner: string
+  /** Aborted when the conversation closes before it has started. */
+  signal: AbortSignal
+}
+
+/**
+ * How an ACP agent forks. A native fork reads, as each turn ends, the
+ * agent's own name for that point in the session, the turn's checkpoint;
+ * `open` makes the agent's copy of the session ending there and returns its
+ * id, which the driver opens with `session/load`, as it resumes a session.
+ */
+export type AcpFork =
+  | (Extract<NativeFork, { kind: "native" }> & {
+      checkpoint(session: { nativeId: string; env: NodeJS.ProcessEnv; cwd: string }): string | undefined
+      open(input: AcpForkInput): Promise<string>
+    })
+  | Exclude<NativeFork, { kind: "native" }>
+
+export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "questions"> {
+  fork: AcpFork
   agents: AcpAgents
   compaction: import("../acp-compaction.js").AcpCompactionSpec
   /**
@@ -259,9 +289,11 @@ export interface AcpAnswer {
 
 /** A request put to the user: what the desk shows, and for a vendor request, what each choice sends. */
 export interface AcpAsk {
-  request: Pick<LivePermissionRequest, "title" | "kind" | "options" | "implementsPlan" | "questions">
+  request: Pick<LivePermissionRequest, "title" | "detail" | "kind" | "options" | "implementsPlan" | "questions" | "feedbackOption">
   /** Absent for ACP's own permission request, whose answer is the chosen option. */
   answers?: AcpAnswer[]
+  /** What the agent is sent for `request.feedbackOption` chosen with the person's words. */
+  feedback?(text: string): JsonObject
   /** For a request that asks `questions`: what the agent is sent for the user's answers, by question ID. */
   answered?(answers: Record<string, string[]>): JsonObject
   /** Sent when the request ends with no choice, as when the session stops. */

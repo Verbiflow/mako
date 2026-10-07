@@ -194,9 +194,20 @@ export interface ProviderStartOptions extends LiveStartOptions {
  * per send beside the model. `proposal` names the native record that carries
  * the plan to Mako's plan card, live and in saved history.
  */
-export type PlanningCapability =
+export type PlanningCapability = (
   | { via: "mode"; mode: string; proposal: string }
   | { via: "setting"; option: string; proposal: string }
+) & { feedback: PlanFeedback }
+
+/**
+ * How what the person types in reply to a plan reaches the agent. In the
+ * refusal, the plan request names the answer that carries the words
+ * (`LivePermissionRequest.feedbackOption`); otherwise they go as the next
+ * message.
+ */
+export type PlanFeedback =
+  | { kind: "in-refusal"; via: string }
+  | { kind: "next-message"; reason: string }
 
 export interface ProviderLiveDriver extends ProviderCapability {
   launchEnvironment: LaunchEnvironmentCapability
@@ -326,6 +337,8 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   if (planning.via === "setting" && driver.modes?.some((mode) => mode.access === "plan"))
     throw new Error(`${driver.provider}: plans through a setting and a mode at once`)
   if (!planning.proposal.trim()) throw new Error(`${driver.provider}: says nothing of how its plan reaches Mako`)
+  if (!(planning.feedback?.kind === "in-refusal" ? planning.feedback.via : planning.feedback?.reason ?? "").trim())
+    throw new Error(`${driver.provider}: says nothing of how a reply to its plan reaches it`)
   const background = driver.backgroundStop
   const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : ""
   if (!reason.trim())

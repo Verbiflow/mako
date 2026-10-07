@@ -1,6 +1,8 @@
 import type { RequestPermissionRequest, SessionNotification } from "@agentclientprotocol/sdk"
 import { z } from "zod"
 import { AcpDecoder } from "../acp-decoder.js"
+import { acpNotificationUsage, acpUsageReading } from "../acp-usage.js"
+import { SessionUsage, type UsageObservation } from "../session-usage.js"
 import { decoded, decodedNotices, type Decoded } from "../contracts/native-decoding.js"
 import type { AcpAsk, ProviderAcpSource } from "./acp-source.js"
 import type { DecoderEffect, ProviderDecoderSource } from "./decoder-source.js"
@@ -14,11 +16,13 @@ import type { DecoderEffect, ProviderDecoderSource } from "./decoder-source.js"
  *
  * Vendor notifications go through the provider's `decodeNotification`, as
  * the live client reads them: their notices become the markers and activity
- * the window draws, and one the provider does not know stays unknown.
+ * the window draws, and one the provider does not know stays unknown. Their
+ * spend and ACP's `usage_update` reach a meter of the session's own, whose
+ * readings are the usage the window would show.
  */
 const DECODED_UPDATES = ["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "tool_call",
-  "tool_call_update", "plan", "current_mode_update", "config_option_update", "session_info_update"]
-const SILENT_UPDATES = ["usage_update", "available_commands_update"]
+  "tool_call_update", "plan", "current_mode_update", "config_option_update", "session_info_update", "usage_update"]
+const SILENT_UPDATES = ["available_commands_update"]
 const PERMISSION = "session/request_permission"
 
 const JsonObjectSchema = z.record(z.string(), z.json())
@@ -59,12 +63,18 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
     },
     declares(message) {
       const recorded = RecordedSchema.safeParse(message)
-      const notices = recorded.success ? vendor(recorded.data)?.notices : undefined
-      return notices === undefined ? undefined : notices.length ? "decoded" : "silent"
+      const notified = recorded.success ? vendor(recorded.data) : undefined
+      if (notified?.notices === undefined) return undefined
+      return notified.notices.length || notified.usage?.length ? "decoded" : "silent"
     },
     open(session) {
       const settings = SessionSchema.safeParse(session).data?.settings
       const decoder = new AcpDecoder(source, () => settings)
+      const usage = new SessionUsage()
+      const metered = (observations: UsageObservation[]): Decoded<DecoderEffect>[] => {
+        const reading = observations.length ? usage.observe(...observations) : undefined
+        return reading ? [decoded.state({ usage: reading })] : []
+      }
       return {
         decode(message): Decoded<DecoderEffect>[] {
           const recorded = RecordedSchema.safeParse(message)
@@ -83,11 +93,19 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
           if (recorded.data.method !== "session/update") {
             const notified = vendor(recorded.data)
             if (!notified?.notices) return [decoded.unknown(notified?.kind ?? recorded.data.method, message)]
-            return [...decodedNotices(notified.notices, notified.id), ...notified.state ? [decoded.state(notified.state)] : []]
+            return [
+              ...decodedNotices(notified.notices, notified.id),
+              ...notified.state ? [decoded.state(notified.state)] : [],
+              ...metered(acpNotificationUsage(notified)),
+            ]
           }
           const notification = NotificationSchema.safeParse(recorded.data.params)
+          if (!notification.success) return [decoded.unknown(kind(recorded.data), message, "unreadable")]
           // SAFETY: as above; the SDK admitted this update before it was recorded.
-          return notification.success ? decoder.update(notification.data as SessionNotification) : [decoded.unknown(kind(recorded.data), message, "unreadable")]
+          const update = notification.data as SessionNotification
+          if (update.update.sessionUpdate !== "usage_update") return decoder.update(update)
+          const read = acpUsageReading(source, update.update)
+          return read.of === "repeat" ? [] : metered(read.observations)
         },
       }
     },

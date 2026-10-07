@@ -12,7 +12,10 @@ export const ACP_NATIVE_IDENTITY = {
 export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
   if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
     throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)
+  if (source.fork.kind === "native" && (source.fork.point !== "checkpoint" || source.resume.kind !== "native"))
+    throw new Error(`${source.provider}: a native ACP fork starts at a turn's checkpoint and opens with session/load`)
   const resume = source.resume
+  const fork = source.fork
   const modes = acpSessionModes(source.access, source.nativeModes ? { availableModes: [...source.nativeModes] } : null)
   return {
     provider: source.provider,
@@ -26,7 +29,7 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
     approvalAnswerDigest: source.approvalAnswerDigest,
     nativeAgents: source.agents.kind === "observed" ? { kind: "observed", via: source.agents.via } : source.agents,
     questions: source.questions,
-    fork: source.fork,
+    fork: fork.kind === "native" ? { kind: fork.kind, point: fork.point, via: fork.via } : fork,
     contextBreakdown: { kind: "unavailable", reason: "ACP's `usage_update` carries the context used and its size, nothing itemized." },
     resume: resume.kind === "native"
       ? { ...resume, locate: async (binding, cwd, env) => binding.nativeId ? resume.locate({ nativeId: binding.nativeId, cwd, env }) : undefined }

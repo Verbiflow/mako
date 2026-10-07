@@ -3,7 +3,7 @@ import type { LivePermissionResponse } from "../contracts/providers-acp.js"
 
 /** The host and native adapters compare decisions without retaining answer text. */
 export function approvalAnswerDigest(response: LivePermissionResponse): string {
-  const canonical = response.kind === "choice" ? response : {
+  const canonical = response.kind === "choice" ? { kind: response.kind, optionId: response.optionId } : {
     kind: response.kind,
     answers: Object.fromEntries(Object.entries(response.answers).sort(([a], [b]) => a.localeCompare(b))),
   }

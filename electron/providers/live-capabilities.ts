@@ -47,7 +47,8 @@ export function liveCapabilities(driver: ProviderLiveDriver): LiveCapabilities {
     compaction: compaction.kind === "supported" ? implemented("The harness's own compaction, started by Mako's Compact action.")
       : compaction.kind === "automatic" ? byDefault(compaction.reason)
         : harnessLacks(compaction.reason),
-    planning: implemented(`${planning.via === "mode" ? `Its ${planning.mode} mode` : `The ${planning.option} setting`}; the plan reaches Mako through ${planning.proposal}.`),
+    planning: implemented(`${planning.via === "mode" ? `Its ${planning.mode} mode` : `The ${planning.option} setting`}; the plan reaches Mako through ${planning.proposal}. ${
+      planning.feedback.kind === "in-refusal" ? `A reply to it goes with the refusal, in ${planning.feedback.via}.` : `A reply to it is the next message: ${planning.feedback.reason}`}`),
     approvals: approvals.kind === "no-interactive-requests" ? harnessLacks(approvals.reason)
       : implemented(approvals.kind === "native-decisions" ? "The harness asks and reports each decision it applied." : "The harness asks; Mako sees only that its answer was submitted."),
     questions: questions.kind === "request" || questions.kind === "session" ? implemented(questions.via) : absent(questions),
