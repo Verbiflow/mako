@@ -58,7 +58,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "planning": {
         "state": "implemented",
-        "via": "Its plan mode; the plan reaches Mako through ExitPlanMode's `plan` input, built by answering its permission request."
+        "via": "Its plan mode; the plan reaches Mako through ExitPlanMode's `plan` input, built by answering its permission request. A reply to it goes with the refusal, in the deny message of ExitPlanMode's permission answer, which Claude reads as the tool's result."
       },
       "approvals": {
         "state": "implemented",
@@ -155,7 +155,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "planning": {
         "state": "implemented",
-        "via": "The plan setting; the plan reaches Mako through The Plan collaboration mode's plan item, built by a message that asks for the implementation."
+        "via": "The plan setting; the plan reaches Mako through The Plan collaboration mode's plan item, built by a message that asks for the implementation. A reply to it is the next message: the plan arrives as the turn ends and nothing waits on an answer."
       },
       "approvals": {
         "state": "implemented",
@@ -235,11 +235,11 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "compaction": {
         "state": "default",
-        "reason": "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. The SDK has no way to ask for it."
+        "reason": "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Its protocol has a summarize action, but the SDK never sends one and offers no way to."
       },
       "planning": {
         "state": "implemented",
-        "via": "The plan setting; the plan reaches Mako through createPlan's `plan` argument, built by a message that asks for the implementation."
+        "via": "The plan setting; the plan reaches Mako through createPlan's `plan` argument, built by a message that asks for the implementation. A reply to it is the next message: createPlan asks nothing, so the turn ends with the plan."
       },
       "approvals": {
         "state": "absent",
@@ -249,7 +249,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "questions": {
         "state": "absent",
         "by": "harness",
-        "reason": "The SDK's `askQuestion` tool has no answer channel in local runs: the SDK makes no interactive request."
+        "reason": "In local runs the SDK answers every `askQuestion` itself, declining it with \"Interactive questions are not supported in local SDK runs\", and has no way for Mako to answer instead."
       },
       "modes": {
         "state": "no-op",
@@ -316,7 +316,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "planning": {
         "state": "implemented",
-        "via": "Its plan mode; the plan reaches Mako through The Plan agent's reply to a step that ends its turn, built by a message to Build."
+        "via": "Its plan mode; the plan reaches Mako through The Plan agent's reply to a step that ends its turn, built by a message to Build. A reply to it is the next message: the plan is the Plan agent's reply, and nothing waits on an answer."
       },
       "approvals": {
         "state": "implemented",
@@ -386,7 +386,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Mako writes the conversation up to the fork point into a new Grok session and resumes it: Grok's own fork takes a turn number its live connection never sends."
+        "via": "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, is imported."
       },
       "steering": {
         "state": "implemented",
@@ -399,7 +399,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "planning": {
         "state": "implemented",
-        "via": "Its plan mode; the plan reaches Mako through exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request."
+        "via": "Its plan mode; the plan reaches Mako through exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request. A reply to it goes with the refusal, in the `feedback` of a cancelled `_x.ai/exit_plan_mode` answer, while a plan file exists; with none, Grok drops the words, so they go as the next message."
       },
       "approvals": {
         "state": "implemented",
@@ -477,7 +477,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Mako writes the conversation up to the fork point into a new Devin session and resumes it, as its ACP agent has no fork."
+        "via": "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node is imported."
       },
       "steering": {
         "state": "implemented",
@@ -490,7 +490,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "planning": {
         "state": "implemented",
-        "via": "Its plan mode; the plan reaches Mako through write_plan's rendered plan file, built by answering exit_plan_mode's permission request."
+        "via": "Its plan mode; the plan reaches Mako through write_plan's rendered plan file, built by answering exit_plan_mode's permission request. A reply to it is the next message: its plan approval is ACP's session/request_permission, whose answer is an option id, and devin 3000.10.23 reads no words with a rejection."
       },
       "approvals": {
         "state": "implemented",

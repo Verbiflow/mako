@@ -24,6 +24,7 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
+import { mockCloudAccount } from "./mock-cloud-account"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
 import type {
@@ -1161,6 +1162,7 @@ export function installMockBridge() {
       return entry?.kind === "assistant" ? (entry.blocks[at.block] ?? null) : null
     },
     threadContexts: mockThreadContexts,
+    ...mockCloudAccount(emit),
     providerConnections: async () => [],
     providerConnectionAction: async () => {
       throw new Error("Fixture providers keep no sign-in")

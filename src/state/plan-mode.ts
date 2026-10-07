@@ -6,6 +6,7 @@ import { harnessLabel } from "@/lib/harness-label"
 import { appendPlanContext, proposedPlanReply } from "@/lib/proposed-plan"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import type { LivePermissionRequest, LiveSessionMode, ThreadRef } from "@/lib/types"
+import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import { useMemo } from "react"
 import { acp, useAcp } from "@/state/acp"
 import { acpForThread, acpStore, activeLiveAcp, type AcpConversation, type AcpState } from "@/state/acp-state"
@@ -412,16 +413,26 @@ export function planRejection(approval: LivePermissionRequest) {
     approval.options.find((option) => option.kind?.startsWith("reject"))
 }
 
+/** Whether the harness takes the person's words inside its "keep planning" answer. */
+export function planTakesFeedback(approval: LivePermissionRequest): boolean {
+  return approval.feedbackOption !== undefined && approval.feedbackOption === planRejection(approval)?.optionId
+}
+
 /**
  * Turn down the plan the harness is waiting on, with its own "keep
- * planning" answer. Feedback typed with it is sent as the next message.
+ * planning" answer. `feedback` goes with it only when `planTakesFeedback`;
+ * otherwise the composer sends what was typed as the next message. True when
+ * the host took the answer.
  */
-export async function keepPlanning(decision: PlanDecision): Promise<void> {
+export async function keepPlanning(decision: PlanDecision, feedback?: string): Promise<boolean> {
   const approval = decision.approval
   const conversation = sourceConversation(acpStore.get(), decision.source)
   const reject = approval ? planRejection(approval) : undefined
-  if (!approval || !conversation || !reject) return
-  await answerLiveApproval(conversation.key, approval.id, { kind: "choice", optionId: reject.optionId })
+  if (!approval || !conversation || !reject) return false
+  const response: LivePermissionResponse = { kind: "choice", optionId: reject.optionId }
+  const words = feedback?.trim()
+  if (words && planTakesFeedback(approval)) response.feedback = words
+  return answerLiveApproval(conversation.key, approval.id, response)
 }
 
 /**

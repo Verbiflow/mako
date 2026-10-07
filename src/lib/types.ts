@@ -185,4 +185,11 @@ export type {
   ProviderConnectionSource,
   ProviderConnectionState,
 } from "../../electron/contracts/provider-connection"
+export type {
+  CloudAccount,
+  CloudAccountState,
+  CloudDevice,
+  CloudPerson,
+  CloudSignedOutNotice,
+} from "../../electron/contracts/cloud-account"
 export type { ProviderFailure, ProviderFailureKind } from "../../electron/contracts/provider-failure"

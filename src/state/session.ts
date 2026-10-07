@@ -22,6 +22,7 @@ import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
+import { cloudAccountStore } from "@/state/cloud-account"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, markLiveOwnerDisconnected } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
@@ -299,6 +300,10 @@ function apply(event: HostEvent) {
   if (event.type === "provider-connections") {
     providerConnectionsStore.set({ connections: event.connections, loadedAt: Date.now() })
     void threads.refreshCapabilities()
+    return
+  }
+  if (event.type === "cloud-account") {
+    cloudAccountStore.set({ account: event.account })
     return
   }
   if (event.type === "runtime-updates") {
