@@ -1,0 +1,9 @@
+{
+  "harness": "claude",
+  "native": {
+    "version": "2.1.283"
+  },
+  "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
+  "store": ".claude/projects/-tmp-mako-pair-project/02403657-0ca2-4a3e-8ea7-6d4b299aca7a.jsonl",
+  "known": []
+}

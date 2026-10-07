@@ -1,0 +1,9 @@
+{
+  "harness": "claude",
+  "native": {
+    "version": "2.1.283"
+  },
+  "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
+  "store": ".claude/projects/-tmp-mako-pair-project/5af40c5c-2040-4ee6-8f65-f3a00aaa1a64.jsonl",
+  "known": []
+}

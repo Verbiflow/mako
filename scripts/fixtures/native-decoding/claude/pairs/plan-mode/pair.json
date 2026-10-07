@@ -1,0 +1,15 @@
+{
+  "harness": "claude",
+  "native": {
+    "version": "2.1.283"
+  },
+  "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
+  "store": ".claude/projects/-tmp-mako-pair-project/b8251239-b23a-4152-8d80-14a16aa33e7e.jsonl",
+  "known": [
+    {
+      "side": "-",
+      "line": "note: Warning \u2014 We're changing auto mode to no longer charge for classifier requests in Claude Code. However, this session isn't eligible because your requests go through 127.\u2026",
+      "reason": "Claude Code streams its system/informational notices to its client and keeps none in the transcript. This one names the sandbox's model address (127.0.0.1), so a session on Anthropic's own API never sees it."
+    }
+  ]
+}

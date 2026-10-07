@@ -1,0 +1,9 @@
+{
+  "harness": "claude",
+  "native": {
+    "version": "2.1.283"
+  },
+  "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
+  "store": ".claude/projects/-tmp-mako-pair-project/5c987421-7873-4a7e-aa0d-deeda98f73f2.jsonl",
+  "known": []
+}
