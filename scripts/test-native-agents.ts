@@ -26,6 +26,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { HostEvent, LiveSessionState } from "../electron/shared.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const claude = new ClaudeAgents()
 {
@@ -163,11 +164,9 @@ const spawn = CodexAgentItemSchema.parse({
   model: "test-model",
   agentsStates: {},
 })
-assert.equal(
-  codex.project(spawn, false)[0]?.state.kind,
-  "working",
-  "Completing spawn does not complete its agent"
-)
+const spawned = codex.project(spawn, false, "spawn-row")[0]
+assert.equal(spawned?.state.kind, "working", "Completing spawn does not complete its agent")
+assert.equal(spawned?.toolId, "spawn-row", "the roster links an agent to the transcript row of its spawn call")
 assert.equal(
   codex.project(
     {
@@ -175,7 +174,8 @@ assert.equal(
       tool: "wait",
       agentsStates: { child: { status: "completed", message: "Tests pass" } },
     },
-    false
+    false,
+    "spawn-row"
   )[0]?.model,
   "test-model"
 )
@@ -186,12 +186,13 @@ assert.equal(
       tool: "wait",
       agentsStates: { child: { status: "notFound", message: null } },
     },
-    false
+    false,
+    "spawn-row"
   )[0]?.state.kind,
   "unknown"
 )
 assert.equal(
-  new CodexAgents().project(spawn, true)[0]?.state.kind,
+  new CodexAgents().project(spawn, true, "spawn-row")[0]?.state.kind,
   "unknown",
   "Replay cannot assert current activity"
 )
@@ -204,10 +205,26 @@ assert.equal(
       agentThreadId: "child",
       agentPath: "child",
     },
-    false
+    false,
+    "spawn-row"
   ).length,
   0
 )
+// Codex 0.159's collab tools: a message, a follow-up and an interrupt report their agents' states.
+for (const tool of ["sendMessage", "followupTask", "listAgents"] as const)
+  assert.equal(CodexAgentItemSchema.safeParse({ ...spawn, tool }).success, true, `${tool} decodes`)
+const interrupted = codex.project(
+  CodexAgentItemSchema.parse({ ...spawn, tool: "interruptAgent", status: "completed", agentsStates: { child: { status: "interrupted", message: null } } }),
+  false,
+  "spawn-row"
+)
+assert.equal(interrupted[0]?.state.kind, "canceled", "an interrupted agent is canceled")
+assert.equal(
+  new CodexAgents().project(CodexAgentItemSchema.parse({ ...spawn, status: "interrupted" }), false, "spawn-row")[0]?.state.kind,
+  "canceled",
+  "a spawn interrupted before it launched leaves no working agent"
+)
+assert.equal(CodexAgentItemSchema.safeParse({ ...spawn, tool: "summonAgent" }).success, false)
 
 const agent: NativeAgent = {
   nativeId: "one",
@@ -266,6 +283,8 @@ const session: LiveSessionState = {
 }
 const events: HostEvent[] = []
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -275,7 +294,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",
-  canResume: true,
   available: () => true,
   start: async () => session,
   prompt: async () => {},

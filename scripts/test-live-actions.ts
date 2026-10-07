@@ -17,6 +17,7 @@ import type {
 } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-actions-"))
 const states = new Map<string, LiveSessionState>()
@@ -28,6 +29,13 @@ let answer: () => Promise<ProviderSteerResult> = async () => ({
   kind: "accepted",
 })
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
+  steering: { kind: "supported", lands: "step", via: "Injected driver fixture", steer: async (id, input) => {
+    steeringCalls++
+    assert.equal(input.expectedRunId, states.get(id)?.nativeRunId)
+    return answer()
+  } },
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -37,8 +45,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",
-  canResume: true,
-  steering: "step",
   available: () => true,
   async start(cwd, options) {
     const state: LiveSessionState = {
@@ -66,11 +72,6 @@ const driver: ProviderLiveDriver = {
     }
     states.set(id, running)
     owner.observe({ type: "live-session", session: running })
-  },
-  async steer(id, input) {
-    steeringCalls++
-    assert.equal(input.expectedRunId, states.get(id)?.nativeRunId)
-    return answer()
   },
   compaction: { kind: "supported", async start(id, actionId) {
     compactionCalls++

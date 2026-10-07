@@ -20,6 +20,7 @@ import {
 } from "../electron/session-memory.js"
 import type { HostEvent, LiveSessionState } from "../electron/shared.js"
 import type { ResumeVerdict, TransferInput } from "../electron/contracts/conversation-control.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-session-memory-"))
 const ledger = join(root, "session-memory.sqlite")
@@ -90,7 +91,8 @@ const FIXTURE_CAPABILITIES: Pick<ProviderLiveDriver, "approvalEvidence" | "launc
 function fixtureDriver(nativeId: string, starts: string[]): ProviderLiveDriver {
   return {
     ...FIXTURE_CAPABILITIES,
-    canResume: true,
+    ...noCapabilities,
+    resume: fixtureResume(),
     provider: "cursor",
     available: () => true,
     start: async (_cwd, options) => {
@@ -473,7 +475,8 @@ async function liveConversationsRoundTrip() {
   let events: (event: import("../electron/shared.js").LiveDriverEvent) => void = () => {}
   const driver: ProviderLiveDriver = {
     ...FIXTURE_CAPABILITIES,
-    canResume: true,
+    ...noCapabilities,
+    resume: fixtureResume(),
     provider: "cursor",
     available: () => true,
     start: async (_cwd, options) => {

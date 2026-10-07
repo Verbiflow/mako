@@ -29,6 +29,7 @@ import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { LiveSnapshot } from "../electron/shared.js"
 import { type JournalFacts, ThreadStore, threadStorePath } from "../electron/thread-store.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**
  * Migration of existing journals and native sessions into the Thread store,
@@ -391,6 +392,8 @@ async function migrationAcrossRestart(): Promise<void> {
 
 function fixtureDriver(): ProviderLiveDriver {
   return {
+    ...noCapabilities,
+    resume: fixtureResume(),
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -399,7 +402,6 @@ function fixtureDriver(): ProviderLiveDriver {
     planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
-    canResume: true,
     provider: "codex",
     available: () => true,
     start: async (cwd, options) => ({

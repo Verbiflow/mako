@@ -145,7 +145,6 @@ try {
             label: profile.label,
             available: true,
             transport: profile.transport,
-            capabilities: [],
             models: [],
           },
         },
@@ -266,7 +265,7 @@ try {
       call.dispatched.initialRequest?.text,
       "Read retained context, then continue"
     )
-    if (driver.canResume) {
+    if (driver.resume.kind === "native") {
       reset()
       const ref = {
         harness: provider,
@@ -290,7 +289,7 @@ try {
       nestedSettingsAndAttachment: "passed",
       savedAndExplicitModeEncoding: "passed",
       displayPrompt: "passed",
-      resumeEncoding: driver.canResume ? "passed" : "not advertised",
+      resumeEncoding: driver.resume.kind === "native" ? "passed" : `not advertised: ${driver.resume.reason}`,
     })
   }
   assert.ok(rows.some((row) => row.provider === "devin"))

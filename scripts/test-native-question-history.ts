@@ -12,6 +12,7 @@ import type { NativeQuestionHistory } from "../electron/contracts/live-questions
 import { latestPendingQuestion } from "../electron/contracts/live-questions.js"
 import { codexAsyncQuestion, codexQuestionAnswer } from "../electron/providers/codex/questions.js"
 import { createCodexQuestionHistory } from "../electron/providers/codex/question-history.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-question-history-"))
 const native = "native-question-history"
@@ -84,11 +85,14 @@ try {
     let evidence:NativeQuestionHistory=[{question:first,answered:[]}]
     let unavailable=false, writes=0
     let gate:Promise<void>|undefined
-    const driver:ProviderLiveDriver={provider,available:()=>true,canResume:true,
+    const driver:ProviderLiveDriver={
+      ...noCapabilities,
+      resume: fixtureResume(),
+      questions: { kind: "session", via: "Injected driver fixture", encodeAnswer:codexQuestionAnswer,history:async()=>{if(gate)await gate;if(unavailable)throw Error("Unavailable source");return evidence} },provider,available:()=>true,
       launchEnvironment:{kind:"unavailable",reason:"Fixture"},nativeIdentity:{kind:"unavailable",reason:"Fixture"},
       nativeExclusion:NO_NATIVE_EXCLUSION,nativePromptIdentity:NO_NATIVE_PROMPT_IDENTITY,
       planning:{via:"setting",option:"plan",proposal:"Fixture"},backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
-      turnRecovery:{kind:"manual",reason:"Fixture"},approvalEvidence:{kind:"submission-only",reason:"Fixture"},sessionQuestions:{encodeAnswer:codexQuestionAnswer,history:async()=>{if(gate)await gate;if(unavailable)throw Error("Unavailable source");return evidence}},start:async()=>{throw Error("Unexpected launch")},prompt:async()=>{writes++},permission:async()=>{writes++},cancel:async()=>{},close(){},setMode:async()=>{}}
+      turnRecovery:{kind:"manual",reason:"Fixture"},approvalEvidence:{kind:"submission-only",reason:"Fixture"},start:async()=>{throw Error("Unexpected launch")},prompt:async()=>{writes++},permission:async()=>{writes++},cancel:async()=>{},close(){},setMode:async()=>{}}
     const deps={root:journals,appPath:root,driver:()=>driver,emit(){},history:async()=>({ref:{harness:provider,nativeId:native,path},entries:[],start:0,total:0,hasEarlier:false,checkpoint:1})}
     let owner=new LiveConversations(deps)
     try {

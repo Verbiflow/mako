@@ -13,7 +13,7 @@ import { NATIVE_CAPTURE_DIR } from "../electron/native-capture.ts"
 import { NATIVE_UNKNOWN_FILE } from "../electron/native-unknown.ts"
 import type { HarnessFamily } from "../electron/providers/harness-definition.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "../electron/contracts/harness-capabilities.ts"
 import { readRuntimeVersion } from "../electron/runtime-updates.ts"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 
@@ -53,13 +53,6 @@ export interface FamilyStatus {
   reason?: string
 }
 
-export interface LiveFields {
-  planning: string
-  steering: string
-  compaction: string
-  sessionQuestions: string
-  contextBreakdown: boolean
-}
 
 export interface InstalledRuntime {
   /** The version fixtures are compared with; null when none could be read. */
@@ -146,7 +139,8 @@ export interface LogReport {
 export interface HarnessReport {
   harness: string
   families: FamilyStatus[]
-  live: LiveFields | null
+  /** Every live capability as the window shows it; null without a live driver. */
+  live: LiveCapabilities | null
   version: VersionReport
   decoder: DecoderReport
   tools: ToolReport
@@ -203,7 +197,7 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
     return {
       harness,
       families: familyStatus(harness),
-      live: liveFields(providerHost.liveDrivers.get(harness)),
+      live: providerHost.harnesses.get(harness)?.capabilities ?? null,
       version: versionReport(await installed(harness), files),
       decoder: decoderReport(harness, files, fixtures.invalid.filter((file) => file.name.startsWith(`${harness}/`)).map((file) => file.name)),
       tools: toolReport(harness),
@@ -220,18 +214,6 @@ export function familyStatus(harness: string): FamilyStatus[] {
     if (!absent) return { family, status: "capability" }
     return { family, status: absent.absent === "harness" ? "lacks" : "notBuilt", reason: absent.reason }
   })
-}
-
-export function liveFields(live: ProviderLiveDriver | undefined): LiveFields | null {
-  if (!live) return null
-  const { planning, compaction, sessionQuestions } = live
-  return {
-    planning: !planning ? "none" : planning.via === "mode" ? `mode ${planning.mode}` : `setting ${planning.option}`,
-    steering: live.steering ?? "none",
-    compaction: !compaction ? "none" : compaction.kind === "supported" ? "supported" : `unavailable: ${compaction.reason}`,
-    sessionQuestions: !sessionQuestions ? "none" : sessionQuestions.history ? "answers, history" : "answers",
-    contextBreakdown: Boolean(live.contextBreakdown),
-  }
 }
 
 /** The runtime sessions launch, read the way Settings reads it: `--version`, or the SDK's package. */
@@ -468,8 +450,12 @@ function formatHarness(report: HarnessReport): string {
   for (const family of report.families.filter((entry) => entry.status !== "capability"))
     more(`${family.status === "lacks" ? "lacks" : "not built"} ${family.family}: ${family.reason}`)
   if (report.live) {
-    const { planning, steering, compaction, sessionQuestions, contextBreakdown } = report.live
-    row("live", `planning ${planning} · steering ${steering} · compaction ${compaction} · questions ${sessionQuestions} · context breakdown ${contextBreakdown ? "yes" : "no"}`)
+    const live = report.live
+    LIVE_CAPABILITY_KEYS.forEach((key, index) => {
+      const capability = live[key]
+      const state = capability.state === "absent" ? `absent (${capability.by === "mako" ? "Mako gap" : "harness has none"})` : capability.state
+      ;(index ? more : (text: string) => row("live", text))(`${LIVE_CAPABILITY_LABELS[key]}: ${state} · ${capabilityText(capability)}`)
+    })
   } else row("live", "no live driver")
 
   const { installed, newestFixture, newestCaptured, verdict, sdk } = report.version

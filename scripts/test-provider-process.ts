@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { installProviderChildren } from "../electron/provider-children.ts"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -24,6 +25,27 @@ try {
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString() })
   await new Promise((resolve) => child.once("close", resolve))
   assert.equal(output, realpathSync(root), "an existing folder starts as asked")
+
+  // A provider that exits leaving its own child on its pipes: Mako ends the
+  // child with the group and closes the pipes, from one exit listener.
+  const providers = installProviderChildren(root)
+  const parent = spawnProviderProcess("/bin/sh", ["-c", "sleep 30 & echo $!"], { cwd: root }, { kind: "test:provider", owner: "exit-cleanup" })
+  assert.equal(parent.listenerCount("exit"), 1, "Mako's exit cleanup is one listener, leaving an SDK room for its own")
+  assert.deepEqual(JSON.parse(readFileSync(providers.path, "utf8")).children.map((entry: { pid: number }) => entry.pid), [parent.pid], "the process is recorded for reaping while it runs")
+  let printed = ""
+  parent.stdout.on("data", (chunk: Buffer) => { printed += chunk.toString() })
+  const closed = new Promise((resolve) => parent.once("close", resolve))
+  await new Promise((resolve) => parent.once("exit", resolve))
+  assert.deepEqual(JSON.parse(readFileSync(providers.path, "utf8")).children, [], "an exited process leaves the registry")
+  const orphan = Number(printed.trim())
+  assert.ok(orphan > 0)
+  await closed
+  const deadline = Date.now() + 5_000
+  for (;;) {
+    try { process.kill(orphan, 0) } catch { break }
+    assert.ok(Date.now() < deadline, "the provider's own child ends with its process group")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
 
   await assert.rejects(
     withDiscoveryProcess({ command: process.execPath, args: ["-e", ""], env: process.env, cwd: gone }, async () => "ran"),

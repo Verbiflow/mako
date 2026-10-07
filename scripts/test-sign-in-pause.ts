@@ -56,7 +56,7 @@ try {
       captureAccount: async () => {}, removeAccount: async () => ({}),
     })
     const host = createProviderHost()
-    host.liveDrivers.register({ ...original, provider, canResume: true, available: () => true, nativeSource: undefined,
+    host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
         opens++
         if (refuseStart) throw new Error(`The selected ${label} account is signed out. Sign in again in Settings → Agents.`)

@@ -19,6 +19,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { HostEvent, LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync("/tmp/mako-peers-")
 const ownerSocket = join(root, "owner.sock")
@@ -37,6 +38,8 @@ const sessions = new Map<string, LiveSessionState>()
 const emitters = new Map<string, (event: LiveDriverEvent) => void>()
 const providers = registeredHarnessIds()
 const drivers = new Map(providers.map((provider) => [provider, {
+  ...noCapabilities,
+  resume: fixtureResume({ checkpoint: async () => "checkpoint" }),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -45,7 +48,7 @@ const drivers = new Map(providers.map((provider) => [provider, {
   planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
-  provider, canResume: true, available: () => true,
+  provider, available: () => true,
   start: async (cwd, options) => {
     starts.push(provider)
     if (options.emit) emitters.set(options.conversationId, options.emit)
@@ -66,7 +69,6 @@ const drivers = new Map(providers.map((provider) => [provider, {
   cancel: async (id) => { cancellations.push(id); finishes.get(id)?.() },
   close: async (id) => { finishes.get(id)?.() },
   setMode: async () => {},
-  checkpoint: async () => "checkpoint",
 } satisfies ProviderLiveDriver]))
 let ownerHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 const owner = new LiveConversations({ appPath: root, root: join(root, "owner"), memory: ownerMemory, driver: (provider) => drivers.get(provider), history: async () => null, nativePath: (session) => join(root, `${session.harness}.jsonl`), checkpoint: async () => "checkpoint", resumeVerdict: async () => ({ kind: "resumable", record: "same" }), emit: (event: HostEvent) => ownerHost?.event(event), providerWarmLimit: 10 })

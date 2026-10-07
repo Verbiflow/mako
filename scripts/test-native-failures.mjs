@@ -91,9 +91,8 @@ async function main() {
     providerHost.acpSources.register({
       ...source,
       provider: name,
-      canResume: false,
+      resume: { kind: "unavailable", reason: "A failure stand-in's sessions are never reopened" },
       available: () => true,
-      locateSession: () => undefined,
       launch: async () => ({
         command: process.execPath,
         args: [fixture],
@@ -242,7 +241,7 @@ async function main() {
       }
       // A prompt handed to a process that dies before acknowledging it.
       const run = await open(provider, "exit-on-prompt")
-      leftovers.push(run.pids.child)
+      leftovers.push(run.pids.child, run.pids.grouped)
       const start2 = await run.started
       assert.ok(start2.ok, `${provider}: the stand-in starts: ${start2.error?.message}`)
       trace(`${provider}: started`)
@@ -256,6 +255,7 @@ async function main() {
       const exit = await until(`${provider}: the exit is reported`, () => run.sessions().find(({ at, event }) => at > handedAt && event.session.connection === "disconnected"))
       assert.equal(exit.event.session.status, "failed", `${provider}: the exit is one failed-and-disconnected update`)
       assert.ok(alive(run.pids.child), `${provider}: the exit was reported while a child still held the pipes`)
+      await until(`${provider}: what the dead process left in its group ends with it`, () => !alive(run.pids.grouped))
       assert.ok(!evidence.includes("accepted"), `${provider}: delivery is never claimed for an unacknowledged prompt`)
       // Claude names its version when a turn opens, the others at startup.
       const runtime = exit.event.session.executionContext?.runtime
@@ -271,5 +271,5 @@ async function main() {
   for (const result of results) console.log(JSON.stringify(result))
   assert.deepEqual(missing, [], `Every registered harness needs a failure stand-in in ${fileURLToPath(import.meta.url)}`)
   const proven = results.filter((result) => result.exitAfterHandoff !== "unproven").map((result) => result.provider)
-  console.log(`Native failures: ${results.map((result) => result.provider).join(", ")} cancel during setup; ${proven.join(", ")} report a death after hand-off while a child holds the pipes and record the runtime version`)
+  console.log(`Native failures: ${results.map((result) => result.provider).join(", ")} cancel during setup; ${proven.join(", ")} report a death after hand-off while a child holds the pipes, end what it left in its group, and record the runtime version`)
 }

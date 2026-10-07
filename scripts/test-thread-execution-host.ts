@@ -16,6 +16,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { SessionMemory } from "../electron/session-memory.js"
 import type { LiveRequest, LiveSessionState } from "../electron/shared.js"
 import { ThreadStore } from "../electron/thread-store.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**
  * Execution ownership in the conversation host, for all six harnesses: a
@@ -49,6 +50,8 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
     prompts: [],
     holdTurn: false,
     driver: {
+      ...noCapabilities,
+      resume: fixtureResume({ checkpoint: async () => "checkpoint", inspect: async () => ({ kind: "available", checkpoint: "checkpoint", strategy: "same-session" }) }),
       approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
       nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
       nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -58,9 +61,6 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
       backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
       turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider: harness,
-      canResume: true,
-      checkpoint: async () => "checkpoint",
-      inspectNativeSession: async () => ({ kind: "available", checkpoint: "checkpoint", strategy: "same-session" }),
       available: () => true,
       start: async (cwd, options) => {
         state.starts += 1

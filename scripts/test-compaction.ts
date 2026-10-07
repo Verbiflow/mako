@@ -4,7 +4,6 @@ import { COMPACTION_CONFIRMATION_MS } from "../electron/contracts/recovery.ts"
 import { AcpCompaction } from "../electron/acp-compaction.ts"
 import { devinCompaction } from "../electron/providers/devin/compaction.ts"
 import type { LiveActionResult } from "../electron/contracts/live-actions.ts"
-import { recoveryCapabilities } from "../electron/providers/live-driver.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 assert.equal(devinCompaction.kind, "supported")
@@ -81,7 +80,6 @@ for (const [text, kind] of [
   await tick()
   assert.deepEqual(completed, [], "a command reply alone never confirms compaction")
 }
-assert.equal(recoveryCapabilities(undefined).compaction.kind, "unavailable")
 mock.timers.enable({ apis: ["setTimeout"] })
 try {
   const timedOut: LiveActionResult[] = []

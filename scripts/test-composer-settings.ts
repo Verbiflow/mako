@@ -32,7 +32,6 @@ const profile: HarnessProfile = {
   available: true,
   transport: "acp",
   models: [{ id: "opus", label: "Opus 5", options: [] }],
-  capabilities: [],
   settings: { model: "opus" },
 }
 
@@ -227,7 +226,6 @@ console.log("composer settings: starting conversations keep their send target")
         ],
       },
     ],
-    capabilities: [],
     settings: { model: "claude-fable-5-1" },
   }
   const target = { kind: "live" as const, id: "live-1", harness: "cursor", cwd }

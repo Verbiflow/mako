@@ -177,7 +177,7 @@ acpStore.set({
 providerStore.set({
   contexts: {
     [providerProfileKey("codex", "/work")]: {
-      id: "codex", label: "Codex", available: true, transport: "app-server", capabilities: [],
+      id: "codex", label: "Codex", available: true, transport: "app-server",
       models: [{ id: "m", label: "M", options: [CODEX_PLAN_OPTION] }], settings: { model: "m" },
     },
   },

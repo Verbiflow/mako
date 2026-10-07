@@ -13,6 +13,7 @@ import type { LiveSessionState, ThreadRef } from "../electron/shared.ts"
 import { archivedByKeys, threadArchiveKey, threadShownKey, type ThreadArchiveSnapshot } from "../electron/contracts/thread-lifecycle.ts"
 import { followNativeArchives } from "../electron/thread-lifecycle.ts"
 import type { HostEvent } from "../electron/shared.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-thread-lifecycle-"))
 const archives = new ThreadArchives(join(root, "archives.sqlite"))
@@ -21,6 +22,8 @@ const releases = new Map<string, () => void>()
 const sent: string[] = []
 let cancellations = 0
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -29,7 +32,7 @@ const driver: ProviderLiveDriver = {
   planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
-  provider: "fixture", canResume: true, available: () => true,
+  provider: "fixture", available: () => true,
   async start(cwd, options) {
     const state: LiveSessionState = { id:options.conversationId, nativeId:options.conversationId, nativePath:join(root,`${options.conversationId}.json`), harness:"fixture", cwd, status:"ready", connection:"connected", modes:[], currentMode:null, configOptions:[] }
     states.set(state.id, state)

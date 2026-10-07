@@ -1,10 +1,12 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { LiveJournal } from "../electron/live-journal"
 import { reduceLiveUpdates } from "../electron/contracts/live-content"
+import { ConversationControlSchema } from "../electron/contracts/conversation-control"
 import { auditSnapshot } from "./performance-audit-fixtures"
 
 const root = await mkdtemp(join(tmpdir(), "mako-journal-deltas-"))
@@ -112,8 +114,67 @@ try {
   }
   journal.commit(shorter, snapshot)
   assert.deepEqual(journal.read()?.blocks, shorter.blocks)
+  snapshot = shorter
+
+  // A harness's model list rides in its own row: a status change leaves it alone.
+  const configOptions = [{ kind: "select" as const, id: "model", label: "Model", current: "m0", values: Array.from({ length: 721 }, (_, index) => ({ value: `m${index}`, label: `Model ${index}`, description: "A model choice with a description" })) }]
+  const commands = [{ name: "review", description: "Review the change" }]
+  const listed = { ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, configOptions, commands } }
+  journal.commit(listed, snapshot)
+  const inspect = new DatabaseSync(join(root, `${snapshot.session.id}.sqlite`))
+  const optionsBytes = () => Number(inspect.prepare("SELECT length(value) AS bytes FROM options WHERE id=1").get()?.bytes ?? 0)
+  const metadataRow = () => String(inspect.prepare("SELECT value FROM metadata WHERE id=1").get()?.value)
+  try {
+    assert.ok(optionsBytes() > 30_000 && metadataRow().length < 4_000, "Model options are stored apart from the session")
+    assert.ok(!metadataRow().includes("Review the change"), "Commands are not stored; nothing reads them back")
+    inspect.exec("CREATE TABLE option_writes (n INTEGER); CREATE TRIGGER count_options AFTER INSERT ON options BEGIN INSERT INTO option_writes VALUES (1); END")
+    const running = { ...listed, revision: listed.revision + 1, session: { ...listed.session, status: "running" as const } }
+    journal.commit(running, listed)
+    assert.equal(Number(inspect.prepare("SELECT count(*) AS n FROM option_writes").get()?.n), 0, "A status change does not rewrite the model options")
+    inspect.exec("DROP TRIGGER count_options; DROP TABLE option_writes")
+    journal.close()
+    journal = new LiveJournal(root, snapshot.session.id)
+    assert.deepEqual(journal.read()?.session.configOptions, configOptions, "Options read back with the session")
+    assert.deepEqual(journal.summary()?.session.configOptions, configOptions, "A summary carries the options too")
+    snapshot = running
+
+    // A journal from before the split keeps its options inline until its next commit moves them.
+    inspect.exec("DELETE FROM options")
+    const legacy = JSON.parse(metadataRow())
+    legacy.session.configOptions = configOptions
+    inspect.prepare("UPDATE metadata SET value=? WHERE id=1").run(JSON.stringify(legacy))
+    journal.close()
+    journal = new LiveJournal(root, snapshot.session.id)
+    const reopened = journal.read()!
+    assert.deepEqual(reopened.session.configOptions, configOptions, "An older journal reads its inline options")
+    const ready = { ...reopened, revision: reopened.revision + 1, session: { ...reopened.session, status: "ready" as const } }
+    journal.commit(ready, reopened)
+    journal.close()
+    journal = new LiveJournal(root, snapshot.session.id)
+    assert.deepEqual(journal.read()?.session.configOptions, configOptions, "Moving options out of an older journal keeps them")
+    assert.ok(optionsBytes() > 30_000 && metadataRow().length < 4_000)
+
+    const reread = journal.read()!
+    const native = { tokens: { input: 6, cacheRead: 54_381, cacheWrite: 31_686, output: 27 }, cost: 0.6487 }
+    const usage = { used: 30_000, size: 200_000, tokens: { input: 2, cacheRead: 26_104, cacheWrite: 4_551, output: 11 }, cost: { amount: 0.0981, currency: "USD" }, native }
+    journal.commit({ ...reread, revision: reread.revision + 1, session: { ...reread.session, usage } }, reread)
+    journal.close()
+    journal = new LiveJournal(root, snapshot.session.id)
+    assert.deepEqual(journal.read()?.session.usage, { used: 30_000, size: 200_000, native }, "The context and the harness's session totals reopen; the process's spend does not")
+
+    const withUsage = journal.read()!
+    const left = { id: randomUUID(), provider: "claude", nativeId: "claude-session", coveredBlocks: 0, includesBase: true, nativeUsage: native }
+    const active = { id: randomUUID(), provider: "codex", nativeId: "codex-thread", coveredBlocks: 0, includesBase: true }
+    const control = ConversationControlSchema.parse({ ...withUsage.control, activeBindingId: active.id, bindings: [left, active], transfers: [] })
+    journal.commit({ ...withUsage, revision: withUsage.revision + 1, control }, withUsage)
+    journal.close()
+    journal = new LiveJournal(root, snapshot.session.id)
+    assert.deepEqual(journal.read()?.control?.bindings[0].nativeUsage, native, "A binding the conversation left keeps its native session's totals")
+  } finally {
+    inspect.close()
+  }
   console.log(
-    "Journal deltas: bounded prefix writes, reopen, split Unicode, authoritative replacement, and truncation preserve exact content"
+    "Journal deltas: bounded prefix writes, reopen, split Unicode, authoritative replacement, truncation, model options apart from the session, and session totals kept for a resume"
   )
 } finally {
   journal.close()

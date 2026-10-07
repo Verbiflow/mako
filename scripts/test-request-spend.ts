@@ -11,6 +11,7 @@ import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
 import { spendBetween } from "../electron/session-usage.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { usageHarnesses, usageSummary } from "../electron/usage.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 // Cursor's and Devin's stores keep no token counts, so what Mako measured
 // while a request ran is the record the usage summary reads for them.
@@ -25,6 +26,8 @@ const conversations = join(root, "conversations")
 const emitters = new Map<string, (event: LiveDriverEvent) => void>()
 const sessions = new Map<string, LiveSessionState>()
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -34,7 +37,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "cursor",
-  canResume: true,
   available: () => true,
   async start(cwd, options) {
     assert.ok(options.emit, "the host gives every driver an event sink")

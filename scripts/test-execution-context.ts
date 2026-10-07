@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { ExecutionContextSchema } from "../electron/contracts/execution-context.ts"
 import { assessExecutionContext, disconnectedContext, launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../electron/execution-context.ts"
-import { CodexIdentityResponseSchema } from "../electron/providers/codex/native-context.ts"
+import { CodexIdentityResponseSchema, codexRuntimeVersion } from "../electron/providers/codex/native-context.ts"
 import { LiveJournal } from "../electron/live-journal.ts"
 import { auditSnapshot } from "./performance-audit-fixtures.ts"
 
@@ -34,6 +34,10 @@ assert.equal(assessExecutionContext(undefined, context, false).kind, "unverified
 assert.equal(assessExecutionContext(context, { ...context, transport: "changed" }, false).kind, "incompatible")
 assert.equal(assessExecutionContext(context, { ...context, transport: "changed" }, true).kind, "compatible", "transport migration requires an exact import receipt at the recovery boundary")
 assert.equal(assessExecutionContext(context, { ...context, runtime: reportedRuntime("native-2.0", "hello") }, false).kind, "unverified", "a runtime version change needs native schema coverage, not guessed semver compatibility")
+// Codex 0.159.3 reports `initialize.userAgent` with the OS and terminal in it.
+assert.equal(codexRuntimeVersion("mako/0.159.3 (Mac OS 26.6.2; arm64) dumb (mako; 0.0.1)"), "0.159.3", "an OS update is not a Codex version change")
+assert.equal(codexRuntimeVersion("codex_cli_rs/0.160.0-alpha.2 (Linux 6.8; x86_64) xterm"), "0.160.0-alpha.2")
+assert.equal(codexRuntimeVersion("unrecognized agent"), "unrecognized agent", "an unknown shape stays whole, never a guessed match")
 assert.equal(assessExecutionContext(context, { ...context, identity: reportedIdentity(undefined, "other-backend", "account/read") }, false).kind, "incompatible", "backend evidence survives even when a named principal is unavailable")
 assert.equal(assessExecutionContext(context, { ...context, identity: {kind:"unavailable",reason:"request failed"} }, false).kind, "incompatible", "failed identity evidence cannot admit a previously identified account")
 const otherIdentity = reportedIdentity("other@example.test", "native", "account/read")

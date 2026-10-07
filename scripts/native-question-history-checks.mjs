@@ -11,7 +11,7 @@ export async function checkNativeQuestionHistory({owner,reopen,id,cwd,driver,mod
     const snapshot=owner().snapshot(id)
     assert.equal(snapshot.control.questions?.length??0,0)
     const binding=snapshot.control.bindings.find(b=>b.id===snapshot.control.activeBindingId)
-    const evidence=await driver.sessionQuestions.history(binding)
+    const evidence=await driver.questions.history(binding)
     assert.ok(evidence.some(e=>e.question.questions.some(q=>q.question===title)&&!e.answered.length))
     result.importSource={path:binding.path,nativeId:binding.nativeId,title}
     result.cases.push({name:'prepare-unobserved-native-source',status:'passed'})
@@ -51,7 +51,7 @@ export async function checkNativeQuestionHistory({owner,reopen,id,cwd,driver,mod
   await capture('history-external-pending')
   await reopen()
   const externalId=randomUUID()
-  const text=driver.sessionQuestions.encodeAnswer(external.native,{[external.native.questions[0].id]:[externalPhrase]})
+  const text=driver.questions.encodeAnswer(external.native,{[external.native.questions[0].id]:[externalPhrase]})
   try {
     const session=await driver.start(cwd,{conversationId:externalId,resume:external.native.sessionId,modeId:mode})
     assert.equal(session.nativeId,external.native.sessionId)

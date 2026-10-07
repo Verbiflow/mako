@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
-import { copyBuildSource, LocalUpdates } from "../electron/local-updates.js"
+import { copyBuildSource, syncBuildCheckout, LocalUpdates } from "../electron/local-updates.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-source-copy-"))
 try {
@@ -50,6 +50,37 @@ try {
   )
   for (const name of [".env", "ignore", "release"])
     await assert.rejects(realpath(join(isolated, name)), { code: "ENOENT" })
+
+  // A workspace can be added after npm wrote its hidden lockfile. The
+  // project's lockfile must invalidate the cached dependency copy too.
+  const syncSource = join(root, "sync-source")
+  const syncCheckout = join(root, "sync-checkout")
+  await mkdir(join(syncSource, "node_modules/@mako"), { recursive: true })
+  await writeFile(join(syncSource, "node_modules/.package-lock.json"), "{}")
+  const lockfile = join(syncSource, "package-lock.json")
+  await writeFile(lockfile, JSON.stringify({ packages: {} }))
+  const beforeWorkspace = await syncBuildCheckout(syncSource, syncCheckout)
+  assert.equal(await syncBuildCheckout(syncSource, syncCheckout), beforeWorkspace)
+  await mkdir(join(syncSource, "packages/git"), { recursive: true })
+  await writeFile(join(syncSource, "packages/git/package.json"), JSON.stringify({
+    name: "@mako/git", type: "module", exports: "./index.js",
+  }))
+  await writeFile(join(syncSource, "packages/git/index.js"), "export const copied = true\n")
+  await symlink("../../packages/git", join(syncSource, "node_modules/@mako/git"))
+  await writeFile(lockfile, JSON.stringify({ packages: {
+    "node_modules/@mako/git": { resolved: "packages/git", link: true },
+  } }))
+  const afterWorkspace = await syncBuildCheckout(syncSource, syncCheckout)
+  assert.notEqual(afterWorkspace, beforeWorkspace)
+  assert.equal(
+    await realpath(join(syncCheckout, "node_modules/@mako/git")),
+    await realpath(join(syncCheckout, "packages/git"))
+  )
+  execFileSync(process.execPath, ["--input-type=module", "--eval",
+    "import assert from 'node:assert/strict'; assert.equal((await import('@mako/git')).copied, true)"],
+    { cwd: syncCheckout })
+  assert.equal(await syncBuildCheckout(syncSource, syncCheckout), afterWorkspace)
+
   await symlink(
     join(source, "packages/sessions"),
     join(source, "node_modules/escape")

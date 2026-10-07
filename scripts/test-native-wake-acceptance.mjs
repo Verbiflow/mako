@@ -21,8 +21,38 @@ if (!process.versions.electron) {
   process.exitCode = code ?? 1
 } else {
   const { app } = await import("electron")
-  void main(app).then(() => app.exit(0), error => { console.error(error.message); app.exit(1) })
+  const unhandled = []
+  process.on("unhandledRejection", reason => {
+    unhandled.push(reason)
+    console.error("Unhandled rejection in the host:", reason?.stack ?? reason)
+  })
+  void main(app).then(() => {
+    if (unhandled.length) throw new Error(`The host left ${unhandled.length} promise rejection(s) unhandled`)
+  }).then(() => app.exit(0), error => { console.error(error.message); app.exit(1) })
 }
+
+const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
+async function processTable() {
+  let listing
+  const stdout = await new Promise((resolve, reject) => {
+    listing = execFile("ps", ["-A", "-o", "pid=,ppid=,command="], { timeout: 3000, maxBuffer: 8 << 20 }, (error, out) => error ? reject(error) : resolve(out))
+  })
+  return stdout.split("\n").flatMap(line => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    return match && Number(match[1]) !== listing.pid ? [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }] : []
+  })
+}
+/** Processes this host started directly, without Electron's own helpers. */
+const hostChildren = table => table.filter(row => row.ppid === process.pid && !row.command.includes("Electron Helper"))
+function descendants(table, pid) {
+  const found = []
+  for (let queue = [pid]; queue.length;) {
+    const parent = queue.shift()
+    for (const row of table) if (row.ppid === parent) { found.push(row); queue.push(row.pid) }
+  }
+  return found
+}
+const executableName = command => command.split(" ")[0].split("/").at(-1)
 
 async function until(label, read, predicate, ms = 90000) {
   const started = Date.now()
@@ -62,6 +92,10 @@ async function main(app) {
       const closeTool = process.env.MAKO_WAKE_SCENARIO === "close-tool"
       const cancelTool = process.env.MAKO_WAKE_SCENARIO === "cancel-tool" || closeTool
       const cancellation = process.env.MAKO_WAKE_SCENARIO === "cancel" || ownership || cancelTool
+      const setupCancel = process.env.MAKO_WAKE_SCENARIO === "setup-cancel"
+      const exitTool = process.env.MAKO_WAKE_SCENARIO === "exit-tool"
+      /** Processes this run started, ended if still running when it finishes. */
+      const spawned = new Set()
       let cancelledChildEnded
       let foregroundChildAgeAtStopMs
       let foregroundChildAgeAtEndMs
@@ -111,7 +145,7 @@ async function main(app) {
           driver: provider => provider === driver.provider ? adapter : undefined,
           memory, history: async () => null, emit: () => {},
           nativePath: nativePathForSession,
-          checkpoint: (path, provider) => providerHost.liveDrivers.get(provider ?? driver.provider)?.checkpoint?.(path),
+          checkpoint: (path, provider) => providerHost.liveDrivers.get(provider ?? driver.provider)?.resume.checkpoint?.(path),
           resumeVerdict: binding => assessProviderResume(binding, adapter),
           providerIdleMs: ownership || cancelTool ? 60000 : 100, providerWarmLimit: ownership || cancelTool ? 1 : 0,
           autoContinueDelayMs: 10,
@@ -119,7 +153,94 @@ async function main(app) {
         })
         bindCodexApp(event => receive(event, event => owner.observe(event)))
         const full = driver.modes?.find(mode => mode.access === "full")
+        const report = async () => {
+          await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed native runtimes through the freshly built isolated host; not the installed Mako app", results }, null, 2))
+          console.log(JSON.stringify(results.at(-1)))
+        }
+        if (setupCancel) {
+          // Close lands while the real harness is still starting: as soon as
+          // its process exists, before its handshake can finish. No model use.
+          const before = new Set(hostChildren(await processTable()).map(row => row.pid))
+          const startedAt = Date.now()
+          await owner.start(driver.provider, cwd, { conversationId: id, modeId: full?.id })
+          let launched = []
+          while (!launched.length) {
+            if (owner.snapshot(id)?.session.connection === "connected") throw new Error("Setup finished before its process was seen, so Close could not land during setup")
+            if (Date.now() - startedAt > 60000) throw new Error("Timed out: the harness process never appeared")
+            const table = await processTable()
+            // `security` is Mako reading a keychain login, not the harness starting.
+            launched = hostChildren(table).filter(row => !before.has(row.pid) && !/^\(?security\)?$/.test(executableName(row.command))).flatMap(row => [row, ...descendants(table, row.pid)])
+          }
+          for (const row of launched) spawned.add(row.pid)
+          const seenMs = Date.now() - startedAt
+          const closing = Date.now()
+          await owner.close(id)
+          const closeMs = Date.now() - closing
+          await until("the cancelled harness's processes end", async () => launched.filter(row => alive(row.pid)), left => left.length === 0, 10000)
+          await delay(1000)
+          const session = owner.snapshot(id)?.session
+          if (session?.connection === "connected" && session.status !== "closed") throw new Error("A session reported connected after Close during setup")
+          if (prompts) throw new Error("Close during setup dispatched input")
+          results.push({ harness: driver.provider, result: "passed", scenario: "Close during setup", durationMs: performance.now() - began,
+            processSeenMs: seenMs, closeMs, processes: launched.map(row => executableName(row.command)),
+            session: session && { status: session.status, connection: session.connection } })
+          await report()
+          continue
+        }
         await owner.start(driver.provider, cwd, { conversationId: id, modeId: full?.id })
+        if (exitTool) {
+          // The harness process dies mid-turn while its foreground tool child
+          // still runs. Mako must settle the turn, continue an accepted one
+          // once in the same native session, and never resend an unconfirmed one.
+          const snapshot = () => owner.snapshot(id)
+          const childPath = join(cwd, "exit-child.json")
+          const childCode = `require("node:fs").writeFileSync(${JSON.stringify(childPath)},JSON.stringify({pid:process.pid,startedAt:Date.now()}));setTimeout(()=>console.log("DONE"),20000)`
+          owner.submit(id, randomUUID(), `Run exactly one foreground terminal command: node -e '${childCode}'. Wait for it, then reply DONE. Do not background it or run any other command.`)
+          let child
+          await until("the foreground tool child", async () => {
+            child = await readFile(childPath, "utf8").then(JSON.parse, () => undefined)
+            return snapshot()
+          }, value => (Number.isSafeInteger(child?.pid) && value?.requests[0]?.status === "dispatching") || (value?.requests[0] && !["queued", "held", "dispatching"].includes(value.requests[0].status)), 120000)
+          if (snapshot().requests[0].status !== "dispatching") throw new Error(`The turn ended before the harness could be killed: ${snapshot().requests[0].status}`)
+          const table = await processTable()
+          const byPid = new Map(table.map(row => [row.pid, row]))
+          let harness = byPid.get(child.pid)
+          while (harness && harness.ppid !== process.pid) harness = byPid.get(harness.ppid)
+          if (!harness) throw new Error("The tool's process does not descend from a process this host started")
+          const tree = descendants(table, harness.pid)
+          for (const row of [harness, ...tree]) spawned.add(row.pid)
+          const nativeId = snapshot().session.nativeId
+          const killedAt = Date.now()
+          process.kill(harness.pid, "SIGKILL")
+          await until("the killed turn settles", snapshot, value => !["queued", "held", "dispatching"].includes(value?.requests[0]?.status), 15000)
+          const settleMs = Date.now() - killedAt
+          const orphanSurvived = alive(child.pid)
+          const first = snapshot().requests[0]
+          let continuation
+          if (first.status === "interrupted") {
+            if (first.interruption?.reason !== "provider-exited") throw new Error(`Interrupted as ${first.interruption?.reason}, not provider-exited`)
+            await until("the automatic continuation ends", snapshot, value => value?.requests[1] && !["queued", "held", "dispatching"].includes(value.requests[1].status), 180000)
+            const next = snapshot().requests[1]
+            if (next.continues?.requestId !== first.id || !next.continues.auto) throw new Error("The second request is not the automatic continuation of the killed one")
+            if (next.status !== "completed") throw new Error(`The continuation ended ${next.status}: ${next.failure ?? ""}`)
+            if (snapshot().session.nativeId !== nativeId) throw new Error("The continuation resumed a different native session")
+            continuation = { status: next.status, sameNativeSession: true }
+          } else if (first.status === "failed") {
+            if (first.nativeDelivery?.evidence.kind === "accepted") throw new Error("An accepted turn failed instead of being continued")
+            await delay(3000)
+            if (snapshot().requests.length !== 1 || prompts !== 1) throw new Error("An unconfirmed request was resent")
+          } else throw new Error(`The killed turn ended ${first.status}`)
+          const closing = Date.now()
+          await Promise.race([owner.close(id), delay(10000).then(() => { throw new Error("Close hung after the harness was killed") })])
+          const closeMs = Date.now() - closing
+          const runtime = snapshot().session.executionContext?.runtime
+          if (runtime?.kind !== "reported") throw new Error("The runtime version was not recorded")
+          results.push({ harness: driver.provider, result: "passed", scenario: "harness killed mid-tool", durationMs: performance.now() - began, starts, prompts,
+            killed: executableName(harness.command), descendantsAtKill: tree.length, orphanSurvived, settleMs, closeMs,
+            killedTurn: { status: first.status, reason: first.interruption?.reason, evidence: first.nativeDelivery?.evidence.kind }, continuation, runtime: runtime.version })
+          await report()
+          continue
+        }
         const marker = `wake-${randomUUID().slice(0, 8)}`
         if (uncertain) {
           owner.submit(id, randomUUID(), `Reply with only ${marker}. Do not use any tools.`)
@@ -231,7 +352,8 @@ async function main(app) {
             foregroundChild = { state, ageMs: Date.now() - child.startedAt }
           }
         }
-        results.push({ harness: driver.provider, result: "failed", reason: error.message, durationMs: performance.now() - began, starts: counts.starts(), prompts: counts.prompts(), connection: current?.session.connection, status: current?.session.status, foregroundChild, requests: current?.requests.map(request => ({ status: request.status, failure: request.failure, evidence: request.nativeDelivery?.evidence.kind })) })
+        results.push({ harness: driver.provider, result: "failed", reason: error.message, durationMs: performance.now() - began, starts: counts.starts(), prompts: counts.prompts(), connection: current?.session.connection, status: current?.session.status, foregroundChild, requests: current?.requests.map(request => ({ status: request.status, failure: request.failure, error: request.error, evidence: request.nativeDelivery?.evidence.kind })),
+          transfers: current?.control.transfers.map(transfer => ({ state: transfer.state.kind, error: transfer.state.error, continues: transfer.continues?.reason })) })
       } finally {
         clearInterval(resourceTimer)
         await sampling
@@ -239,6 +361,7 @@ async function main(app) {
           await owner.close(id).catch(() => {})
           await owner.stop()
         }
+        for (const pid of spawned) if (alive(pid)) process.kill(pid, "SIGKILL")
         if (resources.length) {
           sample(); await sampling
           await writeFile(join(root, `resources-${driver.provider}.json`), JSON.stringify({

@@ -9,6 +9,7 @@ import { skillColumns, skillMatrixRows, skillCell, homeRelative } from "../src/l
 import { parseSkillAppendix } from "../src/lib/skill-references"
 import { skillsStore } from "../src/state/skills"
 import { threadsStore } from "../src/state/threads"
+import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 import type { SkillRecord, SkillRegistrySnapshot } from "../src/lib/types"
 
 /**
@@ -81,6 +82,9 @@ assert.match(matrix, /aria-label="Copies differ"/, "a drifted skill carries the 
 assert.doesNotMatch(matrix, /title="/, "the matrix uses tooltips and popovers, never a native title")
 
 /* Chips ------------------------------------------------------------------- */
+
+// A sent chip names its source from the descriptors the host sends the window.
+threadsStore.set({ descriptors: fixtureHarnesses })
 
 const native = renderToStaticMarkup(<SkillChip name="grilling" sent={{ name: "grilling" }} />)
 assert.match(native, /data-skill-delivery="native"/)

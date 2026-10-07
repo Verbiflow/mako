@@ -32,7 +32,6 @@ const profile: HarnessProfile = {
   models: [],
   available: true,
   transport: "acp",
-  capabilities: [],
   settings: { model: "old-account" },
 }
 const old = providers.load("test", false, "/work")

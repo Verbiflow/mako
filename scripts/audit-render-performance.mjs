@@ -237,6 +237,58 @@ async function auditWindow() {
         "Audit stopped at its 2 GiB working-set limit"
       )
     }
+    // Types into the composer at a person's pace while the conversation streams.
+    const typeWhileStreaming = async (conversation) => {
+      const text = "typing stays responsive"
+      await evaluate("document.querySelector('.composer-input').value=''")
+      await evaluate(`window.performanceAudit.typing(${text.length}); window.performanceAudit.done=false; void window.performanceAudit.streamAgent(100, ${conversation}).then(result=>{window.performanceAudit.result=result;window.performanceAudit.done=true})`)
+      await evaluate("document.querySelector('.composer-input').focus()")
+      for (const key of text) {
+        await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key, text: key })
+        await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key })
+        await new Promise((resolve) => setTimeout(resolve, 60))
+      }
+      await until("window.performanceAudit.done")
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      assert.ok(
+        await evaluate(`document.querySelector('.composer-input').value.includes(${JSON.stringify(text)})`),
+        "Every typed key reached the composer"
+      )
+      return {
+        typing: await evaluate("window.performanceAudit.typing()"),
+        ...(await evaluate("window.performanceAudit.result")),
+      }
+    }
+    // The mock host runs in this page and keeps every snapshot it served, so
+    // heap grows per conversation opened; the window's own share is `blocks`.
+    const heapMb = async () => {
+      await page.debugger.sendCommand("HeapProfiler.collectGarbage")
+      const { usedSize } = await page.debugger.sendCommand("Runtime.getHeapUsage")
+      return Math.round(usedSize / 1024 / 1024)
+    }
+    for (const [turns, steps] of [[1, 1], [10, 140], [43, 140], [3, 450]]) {
+      stage = `agent-${turns}x${steps}`
+      const began = performance.now()
+      const opened = await evaluate(`window.performanceAudit.setupAgent(${turns}, ${steps})`)
+      cases.push({ kind: "agent-open", turns, steps, elapsedMs: performance.now() - began, ...opened })
+      const streamed = await typeWhileStreaming(0)
+      cases.push({ kind: "agent-stream", turns, steps, ...streamed })
+      assert.ok(
+        streamed.parses.calls <= streamed.parses.uniqueLengths + 1,
+        `A streaming turn reparsed unchanged prose ${streamed.parses.calls} times`
+      )
+    }
+    stage = "agent-switching"
+    const switching = []
+    for (let conversation = 0; conversation < 6; conversation++) {
+      await evaluate(`window.performanceAudit.setupAgent(43, 140, ${conversation}, true)`)
+      switching.push({ opened: conversation + 1, heapMb: await heapMb(), ...(await evaluate("window.performanceAudit.held()")) })
+    }
+    cases.push({ kind: "agent-switching", switching, ...(await typeWhileStreaming(5)) })
+    assert.ok(
+      switching.every((sample) => sample.loaded <= 3),
+      "Conversations left behind stay loaded beyond the two most recent"
+    )
     if (process.env.MAKO_PERF_SOAK === "1") {
       stage = "sustained-renderer-stream"
       await evaluate("window.performanceAudit.setup(5000)")
@@ -438,9 +490,18 @@ async function auditWindow() {
           apply: result.apply,
           frames: result.frameGaps,
           parseCalls: result.parses?.calls,
+          parseMs: result.parses?.totalMs,
           uniqueTextLengths: result.parses?.uniqueLengths,
           elapsedMs: result.elapsedMs,
           inputMs: result.inputCommandMs,
+          steps: result.steps,
+          blocks: result.blocks,
+          mountedTurns: result.mountedTurns,
+          domNodes: result.domNodes,
+          typing: result.typing,
+          timelineCommitMs: result.commits?.timeline?.totalMs,
+          composerCommitMs: result.commits?.composer?.totalMs,
+          switching: result.switching,
         })
       )
   } finally {

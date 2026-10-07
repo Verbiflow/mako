@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-acp-background-test-"))
@@ -49,8 +50,8 @@ async function check() {
   async function open(agent) {
     const provider = `background-${agent}-${randomUUID()}`
     providerHost.acpSources.register({
+      ...noAcpCapabilities,
       provider,
-      canResume: false,
       available: () => true,
       observeBackground: observers[agent],
       launch: async () => ({

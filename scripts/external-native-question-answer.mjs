@@ -19,7 +19,7 @@ try {
   const session=await driver.start(input.cwd,{conversationId:id,resume:input.question.sessionId,modeId:driver.modes.find(mode=>mode.access==='full')?.id??driver.defaultMode,emit:observe})
   if(session.nativeId!==input.question.sessionId)throw Error('External controller opened a different session')
   const start=events.length
-  await driver.prompt(id,driver.sessionQuestions.encodeAnswer(input.question,input.answers),[],undefined,{operationId:randomUUID(),attemptId:randomUUID(),report(){}})
+  await driver.prompt(id,driver.questions.encodeAnswer(input.question,input.answers),[],undefined,{operationId:randomUUID(),attemptId:randomUUID(),report(){}})
   const deadline=Date.now()+120000
   while(!events.slice(start).some(e=>e.type==='live-session'&&e.session.status==='ready')) {
     const failed=events.slice(start).find(e=>e.type==='live-session'&&e.session.status==='failed')

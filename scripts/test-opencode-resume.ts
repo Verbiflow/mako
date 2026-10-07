@@ -9,6 +9,9 @@ import { resumable, type ProviderBinding } from "../electron/contracts/conversat
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
 import { sameNativeSource } from "../electron/native-source.ts"
 import { providerHost } from "../electron/providers/index.ts"
+import { createOpenCodeDriver, openCodeForkBoundary, openCodeSessionMessages } from "../electron/providers/opencode/live-driver.ts"
+import { errorMessage } from "../electron/live-runtime.ts"
+import { locateOpenCodeSession, verifyOpenCodeSession } from "../electron/providers/opencode/installation.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-resume-"))
 const idle: ProviderProcessProbe = { provider: "opencode", probe: async () => ({ kind: "available", sessions: [] }) }
@@ -66,8 +69,40 @@ try {
         assert.equal((await read(binding)).kind, "unavailable", "native admitted input must be reconciled before loading")
         db.exec(`DELETE FROM ${pending}`)
       }
+      if (layout === "mixed-v2") {
+        const located = createOpenCodeDriver({ env: async () => ({}), approvalRoot: async () => root })
+        const resume = located.resume
+        assert.ok(resume.kind === "native" && resume.locate)
+        assert.equal(await resume.locate({ ...binding, path: undefined }, root, { OPENCODE_DB: path }), binding.path, "a binding that lost its path finds its record by native ID in the configured store")
+        await assert.rejects(resume.locate({ ...binding, path: undefined, nativeId: "ses_missing" }, root, { OPENCODE_DB: path }), /could not be resolved/)
+        db.prepare("INSERT INTO session_inbox VALUES (?, ?)").run("starting", "ses_one")
+        assert.equal(await locateOpenCodeSession("ses_one", { OPENCODE_DB: path }), binding.path, "a session OpenCode is still starting, with an input waiting, is found where it lives")
+        await assert.rejects(verifyOpenCodeSession("ses_one", undefined, { OPENCODE_DB: path }), /inputs awaiting execution/, "but is not loaded over that input")
+        db.exec("DELETE FROM session_inbox")
+        assert.equal(await verifyOpenCodeSession("ses_one", undefined, { OPENCODE_DB: path }), binding.path)
+      }
     } finally { db.close() }
   }
   assert.equal(readOpenCodeResumeRecord("/missing.db#%zz", "ses_one").kind, "unavailable")
-  console.log("OpenCode recovery: three store layouts, matching identity, consistent session-scoped fingerprints, old/moved history, ownership and native pending-input refusal")
+  const turns = [
+    { id: "a0", type: "agent-switched" }, { id: "u1", type: "user" }, { id: "r1", type: "assistant" },
+    { id: "a1", type: "agent-switched" }, { id: "s1", type: "synthetic" }, { id: "u2", type: "user" }, { id: "r2", type: "assistant" },
+  ]
+  assert.deepEqual(openCodeForkBoundary(turns, "u1"), { type: "before", messageID: "a1" }, "a fork keeps its turn and drops the switches that opened the next one")
+  assert.deepEqual(openCodeForkBoundary(turns, "u2"), { type: "through" }, "a fork from the last turn keeps the whole session")
+  assert.deepEqual(openCodeForkBoundary([{ id: "u1", type: "user" }, { id: "u2", type: "user" }], "u1"), { type: "before", messageID: "u2" }, "a turn with no answer yet still ends at the next one")
+  assert.throws(() => openCodeForkBoundary(turns, "u9"), /not in OpenCode's session/)
+  // OpenCode 2.0.1 names a next page even after the last, and refuses a cursor sent with an order.
+  const stored = Array.from({ length: 450 }, (_, index) => ({ id: `m${index}`, type: index % 2 ? "assistant" : "user" }))
+  const pages: unknown[] = []
+  const list = async (input: { order?: string; limit: number; cursor?: string }) => {
+    pages.push(input)
+    if (input.cursor && input.order) throw { _tag: "InvalidCursorError", message: "Cursor cannot be combined with order" }
+    const start = input.cursor ? Number(input.cursor) : 0
+    return { data: stored.slice(start, start + input.limit), cursor: { next: String(start + input.limit) } }
+  }
+  assert.deepEqual((await openCodeSessionMessages(list, "ses_one")).map(message => message.id), stored.map(message => message.id), "every page, in order")
+  assert.equal(pages.length, 3, "and no page after a short one")
+  assert.equal(errorMessage({ error: { _tag: "InvalidCursorError", message: "Cursor cannot be combined with order" } }), "Cursor cannot be combined with order", "a tagged rejection says what it was")
+  console.log("OpenCode recovery: three store layouts, matching identity, consistent session-scoped fingerprints, old/moved history, ownership, native pending-input refusal, lookup by native ID and fork boundaries")
 } finally { await rm(root, { recursive: true, force: true }) }

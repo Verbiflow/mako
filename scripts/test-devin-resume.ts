@@ -18,7 +18,7 @@ try {
   insert.run("two", 23, "model-b", root)
   await mkdir(join(root, "session_locks"))
   const policy = devinResumePolicy(root)
-  const verdict = async (binding: ProviderBinding) => assessResumeEvidence(binding, await policy.inspectNativeSession(binding))
+  const verdict = async (binding: ProviderBinding) => assessResumeEvidence(binding, await policy.inspect(binding))
   const canResume = async (binding: ProviderBinding) => resumable(await verdict(binding), "same")
   const path = `${join(root, "sessions.db")}#one`
   const checkpoint = await policy.checkpoint(path)

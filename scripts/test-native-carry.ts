@@ -11,6 +11,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 // Moving a conversation to a harness that opens a new session can carry the
 // history natively: written into that harness's own store and resumed there.
@@ -23,6 +24,8 @@ let wrongSession = false
 let reportThroughAccount = false
 const catalog: ThreadRef[] = []
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -32,7 +35,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "grok",
-  canResume: true,
   available: () => true,
   async start(cwd, options) {
     starts.push(options.resume)
@@ -158,6 +160,38 @@ try {
   wrongSession = false
 
   starts.length = 0
+  const parent = randomUUID()
+  await owner.capture(parent, join(root, "claude", `${parent}.jsonl`))
+  const forkId = randomUUID()
+  owner.fork(parent, { id: forkId, provider: "grok", point: { kind: "native", index: 1, revision: "[null,null,null]" } })
+  const forkRequest = randomUUID()
+  owner.submit(forkId, forkRequest, "Try another parser")
+  const deadline = Date.now() + 5_000
+  while (owner.snapshot(forkId)?.control?.transfers.at(-1)?.state.kind !== "accepted") {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for the fork: ${JSON.stringify(owner.snapshot(forkId)?.control?.transfers)}`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  const forked = owner.snapshot(forkId)!
+  const forkState = forked.control!.transfers.at(-1)!.state
+  assert.equal(forkState.kind === "accepted" && forkState.carried, "native", "a fork with no native fork opens on its history in the harness's own store")
+  assert.deepEqual(starts, [`imported-${emitted.length}`])
+  assert.match(JSON.stringify(emitted.at(-1)?.entries), /Plan the parser.*Keep the recursive descent parser/)
+  assert.deepEqual(forked.requests.find((item) => item.id === forkRequest)?.context, [], "and sends no transcript")
+
+  starts.length = 0
+  const fileEmitter = emitter
+  writeFileSync(join(root, "account", "sessions.db"), "")
+  emitter = async (thread) => {
+    emitted.push(thread)
+    return { sessionId: `row-${emitted.length}`, path: join(root, "account", "sessions.db") + `#row-${emitted.length}` }
+  }
+  const row = await move("native")
+  assert.equal(row.state.carried, "native", JSON.stringify(row.state))
+  assert.equal(row.binding?.path, `${realpathSync(join(root, "store", "sessions.db"))}#row-${emitted.length}`,
+    "a session written as a row of a shared store binds the store's real path and the row")
+  emitter = fileEmitter
+
+  starts.length = 0
   emitter = async () => { throw new Error("disk full") }
   const unwritten = await move("native")
   assert.deepEqual(starts, [undefined])
@@ -170,7 +204,7 @@ try {
   assert.deepEqual(starts, [undefined])
   assert.match(unsupported.state.fallback ?? "", /no session import/)
   assert.equal(unsupported.request?.context?.length, 1)
-  console.log("Native carry: a move resumes the session written for it and sends no transcript; a refused, swapped, unwritten or unsupported import goes as transcript and says why")
+  console.log("Native carry: a move or a fork resumes the session written for it and sends no transcript; a refused, swapped, unwritten or unsupported import goes as transcript and says why")
 } catch (error) {
   console.error(error)
   process.exitCode = 1

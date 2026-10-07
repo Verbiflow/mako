@@ -12,6 +12,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { LiveSessionState } from "../electron/shared.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-question-retirement-"))
 try {
@@ -21,7 +22,10 @@ try {
     let state: LiveSessionState = { id, harness: provider, cwd: root, nativeId: "native", nativePath: path, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
     let prompts = 0
     const driver: ProviderLiveDriver = {
-      provider, available: () => true, canResume: true, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
+      ...noCapabilities,
+      resume: fixtureResume(),
+      questions: { kind: "session", via: "Injected driver fixture", encodeAnswer: codexQuestionAnswer },
+      provider, available: () => true, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
       launchEnvironment: { kind: "unavailable", reason: "Fixture" },
       nativeIdentity: { kind: "unavailable", reason: "Fixture" },
       nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -29,7 +33,6 @@ try {
       planning: { via: "setting", option: "plan", proposal: "Fixture" },
       backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
       turnRecovery: { kind: "manual", reason: "Fixture" },
-      sessionQuestions: { encodeAnswer: codexQuestionAnswer },
       start: async () => state,
       prompt: async (_id, _text, _attachments, _settings, dispatch) => {
         prompts++
@@ -82,7 +85,9 @@ try {
       assert.equal(retireQuestionsForInput(before, fresh.id), before, "Answer delivery does not retire other pending questions")
       let release!: () => void
       const gate = new Promise<void>(resolve => { release = resolve })
-      driver.sessionQuestions!.history = async () => {
+      const asked = driver.questions
+      assert.ok(asked.kind === "session")
+      asked.history = async () => {
         await gate
         return [{ question: codexAsyncQuestion("native", "missed-old", "missed-old", [{ title: "Old history arriving late" }]), answered: [] }]
       }
@@ -92,7 +97,7 @@ try {
       release(); await reading
       assert.ok(!snapshot().control!.questions!.some(q => q.native.itemId === "missed-old"), "A pre-input history read cannot introduce an older prompt afterward")
       assert.equal(current()?.id, afterReadStarted.id)
-      delete driver.sessionQuestions!.history
+      delete asked.history
       owner.stop(); owner = new LiveConversations(deps)
       assert.ok(snapshot().control!.questions!.find(q => q.id === old.id)?.retired, "Retirement is journaled across owner restart")
       assert.equal(current()?.id, afterReadStarted.id)

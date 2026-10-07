@@ -32,7 +32,7 @@ try {
   const families = [...providerHost.liveDrivers.list().map(driver => driver.provider), "future-harness"]
   for (const family of families) {
     const provider = `profile-shutdown-${family}`
-    const profile: HarnessProfile = { id: provider, label: family, available: true, transport: "sdk", models: [], capabilities: [] }
+    const profile: HarnessProfile = { id: provider, label: family, available: true, transport: "sdk", models: [] }
     const load = async (_env: NodeJS.ProcessEnv, _cwd?: string, context?: { signal: AbortSignal }) => {
       assert.ok(context)
       signals.push(context.signal)
@@ -45,7 +45,7 @@ try {
       completed++
       return profile
     }
-    unregister.push(providerHost.profiles.register({ provider, label: family, transport: "sdk", defaults: { work: [] }, capabilities: [], cacheKey: () => "fixture", load, loadForSend: load }))
+    unregister.push(providerHost.profiles.register({ provider, label: family, transport: "sdk", defaults: { work: [] }, cacheKey: () => "fixture", load, loadForSend: load }))
     rejected.push(assert.rejects(harnessProfile(provider, true, root), /superseded|shutting down/))
     await until(() => entered === signals.length && signals.length === families.indexOf(family) * 3 + 1)
     // Supersession removes the old public loading entry. Its native owner

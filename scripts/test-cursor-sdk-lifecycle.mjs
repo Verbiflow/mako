@@ -5,6 +5,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CursorSdkClient } from '../dist-electron/providers/cursor/sdk/client.js'
+import { CURSOR_SDK_EXIT } from '../dist-electron/providers/cursor/sdk/wire.js'
 
 // Real SDK child, without auth or agent execution. A lost output reader used
 // to recurse through uncaughtException -> protocol log -> EPIPE indefinitely.
@@ -26,7 +27,7 @@ for (const mode of ['broken-output', 'stdin-eof', 'explicit-close']) {
     else child.stdin.write(JSON.stringify({ id: 2, method: 'close' }) + '\n')
     const [code, signal] = await exited
     assert.equal(signal, null, `${mode} must exit without test cleanup`)
-    assert.equal(code, mode === 'broken-output' ? 1 : 0)
+    assert.equal(code, mode === 'broken-output' ? CURSOR_SDK_EXIT.stdoutError : CURSOR_SDK_EXIT.closed)
     console.log(`${mode}: exited with ${code}`)
   } finally {
     clearTimeout(deadline)

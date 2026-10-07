@@ -364,7 +364,6 @@ const cachedProfile = {
   available: true,
   transport: "acp",
   models: [],
-  capabilities: ["models"],
 } satisfies HarnessProfile
 try {
   const firstCache = new ProviderProfileCache(cachePath)
@@ -379,6 +378,15 @@ try {
     JSON.parse(await readFile(cachePath, "utf8"))
   )
   assert.equal(Object.keys(stored.snapshots).length, 1)
+  // A cache written by a build whose profiles carried capability tags still
+  // loads; the stale tags are dropped, not served.
+  const olderPath = join(cacheDir, "older.json")
+  await writeFile(olderPath, JSON.stringify({
+    version: 3,
+    entries: { "cursor:default": { hash: "older", savedAt: 1 } },
+    snapshots: { older: { ...cachedProfile, capabilities: ["start", "resume-acp"] } },
+  }))
+  assert.deepEqual(await new ProviderProfileCache(olderPath).get("cursor:default"), cachedProfile)
 } finally {
   await rm(cacheDir, { recursive: true, force: true })
 }
@@ -396,8 +404,9 @@ assert.deepEqual(
     .filter((entry) => !entry.absent.nativeRunner)
     .map((entry) => entry.provider)
 )
-assert.equal(providerHost.liveDrivers.get("cursor")?.canResume, true)
-assert.equal(providerHost.liveDrivers.get("cursor")?.steering, "interrupt")
+assert.equal(providerHost.liveDrivers.get("cursor")?.resume.kind, "native")
+const cursorSteering = providerHost.harnesses.get("cursor")?.capabilities.steering
+assert.ok(cursorSteering?.state === "implemented" && cursorSteering.lands === "interrupt", "the window learns where Cursor's steering lands from the driver")
 assert.deepEqual(
   providerHost.connections.list().map((connection) => connection.provider),
   ["cursor", "grok"]
@@ -420,11 +429,8 @@ assert.deepEqual(
   providerHost.acpSources.list().map((source) => source.provider),
   ["grok", "devin"]
 )
-assert.equal(providerHost.liveDrivers.get("opencode")?.canResume, true)
-assert.equal(
-  providerHost.liveDrivers.get("opencode")?.observesNativeAgents,
-  true
-)
+assert.equal(providerHost.liveDrivers.get("opencode")?.resume.kind, "native")
+assert.equal(providerHost.liveDrivers.get("opencode")?.nativeAgents.kind, "observed")
 assert.deepEqual(
   providerHost.sessionEmitters.list().map((emitter) => emitter.provider),
   providerHost.harnesses
@@ -441,7 +447,7 @@ assert.deepEqual(
 )
 assert.equal(providerHost.nativeRunners.get("claude")?.fastMode, "supported")
 assert.equal(providerHost.profiles.get("claude")?.transport, "sdk")
-assert.ok(providerHost.liveDrivers.get("claude")?.steer)
+assert.equal(providerHost.liveDrivers.get("claude")?.steering.kind, "supported")
 assert.equal(
   providerHost.liveDrivers.get("claude")?.compaction?.kind,
   "supported"
@@ -464,8 +470,9 @@ assert.equal(
 )
 assert.equal(
   providerHost.liveDrivers.get("cursor")?.compaction?.kind,
-  "unavailable"
+  "automatic"
 )
+assert.equal(providerHost.harnesses.get("cursor")?.capabilities.compaction.state, "default")
 assert.deepEqual(
   providerHost.accountCapabilities
     .list()

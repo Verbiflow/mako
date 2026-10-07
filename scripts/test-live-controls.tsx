@@ -1,6 +1,8 @@
 import { mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { ProposedPlanCard } from "../src/components/transcript/proposed-plan"
 import { CompactionControl } from "../src/components/composer/compaction-control"
+import { fixtureCapabilities } from "../src/dev/harness-fixtures"
+import { harnessLacks } from "../electron/contracts/harness-capabilities"
 import { Exchange } from "../src/components/transcript/exchange"
 import { Prose } from "../src/components/transcript/markdown"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
@@ -175,7 +177,7 @@ assert.match(singleModeMarkup, /aria-label="Access: Full access"/)
 assert.doesNotMatch(singleModeMarkup, /<button[^>]*aria-label="Access:/)
 const originalAccessDescriptors = threadsStore.get().descriptors
 threadsStore.set({
-  descriptors: [{ provider: "cursor", displayName: "Cursor", resumable: true, live: true, canResume: false, modes: conversation.session.modes }],
+  descriptors: [{ provider: "cursor", displayName: "Cursor", resumable: true, live: true, capabilities: fixtureCapabilities("cursor"), modes: conversation.session.modes }],
   composerHarness: "cursor",
 })
 const nextSessionMarkup = renderToStaticMarkup(<NextSessionModePicker />)
@@ -189,7 +191,7 @@ threadsStore.set({
     displayName: "Grok",
     resumable: true,
     live: true,
-    canResume: true,
+    capabilities: fixtureCapabilities("grok"),
     modes: [
       { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },
       { id: "access:ask", name: "Ask before acting", access: "ask", enforcement: "launch" },
@@ -576,8 +578,7 @@ assert.deepEqual(recoverableRequests(conversation).map(request => request.id), [
 conversation.requests.splice(-2, 2)
 publish()
 const savedDescriptors = threadsStore.get().descriptors
-threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, canResume: true,
-  recovery: { compaction: { kind: "supported" } } }] })
+threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, capabilities: fixtureCapabilities("claude") }] })
 const savedSession = conversation.session
 const savedActions = control.actions
 const compactionRequest = conversation.requests.find((request) => request.id === "failed")!
@@ -597,11 +598,18 @@ assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Compaction comp
 // The unsupported-provider case must not inherit the completed compaction above.
 control.actions = []
 publish()
-threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true, canResume: true,
-  recovery: { compaction: { kind: "unavailable", reason: "Fixture cannot compact" } } }] })
+threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true,
+  capabilities: { ...fixtureCapabilities("claude"), compaction: harnessLacks("Fixture cannot compact") } }] })
 assert.match(renderToStaticMarkup(<RetainedRequests />), /Review message/)
 assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Fixture cannot compact|Start new thread with saved message/)
 assert.doesNotMatch(renderToStaticMarkup(<CompactionControl />), /<button/)
+// A harness that compacts on its own says so, and offers no Compact of its own.
+threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true,
+  capabilities: { ...fixtureCapabilities("claude"), compaction: fixtureCapabilities("cursor").compaction } }] })
+const automatic = renderToStaticMarkup(<CompactionControl />)
+assert.equal(fixtureCapabilities("cursor").compaction.state, "default")
+assert.match(automatic, /summarizes the conversation on its server/)
+assert.doesNotMatch(automatic, /<button|Start a new thread/)
 threadsStore.set({ descriptors: savedDescriptors })
 conversation.session = savedSession
 control.actions = savedActions

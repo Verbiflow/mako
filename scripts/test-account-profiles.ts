@@ -20,7 +20,7 @@ import { cursorAccountCapability } from "../electron/providers/cursor/accounts.t
 import { CURSOR_ACCOUNT_ENV, CursorSdkAuth, type CursorSdkProbeClient } from "../electron/providers/cursor/sdk/auth.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
 import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential } from "../electron/providers/cursor/sdk/credentials.ts"
-import { managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
+import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
 
 /** The fake Cursor SDK child's reply per method; an unlisted method is a test failure. */
 type CursorAnswers = { [Method in SdkMethod]?: () => SdkResult<Method> }
@@ -31,7 +31,7 @@ const original = { ...process.env }
 mock.method(os, "homedir", () => root)
 syncBuiltinESMExports()
 const claudeCredential = (token: string) => JSON.stringify({ claudeAiOauth: { accessToken: token } })
-const codexCredential = (token: string) => JSON.stringify({ tokens: { access_token: token } })
+const codexCredential = (token: string, account = "account-native") => JSON.stringify({ tokens: { access_token: token, account_id: account } })
 const stores: Record<string, string> = {}
 const storePath = join(root, "os-credentials.json")
 const saveStore = () => writeFile(storePath, JSON.stringify(stores))
@@ -59,7 +59,7 @@ else process.exit(1);
   await writeFile(join(nativeClaude, ".credentials.json"), claudeCredential("native-claude"))
   stores["Claude Code-credentials"] = claudeCredential("native-claude")
   await saveStore()
-  await writeFile(join(nativeCodex, "auth.json"), JSON.stringify({ tokens: { access_token: "native-codex", id_token: `e30.${Buffer.from(JSON.stringify({ email: "native@example.invalid" })).toString("base64url")}.fixture` } }))
+  await writeFile(join(nativeCodex, "auth.json"), JSON.stringify({ tokens: { access_token: "native-codex", account_id: "account-native", id_token: `e30.${Buffer.from(JSON.stringify({ email: "native@example.invalid" })).toString("base64url")}.fixture` } }))
   for (const capability of [claude, codex]) {
     const listed = await capability.listAccounts(null)
     assert.equal(listed.length, 1, "the CLI's ordinary login is the one account a new install has")
@@ -214,14 +214,21 @@ else signIn();
     assert.equal(managed.account.name, "personal")
     assert.equal(managed.env[capability.provider === "claude" ? "ANTHROPIC_BASE_URL" : "OPENAI_BASE_URL"], undefined)
     assert.equal((await capability.listAccounts("personal")).filter(account => account.active).length, 1)
-    const replacement = capability.provider === "claude" ? claudeCredential("rotated") : codexCredential("rotated")
-    await writeFile(join(saved, filename), replacement)
-    if (capability.provider === "claude") {
-      const service = `Claude Code-credentials-${createHash("sha256").update(saved.normalize("NFC")).digest("hex").slice(0, 8)}`
-      stores[service] = replacement
-      await saveStore()
+    const service = `Claude Code-credentials-${createHash("sha256").update(saved.normalize("NFC")).digest("hex").slice(0, 8)}`
+    const write = async (contents: string) => {
+      await writeFile(join(saved, filename), contents)
+      if (capability.provider === "claude") {
+        stores[service] = contents
+        await saveStore()
+      }
     }
-    await assert.rejects(assertAccountLaunch(capability.provider, managed), /credentials changed/)
+    await write(capability.provider === "claude" ? claudeCredential("rotated") : codexCredential("rotated"))
+    await assertAccountLaunch(capability.provider, managed)
+    const replacement = capability.provider === "claude" ? claudeCredential("another") : codexCredential("another", "account-other")
+    await write(replacement)
+    if (capability.provider === "claude")
+      await writeFile(join(saved, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "account-other", emailAddress: "other@example.invalid" } }))
+    await assert.rejects(assertAccountLaunch(capability.provider, managed), /credentials changed/, "another login in the account's place is refused")
     await capability.accountEnv("personal", process.env)
     assert.equal(await readFile(join(saved, filename), "utf8"), replacement, "routing never overwrites native refreshes with a stale source copy")
     await selectAccount(capability.provider, null)
@@ -238,6 +245,10 @@ else signIn();
       stores["Claude Code-credentials"] = claudeCredential("native-rotated")
       await saveStore()
     } else await writeFile(join(nativeCodex, "auth.json"), codexCredential("native-rotated"))
+    await assertAccountLaunch(capability.provider, launch)
+    if (capability.provider === "claude")
+      await writeFile(join(root, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "native-other", emailAddress: "native@example.invalid" } }))
+    else await writeFile(join(nativeCodex, "auth.json"), codexCredential("native-rotated", "account-other"))
     await assert.rejects(assertAccountLaunch(capability.provider, launch), /credentials changed/)
   }
 
@@ -252,6 +263,23 @@ else signIn();
     const launch = await resolveAccountLaunch(capability.provider, env)
     await writeFile(path, "two")
     await assert.rejects(assertAccountLaunch(capability.provider, launch), /credentials changed/)
+  }
+
+  // A CLI refreshing its own login is the same account: the next prompt goes. Another account in its place does not.
+  const refreshes = [
+    [grok, "grok-auth.json", { GROK_AUTH_PATH: join(root, "grok-auth.json") },
+      (token: string, user = "user-1") => JSON.stringify({ "https://auth.x.ai::id": { key: token, refresh_token: `${token}-refresh`, expires_at: token, user_id: user, team_id: "team", auth_mode: "oidc" } })],
+    [opencode, "opencode/auth.json", { XDG_DATA_HOME: root },
+      (token: string, user = "user-1") => JSON.stringify({ openai: { type: "oauth", access: token, refresh: `${token}-refresh`, expires: 1, accountId: user } })],
+  ] as const
+  for (const [capability, relative, env, login] of refreshes) {
+    const path = join(root, relative)
+    await writeFile(path, login("first"))
+    const launch = await resolveAccountLaunch(capability.provider, env)
+    await writeFile(path, login("refreshed"))
+    await assertAccountLaunch(capability.provider, launch)
+    await writeFile(path, login("refreshed", "user-2"))
+    await assert.rejects(assertAccountLaunch(capability.provider, launch), /credentials changed/, `${capability.provider}: another account is refused`)
   }
   const plainText = { available: async () => true, encrypt: async (value: string) => Buffer.from(value), decrypt: async (value: Buffer) => value.toString() }
   const cursorKeys = new CursorAccountKeys(join(root, "cursor-accounts"), plainText)
@@ -524,6 +552,14 @@ setInterval(() => {}, 1000);
 
   const legacyHome = join(root, "legacy-config")
   await mkdir(legacyHome)
+  assert.equal(await codexModelProvider(legacyHome), "openai", "a missing config uses Codex's default provider")
+  for (const contents of ['', 'model_provider = ""', 'model_provider = 42', 'model_provider = true', 'model_provider = ["custom"]', 'model_provider =']) {
+    await writeFile(join(legacyHome, "config.toml"), contents)
+    assert.equal(await codexModelProvider(legacyHome), "openai", "missing, invalid or empty provider settings use Codex's default")
+  }
+  await writeFile(join(legacyHome, "config.toml"), 'model_provider = "fixture-provider"\n')
+  assert.equal(await codexModelProvider(legacyHome), "fixture-provider", "a configured provider is preserved")
+  await rm(join(legacyHome, "config.toml"))
   await writeFile(join(nativeCodex, "config.toml"), 'cli_auth_credentials_store = "file"\n')
   await symlink(join(nativeCodex, "config.toml"), join(legacyHome, "config.toml"))
   await managedCodexConfig(nativeCodex, legacyHome, true)

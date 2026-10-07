@@ -81,7 +81,7 @@ async function checkWindow() {
         await evaluate(`(async()=>{
           const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');
           const s=acpStore.get(),l=s.conversations[s.activeKey],harness=${JSON.stringify(harness)};
-          threadsStore.set({descriptors:[...threadsStore.get().descriptors.filter(d=>d.provider!==harness),{provider:harness,displayName:harness,resumable:true,live:true,canResume:true,recovery:{compaction:{kind:'supported'}}}]});
+          threadsStore.set({descriptors:[...threadsStore.get().descriptors.filter(d=>d.provider!==harness),{...threadsStore.get().descriptors.find(d=>d.provider===harness),resumable:true,live:true}]});
           window.__recoveryMutations=[];window.mako.liveAction=async(...args)=>window.__recoveryMutations.push(args);window.mako.livePrompt=async(...args)=>window.__recoveryMutations.push(args);
           acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,session:{...l.session,status:'ready',connection:'connected'},blocks:[],requests:[
             {id:'unsent-'+harness,status:'interrupted',text:'Do not lose a pre-dispatch stop',attachments:[]},
@@ -271,7 +271,7 @@ async function checkWindow() {
             const s=acpStore.get(),live=s.conversations[s.activeKey];
             const harness=${JSON.stringify(harness)},outcome=${JSON.stringify(outcome)};
             document.querySelectorAll('[data-sonner-toast] [data-close-button]').forEach(button=>button.click());
-            threadsStore.set({composerHarness:harness,descriptors:[...threadsStore.get().descriptors.filter(d=>d.provider!==harness),{provider:harness,displayName:harness,resumable:true,live:true,canResume:true,canSteer:true}]});
+            threadsStore.set({composerHarness:harness,descriptors:[...threadsStore.get().descriptors.filter(d=>d.provider!==harness),(d=>({...d,resumable:true,live:true,capabilities:{...d.capabilities,steering:{state:'implemented',via:'Fixture steering',lands:'step'}}}))(threadsStore.get().descriptors.find(d=>d.provider===harness))]});
             const snapshot={session:{...live.session,harness,status:'running',connection:'connected'},revision:(live.revision??0)+10,createdAt:1,base:null,blocks:live.blocks??[],permissions:[],requests:[{id:${JSON.stringify(runningId)},status:'dispatching',text:'Running review',attachments:[]},{id:${JSON.stringify(queuedId)},status:'queued',text:'Check the retry boundary exactly once.',attachments:[]}],control:{...live.control,actions:[],transfers:[]}};
             window.__queueActions=[];window.__queueEdits=[];
             window.mako.liveEditQueued=async(...args)=>{window.__queueEdits.push(args);throw Error('Renderer must not remove the queue separately')};

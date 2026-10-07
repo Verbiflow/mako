@@ -177,7 +177,11 @@ try {
   store.prepare("INSERT INTO blobs (id, data) VALUES ('b1', x'00')").run()
 
   assert.equal(cursorSdkCheckpoint(stateRoot, directoryName), undefined, "no index row yet: no checkpoint")
+  index.prepare("INSERT INTO agents (agent_id, workspace_ref, status, active_run_id, name, created_at, updated_at) VALUES (?, '/repo', 'RUNNING', 'killed-first-run', 'Fixture', '2026-09-13T00:00:00Z', '2026-09-13T00:00:00Z')").run(agentId)
+  const unrooted = cursorSdkCheckpoint(stateRoot, directoryName)
+  assert.ok(unrooted, "an agent whose first turn was killed has a head to resume from")
   setRoot("root-1")
+  assert.notEqual(cursorSdkCheckpoint(stateRoot, directoryName), unrooted, "its first finished turn moves the checkpoint")
   index.prepare("UPDATE agents SET metadata_json = ? WHERE agent_id = ?").run(JSON.stringify(walDocument.sdkMetadata), agentId)
   assert.equal(readCursorSdkAgent(cursorSdkIndexPath(stateRoot), agentId)?.imported?.revision, copiedSnapshot.revision, "the sessions reader retains the persisted native import revision")
   const sdkFirst = cursorSdkCheckpoint(stateRoot, directoryName)
@@ -204,13 +208,14 @@ try {
     cliKey: async () => null,
   })
   const driver = createCursorSdkDriver({ auth, stateRoot: () => stateRoot, home })
-  assert.ok(driver.inspectNativeSession && driver.checkpoint)
+  const resume = driver.resume
+  assert.ok(resume.kind === "native")
   const verdict = (binding: ProviderBinding) => assessProviderResume(binding, driver)
   const sdkBinding: ProviderBinding = { id: "b1", provider: "cursor", nativeId: agentId, path: sdkStorePath, checkpoint: sdkSecond, coveredBlocks: 1, includesBase: true }
   assert.deepEqual(await verdict(sdkBinding), { kind: "resumable", record: "same" })
   assert.deepEqual(await verdict({ ...sdkBinding, checkpoint: sdkFirst }), { kind: "resumable", record: "moved" })
   assert.deepEqual(await verdict({ ...sdkBinding, checkpoint: undefined }), { kind: "resumable", record: "unknown" }, "a binding without a checkpoint reopens without claiming unchanged history")
-  assert.equal(await driver.checkpoint(sdkStorePath), sdkSecond, "the catalog path reads the same head")
+  assert.equal(await resume.checkpoint(sdkStorePath), sdkSecond, "the catalog path reads the same head")
 
   const acpBinding: ProviderBinding = { id: "b2", provider: "cursor", nativeId: legacyId, path: acpPath, checkpoint: second, coveredBlocks: 1, includesBase: true }
   assert.deepEqual(await verdict(acpBinding), { kind: "resumable", record: "same" }, "an ACP store resumes: the SDK imports it")

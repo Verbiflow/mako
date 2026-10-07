@@ -10,9 +10,11 @@ import { TooltipProvider } from "../src/components/ui/tooltip"
 import { installMockBridge } from "../src/dev/mock-bridge"
 import { acpStore } from "../src/state/acp-state"
 import { applyLiveBatch, applyLiveSnapshot } from "../src/state/live-recovery"
+import { watchLiveResidency } from "../src/state/live-residency"
 import { threadsStore } from "../src/state/thread-store"
 import { store } from "../src/state/session"
 import {
+  auditAgentSession,
   auditId,
   auditSnapshot,
   auditStats,
@@ -20,6 +22,7 @@ import {
 import "../src/index.css"
 
 const fixture = installMockBridge()
+watchLiveResidency()
 let turns = 10
 let epoch = 0
 let updateView: (mode: "thread" | "markdown", text: string) => void = () => {}
@@ -46,6 +49,7 @@ const metrics = () => ({
     uniqueLengths: new Set(
       globalThis.performanceAuditParses?.map((entry) => entry.chars)
     ).size,
+    totalMs: (globalThis.performanceAuditParses ?? []).reduce((total, entry) => total + entry.elapsedMs, 0),
     ...auditStats(
       globalThis.performanceAuditParses?.map((entry) => entry.elapsedMs) ?? []
     ),
@@ -124,6 +128,87 @@ async function stream(count = 40, inactive = false) {
     frameGaps: auditStats(gaps),
     ...metrics(),
   }
+}
+
+async function setupAgent(count: number, steps: number, conversation = 0, settled = false) {
+  turns = count
+  epoch++
+  const snapshot = auditAgentSession(count, steps, conversation, settled ? "ready" : "running")
+  fixture.setLiveSnapshot(snapshot)
+  flushSync(() => {
+    acpStore.set({
+      activeKey: snapshot.session.id,
+      conversations: conversation === 0 ? {} : acpStore.get().conversations,
+    })
+    store.set({ messages: [], stream: null })
+    applyLiveSnapshot(snapshot)
+    updateView("thread", "")
+  })
+  await document.fonts.ready
+  await frames()
+  reset()
+  return { blocks: snapshot.blocks.length, ...metrics() }
+}
+
+/** The renderer's own count of conversations it holds and the blocks in them. */
+function held() {
+  const conversations = Object.values(acpStore.get().conversations)
+  return {
+    conversations: conversations.length,
+    loaded: conversations.filter((item) => item.hydrated).length,
+    blocks: conversations.reduce((total, item) => total + (item.kind === "live" ? item.blocks.length : 0), 0),
+  }
+}
+
+/** A working agent: every tick a tool call starts, streams output, and ends. */
+async function streamAgent(count: number, conversation = 0) {
+  reset()
+  const apply: number[] = []
+  const key = auditId(conversation)
+  for (let frame = 0; frame < count; frame++) {
+    const id = `live-${epoch}-${frame}`
+    const before = performance.now()
+    applyLiveBatch({
+      id: key,
+      revision: (acpStore.get().conversations[key]?.revision ?? 0) + 1,
+      updates: [
+        { kind: "thinking", id: `thinking-${id}`, text: "Reading the next record. " },
+        { kind: "tool", id: `tool-${id}`, title: "Shell", name: "Shell", toolKind: "execute", status: "in_progress", input: '{"command":"rg -n decode"}' },
+        { kind: "tool-update", id: `tool-${id}`, outputAppend: "src/decoder.ts:1: decode\n".repeat(8) },
+        { kind: "tool-update", id: `tool-${id}`, status: "completed" },
+      ],
+    })
+    apply.push(performance.now() - before)
+    // The host flushes a streaming conversation every 16 ms.
+    await pause(16)
+  }
+  await frames()
+  return { apply: auditStats(apply), ...metrics() }
+}
+
+/**
+ * Key-to-paint latency, as Event Timing reports it: from the key press until
+ * the frame that shows it. Keys under the API's 16 ms floor are not reported
+ * and count as 16.
+ */
+const keyLatency: number[] = []
+let keysExpected = 0
+interface EventTimingInit extends PerformanceObserverInit {
+  durationThreshold: number
+}
+const eventTiming: EventTimingInit = { type: "event", durationThreshold: 16 }
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries())
+    if (entry.name === "keydown") keyLatency.push(entry.duration)
+}).observe(eventTiming)
+function typing(expected?: number) {
+  if (expected !== undefined) {
+    keyLatency.length = 0
+    keysExpected = expected
+    return null
+  }
+  const values = [...keyLatency, ...Array<number>(Math.max(0, keysExpected - keyLatency.length)).fill(16)]
+  return { keys: keysExpected, over16: keyLatency.length, ...auditStats(values) }
 }
 
 async function markdown(chars: number) {
@@ -226,17 +311,25 @@ interface AuditApi {
   setupEarlier: typeof setupEarlier
   releaseEarlier: () => void
   setup: typeof setup
+  setupAgent: typeof setupAgent
   stream: typeof stream
+  streamAgent: typeof streamAgent
+  typing: typeof typing
+  held: typeof held
   markdown: typeof markdown
   metrics: typeof metrics
-  result: Awaited<ReturnType<typeof stream>> | null
+  result: Awaited<ReturnType<typeof stream>> | Awaited<ReturnType<typeof streamAgent>> | null
   done: boolean
 }
 const api: AuditApi = {
   setupEarlier,
   releaseEarlier: () => {},
   setup,
+  setupAgent,
   stream,
+  streamAgent,
+  typing,
+  held,
   markdown,
   metrics,
   result: null,

@@ -97,8 +97,15 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
   child.exit(1)
   await assert.rejects(pending, /devin exited with code 1 during initialize: Error: no credentials found$/)
   assert.equal(watch.steps[0]?.outcome, "exited")
-  // A later step on a dead process fails before it is even sent.
-  await assert.rejects(watch.step("session/new", Promise.resolve(1)), /devin exited with code 1 before session\/new: Error: no credentials found$/)
+  // A later step on a dead process fails before it is even sent, and the
+  // request a dead client refused is not left unhandled.
+  let unhandled = 0
+  const onUnhandled = () => { unhandled += 1 }
+  process.on("unhandledRejection", onUnhandled)
+  await assert.rejects(watch.step("session/new", Promise.reject(new Error("closed before answering"))), /devin exited with code 1 before session\/new: Error: no credentials found$/)
+  await new Promise((resolve) => setImmediate(resolve))
+  process.off("unhandledRejection", onUnhandled)
+  assert.equal(unhandled, 0)
   watch.dispose()
 }
 

@@ -16,6 +16,7 @@ import type { LiveSessionState } from "../electron/shared.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { resumable } from "../electron/contracts/conversation-control.ts"
 import type { NativeResumeEvidence } from "../electron/native-continuation.ts"
+import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-checkpoint-"))
 try {
@@ -98,11 +99,13 @@ try {
   // Every installed declaration, plus a new harness, shares the decision owner.
   // Inject native facts here; real file/DB/SDK readers have separate fixture oracles.
   for (const driver of [...providerHost.liveDrivers.list(), { ...providerHost.liveDrivers.list()[0], provider: "future-harness" }]) {
-    assert.ok(driver.checkpoint && driver.inspectNativeSession, `${driver.provider}: explicit native recovery contributions`)
+    const resume = driver.resume
+    assert.ok(resume.kind === "native", `${driver.provider}: explicit native recovery contributions`)
+    const inspecting = (base: ProviderLiveDriver, inspect: () => Promise<NativeResumeEvidence>): ProviderLiveDriver => ({ ...base, resume: { ...resume, inspect } })
     const saved = { ...binding, provider: driver.provider }
     let reads = 0
     let evidence: NativeResumeEvidence = { kind: "available", checkpoint: checkpoint!, strategy: "same-session" }
-    const adapter = { ...driver, nativeSource: undefined, inspectNativeSession: async () => { reads++; return evidence } }
+    const adapter = inspecting({ ...driver, nativeSource: undefined }, async () => { reads++; return evidence })
     assert.deepEqual(await assessProviderResume(saved, adapter), { kind: "resumable", record: "same" })
     assert.deepEqual(await assessProviderResume({ ...saved, checkpoint: undefined }, adapter), { kind: "resumable", record: "unknown" })
     evidence = { kind: "available", checkpoint: "new revision", strategy: "copy" }
@@ -110,18 +113,18 @@ try {
     evidence = { kind: "held", by: "independent native owner" }
     assert.deepEqual(await assessProviderResume(saved, adapter), evidence, "changing ownership cannot reuse a cached permission")
     assert.equal(reads, 4)
-    const missing = await assessProviderResume(saved, { ...adapter, inspectNativeSession: undefined })
+    const missing = await assessProviderResume(saved, { ...adapter, resume: { kind: "not-built", reason: "Fixture" } })
     assert.equal(missing.kind, "unavailable")
     assert.equal((await assessProviderResume(saved, { ...adapter, provider: "wrong-owner" })).kind, "unavailable")
     assert.equal(reads, 4, "invalid ownership/implementation is refused before native I/O")
-    assert.equal((await assessProviderResume(saved, { ...adapter, inspectNativeSession: async () => { throw new Error("read failed") } })).kind, "unavailable")
+    assert.equal((await assessProviderResume(saved, inspecting(adapter, async () => { throw new Error("read failed") }))).kind, "unavailable")
     const oldContext = launchContext("native-fixture", driver.nativeIdentity, { name: "managed-a", dir: "/account-a" })
     oldContext.store = { kind: "located", path: saved.path! }
     const observedContext = { ...oldContext, account: { kind: "configured" as const, name: "managed-b", managed: true } }
     const retained = { ...saved, executionContext: oldContext }
     const session: LiveSessionState = { id: saved.id, harness: driver.provider, nativeId: saved.nativeId, nativePath: saved.path,
       executionContext: observedContext, cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
-    const same = { ...adapter, inspectNativeSession: async (): Promise<NativeResumeEvidence> => ({ kind: "available", checkpoint: checkpoint!, strategy: "same-session" }) }
+    const same = inspecting(adapter, async () => ({ kind: "available", checkpoint: checkpoint!, strategy: "same-session" }))
     await verifyRecoveredSession(retained, session, same)
     await assert.rejects(verifyRecoveredSession(retained, { ...session, nativeId: "wrong-id" }, same), /different native session/)
     await assert.rejects(verifyRecoveredSession(retained, { ...session, nativePath: "/other/store", executionContext: { ...observedContext, store: {kind:"located",path:"/other/store"} } }, same), /different native store/)
@@ -130,7 +133,7 @@ try {
     await assert.rejects(verifyRecoveredSession(saved, { ...session, nativePath: undefined, executionContext: undefined }, same), /did not locate/, "legacy context cannot bypass locating the actual reopened source")
     const inconsistent = { ...retained, executionContext: {...oldContext,store:{kind:"located" as const,path:"/other/store"}} }
     assert.equal((await assessProviderResume(inconsistent, same)).kind, "unavailable", "a stale context cannot be silently replaced before native admission")
-    const copy = { ...same, inspectNativeSession: async (): Promise<NativeResumeEvidence> => ({ kind: "available", checkpoint: checkpoint!, strategy: "copy" }) }
+    const copy = inspecting(same, async () => ({ kind: "available", checkpoint: checkpoint!, strategy: "copy" }))
     await assert.rejects(verifyRecoveredSession(retained, { ...session, nativePath: "/copied/store", executionContext: undefined }, copy), /exact import receipt/, "copy support cannot authorize an arbitrary destination")
     const imported = { ...session, nativePath: "/copied/store", executionContext: { ...observedContext, store: { kind: "located" as const, path: "/copied/store" }, sourceImport: { source: saved.path!, destination: "/copied/store", nativeId: saved.nativeId!, via: "native import response", revision: checkpoint! } } }
     await verifyRecoveredSession(retained, imported, copy)

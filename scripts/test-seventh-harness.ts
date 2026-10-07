@@ -43,7 +43,7 @@ const seventh: HarnessDefinition = {
   toolEditing: lacks("synthetic"),
   skillEditing: lacks("synthetic"),
   mcpEditing: lacks("synthetic"),
-  live: { ...codexLive, provider: "seventh" },
+  live: { ...codexLive, provider: "seventh", contextBreakdown: { kind: "not-built", reason: "Seven itemizes its context; Mako does not read it yet" } },
   decoder: lacks("synthetic"),
   profile: { ...codexProfile, provider: "seventh", label: "Seventh Agent", defaults },
   accounts: lacks("synthetic"),
@@ -66,6 +66,11 @@ installHarness(host, seventh)
 // Its name, wherever Mako shows one: transcripts and the usage table.
 assert.deepEqual(host.harnesses.list().map(({ provider }) => [provider, harnessLabel(host, provider)]), [["claude", "Claude Code"], ["seventh", "Seventh Agent"]])
 assert.equal(host.harnesses.get("seventh")?.absent.usageHistory?.reason, "Its store keeps no token counts")
+// Where it stands on each live capability: what it declared, and what its driver says.
+const capabilities = host.harnesses.get("seventh")!.capabilities
+assert.deepEqual(capabilities.contextBreakdown, { state: "absent", by: "mako", reason: "Seven itemizes its context; Mako does not read it yet" })
+assert.equal(capabilities.compaction.state, "implemented", "compaction is read from the driver's own declaration")
+assert.equal(capabilities.residency.state, "implemented")
 
 // Mako's order is the order harnesses install in; a new one follows the rest.
 const installed = host.harnesses.list().map(({ provider }) => provider)

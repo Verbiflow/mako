@@ -6,14 +6,16 @@ import { reconcileMessages } from "../src/lib/reconcile.ts"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
+import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const capability = { kind: "accepted-message-id", evidence: "Injected message receipt" } as const
 assert.equal(acpLiveDriver({
+  ...noAcpCapabilities,
   provider: "future-acp-fixture", nativePromptIdentity: capability,
   approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   planning: { via: "setting", option: "plan", proposal: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
-  canResume: false, available: () => true, launch: async () => null,
+  available: () => true, launch: async () => null,
 }).nativePromptIdentity, capability, "ACP forwards the provider contribution instead of fixing its availability in transport")
 const scope = { bindingId: "binding", attemptId: auditId(20), provider: "fixture", nativeId: "native", path: "/fixture/history" }
 const accepted = { kind: "accepted", source: "native-response", referenceId: "u1" } as const

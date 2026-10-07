@@ -27,6 +27,7 @@ import type {
   TransferInput,
 } from "../electron/shared.ts"
 import type { ConversationControl } from "../electron/contracts/conversation-control.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-transfers-"))
 const livePids = new Set([41, 42])
@@ -64,6 +65,8 @@ let blockedCloseStarted = false
 let releaseBlockedClose: (() => void) | undefined
 function driver(provider: string): ProviderLiveDriver {
   return {
+    ...noCapabilities,
+    resume: fixtureResume(),
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -73,7 +76,6 @@ function driver(provider: string): ProviderLiveDriver {
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
-    canResume: true,
     available: () => true,
     async start(cwd, options) {
       if (provider === "slow") {

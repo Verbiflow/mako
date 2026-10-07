@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
-import { CursorSdkDisconnectedError } from "../electron/providers/cursor/sdk/client.ts"
+import { CursorSdkDisconnectedError, type CursorSdkExit } from "../electron/providers/cursor/sdk/client.ts"
 import { cursorProfileLoaderWith } from "../electron/providers/cursor/profile.ts"
 import { resolveHarnessTuning } from "../electron/harness-models.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
@@ -164,7 +164,7 @@ try {
   const states: LiveSessionState[] = []
   let closeRequested = false
   let exited = false
-  let confirmExit: (exit: { code: number | null; signal: NodeJS.Signals | null }) => void = () => {}
+  let confirmExit: (exit: CursorSdkExit) => void = () => {}
   const unresponsive: CursorSdkLiveClient = {
     ...client,
     get alive() { return !exited },
@@ -195,7 +195,7 @@ try {
   assert.equal(states.at(-1)?.status, "running", "a timeout cannot report a still-live writer as ready")
   await assert.rejects(stalled.prompt(stalledId, "competing", [], undefined, dispatch()), /already working/)
   exited = true
-  confirmExit({ code: null, signal: "SIGKILL" })
+  confirmExit({ code: null, signal: "SIGKILL", fatal: undefined })
   await stopping
   assert.equal(states.at(-1)?.connection, "disconnected")
   assert.equal(states.at(-1)?.status, "failed")

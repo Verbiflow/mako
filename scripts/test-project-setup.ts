@@ -20,7 +20,6 @@ const profile = (
   available,
   pending,
   transport: "acp",
-  capabilities: [],
   defaultModel: `${id}-default`,
   settings: { model: `${id}-default` },
   models: [{ id: `${id}-default`, label: `${id} model`, options: [] }],

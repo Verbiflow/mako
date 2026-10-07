@@ -14,6 +14,7 @@ import type { PlanningCapability, ProviderLiveDriver } from "../electron/provide
 import { elicitationQuestion, elicitationContent } from "../electron/acp-elicitation.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
+import { fixtureResume, noAcpCapabilities, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 // Native enum titles may be blank. Display the value without changing its wire identity.
 for (const type of ["string", "array"] as const) {
@@ -39,15 +40,17 @@ const nativeEncoding = () => "a".repeat(64)
 const nativePromptIdentity = { kind: "accepted-message-id", evidence: "Future ACP fixture with a proven message receipt" } as const
 const planning: PlanningCapability = { via: "setting", option: "plan", proposal: "Fixture" }
 assert.equal(acpLiveDriver({
+  ...noAcpCapabilities,
   nativePromptIdentity, planning,
   provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
-  approvalAnswerDigest: nativeEncoding, canResume: false, available: () => true, launch: async () => null,
+  approvalAnswerDigest: nativeEncoding, available: () => true, launch: async () => null,
 }).approvalAnswerDigest, nativeEncoding)
 assert.equal(acpLiveDriver({
+  ...noAcpCapabilities,
   provider: "future", nativePromptIdentity, planning, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
-  canResume: false, available: () => true, launch: async () => null,
+  available: () => true, launch: async () => null,
 }).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-registry-"))
@@ -55,6 +58,8 @@ const sent: Array<{ id: string; text: string }> = []
 const sessions = new Map<string, LiveSessionState>()
 let receive: (event: HostEvent) => void = () => {}
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -63,7 +68,6 @@ const driver: ProviderLiveDriver = {
   planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
-  canResume: true,
   provider: "test",
   available: () => true,
   start: async (cwd, options) => {

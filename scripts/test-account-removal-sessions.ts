@@ -44,7 +44,7 @@ try {
     const launchedAs: string[] = []
     let holdTurns = false
     const host = createProviderHost()
-    host.liveDrivers.register({ ...original, provider, canResume: true, available: () => true, nativeSource: undefined,
+    host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
         const account = options.accountLaunch!.account
         launchedAs.push(account.name)

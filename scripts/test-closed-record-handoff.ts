@@ -9,6 +9,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 // A record its harness keeps closed (a Codex archive, a Cursor desktop chat)
 // continues in a new session of the same harness carrying the conversation,
@@ -17,6 +18,8 @@ import type { LiveSessionState } from "../electron/shared.ts"
 const root = mkdtempSync(join(tmpdir(), "mako-closed-handoff-"))
 const starts: Array<string | undefined> = []
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -26,7 +29,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "codex",
-  canResume: true,
   available: () => true,
   async start(cwd, options) {
     starts.push(options.resume)

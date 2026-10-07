@@ -9,12 +9,13 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { acpStore, acp } = await import("../src/state/acp")
-const { applyLiveBatch, hydrateLiveSummaries } =
+const { applyLiveBatch, applyLiveSnapshot, hydrateLiveSummaries } =
   await import("../src/state/live-recovery")
 const { getMako } = await import("../src/lib/bridge")
 const fixture = installMockBridge()
@@ -71,10 +72,51 @@ assert.ok(
     )
 )
 reads.mock.restore()
+
+// Leaving conversations behind unloads all but the two most recent; a running
+// one keeps its transcript, and opening an unloaded one reads it again.
+const { watchLiveResidency } = await import("../src/state/live-residency")
+const conversation = (index: number, status: "ready" | "running") => {
+  const made = auditSnapshot(20, "claude")
+  return { ...made, session: { ...made.session, id: auditId(100 + index), nativeId: `native-${index}`, status } }
+}
+const left = [0, 1, 2, 3].map((index) => conversation(index, "ready"))
+const working = conversation(4, "running")
+const all = [...left, working]
+const reread = mock.method(getMako(), "liveSnapshot", async (id: string) => all.find((item) => item.session.id === id) ?? null)
+acpStore.set({ activeKey: null, conversations: {} })
+for (const item of all) applyLiveSnapshot(item)
+const stopResidency = watchLiveResidency()
+for (const item of left) {
+  acp.activate(item.session.id)
+  await tick()
+  await tick()
+}
+const readsWhileSwitching = reread.mock.callCount()
+const loaded = (id: string) => {
+  const held = acpStore.get().conversations[id]
+  return held?.hydrated === true && held.blocks.length > 0
+}
+assert.deepEqual(
+  left.map((item) => loaded(item.session.id)),
+  [false, true, true, true],
+  "Only the active conversation and the two before it stay loaded"
+)
+assert.equal(loaded(working.session.id), true, "A running conversation keeps its transcript")
+acp.activate(left[0]!.session.id)
+await tick()
+await tick()
+assert.equal(reread.mock.callCount(), readsWhileSwitching + 1)
+assert.equal(loaded(left[0]!.session.id), true, "Opening an unloaded conversation reads it again")
+assert.equal(loaded(left[1]!.session.id), false)
+stopResidency()
+reread.mock.restore()
 Reflect.deleteProperty(globalThis, "window")
 const root = await mkdtemp(join(tmpdir(), "mako-closed-cache-"))
 const closed = mock.method(LiveJournal.prototype, "close")
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -84,7 +126,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",
-  canResume: true,
   available: () => true,
   start: async (cwd, options) => {
     assert.ok(options.conversationId)
@@ -135,7 +176,7 @@ try {
       )
   )
   console.log(
-    "Live retention: lazy background history, fresh activation, bounded closed journals, and lossless journal rehydration verified"
+    "Live retention: lazy background history, fresh activation, window residency bounded to recent conversations, bounded closed journals, and lossless journal rehydration verified"
   )
 } finally {
   owner.stop()

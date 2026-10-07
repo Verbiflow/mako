@@ -52,7 +52,6 @@ const profile = {
   label: "Codex",
   available: true,
   transport: "app-server" as const,
-  capabilities: [],
   ...catalog,
   settings: { model: "b", options: { effort: "low" } },
 }
@@ -219,7 +218,6 @@ providerStore.set({
       label: "Cursor",
       available: true,
       transport: "acp" as const,
-      capabilities: [],
       models: [{ id: "composer", label: "Composer", options: [cursorMode] }],
       settings: { model: "composer", options: { mode: "agent" } },
     },

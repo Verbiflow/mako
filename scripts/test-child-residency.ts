@@ -11,6 +11,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 async function until(check: () => boolean) {
   const deadline = Date.now() + 5000
@@ -27,6 +28,8 @@ let pauseCheckpoint = false
 let catalogPath: string | undefined
 const session: LiveSessionState = { id, nativeId: "native-parent", harness: "devin-fixture", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -35,7 +38,7 @@ const driver: ProviderLiveDriver = {
   planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
-  provider: "devin-fixture", canResume: true, available: () => true,
+  provider: "devin-fixture", available: () => true,
   start: async () => session,
   prompt: async () => {
     owner.observe({ type: "live-session", session: { ...session, status: "running" } })

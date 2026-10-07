@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { harnessDescriptors } from "../src/dev/harness-descriptors.ts"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -46,10 +47,11 @@ async function writeSkill(
   return join(path, "SKILL.md")
 }
 
+/** The providers as the host labels them, from the harness definitions. */
 function providers(readsUniversalRoot: boolean): SkillProviderStatus[] {
   return ["claude", "cursor"].map((id) => ({
     id,
-    label: id,
+    label: harnessDescriptors.find((descriptor) => descriptor.provider === id)?.displayName ?? id,
     account: "default",
     available: true,
     readsUniversalRoot,
@@ -126,7 +128,7 @@ try {
   const grillingForClaude = skillDelivery(grilling, "claude", snapshot.providers)
   assert.deepEqual(grillingForClaude, { kind: "native", path: projectCopy.provenance }, "a provider's own project copy is the one it loads, so it is the one named")
   const grillingForCursor = skillDelivery(grilling, "cursor", snapshot.providers)
-  assert.deepEqual(grillingForCursor, { kind: "handover", path: projectCopy.provenance, from: "claude" }, "a handover reads the project copy too")
+  assert.deepEqual(grillingForCursor, { kind: "handover", path: projectCopy.provenance, from: "claude", source: "Claude Code's skills" }, "a handover reads the project copy too")
 
   /* The read. */
   assert.equal(skillBody("---\nname: a\n---\n\nBody\n"), "Body")

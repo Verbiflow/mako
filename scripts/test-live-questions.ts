@@ -15,6 +15,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-i
 import { codexAsyncQuestion, codexQuestionAnswer, codexAnsweredQuestions } from "../electron/providers/codex/questions.js"
 import { latestPendingQuestion, pendingQuestion } from "../electron/contracts/live-questions.js"
 import { parseNotification } from "../electron/codex-app-parse.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-session-questions-"))
 const native = codexAsyncQuestion("native", "turn-1", "item-1", [{ title: "Which?", options: ["One", "Two"] }])
@@ -31,12 +32,15 @@ try {
     let throwSteer=false, refuseSteer=false
     let beforeRefusal: (() => void) | undefined
     const driver: ProviderLiveDriver = {
-      provider, approvalEvidence:{kind:"submission-only",reason:"Fixture"}, canResume:true, available:()=>true,
+      ...noCapabilities,
+      resume: fixtureResume(),
+      steering: { kind: "supported", lands: "step", via: "Injected driver fixture", steer: async()=>{steers++;beforeRefusal?.();if(throwSteer)throw Error("Lost reply");return refuseSteer ? {kind:"not-accepted",reason:"Turn ended"} : {kind:"accepted"}} },
+      questions: { kind: "session", via: "Injected driver fixture", encodeAnswer:codexQuestionAnswer },
+      provider, approvalEvidence:{kind:"submission-only",reason:"Fixture"}, available:()=>true,
       launchEnvironment:{kind:"unavailable",reason:"Fixture"}, nativeIdentity:{kind:"unavailable",reason:"Fixture"},
       nativeExclusion:NO_NATIVE_EXCLUSION, nativePromptIdentity:NO_NATIVE_PROMPT_IDENTITY,
       planning:{via:"setting",option:"plan",proposal:"Fixture"}, backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
       turnRecovery:{kind:"manual",reason:"Fixture"},
-      sessionQuestions:{encodeAnswer:codexQuestionAnswer}, steering:"step",
       start:async()=>{state={...state,status:"ready",connection:"connected"};return state},
       prompt:async(_id,text,_attachments,_settings,dispatch)=>{
         prompts++
@@ -46,7 +50,6 @@ try {
         owner.observe({type:"live-session",session:state})
         dispatch.report({kind:"accepted",source:"native-response",referenceId:state.nativeRunId})
       },
-      steer:async()=>{steers++;beforeRefusal?.();if(throwSteer)throw Error("Lost reply");return refuseSteer ? {kind:"not-accepted",reason:"Turn ended"} : {kind:"accepted"}},
       permission:async()=>{throw Error("Session question must never use approval callbacks")},
       close(){},cancel:async()=>{},setMode:async()=>{},
     }
@@ -72,9 +75,11 @@ try {
       assert.equal(prompts,0)
       // Both callers begin catch-up before either owns the answer. The first
       // answer's admission must not make the second lose its idempotent receipt.
-      driver.sessionQuestions!.history = async () => { await delay(5); return [{ question: native, answered: [] }] }
+      const asked = driver.questions
+      assert.ok(asked.kind === "session")
+      asked.history = async () => { await delay(5); return [{ question: native, answered: [] }] }
       await Promise.all([owner.permission(id,first.id,response),owner.permission(id,first.id,response)])
-      delete driver.sessionQuestions!.history
+      delete asked.history
       for(let i=0;i<100&&!prompts;i++)await delay(5)
       assert.equal(prompts,1,"Concurrent clients send one answer")
       await assert.rejects(owner.permission(id,first.id,{kind:"answers",answers:{[native.questions[0]!.id]:["One"]}}),/different/)

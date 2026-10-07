@@ -13,6 +13,7 @@ import type { LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver, ProviderSteerResult } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-queued-steering-"))
 try {
@@ -26,25 +27,9 @@ try {
       let owner: LiveConversations
       const response = Promise.withResolvers<ProviderSteerResult>()
       const driver: ProviderLiveDriver = {
-        approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
-        launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
-        nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
-        nativeExclusion: NO_NATIVE_EXCLUSION,
-        nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-        planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
-        backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
-        turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
-        provider, canResume: true, steering: "step", available: () => true,
-        async start(cwd, options) {
-          state = { id: options.conversationId, harness: provider, cwd, nativeId: "fixture", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
-          return state
-        },
-        async prompt(_id, text) {
-          sent.push(text)
-          state = { ...state, status: "running", nativeRunId: randomUUID() }
-          owner.observe({ type: "live-session", session: state })
-        },
-        async steer(_id, input) {
+        ...noCapabilities,
+        resume: fixtureResume(),
+        steering: { kind: "supported", lands: "step", via: "Injected driver fixture", steer: async (_id, input) => {
           calls++
           assert.equal(input.expectedRunId, state.nativeRunId)
           if (outcome === "accepted") {
@@ -58,6 +43,24 @@ try {
           assert.equal(snapshot?.requests.find(r => r.id === queuedId)?.status, "canceled", "Provider write sees durable queue ownership already transferred")
           assert.equal(snapshot?.control?.actions?.at(-1)?.state.kind, "dispatching")
           return response.promise
+        } },
+        approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
+        launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
+        nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
+        nativeExclusion: NO_NATIVE_EXCLUSION,
+        nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+        planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+        backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
+        turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
+        provider, available: () => true,
+        async start(cwd, options) {
+          state = { id: options.conversationId, harness: provider, cwd, nativeId: "fixture", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
+          return state
+        },
+        async prompt(_id, text) {
+          sent.push(text)
+          state = { ...state, status: "running", nativeRunId: randomUUID() }
+          owner.observe({ type: "live-session", session: state })
         },
         async permission() {}, async cancel() {}, async setMode() {}, close() {},
       }

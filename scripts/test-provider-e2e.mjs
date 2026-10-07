@@ -91,7 +91,7 @@ async function runElectron() {
       throw new Error("--control needs an installed CUA Driver")
   }
   // Use the same declared native evidence and shared policy as the host.
-  const checkpoint = (provider, path) => providerHost.liveDrivers.get(provider)?.checkpoint?.(path)
+  const checkpoint = (provider, path) => providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path)
   const resumeVerdict = binding => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider))
   const { nativeSessionPath } = await import("../dist-electron/native-source.js")
   const catalog = defaultCatalog()
@@ -261,11 +261,12 @@ async function runElectron() {
         console.log(JSON.stringify(result))
         continue
       }
-      if (process.argv.includes("--probe-steer") && !driver.steer) {
+      if (process.argv.includes("--probe-steer") && driver.steering.kind !== "supported") {
         const source = providerHost.acpSources.get(driver.provider)
         if (source) {
-          source.steering = "concurrent-prompt"
-          driver.steer = (await import("../dist-electron/acp.js")).liveSteer
+          const via = "Probe: a second prompt sent while the turn runs"
+          source.steering = { kind: "supported", via, wire: "concurrent-prompt" }
+          driver.steering = { kind: "supported", lands: "step", via, steer: (await import("../dist-electron/acp.js")).liveSteer }
         }
       }
       const id = randomUUID()
@@ -556,8 +557,8 @@ async function runElectron() {
           result.wakeRequestId = wakeRequest
         }
         if (process.argv.includes("--steer")) {
-          if (!driver.steer)
-            throw new Error("This provider has no steering transport")
+          if (driver.steering.kind !== "supported")
+            throw new Error(`This provider has no steering transport: ${driver.steering.reason}`)
           const nativeId = completed.session.nativeId
           const steeredRequest = randomUUID()
           const actionId = randomUUID()
@@ -911,7 +912,7 @@ async function runElectron() {
           .slice(2)
           .filter((arg) => !arg.startsWith("--"))
           .find(
-            (candidate) => providerHost.liveDrivers.get(candidate)?.canResume
+            (candidate) => providerHost.liveDrivers.get(candidate)?.resume.kind === "native"
           ) ?? "codex"
       const cwd = join(root, "restart-fixture")
       await mkdir(cwd)

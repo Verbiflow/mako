@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { fixtureResume, noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-provider-turn-test-"))
@@ -35,23 +36,25 @@ async function check() {
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
-  const { liveStart, livePrompt, liveCancel, liveClose, liveCompact, liveSetMode } = await import(join(repo, "dist-electron/acp.js"))
+  const { liveStart, livePrompt, liveCancel, liveClose, liveCompact, liveSetMode, liveSteer } = await import(join(repo, "dist-electron/acp.js"))
   const { advancePromptDelivery } = await import(join(repo, "dist-electron/contracts/prompt-delivery.js"))
   const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
   const hostLogFile = join(root, "host.log")
   installHostLog(hostLogFile)
   // Sessions the agent has written to; a new session is not on disk until its first turn.
   const written = new Set()
-  const fixture = (provider, source) => providerHost.acpSources.register({
+  const fixture = (provider, source, declared = {}) => providerHost.acpSources.register({
+    ...noAcpCapabilities,
+    ...declared,
     provider,
-    canResume: false,
-    locateSession: ({ nativeId }) => (written.has(nativeId) ? join(root, "located", nativeId) : undefined),
+    resume: { ...fixtureResume(), locate: ({ nativeId }) => (written.has(nativeId) ? join(root, "located", nativeId) : undefined) },
     available: () => true,
     providerTurns: source.providerTurns,
     decodeNotification: source.decodeNotification,
     mcpStartup: source.mcpStartup,
-    observeAgents: source.observeAgents,
+    agents: source.agents,
     compaction: source.compaction,
+    steering: source.steering,
     clientCapabilities: source.clientCapabilities,
     launch: async () => ({
       command: process.execPath,
@@ -65,11 +68,13 @@ async function check() {
   fixture("provider-turn-grok", grokAcpSource)
   fixture("provider-turn-devin", devinAcpSource)
   fixture("provider-turn-modes", grokAcpSource)
+  fixture("provider-turn-grok-load", grokAcpSource, { access: grokAcpSource.access })
 
-  async function conversation(provider) {
+  async function conversation(provider, start = {}) {
     const id = randomUUID()
     const events = []
     await liveStart(provider, root, {
+      ...start,
       conversationId: id,
       emit: (event) => events.push(event),
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
@@ -84,7 +89,7 @@ async function check() {
       }
     }
     return {
-      events, session, updates, until,
+      id, events, session, updates, until,
       mode: (modeId) => liveSetMode(id, modeId),
       markers: (label) => updates().filter((update) => update.kind === "event" && update.label === label).map((update) => update.detail),
       opened: () => updates().filter((update) => update.kind === "provider-turn"),
@@ -118,6 +123,27 @@ async function check() {
   assert.equal(modes.events.length, closedEvents, "a late result cannot publish mode state into a closed session")
   await assert.rejects(modes.mode("default"), /no longer connected/)
   console.log("PASS: Native mode acknowledgment, refusal, missing/closed session, overlapping request and close-during-request fencing")
+
+  const loaded = await conversation("provider-turn-grok-load", { resume: "provider-turn-fixture", modeId: "access:full" })
+  assert.equal(loaded.session().currentMode, "access:full")
+  await loaded.prompt("native-mode")
+  assert.ok(loaded.updates().some((update) => update.kind === "text" && update.text.includes("Native mode default.")),
+    "a session Grok reloads in plan is returned to the launch tier the desk reports, not left planning")
+  await loaded.close()
+  console.log("PASS: a Grok session reloaded in plan returns to its launch tier")
+
+  const steered = await conversation("provider-turn-grok")
+  const steer = (text, attachments = []) => liveSteer(steered.id, { id: randomUUID(), expectedRunId: steered.session().nativeRunId, text, attachments })
+  await livePrompt(steered.id, "steered", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  await steered.until("the turn to run", () => steered.updates().some((update) => update.kind === "text" && update.text.includes("Started steered")))
+  assert.equal((await steer("look", [{ name: "a.png", mimeType: "image/png", data: "AA==" }])).kind, "not-accepted", "Grok steers with text only")
+  assert.deepEqual(await steer("Use the other parser"), { kind: "accepted" })
+  await steered.until("the steered turn to end", () => steered.session()?.status === "ready")
+  assert.ok(steered.updates().some((update) => update.kind === "text" && update.text.includes("Steered: Use the other parser")), "the running turn reads the steered message")
+  assert.doesNotMatch(await readFile(hostLogFile, "utf8"), /native event not handled.*interjection/, "Grok's echo of the message is known")
+  assert.equal((await steer("too late")).kind, "not-accepted", "a finished turn takes no steering")
+  await steered.close()
+  console.log("PASS: Steering Grok sends _x.ai/interject into the running turn, text only")
 
   const grok = await conversation("provider-turn-grok")
   assert.deepEqual(grok.markers("MCP server failed"), ["crashes · could not connect"],

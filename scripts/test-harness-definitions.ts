@@ -10,6 +10,7 @@ import {
   type HarnessFamily,
 } from "../electron/providers/harness-definition.ts"
 import { providerHost } from "../electron/providers/index.ts"
+import { capabilityText, liveCapabilities, LIVE_CAPABILITY_KEYS } from "../electron/providers/live-capabilities.ts"
 import type { ProviderRegistry, ProviderCapability } from "../electron/providers/registry.ts"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 
@@ -122,10 +123,10 @@ assert.equal(host.hooks.list().length, 0)
 
 assert.throws(() => installHarness(host, {
   ...definition,
-  live: { ...definition.live, provider: "example", inspectNativeSession: undefined },
+  live: { ...definition.live, provider: "example", resume: { kind: "not-built", reason: "test" } },
   profile: { ...definition.profile, provider: "example" },
-}), /explicit checkpoint and session evidence/)
-assert.equal(host.harnesses.list().length, 0, "a missing native recovery contribution cannot install a partial harness")
+}), /continued on its native session, which needs native resume/)
+assert.equal(host.harnesses.list().length, 0, "a turn recovery without native resume cannot install a partial harness")
 assert.equal(host.liveDrivers.list().length, 0)
 
 const nativeRunner = providerHost.nativeRunners.get("codex")!
@@ -151,6 +152,42 @@ for (const field of ["launchEnvironment", "nativeIdentity", "nativeExclusion", "
   }), Error, `a new harness must declare ${field}, including why it is unavailable`)
   assert.equal(host.harnesses.list().length, 0)
   assert.equal(host.liveDrivers.list().length, 0)
+}
+
+// A driver whose fields contradict each other never installs. Each field
+// carries its own hooks, so only invariants across fields are checked here.
+const example = { ...definition, live: { ...definition.live, provider: "example" }, profile: { ...definition.profile, provider: "example" } }
+const manual = { turnRecovery: { kind: "manual", reason: "test" } } as const
+for (const [harness, refusal] of [
+  [{ ...example, live: { ...example.live, ...manual, resume: { kind: "unavailable", reason: "test" }, fork: { kind: "import", via: "test" } } }, /fork Mako imports continues as a resumed session/],
+  [{ ...example, live: { ...example.live, fork: { kind: "import", via: "test" } } }, /forks by importing the conversation into a new session, which needs its session emitter/],
+  [{ ...example, live: { ...example.live, modeSwitching: { kind: "single", reason: "test" } } }, /mode switching is single with 4 modes/],
+  [{ ...example, live: { ...example.live, steering: { kind: "not-built", reason: " " } } }, /explain its steering declaration/],
+  ...example.live.resume.kind === "native" ? [[{ ...example, live: { ...example.live, resume: { ...example.live.resume, wake: "" } } }, /explain its idle wake declaration/] as const] : [],
+] as const) {
+  assert.throws(() => installHarness(host, harness), refusal)
+  assert.equal(host.harnesses.list().length, 0, "a contradicted capability cannot leave a partially installed harness")
+}
+
+// The catalog is the driver, projected: changing a field changes what the
+// window shows, with the driver's words, and nothing else can disagree.
+const codex = example.live
+assert.deepEqual(liveCapabilities({ ...codex, steering: { kind: "not-built", reason: "test gap" } }).steering, { state: "absent", by: "mako", reason: "test gap" })
+assert.deepEqual(liveCapabilities({ ...codex, contextBreakdown: { kind: "unavailable", reason: "test lack" } }).contextBreakdown, { state: "absent", by: "harness", reason: "test lack" })
+const unresumable = liveCapabilities({ ...codex, ...manual, resume: { kind: "unavailable", reason: "test" } })
+assert.equal(unresumable.resume.state, "absent")
+assert.equal(unresumable.residency.state, "absent", "a process that can't be reopened is never closed when idle")
+assert.equal(liveCapabilities(codex).residency.state, "implemented")
+assert.ok(codex.resume.kind === "native" && capabilityText(liveCapabilities(codex).residency).includes(codex.resume.wake),
+  "residency explains how the harness wakes, in the driver's words")
+
+// Every installed harness states every live capability, with its words.
+for (const harness of harnesses) {
+  for (const key of LIVE_CAPABILITY_KEYS) {
+    const capability = harness.capabilities[key]
+    assert.ok(capability, `${harness.provider} declares ${key}`)
+    assert.ok((capability.state === "implemented" ? capability.via : capability.reason).trim(), `${harness.provider} explains ${key}`)
+  }
 }
 
 console.log(`${"".padEnd(10)}${familyNames.join(" ")}`)

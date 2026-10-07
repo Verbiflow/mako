@@ -10,6 +10,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-i
 import { providerHost } from "../electron/providers/index.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**
  * A live session that changes native ID (Claude's /clear) must not keep the
@@ -36,6 +37,8 @@ for (const { provider, nativeSource } of cases) {
   let emit: (event: LiveDriverEvent) => void = () => {}
   let state: LiveSessionState
   const driver: ProviderLiveDriver = {
+    ...noCapabilities,
+    resume: fixtureResume(),
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -45,7 +48,6 @@ for (const { provider, nativeSource } of cases) {
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
-    canResume: true,
     nativeSource,
     available: () => true,
     async start(cwd, options) {

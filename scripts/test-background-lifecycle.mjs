@@ -7,6 +7,7 @@ import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-background-test-"))
@@ -50,8 +51,8 @@ async function checkMcpStartup() {
   providerHost.mcpSources.list = () => []
   try {
     providerHost.acpSources.register({
+      ...noAcpCapabilities,
       provider: "startup-gate",
-      canResume: false,
       available: () => true,
       launch: async () => ({
         command: process.execPath,

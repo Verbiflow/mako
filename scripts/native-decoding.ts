@@ -64,7 +64,7 @@ const CaptureHeaderSchema = z.object({
   session: JsonObjectSchema,
   native: z.object({ version: VersionSchema, sdk: SdkSchema.optional() }).optional(),
 })
-const CaptureLineSchema = z.object({ message: z.json() })
+const CaptureLineSchema = z.union([z.object({ message: z.json() }), z.object({ prompted: z.literal(true) })])
 
 export function decoders(): ProviderDecoderSource[] {
   return providerHost.decoders.list()
@@ -145,6 +145,8 @@ export interface Recording {
   native?: Partial<FixtureNative>
   session: JsonObject
   messages: JsonValue[]
+  /** Where Mako sent a prompt, as the index of the first message after it. */
+  prompts?: number[]
 }
 
 /** Messages from a capture, a fixture, or a file of one native message per line. */
@@ -158,6 +160,7 @@ export async function readRecording(path: string): Promise<Recording> {
   const header = CaptureHeaderSchema.safeParse(JSON.parse(lines[0] ?? "null"))
   const body = header.success ? lines.slice(1) : lines
   const messages: JsonValue[] = []
+  const prompts: number[] = []
   for (const line of body) {
     const value = z.json().parse(JSON.parse(line))
     if (!header.success) {
@@ -165,10 +168,12 @@ export async function readRecording(path: string): Promise<Recording> {
       continue
     }
     const captured = CaptureLineSchema.safeParse(value)
-    if (captured.success) messages.push(captured.data.message)
+    if (!captured.success) continue
+    if ("message" in captured.data) messages.push(captured.data.message)
+    else prompts.push(messages.length)
   }
   return header.success
-    ? { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages }
+    ? { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts }
     : { session: {}, messages }
 }
 

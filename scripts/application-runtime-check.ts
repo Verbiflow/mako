@@ -20,6 +20,7 @@ import type { LiveSessionState } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 async function checkRuntime() {
   app.setPath("userData", join(app.getAppPath(), "profile"))
@@ -30,6 +31,8 @@ async function checkRuntime() {
   const sent: string[] = []
   const completed: LifecycleAction[] = []
   const driver: ProviderLiveDriver = {
+    ...noCapabilities,
+    resume: fixtureResume(),
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -39,7 +42,6 @@ async function checkRuntime() {
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider: "fixture",
-    canResume: true,
     available: () => true,
     async start(cwd, options) {
       const state: LiveSessionState = {

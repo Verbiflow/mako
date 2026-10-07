@@ -10,6 +10,7 @@ import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import type { LiveSessionState } from "../electron/shared.ts"
 import type { RelayCanonicalEvent } from "@mako/relay"
+import { noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-relay-conversations-"))
 const sessions = new Map<string, LiveSessionState>()
@@ -18,6 +19,7 @@ const permissions: string[] = []
 const cancellations: string[] = []
 function driver(provider: string): ProviderLiveDriver {
   return {
+    ...noCapabilities,
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -27,7 +29,6 @@ function driver(provider: string): ProviderLiveDriver {
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
-    canResume: false,
     available: () => true,
     async start(cwd, options) {
       const session: LiveSessionState = {

@@ -19,6 +19,7 @@ import {
 } from "../electron/providers/prompt-dispatch.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
 import type { LiveBatch } from "../electron/contracts/live-conversations.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 // Shared-policy conformance labels; real native adapter evidence is tested separately.
@@ -31,6 +32,8 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   let fail = false
   let failStart = false
   const driver: ProviderLiveDriver = {
+    ...noCapabilities,
+    resume: fixtureResume(),
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -40,7 +43,6 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
-    canResume: true,
     available: () => true,
     async start(cwd, options) {
       if (failStart) throw new Error("Fixture refuses the requested mode before dispatch")
@@ -266,6 +268,8 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   const calls: PromptDispatch[] = []
   let behaviour: "throw-running" | "refuse-running" | "accept" = "throw-running"
   const driver: ProviderLiveDriver = {
+    ...noCapabilities,
+    resume: fixtureResume(),
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -275,7 +279,6 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider: "cursor",
-    canResume: true,
     available: () => true,
     async start(cwd, options) {
       emit = options.emit ?? (() => {})
@@ -374,6 +377,8 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
   const calls: PromptDispatch[] = []
   let evidence: Exclude<PromptDeliveryEvidence, { kind: "prepared" }> = { kind: "submitted", source: "transport-call" }
   const driver: ProviderLiveDriver = {
+    ...noCapabilities,
+    resume: fixtureResume(),
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -383,7 +388,6 @@ for (const provider of [...registeredHarnessIds(), "seventh-fixture"]) {
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,
-    canResume: true,
     available: () => true,
     async start(cwd, options) {
       emits.set(options.conversationId, options.emit ?? (() => {}))

@@ -22,8 +22,11 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import { projectLive } from "../src/state/live-projection.js"
+import { compactionAvailable } from "../electron/contracts/recovery.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const fixtureCapabilities = {
+  ...noCapabilities,
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -74,7 +77,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   let closed = 0
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
-    canResume: true,
+    resume: fixtureResume(),
     provider: "test-provider",
     available: () => true,
     start: () => started.promise,
@@ -117,6 +120,131 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
       owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
+  }
+}
+
+/** Compaction is offered on an idle conversation, so asking for it reconnects first, as a follow-up would. */
+async function compactsAfterHibernation() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-compact-idle-"))
+  const memory = new SessionMemory(join(root, "session-memory.sqlite"), { pid: 11_101, startedAt: Date.now(), label: "the compaction test host" }, { alive: () => true })
+  const id = randomUUID()
+  const nativePath = join(root, "native-session")
+  const emitters: Array<(event: LiveDriverEvent) => void> = []
+  const compacted: string[] = []
+  let starts = 0
+  const session = (bindingId: string, status: LiveSessionState["status"] = "ready"): LiveSessionState => ({
+    id: bindingId, nativeId: "native-compact", nativePath, harness: "test-provider", cwd: root,
+    status, connection: "connected", modes: [], currentMode: null, configOptions: [],
+  })
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      starts++
+      if (options.emit) emitters.push(options.emit)
+      return session(options.conversationId)
+    },
+    prompt: async (bindingId) => {
+      emitters.at(-1)?.({ type: "live-session", session: session(bindingId, "running") })
+      emitters.at(-1)?.({ type: "live-session", session: session(bindingId) })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => {},
+    setMode: async () => {},
+    compaction: { kind: "supported", start: async (bindingId) => { compacted.push(bindingId) } },
+  }
+  const owner = new LiveConversations({
+    appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null, emit: () => {},
+    memory, providerIdleMs: 15, providerWarmLimit: 2,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+    workspaceSnapshots: new WorkspaceSnapshots(join(root, "workspace-snapshots")),
+  })
+  try {
+    await owner.start("test-provider", root, { conversationId: id })
+    owner.submit(id, randomUUID(), "seed")
+    await waitFor(() => owner.snapshot(id)?.session.connection === "hibernated", "the idle provider did not hibernate")
+    const snapshot = owner.snapshot(id)!
+    assert.ok(compactionAvailable(snapshot.session, snapshot.control?.actions ?? [], false), "the window offers compaction on a hibernated conversation")
+    const action = await owner.act(id, { kind: "compact", id: randomUUID() })
+    assert.equal(action.state.kind, "accepted")
+    assert.equal(starts, 2, "compaction resumes the native session once")
+    assert.deepEqual(compacted, [owner.snapshot(id)?.control?.activeBindingId], "compaction runs on the resumed binding")
+    console.log("PASS: compacting a hibernated conversation resumes it once, then compacts")
+  } finally {
+    owner.stop()
+    memory.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The host quit inside a first turn whose native record was never reported:
+ * after a restart the mode can still be chosen, and the follow-up resumes the
+ * same native session from the record the driver finds by its ID.
+ */
+async function resumesAfterQuitInFirstTurn() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-unlocated-"))
+  const nativePath = join(root, "native-unlocated.jsonl")
+  const id = randomUUID()
+  const starts: Array<{ resume?: string; modeId?: string }> = []
+  const prompts: string[] = []
+  const emitters: Array<(event: LiveDriverEvent) => void> = []
+  const session = (bindingId: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
+    id: bindingId, nativeId: "native-unlocated", harness: "test-provider", cwd: root, status: "ready", connection: "connected",
+    modes: [{ id: "plan", name: "Plan" }, { id: "full", name: "Full" }], currentMode: "full", configOptions: [], ...patch,
+  })
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume({ locate: async (binding) => binding.nativeId === "native-unlocated" ? nativePath : undefined }),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      starts.push({ resume: options.resume, modeId: options.modeId })
+      if (options.emit) emitters.push(options.emit)
+      return session(options.conversationId, { currentMode: options.modeId ?? "full", nativePath: options.resume ? nativePath : undefined })
+    },
+    prompt: async (bindingId, text) => {
+      prompts.push(text)
+      emitters.at(-1)?.({ type: "live-session", session: session(bindingId, { status: "running", nativePath: starts.length > 1 ? nativePath : undefined }) })
+      if (starts.length > 1) emitters.at(-1)?.({ type: "live-session", session: session(bindingId, { nativePath }) })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => {},
+    setMode: async () => {},
+  }
+  const dependencies = (memory: SessionMemory): ConstructorParameters<typeof LiveConversations>[0] => ({
+    appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null, emit: () => {}, memory,
+    resumeVerdict: async (binding) => binding.path ? { kind: "resumable", record: "same" } : { kind: "unavailable", reason: "The native session identity or source has not been located." },
+    workspaceSnapshots: new WorkspaceSnapshots(join(root, "workspace-snapshots")),
+  })
+  const firstMemory = new SessionMemory(join(root, "memory.sqlite"), { pid: 11_201, startedAt: Date.now(), label: "the host that quits" }, { alive: () => true })
+  const first = new LiveConversations(dependencies(firstMemory))
+  await first.start("test-provider", root, { conversationId: id })
+  first.submit(id, randomUUID(), "Ask me a question")
+  await waitFor(() => first.snapshot(id)?.session.status === "running", "the first turn did not start")
+  await first.stop()
+  firstMemory.close()
+  const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: 11_202, startedAt: Date.now(), label: "the restarted host" }, { alive: () => true })
+  const owner = new LiveConversations(dependencies(memory))
+  try {
+    const reopened = owner.snapshot(id)
+    assert.ok(reopened)
+    assert.equal(reopened.control?.bindings[0]?.path, undefined, "the quit host never learned the record's path")
+    await owner.setMode(id, "plan")
+    assert.equal(owner.snapshot(id)?.session.currentMode, "plan", "a mode chosen after the restart is kept for the reopen")
+    owner.submit(id, randomUUID(), "Reply with only OK")
+    await waitFor(() => prompts.length === 2, "the follow-up after the restart was never sent")
+    assert.deepEqual(starts.at(-1), { resume: "native-unlocated", modeId: "plan" }, "the follow-up resumes the same native session in the chosen mode")
+    assert.equal(owner.snapshot(id)?.control?.bindings.find((binding) => binding.id === owner.snapshot(id)?.control?.activeBindingId)?.path, nativePath)
+    console.log("PASS: a session the host quit inside its first turn resumes after a restart, in the mode chosen meanwhile")
+  } finally {
+    await owner.stop()
+    memory.close()
+    rmSync(root, { recursive: true, force: true })
   }
 }
 
@@ -167,7 +295,7 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
   })
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
-    canResume: true,
+    resume: fixtureResume(),
     provider: "test-provider",
     available: () => true,
     start: async (_cwd, options) => {
@@ -410,7 +538,7 @@ async function boundsWarmProviders() {
   let owner: LiveConversations
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
-    canResume: true,
+    resume: fixtureResume(),
     provider: "test-provider",
     available: () => true,
     start: async (_cwd, options) => ({
@@ -492,6 +620,84 @@ async function boundsWarmProviders() {
   }
 }
 
+async function prewarmOverlapsTyping() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-prewarm-"))
+  const id = randomUUID()
+  let starts = 0
+  let owner: LiveConversations
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      starts++
+      return {
+        id: options.conversationId,
+        nativeId: options.conversationId,
+        nativePath: join(root, options.conversationId),
+        harness: "test-provider",
+        cwd: root,
+        status: "ready",
+        connection: "connected",
+        modes: [],
+        currentMode: null,
+        configOptions: [],
+      }
+    },
+    prompt: async (prompted) => {
+      const current = owner.snapshot(prompted)?.session
+      assert.ok(current)
+      owner.observe({ type: "live-session", session: { ...current, status: "running" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "ready" } })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: () => {},
+    setMode: async () => {},
+  }
+  const idleMs = 400
+  owner = new LiveConversations({
+    appPath: root,
+    root: join(root, "journals"),
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    providerIdleMs: idleMs,
+    providerWarmLimit: 2,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  const connection = () => owner.snapshot(id)?.session.connection
+  try {
+    assert.equal(owner.prewarm(id), "unchanged", "an unknown conversation is left alone")
+    await owner.start("test-provider", root, { conversationId: id })
+    owner.submit(id, randomUUID(), "seed")
+    await waitFor(() => connection() === "hibernated", "the idle provider did not hibernate")
+    assert.equal(starts, 1)
+
+    assert.equal(owner.prewarm(id), "waking", "typing wakes a hibernated conversation")
+    assert.equal(owner.prewarm(id), "waking", "a second keystroke joins the same wake")
+    await waitFor(() => connection() === "connected", "the prewarmed provider did not connect")
+    assert.equal(starts, 2, "one wake starts one process")
+    assert.equal(owner.snapshot(id)?.requests.length, 1, "prewarming sends nothing")
+
+    await new Promise((resolve) => setTimeout(resolve, idleMs * 0.75))
+    assert.equal(owner.prewarm(id), "kept-warm", "typing into a warm conversation restarts its idle window")
+    await new Promise((resolve) => setTimeout(resolve, idleMs * 0.75))
+    assert.equal(connection(), "connected", "a draft in progress keeps its provider past the old deadline")
+    await waitFor(() => connection() === "hibernated", "an abandoned draft still lets the provider hibernate")
+    assert.equal(starts, 2)
+
+    await owner.close(id)
+    assert.equal(owner.prewarm(id), "unchanged", "a closed conversation never wakes")
+    assert.equal(starts, 2)
+    console.log("PASS: typing wakes a hibernated provider once, keeps a warm one past its deadline, and a closed one stays down")
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 async function backgroundWorkKeepsProviderResident() {
   const root = mkdtempSync(join(tmpdir(), "mako-live-background-"))
   const ids = [randomUUID(), randomUUID()]
@@ -504,7 +710,7 @@ async function backgroundWorkKeepsProviderResident() {
   }
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
-    canResume: true,
+    resume: fixtureResume(),
     provider: "test-provider",
     available: () => true,
     start: async (_cwd, options) => ({
@@ -590,7 +796,7 @@ async function failedCloseKeepsOwnership() {
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
     provider: "test-provider",
-    canResume: true,
+    resume: fixtureResume(),
     available: () => true,
     start: async (cwd, options) => ({
       id: options.conversationId,
@@ -1429,7 +1635,7 @@ async function providerExitContinued() {
         exit: "the fixture session reports failed and disconnected",
         tests: ["scripts/test-live-conversations.ts"],
       },
-      canResume: true,
+      resume: fixtureResume(),
       provider: "test-provider",
       available: () => true,
       start: async (_cwd, options) => {
@@ -1607,16 +1813,20 @@ async function providerExitContinued() {
   // unacknowledged cancel closes the process, Claude's interrupt can settle
   // as a failed result first.
   for (const ending of [exited, { status: "failed", error: "stream disconnected before completion" }] as const)
-    await run(true, async ({ owner, id, starts, prompts, end, hooks }) => {
+    await run(true, async ({ owner, id, starts, prompts, end, update, hooks }) => {
       const first = randomUUID()
       owner.submit(id, first, "first")
       await dispatched(owner, id, 0)
+      update({ kind: "tool", id: "sleep", title: "sleep 90", status: "running" })
       hooks.cancel = () => end(ending)
       assert.equal(await owner.stopRequest(id, first), true)
       await sleep(60)
       const request = owner.snapshot(id)!.requests[0]
       assert.equal(request?.status, "interrupted")
       assert.equal(request?.interruption?.reason, "stopped", `a stopped turn that ended ${ending.error} reads as stopped`)
+      const call = owner.snapshot(id)!.blocks.find((block) => block.type === "tool" && block.id === "sleep")
+      assert.equal(call?.type === "tool" ? call.status : undefined, "canceled", "a call the stopped process never reported is closed, not left running")
+      assert.equal(request?.interruption?.calls, undefined, "a stopped turn records nothing for the next prompt to explain")
       assert.equal(prompts.length, 1, "a stopped turn is never continued")
       assert.equal(starts.length, 1, "a stopped turn never restarts the provider")
     })
@@ -1693,8 +1903,11 @@ await hibernatesAndWakesExactlyOnce()
 await hibernatesAndWakesExactlyOnce(true)
 await hibernatesAndWakesExactlyOnce("close-during-preparation")
 await hibernatesAndWakesExactlyOnce("changed-store")
+await compactsAfterHibernation()
+await resumesAfterQuitInFirstTurn()
 await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()
+await prewarmOverlapsTyping()
 await failedCloseKeepsOwnership()
 identityAndToolLifecycle()
 console.log(

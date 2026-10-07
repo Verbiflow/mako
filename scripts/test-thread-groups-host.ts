@@ -13,6 +13,7 @@ import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import type { LiveSessionState } from "../electron/shared.js"
 import { ThreadStore } from "../electron/thread-store.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**
  * A Thread with several Sessions in the conversation host, for all six
@@ -34,6 +35,8 @@ const purposeAtSpawn = new Map<string, string | undefined>()
 function driver(harness: string, owner: () => LiveConversations, threads: ThreadStore): ProviderLiveDriver {
   const sessions = new Map<string, LiveSessionState>()
   return {
+    ...noCapabilities,
+    resume: fixtureResume(),
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
     launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
     nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -43,7 +46,6 @@ function driver(harness: string, owner: () => LiveConversations, threads: Thread
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider: harness,
-    canResume: true,
     available: () => true,
     start: async (cwd, options) => {
       const thread = threads.journalPlacement(options.conversationId)?.thread

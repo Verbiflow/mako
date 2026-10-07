@@ -547,13 +547,19 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
       { path: "/tmp/project/old.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-a\n+b\n" },
     ],
   } })
+  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
+    type: "functionCallOutput", id: "handed", name: "lookup", namespace: "crm",
+    output: [{ type: "input_text", text: "Acme, 40 seats" }, { type: "input_image", image_url: "data:image/png;base64,AAAA" }],
+  } })
   const tools = reduceLiveUpdates([], updates).filter((block) => block.type === "tool")
   assert.deepEqual(tools.map((tool) => [tool.title, tool.name, tool.status]), [
     ["electron utility process", "web_search", "completed"],
     ["Sleep 1m 30s", "sleep", "completed"],
     ["linear: get_issue", "mcp__linear__get_issue", "completed"],
     ["Edit /tmp/project/new.ts, /tmp/project/old.ts", "apply_patch", "completed"],
+    ["crm.lookup", "crm.lookup", "completed"],
   ])
+  assert.equal(tools[4]?.output, "Acme, 40 seats\n[image]", "a handed-in tool result shows its text, never an image's data")
   assert.equal(tools[0]?.input, JSON.stringify({ type: "search", query: "electron utility process", queries: null }, null, 2))
   assert.equal(tools[2]?.input, JSON.stringify({ id: "MAK-1" }, null, 2), "an MCP row shows what it was called with")
   assert.equal(tools[3]?.output, "Add /tmp/project/new.ts\n+export {}\n\nUpdate /tmp/project/old.ts\n@@ -1 +1 @@\n-a\n+b", "edits read as a patch, not JSON")

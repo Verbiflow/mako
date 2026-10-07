@@ -19,6 +19,7 @@ import type { LiveSessionState, LiveSnapshot } from "../electron/shared.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-snapshots-"))
 const cwd = join(root, "workspace")
@@ -36,6 +37,8 @@ const snapshots = new WorkspaceSnapshots(join(root, "snapshots"))
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -45,7 +48,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "test",
-  canResume: true,
   available: () => true,
   async start(directory, options) {
     const state: LiveSessionState = {

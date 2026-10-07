@@ -31,10 +31,10 @@ const agents = new CodexAgents({
   publish: (agent) => published.push(agent),
 })
 try {
-  agents.project({ ...activity, id: "spawn", kind: "started" }, false)
+  agents.project({ ...activity, id: "spawn", kind: "started" }, false, "spawn-row")
   await until(() => pending.length === 1)
   // A follow-up arrived while an older status request was outstanding.
-  agents.project({ ...activity, id: "followup", kind: "interacted" }, false)
+  agents.project({ ...activity, id: "followup", kind: "interacted" }, false, "spawn-row")
   pending[0]!({ id: "old-run", status: "completed" })
   await until(() => pending.length === 2)
   assert.equal(published.length, 0, "Old read completion cannot settle newer activity")
@@ -43,20 +43,20 @@ try {
   assert.equal(published[0]?.nativeRunId, "new-run")
   assert.equal(published[0]?.state.kind, "working")
   // A late completed activity refers to the old run. Read latest, never trust its arrival order.
-  const projected = agents.project(activity, false)
+  const projected = agents.project(activity, false, "spawn-row")
   assert.equal(projected[0]?.state.kind, "working")
   await until(() => pending.length === 3)
   pending[2]!({ id: "new-run", status: "inProgress" })
   await until(() => published.length === 2)
   assert.equal(published[1]?.state.kind, "working")
-  agents.project({ ...activity, id: "new-completion" }, false)
+  agents.project({ ...activity, id: "new-completion" }, false, "spawn-row")
   await until(() => pending.length === 4)
   pending[3]!({ id: "new-run", status: "completed" })
   await until(() => published.length === 3)
   assert.equal(published[2]?.state.kind, "completed")
   assert.equal(published[2]?.nativeRunId, "new-run")
   const reads = pending.length
-  agents.project({ ...activity, id: "historical-start", kind: "started" }, true)
+  agents.project({ ...activity, id: "historical-start", kind: "started" }, true, "spawn-row")
   await delay(30)
   assert.equal(pending.length, reads, "Replay never starts status polling or execution")
 } finally { agents.dispose() }

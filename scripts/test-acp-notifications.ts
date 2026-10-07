@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { nativeRecord } from "../electron/native-source.ts"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -222,11 +223,34 @@ const exitPlan = grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { sessio
 assert.ok(exitPlan)
 assert.deepEqual(exitPlan.updates, [], "an empty plan file adds no card; the tool call's own copy stands")
 assert.deepEqual(exitPlan.ask.request.implementsPlan, { plan: "grok:s:call_1", approve: "approved" })
-assert.deepEqual(acpAnswer(exitPlan.ask, "approved"), { outcome: "approved" })
-assert.deepEqual(acpAnswer(exitPlan.ask, "abandoned"), { outcome: "abandoned" })
-assert.deepEqual(acpAnswer(exitPlan.ask, "keep-planning"), { outcome: "rejected" })
-assert.deepEqual(acpAnswer(exitPlan.ask, null), { outcome: "rejected" }, "a request the session dropped keeps planning; it never builds")
+assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "approved" }), { outcome: "approved" })
+assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "abandoned" }), { outcome: "abandoned" })
+assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "keep-planning" }), { outcome: "rejected" })
+assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: null }), { outcome: "rejected" }, "a request the session dropped keeps planning; it never builds")
 assert.equal(grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { toolCallId: 1 }), undefined, "a malformed request is refused")
+// The request grok 1.0.44 sent when its model called `ask_user_question` on October 5, 2026.
+const grokQuestion = grokAcpSource.requests?.decode("_x.ai/ask_user_question", {
+  sessionId: "s", toolCallId: "call_q", mode: "default",
+  questions: [
+    { question: "Which color?", options: [{ label: "Red", description: "Warm" }, { label: "Blue", description: "Cool" }], multiSelect: false },
+    { question: "Which sizes?", options: [{ label: "S", description: "" }, { label: "L", description: "" }], multiSelect: true },
+  ],
+})
+assert.ok(grokQuestion, "Grok's question request is read, not refused as an unknown method")
+assert.deepEqual(grokQuestion.ask.request.questions?.map((question) => [question.id, question.question, question.valueType, question.options.map((option) => option.label)]), [
+  ["0", "Which color?", "string", ["Red", "Blue"]],
+  ["1", "Which sizes?", "string-array", ["S", "L"]],
+])
+assert.deepEqual(acpAnswer(grokQuestion.ask, { kind: "answers", answers: { 0: ["Blue"], 1: ["S", "L"] } }),
+  { outcome: "accepted", answers: { "Which color?": "Blue", "Which sizes?": "S, L" }, annotations: {} })
+assert.deepEqual(acpAnswer(grokQuestion.ask, { kind: "choice", optionId: null }), { outcome: "skip_interview", partial_answers: {} },
+  "a dismissed card lets Grok continue without answers")
+assert.equal(grokAcpSource.requests?.decode("_x.ai/ask_user_question", { sessionId: "s", toolCallId: "call_q", questions: [] }), undefined)
+// grok 1.0.46 writes chat_history.jsonl from the first prompt and updates.jsonl at the turn's end:
+// a session saved mid-turn and the same session resumed name one record.
+const grokFolder = "/home/.grok/sessions/%2Fwork/01a10e4d-0e30"
+assert.deepEqual(nativeRecord(grokAcpSource, `${grokFolder}/chat_history.jsonl`, "01a10e4d-0e30"), nativeRecord(grokAcpSource, `${grokFolder}/updates.jsonl`, "01a10e4d-0e30"))
+assert.equal(nativeRecord(grokAcpSource, `${grokFolder}/updates.jsonl`, "another-session"), undefined, "a folder named for another session is not this record")
 assert.equal(new AcpDecoder(grokAcpSource).request("_x.ai/elsewhere", {}), undefined, "a method no provider reads is refused")
 assert.equal(new AcpDecoder(undefined).request("_x.ai/exit_plan_mode", {}), undefined)
 const untitled = new AcpDecoder(devinAcpSource).permission({ sessionId: "s", toolCall: { toolCallId: "t" },

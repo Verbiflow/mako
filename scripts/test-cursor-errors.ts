@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
 import { AuthenticationError, NetworkError, RateLimitError } from "@cursor/sdk"
-import { crashSummary, cursorSdkWireError } from "../electron/providers/cursor/sdk/errors.ts"
+import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "../electron/providers/cursor/sdk/errors.ts"
 import { CursorSdkError } from "../electron/providers/cursor/sdk/client.ts"
 import { SdkWireErrorSchema } from "../electron/providers/cursor/sdk/wire.ts"
 
 const secret = "Bearer fixture-secret https://private.invalid/account"
+assert.equal(cursorSdkWireError(cursorBusyRefusal(new Error("Agent fixture already has active run"), "fixture")).kind, "busy")
+const unrelated = new Error("Agent other already has active run")
+assert.equal(cursorBusyRefusal(unrelated, "fixture"), undefined, "only this agent's exact native pre-run refusal is classified as busy")
 const refused = Object.assign(new Error(secret), { code: "ECONNREFUSED", address: secret })
 const timeout = Object.assign(new Error(secret), { code: "UND_ERR_CONNECT_TIMEOUT" })
 const invalid = Object.assign(new Error(secret), { code: secret })

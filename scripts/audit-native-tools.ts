@@ -7,7 +7,7 @@ import { CursorProvider } from "../packages/sessions/src/providers/cursor.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
-import { identifyTool } from "../packages/sessions/src/tool-identity.ts"
+import { identifyTool, isDeclaredTool } from "../packages/sessions/src/tool-identity.ts"
 
 /**
  * How every harness's tool calls resolve, read from this machine's own native
@@ -16,9 +16,10 @@ import { identifyTool } from "../packages/sessions/src/tool-identity.ts"
  *   npm run audit:tools -- [--harness grok] [--sessions 40] [--unresolved]
  *
  * Prints names, kinds, labels and argument keys only, never argument values
- * or output, so the report is safe to paste. `other` means no vocabulary in
- * packages/sessions/src/tool-identity.ts knows the name; `no target` counts
- * calls whose collapsed row would show only the label.
+ * or output, so the report is safe to paste. A name marked `undeclared` is
+ * one its harness's vocabulary (packages/sessions/src/harnesses/) doesn't
+ * declare, whatever the shared fallback made of it; `no target` counts calls
+ * whose collapsed row would show only the label.
  */
 
 const options = parseArgs({
@@ -40,6 +41,7 @@ interface ToolTally {
   kind: string
   label: string
   untargeted: number
+  undeclared: boolean
   keys: Map<string, number>
 }
 
@@ -63,7 +65,7 @@ for (const provider of providers) {
         if (block.type !== "tool") continue
         const identity = identifyTool({ harness: provider.harness, name: block.name, input: block.input })
         const row = identity.via ? `${block.name} → ${identity.server ? `${identity.server}/` : ""}${identity.tool}` : block.name
-        const tally = tools.get(row) ?? { count: 0, kind: identity.kind, label: identity.label, untargeted: 0, keys: new Map() }
+        const tally = tools.get(row) ?? { count: 0, kind: identity.kind, label: identity.label, untargeted: 0, undeclared: !isDeclaredTool(provider.harness, block.name), keys: new Map() }
         tally.count += 1
         if (!identity.target) tally.untargeted += 1
         for (const key of argumentKeys(identity.input ?? block.input)) tally.keys.set(key, (tally.keys.get(key) ?? 0) + 1)
@@ -73,18 +75,18 @@ for (const provider of providers) {
   }
   provider.close?.()
   const rows = [...tools]
-    .filter(([, tally]) => !options.unresolved || tally.kind === "other")
+    .filter(([, tally]) => !options.unresolved || tally.undeclared)
     .sort((a, b) => b[1].count - a[1].count)
-  const unresolved = rows.filter(([, tally]) => tally.kind === "other").length
+  const unresolved = rows.filter(([, tally]) => tally.undeclared).length
   unresolvedTotal += unresolved
-  console.log(`\n## ${provider.harness}: ${read} sessions, ${tools.size} tools, ${unresolved} unresolved`)
+  console.log(`\n## ${provider.harness}: ${read} sessions, ${tools.size} tools, ${unresolved} undeclared`)
   for (const [row, tally] of rows) {
     const keys = [...tally.keys].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([key]) => key).join(",")
     const untargeted = tally.untargeted ? `no target ×${tally.untargeted}` : ""
-    console.log(`${String(tally.count).padStart(5)}  ${clip(row, 64).padEnd(64)} ${tally.kind.padEnd(13)} ${clip(tally.label, 22).padEnd(22)} ${untargeted.padEnd(16)} keys: ${keys}`)
+    console.log(`${String(tally.count).padStart(5)}  ${clip(row, 64).padEnd(64)} ${tally.kind.padEnd(13)} ${clip(tally.label, 22).padEnd(22)} ${untargeted.padEnd(16)} ${(tally.undeclared ? "undeclared" : "").padEnd(10)} keys: ${keys}`)
   }
 }
-console.log(`\n${unresolvedTotal} unresolved tool names`)
+console.log(`\n${unresolvedTotal} tool names their harness doesn't declare`)
 
 function argumentKeys(input: string | undefined): string[] {
   if (!input) return ["(no input)"]

@@ -61,7 +61,7 @@ export async function checkNativeQuestionRetirement({owner,reopen,id,cwd,driver,
   await assert.rejects(owner().permission(id,external.id,{kind:'answers',answers:{[external.native.questions[0].id]:['STALE_EXTERNAL_ANSWER']}}),/no longer available/)
   assert.equal(answers(),before)
   const binding=snapshot.control.bindings.find(b=>b.id===snapshot.control.activeBindingId)
-  const evidence=await driver.sessionQuestions.history(binding)
+  const evidence=await driver.questions.history(binding)
   assert.ok(evidence.find(entry=>entry.question.itemId===external.native.itemId)?.retired)
   result.cases.push({name:'external-input-native-history-retirement',status:'passed',native:external.native,answerDispatches:0,sameNativeSession:true})
 }

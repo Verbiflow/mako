@@ -18,7 +18,7 @@ import {
   type LiveBlock,
   type LiveUpdate,
 } from "../electron/contracts/live-content"
-import { requestsAfter, requestsDelta, type LiveRequest } from "../electron/contracts/live-conversations"
+import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "../electron/contracts/live-conversations"
 import { LiveJournal } from "../electron/live-journal"
 import { auditSnapshot } from "./performance-audit-fixtures"
 
@@ -155,11 +155,32 @@ for (const [report, batches] of Object.entries(reports)) {
   assert.equal(requestsAfter(same, {}), undefined)
 }
 
+// A session travels as the fields that changed: a harness's commands and models go once.
+{
+  const commands = Array.from({ length: 300 }, (_, index) => ({ name: `skill-${index}`, description: "x".repeat(200) }))
+  const held = { ...auditSnapshot(1).session, status: "ready" as const, commands, nativeRunId: undefined, error: "earlier" }
+  // SAFETY: a JSON round trip of a session keeps its shape and drops only undefined fields, as a report from a child process does.
+  const reported = JSON.parse(JSON.stringify({ ...held, status: "running", nativeRunId: "run-1", error: undefined })) as typeof held
+  const shared = sharedSession(held, reported)
+  assert.equal(shared.commands, held.commands, "Commands reported again, equal in content, keep their identity")
+  const delta = sessionDelta(held, shared)
+  assert.deepEqual(delta, { sessionChanges: { status: "running", nativeRunId: "run-1" }, sessionCleared: ["error"] })
+  // SAFETY: the delta is JSON by construction; the round trip is the web host's transport.
+  const received = JSON.parse(JSON.stringify(delta)) as typeof delta
+  assert.deepEqual(sessionAfter(held, received), JSON.parse(JSON.stringify(shared)), "The receiver rebuilds the session the host holds")
+  assert.ok(changesSession(received) && !changesSession({}))
+  assert.equal(sessionAfter(held, {}), held)
+  assert.deepEqual(sessionDelta(held, held), {})
+  const renamed = sharedSession(held, { ...reported, commands: commands.slice(1) })
+  assert.notEqual(renamed.commands, held.commands, "A changed list travels")
+}
+
 // Storage appends what a call gained and reopens to the same blocks.
 const stored = (blocks: LiveBlock[]): LiveBlock[] => JSON.parse(JSON.stringify(blocks))
 const root = await mkdtemp(join(tmpdir(), "mako-live-delivery-"))
 try {
   let snapshot = { ...auditSnapshot(1), blocks: opened }
+  const written = snapshot.revision
   let journal = new LiveJournal(root, snapshot.session.id)
   journal.commit(snapshot)
   for (const batch of [...reports["native output deltas (Codex, Cursor)"], ...reports["native input deltas (Claude)"].slice(0, 8)]) {
@@ -173,12 +194,16 @@ try {
     const row = raw.prepare("SELECT count(*) AS count, sum(length(value)) AS bytes FROM block_appends").get()
     assert.ok(row && Number(row.count) > 0 && Number(row.bytes) < total.length * 1.5,
       "A growing call stores its new end, not its whole output again")
+    const metadata = raw.prepare("SELECT value FROM metadata WHERE id=1").get()
+    assert.equal(JSON.parse(String(metadata?.value)).revision, written, "A streamed flush leaves the session's metadata row as it was written")
   } finally {
     raw.close()
   }
   journal.close()
   journal = new LiveJournal(root, snapshot.session.id)
   assert.deepEqual(journal.read()?.blocks, stored(snapshot.blocks), "Appended calls reopen as they were")
+  assert.equal(journal.read()?.revision, snapshot.revision, "and at the last flush's revision")
+  assert.equal(journal.summary()?.revision, snapshot.revision)
   const settled = { ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, status: "ready" as const } }
   journal.commit(settled, snapshot)
   journal.close()

@@ -11,6 +11,7 @@ import { createMakoBridge } from "../electron/shared.ts"
 import { acp, acpStore } from "../src/state/acp.ts"
 import { applyLiveSnapshot } from "../src/state/live-recovery.ts"
 import { prefsStore } from "../src/state/prefs.ts"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-mode-memory-"))
 const id = randomUUID()
@@ -31,6 +32,8 @@ const applied: string[] = []
 const prompts: string[] = []
 const gate = Promise.withResolvers<void>()
 const driver: ProviderLiveDriver = {
+  ...noCapabilities,
+  resume: fixtureResume(),
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
   launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
@@ -40,7 +43,6 @@ const driver: ProviderLiveDriver = {
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",
-  canResume: true,
   available: () => true,
   start: async (_cwd, options) => ({ ...session, id: options.conversationId }),
   prompt: async (_id, text) => {

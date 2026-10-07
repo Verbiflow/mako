@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
-import { resolve } from "node:path"
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
+import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
 import { CURSOR_SDK_EXIT, cursorSdkExitReason } from "../electron/providers/cursor/sdk/wire.ts"
 
 // An uncaught failure inside the child reaches the host as one bounded log
@@ -71,4 +75,22 @@ const [brokenCode] = await brokenExit
 assert.equal(brokenCode, CURSOR_SDK_EXIT.stdoutError)
 assert.match(cursorSdkExitReason(brokenCode) ?? "", /protocol pipe/)
 brokenPipe.stdin.destroy()
-console.log("Cursor child crash: fatal exception reported once without its message; a failed spawn's rejection is contained while any other stays fatal; a broken pipe exits with its own code passed")
+
+// A child that exhausts its V8 heap names that on exit, through the real
+// client, and nothing else from its stderr reaches the host.
+const oomRoot = mkdtempSync(join(tmpdir(), "mako-cursor-oom-"))
+try {
+  const allocate = join(oomRoot, "allocate.mjs")
+  writeFileSync(allocate, `process.stdin.once("data", () => setTimeout(() => { process.stderr.write(${JSON.stringify(secret)}); const kept = []; for (;;) kept.push("x".repeat(100_000) + kept.length) }, 20))`)
+  const node = join(oomRoot, "node")
+  writeFileSync(node, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --max-old-space-size=24 --import ${JSON.stringify(pathToFileURL(allocate).href)} "$@"\n`)
+  chmodSync(node, 0o755)
+  const client = new CursorSdkClient({ owner: "oom-fixture", cwd: oomRoot, env: { PATH: process.env.PATH }, onEvent: () => {}, execPath: node, entry: resolve("dist-electron/providers/cursor/sdk/child.js") })
+  await client.hello().catch(() => {})
+  const exit = await client.exited
+  assert.equal(exit.fatal, "it ran out of JavaScript heap", `a heap exhaustion is named on exit: ${JSON.stringify(exit)}`)
+  assert.ok(!JSON.stringify(exit).includes(secret), "the exit carries only the marker's meaning")
+} finally {
+  rmSync(oomRoot, { recursive: true, force: true })
+}
+console.log("Cursor child crash: fatal exception reported once without its message; a failed spawn's rejection is contained while any other stays fatal; a broken pipe exits with its own code; a heap exhaustion is named on exit without stderr content passed")

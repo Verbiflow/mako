@@ -25,6 +25,8 @@ const log = installHostLog(join(root, "host.log"))
   retainUnknown("codex", "future/notification", "unknown", raw)
   retainUnknown("codex", "item/commandExecution/invalid", "unreadable", { item: { type: "commandExecution" } })
   retainUnknown("claude", "stream_event/unknown", "unknown")
+  // Grok 1.0.44's `_x.ai/mcp/servers_updated` carries each MCP server's environment and headers.
+  retainUnknown("grok", "_x.ai/mcp/servers_updated", "unknown", { mcpServers: [{ name: "axiom", env: [{ name: "AXIOM_TOKEN", value: "xaat-fixture-secret" }], headers: [{ name: "X-Api-Key", value: "fixture-header" }] }, { name: "local", env: { DB_URL: "postgres://user:pw@host/db", MAX_TOKENS: "4096" }, config: { AXIOM_TOKEN: "fixture-bare", dbPassword: "fixture-pw", max_tokens: 4096 } }] })
   await flushUnknown()
   await log.flush()
 
@@ -34,12 +36,18 @@ const log = installHostLog(join(root, "host.log"))
   assert.deepEqual(lines.map((line) => [line.harness, line.kind, line.reason]), [
     ["codex", "future/notification", "unknown"],
     ["codex", "item/commandExecution/invalid", "unreadable"],
+    ["grok", "_x.ai/mcp/servers_updated", "unknown"],
   ], "the first record of each kind is kept; a repeat is counted, and a kind without a record is only counted")
   assert.deepEqual(lines[0]!.record, { threadId: "thread-1", header: "Bearer …", config: { api_key: "[redacted]", refreshToken: "[redacted]", headers: { Authorization: "[redacted]", Cookie: "[redacted]" } }, token_count: 120, model: "fixture-model" }, "known structured credential fields are redacted without dropping model/token-count evidence")
+  assert.deepEqual(lines[2]!.record, { mcpServers: [
+    { name: "axiom", env: [{ name: "AXIOM_TOKEN", value: "[redacted]" }], headers: [{ name: "X-Api-Key", value: "[redacted]" }] },
+    { name: "local", env: { DB_URL: "[redacted]", MAX_TOKENS: "[redacted]" }, config: { AXIOM_TOKEN: "[redacted]", dbPassword: "[redacted]", max_tokens: 4096 } },
+  ] }, "MCP server environments and headers keep their names but no values, in either shape")
   assert.deepEqual(unknownKinds().map((kind) => [kind.kind, kind.count]), [
     ["future/notification", 2],
     ["item/commandExecution/invalid", 1],
     ["stream_event/unknown", 1],
+    ["_x.ai/mcp/servers_updated", 1],
   ])
   const host = await readFile(log.path, "utf8")
   assert.equal(host.match(/native event not handled harness=codex kind=future\/notification/g)?.length, 1, "the host log names a kind once")
@@ -65,7 +73,9 @@ const log = installHostLog(join(root, "host.log"))
     { method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "a", delta: "token=abc123 stays private" } },
     { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, items: [] } } },
   ]
-  for (const message of messages) capture.record(message)
+  capture.record(messages[0]!)
+  capture.prompted()
+  for (const message of messages.slice(1)) capture.record(message)
   await capture.flush()
   delete process.env[NATIVE_CAPTURE_ENV]
 
@@ -73,11 +83,12 @@ const log = installHostLog(join(root, "host.log"))
   assert.equal(recording.harness, "codex")
   assert.deepEqual(recording.session, { threadId: "thread-1", diagnostic: "Bearer …", env: { ANTHROPIC_API_KEY: "[redacted]", XAI_API_KEY: "[redacted]" }, credentials: "[redacted]" }, "the first-message header preserves provenance while scrubbing secrets too")
   assert.equal(recording.messages.length, 3)
+  assert.deepEqual(recording.prompts, [1], "a prompt Mako sent is kept where it fell, before the message that followed it")
   assert.match(JSON.stringify(recording.messages[1]), /token=… stays private/, "captured content is scrubbed of token values")
   const steps = decodeSession(decoderFor("codex"), recording.session, recording.messages)
   assert.deepEqual(steps.map((step) => step.kind), ["turn/started", "item/agentMessage/delta", "turn/completed"])
   assert.ok(steps[1]!.decoded.length, "a captured session decodes as it arrived")
-  console.log("PASS: an opt-in capture records a conversation and replays through its decoder")
+  console.log("PASS: an opt-in capture records a conversation, where its prompts were sent, and replays through its decoder")
 }
 
 {

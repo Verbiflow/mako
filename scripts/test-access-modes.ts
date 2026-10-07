@@ -14,13 +14,15 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
-import { openCodeAgentForMode, openCodeModeForAgent, openCodeModes, openCodeSessionModes } from "../electron/providers/opencode/access.ts"
+import { openCodeAgentForMode, openCodeLaunchAccess, openCodeModeForAgent, openCodeModes, openCodeSessionModes } from "../electron/providers/opencode/access.ts"
 import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "../electron/providers/codex/access.ts"
 import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
 import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
 import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 import type { SandboxPolicy } from "../electron/providers/codex/generated/v2/SandboxPolicy.ts"
 import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+
+const lands = (driver: ProviderLiveDriver) => driver.steering.kind === "supported" ? driver.steering.lands : driver.steering.kind
 
 function codexWithout(declaration: keyof ProviderLiveDriver): ProviderLiveDriver {
   // SAFETY: deliberately malformed input: a declaration the type requires is removed, to prove registration rejects it at runtime.
@@ -56,8 +58,7 @@ assert.ok(
   !cursorModes.some((mode) => mode.access === "auto"),
   "the SDK's Auto review refuses calls nobody at the desk can approve, so it is not a tier"
 )
-assert.equal(cursorDriver.steering, "interrupt")
-assert.ok(cursorDriver.steer)
+assert.equal(lands(cursorDriver), "interrupt")
 
 // Devin: every tier is native, nothing is synthesized.
 const devinNative = {
@@ -79,10 +80,11 @@ assert.deepEqual(devinModes.map((mode) => [mode.id, mode.access]), [
   ["bypass", "full"],
 ])
 assert.ok(devinModes.every((mode) => mode.enforcement === "provider"))
-assert.equal(acpLiveDriver(devinAcpSource).steering, "step")
+assert.equal(lands(acpLiveDriver(devinAcpSource)), "step")
 
 // Grok: Plan is a native mode it takes live but does not list; permission
-// tiers are fixed at launch through --permission-mode. No steering.
+// tiers are fixed at launch through --permission-mode. It steers through
+// `_x.ai/interject`, which the running turn reads at its next step.
 const grokModes = acpSessionModes(grokAcpSource.access, null)
 assert.deepEqual(grokModes.map((mode) => [mode.id, mode.access, mode.enforcement]), [
   ["plan", "plan", "provider"],
@@ -90,8 +92,7 @@ assert.deepEqual(grokModes.map((mode) => [mode.id, mode.access, mode.enforcement
   [accessModeId("auto"), "auto", "launch"],
   [accessModeId("full"), "full", "launch"],
 ])
-assert.equal(acpLiveDriver(grokAcpSource).steer, undefined, "Grok queues a concurrent prompt behind the turn")
-assert.equal(acpLiveDriver(grokAcpSource).steering, undefined)
+assert.equal(lands(acpLiveDriver(grokAcpSource)), "step")
 const grokRoot = realpathSync(mkdtempSync(join(tmpdir(), "grok-access-")))
 const grokHome = join(grokRoot, "home")
 const grokRepo = join(grokRoot, "repo")
@@ -215,6 +216,9 @@ assert.deepEqual(openCodeSessionModes([{ id: "build", name: "build" }, { id: "pl
   "a session with only the built-in agents shows the ladder declared before launch")
 assert.equal(openCodeAgentForMode(accessModeId("full"), "full"), "build", "returning from Plan must switch the native agent back to Build")
 assert.equal(openCodeAgentForMode("plan", "full"), "plan")
+assert.equal(openCodeLaunchAccess("plan", accessModeId("full")), "full", "a session opened in Plan launches at the level beside it, which building the plan uses")
+assert.equal(openCodeLaunchAccess(accessModeId("edits"), accessModeId("full")), "edits", "a selected access mode wins over the launch level")
+assert.equal(openCodeLaunchAccess("plan", undefined), "ask")
 assert.equal(openCodeAgentForMode("review", "ask"), "review")
 assert.throws(() => openCodeAgentForMode(accessModeId("ask"), "full"), /when its session starts/)
 assert.equal(openCodeModeForAgent("build", "edits"), accessModeId("edits"))
@@ -312,19 +316,11 @@ assert.equal(cursorDriver.defaultMode, "full-access")
 
 // Invariants the interface cannot type fail at install, not at a call site.
 assert.throws(
-  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", steering: undefined }),
-  /steer and steering/
-)
-assert.throws(
-  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", steer: undefined, steering: "interrupt" }),
-  /steer and steering/
-)
-assert.throws(
-  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", modes: [{ id: "a", name: "A", access: "full" }] }),
+  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", modes: [{ id: "a", name: "A", access: "full" }], modeSwitching: { kind: "single", reason: "x" } }),
   /no enforcer/
 )
 assert.throws(
-  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", modes: [{ id: "a", name: "A" }], defaultMode: "b" }),
+  () => validateLiveDriver({ ...codexLiveDriver, provider: "x", modes: [{ id: "a", name: "A" }], modeSwitching: { kind: "single", reason: "x" }, defaultMode: "b" }),
   /not one of its declared modes/
 )
 

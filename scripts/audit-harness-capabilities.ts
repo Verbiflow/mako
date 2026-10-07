@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util"
 import { accessTierOfModeId, ACCESS_TIER_NAMES } from "../electron/contracts/access.ts"
 import { providerHost } from "../electron/providers/index.ts"
+import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../electron/providers/live-capabilities.ts"
 
 /**
  * What each installed harness declares about access, plans, approvals and
@@ -88,6 +89,27 @@ const cell = (text: string, column: keyof Row) => (text.length > width(column) ?
 console.log(columns.map((column) => cell(column, column)).join("  "))
 for (const row of rows) console.log(columns.map((column) => cell(row[column], column)).join("  "))
 console.log("ᴸ: the harness reads the tier when its process starts; a running session keeps it.")
+
+// Where each harness stands on each live capability, one column per harness.
+const records = providerHost.harnesses.list().filter(({ provider }) => !options.harness || provider === options.harness)
+const MARK = { implemented: "✓", "no-op": "no-op", default: "default", absent: "" } as const
+const mark = (capability: Capability) => capability.state === "absent" ? (capability.by === "harness" ? "—" : "GAP") : MARK[capability.state]
+const labelWidth = Math.max(...LIVE_CAPABILITY_KEYS.map((key) => LIVE_CAPABILITY_LABELS[key].length))
+const columnWidth = Math.max(8, ...records.map(({ provider }) => provider.length))
+console.log(`\n${"".padEnd(labelWidth)}  ${records.map(({ provider }) => provider.padEnd(columnWidth)).join("  ")}`)
+for (const key of LIVE_CAPABILITY_KEYS)
+  console.log(`${LIVE_CAPABILITY_LABELS[key].padEnd(labelWidth)}  ${records.map(({ capabilities }) => mark(capabilities[key]).padEnd(columnWidth)).join("  ")}`)
+console.log("✓ Mako drives it · no-op: accepted, nothing to do · default: the harness's own behaviour · —: the harness has none · GAP: the harness has it, Mako doesn't drive it")
+const gaps = records.flatMap(({ provider, capabilities }) => LIVE_CAPABILITY_KEYS.filter((key) => {
+  const capability = capabilities[key]
+  return capability.state === "absent" && capability.by === "mako"
+}).map((key) => `${provider} ${LIVE_CAPABILITY_LABELS[key]}`))
+if (gaps.length) console.log(`Gaps: ${gaps.join(", ")}`)
+for (const { provider, capabilities } of records)
+  details.push(`${provider} capabilities`, ...LIVE_CAPABILITY_KEYS.map((key) => {
+    const capability = capabilities[key]
+    return `  ${LIVE_CAPABILITY_LABELS[key]}: ${capability.state}${capability.state === "absent" ? ` (${capability.by})` : ""} — ${capability.state === "implemented" ? capability.via : capability.reason}`
+  }))
 if (options.detail) console.log(`\n${details.join("\n")}`)
 if (problems.length) {
   console.log(`\n${problems.length} contradiction${problems.length === 1 ? "" : "s"}:`)

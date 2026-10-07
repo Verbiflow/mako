@@ -134,7 +134,7 @@ async function run() {
     appPath: root,
     driver: (name) => (name === provider ? observedDriver : undefined),
     history: async () => null,
-    checkpoint: path => driver.checkpoint?.(path),
+    checkpoint: path => driver.resume.checkpoint?.(path),
     nativePath: session => nativeSessionPath(session, catalog.list()),
     resumeVerdict: binding => assessProviderResume(binding, driver),
     emit() {},
@@ -150,10 +150,13 @@ async function run() {
     if(args[1].startsWith('<send_user_message_question_reply>'))events.push({type:'test-answer-prompt'})
     return nativePrompt(...args)
   }
-  const nativeSteer = observedDriver.steer
-  if(nativeSteer) observedDriver.steer = async (...args) => {
-    if(args[1].text.startsWith('<send_user_message_question_reply>'))events.push({type:'test-answer-steer'})
-    return nativeSteer(...args)
+  const steering = observedDriver.steering
+  if(steering.kind === 'supported') {
+    const nativeSteer = steering.steer.bind(steering)
+    observedDriver.steering = { ...steering, steer: async (...args) => {
+      if(args[1].text.startsWith('<send_user_message_question_reply>'))events.push({type:'test-answer-steer'})
+      return nativeSteer(...args)
+    } }
   }
   let owner = new LiveConversations(dependencies)
   const externalDecision = Boolean(process.env.MAKO_NATIVE_APPROVAL_EXTERNAL)

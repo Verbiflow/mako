@@ -163,7 +163,7 @@ const splitReply = responseSections([{ id: "native-reply", role: "assistant", bl
   { type: "attachment", name: "screen.png", mimeType: "image/png", source: { kind: "file", path: screenshot } },
   { type: "text", text: duplicatedVisual },
 ] }, { id: "independent-reply", role: "assistant", blocks: [{ type: "text", text: duplicatedVisual }] }])
-assert.deepEqual(splitReply.map(section => section.kind === "prose" ? section.previewedFiles : undefined), [[screenshot], [screenshot], []], "Native provenance survives section splitting without leaking to another message")
+assert.deepEqual(splitReply.map(section => section.kind === "prose" ? section.previewedFiles : undefined), [[screenshot], [screenshot], undefined], "Native provenance survives section splitting without leaking to another message")
 for (const path of ["video.mp4", "voice.wav", "report.xlsx", "report.pdf", "trace.har", "guide.md"]) {
   const plan = unified().use(rehypeAssetGroups, { previewedFiles: [path] }).runSync(parseProse(`The file is at \`${path}\`.`))
   assert.deepEqual(plan.children.flatMap(node => node.type === "element" ? inlineFileLinks(node) : []), [], `Native ${path} does not gain a second automatic preview`)

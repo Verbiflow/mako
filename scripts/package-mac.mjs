@@ -19,6 +19,7 @@ import { build, Platform, Arch } from "electron-builder"
 import { extractFile } from "@electron/asar"
 import { auditPackage } from "./audit-package.mjs"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
+import { assertCursorSdkPatched } from "./patch-cursor-sdk.mjs"
 import { localMacConfig, resolveLocalIdentity, verifyLocalSignature } from "./mac-local-signing.mjs"
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -41,6 +42,8 @@ const inputs = [
   "dist-electron",
   "dist-browser-extension",
   "package.json",
+  "LICENSE",
+  "NOTICE",
   "packages/sessions/package.json",
   "packages/sessions/dist",
   "packages/git/package.json",
@@ -134,6 +137,10 @@ try {
   const makoBuild = { id: createHash("sha256").update(JSON.stringify(before)).digest("hex").slice(0, 16), builtAt: new Date().toISOString(), revision, dirty }
   const configuration = { ...pkg.build, extraMetadata: { ...pkg.build.extraMetadata, makoBuild } }
   const buildConfig = localIdentity ? localMacConfig(configuration, localIdentity) : configuration
+  const workspaceFiles = buildConfig.files.flatMap((entry) => {
+    const parsed = z.object({ from: z.string(), to: z.string(), filter: z.array(z.string()).optional() }).passthrough().safeParse(entry)
+    return parsed.success && parsed.data.from.startsWith("packages/") ? [parsed.data] : []
+  })
   const packagedMetadata = { ...pkg, ...buildConfig.extraMetadata }
   await writeFile(join(stage, "package.json"), JSON.stringify(packagedMetadata))
   const config = join(stage, "electron-builder.json")
@@ -161,6 +168,10 @@ try {
         "!**/__pycache__/**",
         "!**/*.pyc",
         "!**/*.pyo",
+        // These packages come from the frozen FileSets below. Collecting them
+        // again through workspace dependencies duplicates ASAR destinations
+        // and can leave headers pointing into another file's bytes.
+        ...workspaceFiles.map((entry) => `!${entry.to}{,/**/*}`),
         {
           from: stage,
           to: ".",
@@ -175,27 +186,24 @@ try {
         },
         // Use the release manifest's package filters on the frozen inputs too.
         // A second package list omitted control-runtime after its extraction.
-        ...buildConfig.files
-          .flatMap((entry) => {
-            const parsed = z
-              .object({
-                from: z.string(),
-                to: z.string(),
-                filter: z.array(z.string()).optional(),
-              })
-              .passthrough()
-              .safeParse(entry)
-            return parsed.success && parsed.data.from.startsWith("packages/")
-              ? [parsed.data]
-              : []
-          })
+        ...workspaceFiles
           .map((entry) => ({
             ...entry,
             from: join(stage, entry.from),
             filter: [...(entry.filter ?? []), "!**/*.map"],
           })),
       ],
-      extraResources: [...(buildConfig.extraResources ?? []), { from: join(stage, "vendor/control-media"), to: "control-media" }],
+      extraResources: [
+        ...(buildConfig.extraResources ?? []).map((entry) => {
+          const path = z.string().safeParse(entry)
+          // Freeze these notices too. A relative LICENSE resource also
+          // excludes LICENSE from every workspace FileSet in the builder.
+          return path.success && ["LICENSE", "NOTICE"].includes(path.data)
+            ? { from: join(stage, path.data), to: path.data }
+            : entry
+        }),
+        { from: join(stage, "vendor/control-media"), to: "control-media" },
+      ],
       extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }],
       mac: {
         ...buildConfig.mac,
@@ -223,10 +231,17 @@ try {
   const app = join(output, "mac-arm64", `${pkg.build.productName}.app`)
   const archive = join(app, "Contents/Resources/app.asar")
   const metadata = JSON.parse(extractFile(archive, "package.json").toString("utf8"))
+  assertCursorSdkPatched((target) => extractFile(archive, `node_modules/@cursor/sdk/${target}`).toString("utf8"))
   for (const [key, value] of Object.entries(buildConfig.extraMetadata ?? {}))
     assert.deepEqual(metadata[key], value, `Packaged metadata differs from the frozen configuration: ${key}`)
   const verified = []
   for (const file of before) {
+    if (["LICENSE", "NOTICE"].includes(file.path)) {
+      const target = join(app, "Contents/Resources", file.path)
+      assert.equal(await digest(target), file.sha256, `Packaged notice differs: ${file.path}`)
+      verified.push({ path: target, sha256: file.sha256 })
+      continue
+    }
     if (file.path.startsWith("vendor/control-media/")) {
       const target = join(app, "Contents/Resources", file.path.slice("vendor/".length))
       if (/\/(ffmpeg|ffprobe)$/.test(file.path)) {

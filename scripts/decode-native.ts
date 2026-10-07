@@ -1,7 +1,9 @@
-import { access, mkdir, writeFile } from "node:fs/promises"
+import { access, mkdir, stat, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
+import { aligned, comparePair, differences, liveDrawing, storeDrawing } from "./decode-compare.ts"
 import {
   decoderFor,
   decodeSession,
@@ -24,6 +26,14 @@ import {
  *   npm run decode -- capture.jsonl --fixture compaction --about "…" --source "codex-cli 0.159.0 app-server" --version 0.159.0
  *   npm run decode -- shapes.jsonl --harness cursor --fixture … --version 1.0.31 --sdk @cursor/sdk@1.0.31 --origin written
  *
+ *   npm run decode -- capture.jsonl --compare <store file>  the live drawing beside the store's
+ *   npm run decode -- scripts/fixtures/native-decoding/grok/pairs/shell-and-edit
+ *
+ * `--compare` reads the store file the session wrote with the harness's
+ * history reader (`--home` when the store is not under your own home) and
+ * prints both drawings aligned: ` ` both sides draw a line, `-` only the
+ * live wire, `+` only the store. A pair folder compares its own two halves.
+ *
  * Captures come from running Mako with `MAKO_NATIVE_CAPTURE=codex`; they sit
  * in `native-captures/` beside the host log. A capture holds conversation
  * content: read the fixture it becomes before committing it. A fixture's
@@ -45,6 +55,8 @@ const { values: options, positionals } = parseArgs({
     sdk: { type: "string" },
     origin: { type: "string" },
     force: { type: "boolean", default: false },
+    compare: { type: "string" },
+    home: { type: "string" },
   },
 })
 
@@ -55,6 +67,15 @@ if (!path) {
   process.exit(2)
 }
 
+if (await stat(path).then((info) => info.isDirectory(), () => false)) {
+  const { pair, live, store, unexplained, settled } = await comparePair(path)
+  console.log(`${pair.harness} ${pair.native.version}: ${pair.about}`)
+  printAligned(live, store)
+  for (const difference of pair.known) console.log(`known ${difference.side} ${difference.reason || "(no reason given)"}`)
+  console.log(`${unexplained.length} unexplained, ${settled.length} listed but settled`)
+  process.exit(unexplained.length || settled.length ? 1 : 0)
+}
+
 const recording = await readRecording(path)
 const harness = options.harness ?? recording.harness
 if (!harness) {
@@ -62,6 +83,14 @@ if (!harness) {
   process.exit(2)
 }
 const session = options.session ? z.record(z.string(), z.json()).parse(JSON.parse(options.session)) : recording.session
+
+if (options.compare) {
+  const live = liveDrawing(harness, { ...recording, session })
+  const store = await storeDrawing(harness, options.home ?? homedir(), options.compare)
+  printAligned(live, store)
+  process.exit(differences(live, store).length ? 1 : 0)
+}
+
 const source = decoderFor(harness)
 const steps = decodeSession(source, session, recording.messages)
 
@@ -114,6 +143,13 @@ if (!options.json) {
   for (const [kind, seen] of [...tally].sort((a, b) => b[1].count - a[1].count))
     console.log(`  ${String(seen.count).padStart(5)}  ${kind}${seen.events ? "" : "  → nothing"}`)
   if (unknown.size) console.log(`\nNot yet decoded: ${[...unknown].join(", ")}`)
+}
+
+function printAligned(live: string[], store: string[]): void {
+  const listing = aligned(live, store)
+  for (const { side, line } of listing) console.log(`${side} ${line}`)
+  const changed = listing.filter((entry) => entry.side !== " ").length
+  console.log(`\nlive draws ${live.length} lines, the store ${store.length}; ${changed ? `${changed} differ` : "the same drawing"}`)
 }
 
 /** `--version none` is for a fixture written from a protocol schema alone, which then names its `--sdk`. */

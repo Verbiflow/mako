@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdir, mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type {
   HookCallback,
@@ -13,6 +13,7 @@ import type {
   SDKAssistantMessage,
   SDKAssistantMessageError,
   PermissionUpdate,
+  Options,
 } from "@anthropic-ai/claude-agent-sdk"
 import {
   createClaudeSdkDriver,
@@ -24,6 +25,7 @@ import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { claudeInputContent, ClaudeInput } from "../electron/providers/claude/input.ts"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { ClaudeTranscript } from "../electron/providers/claude/sdk-transcript.ts"
+import { launchContext } from "../electron/execution-context.ts"
 import type { LiveDriverEvent } from "../electron/shared.ts"
 import { claudeAuthCause, claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
 import type { ClaudeCredentialState } from "../electron/providers/claude/accounts.ts"
@@ -162,9 +164,10 @@ const running = events.findLast(
   (event) => event.type === "live-session" && event.session.status === "running"
 )
 assert.ok(running?.type === "live-session" && running.session.nativeRunId)
-assert.ok(driver.steer)
+const steering = driver.steering
+assert.ok(steering.kind === "supported")
 assert.deepEqual(
-  await driver.steer("sdk-fixture", {
+  await steering.steer("sdk-fixture", {
     id: "stale",
     expectedRunId: "stale",
     text: "Wrong turn",
@@ -172,32 +175,32 @@ assert.deepEqual(
   }),
   { kind: "not-accepted", reason: "The Claude turn has already changed" }
 )
-const receipt = driver.steer("sdk-fixture", {
+const receipt = steering.steer("sdk-fixture", {
   id: "one",
   expectedRunId: running.session.nativeRunId,
   text: "Steer",
   attachments: [],
 })
-const steering = await input?.next()
-assert.ok(steering && !steering.done)
-assert.equal(steering.value.priority, "now")
-output.send(steering.value)
+const steered = await input?.next()
+assert.ok(steered && !steered.done)
+assert.equal(steered.value.priority, "now")
+output.send(steered.value)
 assert.deepEqual(await receipt, { kind: "accepted" })
 // Claude Code 2.1.283 reports each command's progress by Mako's uuid, before any echo.
 // A CLI newer than the SDK's types sends this kind, as JSON the driver parses.
 const lifecycle = (command: string, state: string) =>
   output.send(JSON.parse(JSON.stringify({ type: "command_lifecycle", command_uuid: command, state, uuid: randomUUID(), session_id: "native" })))
-const queued = driver.steer("sdk-fixture", { id: "queued", expectedRunId: running.session.nativeRunId, text: "Queued", attachments: [] })
+const queued = steering.steer("sdk-fixture", { id: "queued", expectedRunId: running.session.nativeRunId, text: "Queued", attachments: [] })
 const queuedInput = await input?.next()
 assert.ok(queuedInput && !queuedInput.done)
 lifecycle(queuedInput.value.uuid!, "queued")
 assert.deepEqual(await queued, { kind: "accepted" }, "a queued command is received")
-const dropped = driver.steer("sdk-fixture", { id: "dropped", expectedRunId: running.session.nativeRunId, text: "Dropped", attachments: [] })
+const dropped = steering.steer("sdk-fixture", { id: "dropped", expectedRunId: running.session.nativeRunId, text: "Dropped", attachments: [] })
 const droppedInput = await input?.next()
 assert.ok(droppedInput && !droppedInput.done)
 lifecycle(droppedInput.value.uuid!, "cancelled")
 await assert.rejects(dropped, /not confirmed steering/, "a cancelled command is no receipt")
-const missing = driver.steer("sdk-fixture", {
+const missing = steering.steer("sdk-fixture", {
   id: "two",
   expectedRunId: running.session.nativeRunId,
   text: "Unknown",
@@ -246,6 +249,62 @@ await assert.rejects(
   assert.equal(death?.connection, "disconnected")
   assert.equal(death?.nativePath, transcriptPath, "the death carries the transcript found under the account's config")
   await rm(configDir, { recursive: true, force: true })
+}
+
+// Stop in a fresh session's first turn closes the process before any hook
+// reports the transcript; the follow-up resumes from the path Stop found.
+{
+  const configDir = await mkdtemp(join(tmpdir(), "mako-claude-config-"))
+  const conversationId = randomUUID()
+  const transcriptPath = join(configDir, "projects", "-private-tmp-work", `${conversationId}.jsonl`)
+  await mkdir(dirname(transcriptPath), { recursive: true })
+  await writeFile(transcriptPath, "{}\n")
+  const messages = new Messages()
+  const stops: LiveDriverEvent[] = []
+  const stopDriver = createClaudeSdkDriver({
+    ...dependencies,
+    configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: configDir } }, account: { name: "fixture-launch" } }),
+    query: (options) => ({ ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+      close: () => messages.close(), interrupt: async () => {} }),
+  })
+  await stopDriver.start("/tmp/work", { conversationId, emit: (event) => stops.push(event) })
+  await stopDriver.prompt(conversationId, "sleep 90", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  await stopDriver.cancel(conversationId)
+  const stopped = stops.findLast((event) => event.type === "live-session")
+  const state = stopped?.type === "live-session" ? stopped.session : undefined
+  assert.equal(state?.lastStop, "interrupted")
+  assert.equal(state?.connection, "disconnected")
+  assert.equal(state?.nativePath, transcriptPath, "Stop carries the transcript the next prompt resumes from")
+
+  // A conversation saved before any path was reported (the host quit inside
+  // its first turn) is found by its session ID under its account's folder.
+  const locator = createClaudeSdkDriver({ ...dependencies, configDir: (account) => account === "default" ? configDir : "/missing" })
+  const binding = { id: conversationId, provider: "claude", nativeId: conversationId, coveredBlocks: 0, includesBase: true }
+  const resume = locator.resume
+  assert.ok(resume.kind === "native" && resume.locate)
+  assert.equal(await resume.locate(binding, "/tmp/work", {}), transcriptPath)
+  assert.equal(await resume.locate({ ...binding, executionContext: launchContext("claude-agent-sdk", { kind: "unavailable", reason: "fixture" }, { name: "work", dir: "/missing" }) }, "/tmp/work", {}), undefined,
+    "another account's folder is not searched")
+  await rm(configDir, { recursive: true, force: true })
+}
+
+// The prompt's hook reports the transcript as the first turn starts, so a host
+// that quits inside that turn has already saved where it resumes from.
+{
+  const messages = new Messages()
+  const events: LiveDriverEvent[] = []
+  let hooks: Options["hooks"]
+  const hookDriver = createClaudeSdkDriver({ ...dependencies, query: (options) => {
+    hooks = options.options.hooks
+    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  } })
+  await hookDriver.start("/tmp/work", { conversationId: "hook-fixture", emit: (event) => events.push(event) })
+  const submitted = hooks?.UserPromptSubmit?.at(-1)?.hooks[0]
+  assert.ok(submitted, "the transcript hook listens to UserPromptSubmit")
+  await submitted({ hook_event_name: "UserPromptSubmit", session_id: "hook-fixture", transcript_path: "/claude/projects/-tmp-work/hook-fixture.jsonl", cwd: "/tmp/work", prompt: "Begin" }, undefined, { signal: new AbortController().signal })
+  const reported = events.findLast((event) => event.type === "live-session")
+  assert.equal(reported?.type === "live-session" ? reported.session.nativePath : undefined, "/claude/projects/-tmp-work/hook-fixture.jsonl")
+  await hookDriver.close("hook-fixture")
 }
 
 let configured: (() => void) | undefined
@@ -330,7 +389,7 @@ for (const [optionId, classification] of [["allow_once", "user_temporary"], ["al
 }
 const queue = new ClaudeInput()
 queue.close()
-assert.throws(() => queue.send(steering.value), /closed/)
+assert.throws(() => queue.send(steered.value), /closed/)
 console.log(
   "PASS: Claude SDK exact-turn steering, receipt timeout, bounded Stop, launch cancellation, questions, permission decline and closed input"
 )
@@ -681,7 +740,8 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
     { label: "Warning", detail: "The reply hit the output token limit", body: undefined, tone: "warning" },
   ], "an API failure Claude composed is a marker, and a truncated reply says so")
   assert.deepEqual(session()?.usage, { used: 6200, size: 1_000_000, cost: { amount: 0.25, currency: "USD" },
-    tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 } },
+    tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 },
+    native: { tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 }, cost: 0.25 } },
     "the context meter reads the main loop's latest request against its model's window, split by where its tokens came from")
   const reports = noticeEvents.length
   result({ total_cost_usd: 0.25, modelUsage: { "claude-opus-4-8[1m]": window } })
@@ -722,8 +782,9 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
   await delay(0)
   assert.equal(session()?.nativeId, resetId, "a cleared conversation continues under its new native id")
   assert.deepEqual(session()?.usage, { cost: { amount: 0.25, currency: "USD" },
-    tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 } },
-  "a cleared conversation empties the context, a result without model usage erases nothing, and what was spent stays")
+    tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 },
+    native: { tokens: { input: 1000, cacheRead: 5000, cacheWrite: 0, output: 200 }, cost: 0.25 } },
+  "a cleared conversation empties the context, a result without model usage erases nothing, and what was spent and the process's own totals stay")
   noticeDriver.close("notice-fixture")
 }
 console.log("PASS: Claude limits, fallbacks, notices, mode, commands, usage and stop reasons reach the session once each")
