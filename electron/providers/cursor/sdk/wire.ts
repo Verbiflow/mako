@@ -301,6 +301,8 @@ export const SdkEventSchema = z.discriminatedUnion("event", [
    */
   z.object({ event: z.literal("message"), turn: z.string(), seq: z.number().int().nonnegative().optional(), message: CursorSdkMessageSchema }),
   z.object({ event: z.literal("delta"), turn: z.string(), delta: CursorSdkDeltaSchema }),
+  /** Calls the run moved past without its stream ending them, settled from a checkpoint Cursor saved since. */
+  z.object({ event: z.literal("settled"), turn: z.string(), calls: SdkSettledCallsSchema }),
   z.object({ event: z.literal("result"), turn: z.string(), result: SdkRunResultSchema }),
   z.object({ event: z.literal("login-url"), url: z.string() }),
   z.object({ event: z.literal("log"), level: z.enum(["info", "warn"]), message: z.string() }),
