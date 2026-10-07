@@ -2,7 +2,7 @@
 import { useState, useSyncExternalStore } from "react"
 import type { ThreadEntry } from "@mako/sessions"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
-import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { acpBlocksToMessages } from "@/lib/acp-blocks"
 import { Prose } from "@/components/transcript/markdown"
 import { TranscriptAttachment } from "@/components/transcript/attachment"

@@ -1,7 +1,7 @@
 // The fixture desk's setup Thread: one scripted turn that reads the guide,
 // looks at the project, saves the recipe and proves it, with the strip's
 // "Setting up" menu following each step. `?mock&app=setup`.
-import type { LiveUpdate } from "../../electron/contracts/live-content"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import { mockSetupMoment } from "./mock-thread-app"
 
 type Beat = { after: number; updates?: LiveUpdate[]; moment?: Parameters<typeof mockSetupMoment>[0] }

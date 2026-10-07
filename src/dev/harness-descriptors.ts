@@ -386,7 +386,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Mako writes the conversation up to the fork point into a new Grok session and resumes it, as its ACP agent has no fork."
+        "via": "Mako writes the conversation up to the fork point into a new Grok session and resumes it: Grok's own fork takes a turn number its live connection never sends."
       },
       "steering": {
         "state": "implemented",

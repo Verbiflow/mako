@@ -21,7 +21,7 @@ import { continueTurnPrompt } from "../../electron/contracts/turn-continuation"
 import { z } from "zod"
 import { confirmAccount } from "../../electron/execution-context"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { reduceLiveUpdates, type LiveUpdate } from "../../electron/contracts/live-content"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
 import { mockSetupMoment } from "./mock-thread-app"
@@ -2401,6 +2401,7 @@ export function installMockBridge() {
       disconnected: 0,
       warmLimit: 2,
       idleMs: 10 * 60_000,
+      memory: { loaded: 0, unloaded: 0, bytes: 0, pinnedBytes: 0, budget: 128 * 1024 * 1024 },
     }),
     clearCrashes: async () => {},
     reportCrash: async () => {},
