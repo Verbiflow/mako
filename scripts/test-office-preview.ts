@@ -5,7 +5,7 @@ import { mock } from "node:test"
 import { checkOfficeArchive, readOfficeInput, OFFICE_BYTE_LIMIT } from "../src/lib/office-input.ts"
 import { filePreviewFormat } from "../electron/contracts/file-preview.ts"
 import { scheduleFileInspection, fileInspectionStats } from "../src/lib/file-inspections.ts"
-import { LiveUpdateSchema, reduceLiveUpdates } from "../electron/contracts/live-content.ts"
+import { LiveUpdateSchema, reduceLiveUpdates } from "@mako/sessions/live-content"
 import { ThreadEntrySchema } from "../packages/sessions/src/thread-schema.ts"
 
 const zip = async (size: number) => {

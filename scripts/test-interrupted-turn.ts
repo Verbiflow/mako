@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "../electron/contracts/live-content.ts"
+import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveRequest } from "../electron/contracts/live-conversations.ts"
 import {
   closeCutOffCalls,

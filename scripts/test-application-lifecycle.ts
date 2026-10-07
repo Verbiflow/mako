@@ -24,7 +24,7 @@ const lifecycle = new ApplicationLifecycle({
     stops++
     work = []
   },
-  apply: async (action) => {
+  apply: async (action): Promise<void> => {
     assert.equal(lifecycle.blocked, true)
     applied.push(action)
   },

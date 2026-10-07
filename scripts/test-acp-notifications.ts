@@ -8,7 +8,7 @@ import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
 import type { JsonObject } from "../electron/codex-app-json.ts"
 import type { NativeNotice } from "../electron/contracts/native-activity.ts"
 import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
-import { forward } from "../electron/acp-notifications.ts"
+import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 import { AcpDecoder, acpAnswer } from "../electron/acp-decoder.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { grokNotification } from "../electron/providers/grok/notifications.ts"
@@ -51,21 +51,25 @@ assert.deepEqual(notices({ sessionUpdate: "auto_compact_failed", error: "Summari
 assert.deepEqual(notices({ sessionUpdate: "auto_compact_cancelled", reason: "user" }), [{ kind: "activity", activity: null }])
 console.log("PASS: Grok auto-compaction reads as compacting, then a compaction marker or its failure")
 
-assert.deepEqual(notices({ sessionUpdate: "retry_state", state: "retrying", attempt: 2, max_retries: 8, error_type: "rate_limit", is_rate_limited: true }), [
+// Shapes of `RetryState` in xai-org/grok-build 1.0.45 `extensions/notification.rs`.
+assert.deepEqual(notices({ sessionUpdate: "retry_state", type: "retrying", attempt: 2, max_retries: 8, reason: "429 Too Many Requests", error_type: "rate_limited" }), [
   { kind: "activity", activity: { kind: "retrying", attempt: 2, maxAttempts: 8, reason: "Rate limited" } },
 ])
-assert.deepEqual(notices({ sessionUpdate: "retry_state", state: "Retrying", attempt: 1, max_retries: 8, error_type: "ServerError", is_rate_limited: false }), [
-  { kind: "activity", activity: { kind: "retrying", attempt: 1, maxAttempts: 8, reason: "Server error" } },
-])
-assert.deepEqual(notices({ sessionUpdate: "retry_state", state: "failed", error_type: "invalid_request" }), [{ kind: "activity", activity: null }])
-assert.deepEqual(notices({ sessionUpdate: "retry_state", state: "exhausted", attempt: 8, max_retries: 8, error_type: "rate_limit", is_rate_limited: true }), [
+assert.deepEqual(notices({ sessionUpdate: "retry_state", type: "retrying", attempt: 1, max_retries: 3, reason: "Too many requests in flight; waiting 4s before trying again" }), [
+  { kind: "activity", activity: { kind: "retrying", attempt: 1, maxAttempts: 3, reason: "Too many requests in flight; waiting 4s before trying again" } },
+], "a retry with no error kind reads Grok's own reason")
+assert.deepEqual(notices({ sessionUpdate: "retry_state", type: "failed", error_type: "api", message: "upstream returned 500" }), [
   { kind: "activity", activity: null },
-  { kind: "event", event: { label: "Turn failed", detail: "Rate limited", tone: "error" } },
+  { kind: "event", event: { label: "Turn failed", detail: "Server error", body: "upstream returned 500", tone: "error" } },
+], "`failed` is the error that ends the turn")
+assert.deepEqual(notices({ sessionUpdate: "retry_state", type: "exhausted", attempts: 8, reason: "429 Too Many Requests", is_rate_limited: true }), [
+  { kind: "activity", activity: null },
+  { kind: "event", event: { label: "Turn failed", detail: "Rate limited", body: "429 Too Many Requests", tone: "error" } },
 ])
-assert.deepEqual(grok({ sessionUpdate: "retry_state", state: "paused" }), {
+assert.deepEqual(grok({ sessionUpdate: "retry_state", type: "paused" }), {
   sessionId: "grok-session", kind: `${GROK}/retry_state/paused`, notices: undefined, state: undefined, id: "e",
 }, "an unknown retry state is logged under its own name")
-console.log("PASS: Grok retry state reads as retrying, and exhausted retries fail the turn")
+console.log("PASS: Grok retry state reads as retrying, and the error that ends its retries fails the turn")
 
 assert.deepEqual(grok({ sessionUpdate: "session_summary_generated", session_summary: " Fix the flaky build " }), {
   sessionId: "grok-session", kind: `${GROK}/session_summary_generated`, notices: [], state: { title: "Fix the flaky build" }, id: "e",
@@ -74,19 +78,29 @@ assert.deepEqual(notices({ sessionUpdate: "model_auto_switched", previous_model_
   { kind: "event", event: { label: "Model changed", detail: "grok-4.7 → grok-4.6 · Rate limited" } },
 ])
 assert.deepEqual(notices({ sessionUpdate: "model_changed", model_id: "grok-4.7" }), [], "the config option update already shows a chosen model")
-assert.deepEqual(notices({ sessionUpdate: "image_dropped", reason: "Image exceeds 20 MB" }), [
-  { kind: "event", event: { label: "Warning", detail: "An image was not sent to the model", body: "Image exceeds 20 MB", tone: "warning" } },
+assert.deepEqual(notices({ sessionUpdate: "image_dropped", notes: ["Image 1 exceeds 20 MB", "Image 2 failed its integrity check"] }), [
+  { kind: "event", event: { label: "Warning", detail: "An image was not sent to the model", body: "Image 1 exceeds 20 MB\nImage 2 failed its integrity check", tone: "warning" } },
 ])
+assert.deepEqual(notices({ sessionUpdate: "hook_annotation", message: "Formatted 2 files" }), [{ kind: "event", event: { label: "Hook", detail: "Formatted 2 files" } }])
+assert.deepEqual(notices({ sessionUpdate: "hook_annotation", message: "Blocked: writes outside the repo", kind: "tool_outcome" }), [
+  { kind: "event", event: { label: "Hook", detail: "Blocked: writes outside the repo", tone: "warning" } },
+])
+assert.deepEqual(notices({ sessionUpdate: "scheduled_task_created", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: null }), [
+  { kind: "event", event: { label: "Scheduled task", detail: "every hour", body: "Check the deploy" } },
+])
+assert.deepEqual(notices({ sessionUpdate: "scheduled_task_deleted", task_id: "t1", reason: "expired" }), [{ kind: "event", event: { label: "Scheduled task removed", detail: "Expired" } }])
+assert.deepEqual(notices({ sessionUpdate: "scheduled_task_deleted", task_id: "t1", reason: "shutdown" }), [], "a shutdown only clears the chip; the task re-arms on resume")
 assert.deepEqual(notices({ sessionUpdate: "auto_recovery_exhausted" }), [
   { kind: "event", event: { label: "Warning", detail: "Grok could not recover the turn", tone: "warning" } },
 ])
 console.log("PASS: Grok titles, model switches, dropped images and recovery read in the shared vocabulary")
 
 for (const sessionUpdate of ["hook_execution", "hook_run_started", "memory_dream_started", "response_completed", "turn_usage", "task_backgrounded",
+  "auto_continue_completed", "feedback_request", "monitor_event", "memory_files",
   "compaction_checkpoint", "session_recap", "subagent_progress", "background_tasks", "turn_completed", "subagent_spawned", "subagent_finished"])
   assert.deepEqual(notices({ sessionUpdate }), [], `${sessionUpdate} is known and shows nothing`)
-assert.deepEqual(grok({ sessionUpdate: "scheduled_task_fired" }), {
-  sessionId: "grok-session", kind: `${GROK}/scheduled_task_fired`, notices: undefined, state: undefined, id: "e",
+assert.deepEqual(grok({ sessionUpdate: "voice_session_started" }), {
+  sessionId: "grok-session", kind: `${GROK}/voice_session_started`, notices: undefined, state: undefined, id: "e",
 }, "an unknown update is logged by its own kind, not only by the channel it came on")
 assert.deepEqual(grokNotification(GROK, { sessionId: "grok-session" }), { kind: GROK, notices: undefined })
 assert.deepEqual(grokNotification("_x.ai/fs/index/delta", {}), { kind: "_x.ai/fs/index/delta", notices: [] })
@@ -106,10 +120,12 @@ try {
     { sessionUpdate: "compaction_checkpoint", checkpoint_id: "c1" },
     { sessionUpdate: "auto_compact_completed", tokens_before: 403803, tokens_after: 21289, elapsed_ms: 94952, summary_preview: "Kept the plan" },
     { sessionUpdate: "auto_compact_failed", error: "Summarizer timed out" },
-    { sessionUpdate: "retry_state", state: "retrying", attempt: 2, max_retries: 8, is_rate_limited: true },
-    { sessionUpdate: "retry_state", state: "exhausted", attempt: 8, max_retries: 8, error_type: "server_error", is_rate_limited: false },
+    { sessionUpdate: "retry_state", type: "retrying", attempt: 2, max_retries: 8, reason: "429", error_type: "rate_limited" },
+    { sessionUpdate: "retry_state", type: "failed", error_type: "http", message: "connection reset" },
     { sessionUpdate: "model_auto_switched", previous_model_id: "grok-4.7", new_model_id: "grok-4.6", reason: "Capacity" },
-    { sessionUpdate: "image_dropped", reason: "Image exceeds 20 MB" },
+    { sessionUpdate: "image_dropped", notes: ["Image exceeds 20 MB"] },
+    { sessionUpdate: "hook_annotation", message: "Formatted 2 files" },
+    { sessionUpdate: "scheduled_task_fired", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: null },
     { sessionUpdate: "auto_recovery_started", reason: "Stream stalled" },
     { sessionUpdate: "auto_recovery_exhausted" },
     { sessionUpdate: "hook_execution", hook: "PreToolUse" },
@@ -125,7 +141,7 @@ try {
     .map((marker) => JSON.parse(JSON.stringify(marker)))
   const liveMarkers = saved.flatMap((update) => (notices(update) ?? []).flatMap((notice: NativeNotice): TranscriptEvent[] =>
     notice.kind === "event" ? [notice.event] : notice.kind === "compacted" ? [compactionEvent(notice.compaction)] : []))
-  assert.equal(liveMarkers.length, 7)
+  assert.equal(liveMarkers.length, 9)
   assert.deepEqual(savedMarkers, liveMarkers, "a Grok marker reads the same live and saved")
   console.log("PASS: Grok's saved transcript shows the markers its live connection showed")
 } finally {
@@ -204,8 +220,13 @@ console.log("PASS: Devin output warnings, modals and billing read as notices; bo
 // Standard ACP updates the host renders as state, or knowingly skips.
 const patches: Array<Partial<LiveSessionState>> = []
 const unhandled: string[] = []
-const send = (update: SessionNotification["update"]) =>
-  forward({ id: "c" }, { sessionId: "s", update }, () => assert.fail("nothing is emitted"), (_live, patch) => patches.push(patch), undefined, undefined, (kind) => unhandled.push(kind))
+const send = (update: SessionNotification["update"]) => {
+  for (const item of decodeAcpUpdate(update)) {
+    if (item.kind === "update") assert.fail("nothing is drawn")
+    else if (item.kind === "state") patches.push(item.patch)
+    else unhandled.push(item.type)
+  }
+}
 send({ sessionUpdate: "session_info_update", title: " Fix the flaky build ", updatedAt: "2026-09-29T00:00:00Z" })
 send({ sessionUpdate: "session_info_update", title: null })
 send({ sessionUpdate: "session_info_update", updatedAt: "2026-09-29T00:00:01Z" })
@@ -225,8 +246,8 @@ assert.deepEqual(exitPlan.updates, [], "an empty plan file adds no card; the too
 assert.deepEqual(exitPlan.ask.request.implementsPlan, { plan: "grok:s:call_1", approve: "approved" })
 assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "approved" }), { outcome: "approved" })
 assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "abandoned" }), { outcome: "abandoned" })
-assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "keep-planning" }), { outcome: "rejected" })
-assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: null }), { outcome: "rejected" }, "a request the session dropped keeps planning; it never builds")
+assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "keep-planning" }), { outcome: "cancelled" })
+assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: null }), { outcome: "cancelled" }, "a request the session dropped keeps planning; it never builds")
 assert.equal(grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { toolCallId: 1 }), undefined, "a malformed request is refused")
 // The request grok 1.0.44 sent when its model called `ask_user_question` on October 5, 2026.
 const grokQuestion = grokAcpSource.requests?.decode("_x.ai/ask_user_question", {

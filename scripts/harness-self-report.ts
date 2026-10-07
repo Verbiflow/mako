@@ -9,6 +9,7 @@ import { promisify } from "node:util"
 import { parseArgs } from "node:util"
 import { VOCABULARIES, type HarnessConcepts } from "@mako/sessions/harnesses"
 import { z } from "zod"
+import type { JsonObject } from "../electron/codex-app-json.ts"
 import { resolveExecutable } from "../electron/executable.ts"
 import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
 import { devinExecutable } from "../electron/providers/devin/executable.ts"
@@ -172,6 +173,57 @@ async function codexSkillList(executable: string, { project, env }: Sandbox): Pr
   }
 }
 
+const AcpReply = z.object({ id: z.number().optional(), method: z.string().optional(), params: z.object({ update: z.object({ availableCommands: z.array(z.object({ name: z.string() }).loose()) }).loose() }).loose().optional() }).loose()
+
+/**
+ * Grok names every skill and command it loaded in ACP's
+ * `available_commands_update`, which a new session sends with no model call.
+ * It reads a project's folders only once the project is trusted
+ * (`$GROK_HOME/trusted_folders.toml`), so the throwaway project is; its
+ * model URLs point at a closed port and its key is a placeholder.
+ */
+async function grokSkillListing(executable: string, { home, project, env }: Sandbox): Promise<string> {
+  const grokHome = join(home, ".grok")
+  await mkdir(grokHome, { recursive: true })
+  await writeFile(join(grokHome, "trusted_folders.toml"), `[folders.${JSON.stringify(project)}]\ntrusted = true\n`)
+  const closed = "http://127.0.0.1:9/v1"
+  const child = spawn(executable, ["agent", "--no-leader", "stdio"], {
+    cwd: project,
+    env: { ...env, GROK_HOME: grokHome, XAI_API_KEY: "mako-self-report", GROK_XAI_API_BASE_URL: closed, GROK_CLI_CHAT_PROXY_BASE_URL: closed, GROK_MODELS_BASE_URL: closed },
+    stdio: ["pipe", "pipe", "ignore"],
+  })
+  const names = new Set<string>()
+  const replies = new Map<number, () => void>()
+  const lines = createInterface({ input: child.stdout })
+  lines.on("line", (line) => {
+    try {
+      const message = AcpReply.parse(JSON.parse(line))
+      for (const command of message.params?.update.availableCommands ?? []) names.add(command.name)
+      if (message.id !== undefined && !message.method) replies.get(message.id)?.()
+    } catch {
+      // Other notifications and harness output.
+    }
+  })
+  let next = 0
+  const call = (method: string, params: JsonObject) => new Promise<void>((resolve, reject) => {
+    const id = ++next
+    const timer = setTimeout(() => reject(new Error(`grok did not answer ${method}`)), 20_000)
+    replies.set(id, () => { clearTimeout(timer); resolve() })
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
+  })
+  try {
+    await call("initialize", { protocolVersion: 1, clientCapabilities: {} })
+    await call("session/new", { cwd: project, mcpServers: [] })
+    // The list comes after the session, and again as each folder loads; it is whole once two reads agree.
+    let previous = -1
+    for (const deadline = Date.now() + 20_000; Date.now() < deadline && names.size !== previous; await sleep(2_000)) previous = names.size
+    return [...names].join("\n")
+  } finally {
+    lines.close()
+    child.kill()
+  }
+}
+
 /**
  * OpenCode answers its listings from a server. Its background service owns
  * one fixed port per machine, so the listing starts a private server on a
@@ -228,7 +280,7 @@ const listings = new Map<string, Listings>([
   ["claude", { executable: async () => resolveExecutable("claude", process.env), mcpConfig: cliListing(["mcp", "list"]) }],
   ["codex", { executable: () => resolveCodexExecutable(), skills: codexSkillList }],
   ["opencode", { executable: async () => resolveExecutable("opencode", process.env), skills: openCodeListing("/api/skill"), mcpConfig: openCodeListing("/api/mcp"), mcpFormat: "opencode" }],
-  ["grok", { executable: async () => resolveExecutable("grok", process.env), mcpConfig: cliListing(["mcp", "doctor"]) }],
+  ["grok", { executable: async () => resolveExecutable("grok", process.env), skills: grokSkillListing, mcpConfig: cliListing(["mcp", "doctor"]) }],
   ["devin", { executable: async () => devinExecutable(), skills: cliListing(["skills", "list"]), mcpConfig: cliListing(["mcp", "list"]) }],
 ])
 

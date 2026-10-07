@@ -6,7 +6,7 @@ import { textOf } from "../src/lib/format.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
 import type { AttachmentContent } from "@mako/sessions"
 import { CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
-import { reduceLiveUpdates } from "../electron/contracts/live-content.ts"
+import { reduceLiveUpdates } from "@mako/sessions/live-content"
 
 // SDK wire -> canonical live blocks -> shared row, and retained blocks -> the same row.
 // The SDK's MCP envelope differs from Desktop's CallDynamicTool, even in one harness.
@@ -150,7 +150,8 @@ assert.equal(
 const { devinReferences, devinPromptImages, devinMcpCall } =
   await import("../packages/sessions/src/providers/devin-presentation.ts")
 const reference = '<ref_snippet file="/work/src/app.ts" lines="12-18" />'
-assert.ok(devinReferences(reference).includes("/work/src/app.ts#L12-L18"))
+assert.equal(devinReferences(reference), "[app.ts:12-18](file:///work/src/app.ts)", "as Devin 3000.10.23 streams it")
+assert.equal(devinReferences('See <ref_file file="/work/src/app.ts" />.'), "See [app.ts](file:///work/src/app.ts).")
 assert.equal(
   devinReferences("```xml\n" + reference + "\n```"),
   "```xml\n" + reference + "\n```"

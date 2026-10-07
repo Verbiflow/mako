@@ -8,13 +8,13 @@ import type {
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import type { JsonValue } from "../electron/codex-app-json.js"
-import { ClaudeProjection } from "../electron/providers/claude/sdk-projection.js"
+import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import {
   deliverLiveUpdates,
   reduceLiveUpdates,
   type LiveBlock,
   type LiveUpdate,
-} from "../electron/contracts/live-content.js"
+} from "@mako/sessions/live-content"
 import { decoderFor, loadFixtures } from "./native-decoding.js"
 import { auditId } from "./performance-audit-fixtures.js"
 

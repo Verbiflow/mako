@@ -17,7 +17,7 @@ import {
   reduceLiveUpdates,
   type LiveBlock,
   type LiveUpdate,
-} from "../electron/contracts/live-content"
+} from "@mako/sessions/live-content"
 import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "../electron/contracts/live-conversations"
 import { LiveJournal } from "../electron/live-journal"
 import { auditSnapshot } from "./performance-audit-fixtures"

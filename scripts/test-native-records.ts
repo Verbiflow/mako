@@ -74,8 +74,11 @@ const log = installHostLog(join(root, "host.log"))
     { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, items: [] } } },
   ]
   capture.record(messages[0]!)
+  capture.prompted({ text: "Count the lines" })
+  capture.record(messages[1]!)
+  capture.steered("Only the first file")
+  capture.record(messages[2]!)
   capture.prompted()
-  for (const message of messages.slice(1)) capture.record(message)
   await capture.flush()
   delete process.env[NATIVE_CAPTURE_ENV]
 
@@ -83,7 +86,11 @@ const log = installHostLog(join(root, "host.log"))
   assert.equal(recording.harness, "codex")
   assert.deepEqual(recording.session, { threadId: "thread-1", diagnostic: "Bearer …", env: { ANTHROPIC_API_KEY: "[redacted]", XAI_API_KEY: "[redacted]" }, credentials: "[redacted]" }, "the first-message header preserves provenance while scrubbing secrets too")
   assert.equal(recording.messages.length, 3)
-  assert.deepEqual(recording.prompts, [1], "a prompt Mako sent is kept where it fell, before the message that followed it")
+  assert.deepEqual(recording.prompts, [
+    { at: 1, text: "Count the lines" },
+    { at: 2, text: "Only the first file", steered: true },
+    { at: 3 },
+  ], "a prompt Mako sent and a message it steered in keep their text where they fell; a turn the harness opened has none")
   assert.match(JSON.stringify(recording.messages[1]), /token=… stays private/, "captured content is scrubbed of token values")
   const steps = decodeSession(decoderFor("codex"), recording.session, recording.messages)
   assert.deepEqual(steps.map((step) => step.kind), ["turn/started", "item/agentMessage/delta", "turn/completed"])

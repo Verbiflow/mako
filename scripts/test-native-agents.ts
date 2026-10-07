@@ -7,7 +7,7 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { ClaudeAgents } from "../electron/providers/claude/sdk-agents.ts"
 import { CursorAgents } from "../electron/providers/cursor/sdk/agents.ts"
 import type { SdkMessage } from "../electron/providers/cursor/sdk/wire.ts"
-import { ClaudeProjection } from "../electron/providers/claude/sdk-projection.ts"
+import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import {
   CodexAgents,
   CodexAgentItemSchema,

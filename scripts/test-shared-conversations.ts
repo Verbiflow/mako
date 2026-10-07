@@ -163,7 +163,7 @@ try {
     assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === queuedId)?.status, "queued")
     await assert.rejects(invokeRuntime(desktopSocket, client, "mako:live-steer-queued", [id, {
       kind: "steer-queued", id: randomUUID(), requestId, queuedRequestId: queuedId, text: `${provider} next`, attachments: [],
-    }]), /does not support steering/, "queued steering reaches the owning host's provider check through either client")
+    }]), /can't steer an active turn: Injected driver fixture/, "queued steering reaches the owning host's provider check through either client")
     assert.equal(owner.snapshot(id)?.requests.find((request) => request.id === queuedId)?.status, "queued", "a provider refusal preserves the queue")
     const binding = owner.snapshot(id)?.control?.activeBindingId ?? id
     emitters.get(binding)?.({ type: "live-permission", request: { id: "approval", sessionId: binding, title: "Fixture approval", options: [{ optionId: "allow", name: "Allow" }] } })

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { LiveJournal } from "../electron/live-journal"
-import { reduceLiveUpdates } from "../electron/contracts/live-content"
+import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { ConversationControlSchema } from "../electron/contracts/conversation-control"
 import { auditSnapshot } from "./performance-audit-fixtures"
 

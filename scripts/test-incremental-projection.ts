@@ -5,7 +5,7 @@ import {
   reduceLiveUpdates,
   mergeLiveUpdates,
   type LiveUpdate,
-} from "../electron/contracts/live-content"
+} from "@mako/sessions/live-content"
 
 let snapshot = auditSnapshot(1000)
 const oldText = snapshot.blocks[2]

@@ -1,20 +1,19 @@
 import assert from "node:assert/strict"
 import { devinPermissionTitle } from "../electron/providers/devin/permissions.ts"
-import { devinToolName } from "../electron/providers/devin/tool-name.ts"
-import { forward } from "../electron/acp-notifications.ts"
+import { DEVIN_ACP_HOOKS } from "@mako/sessions/harnesses"
+import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 
 const tool = {
   sessionUpdate: "tool_call", toolCallId: "child-call", title: "Task", kind: "other",
   _meta: { "cognition.ai/inferenceToolName": "run_subagent" },
-} satisfies Parameters<typeof devinToolName>[0]
-assert.equal(devinToolName(tool), "run_subagent")
-assert.equal(devinToolName({ ...tool, _meta: { "cognition.ai/inferenceToolName": 17 } }), undefined)
-assert.equal(devinToolName({ ...tool, _meta: undefined }), undefined)
+} satisfies Parameters<typeof DEVIN_ACP_HOOKS.toolName>[0]
+assert.equal(DEVIN_ACP_HOOKS.toolName(tool), "run_subagent")
+assert.equal(DEVIN_ACP_HOOKS.toolName({ ...tool, _meta: { "cognition.ai/inferenceToolName": 17 } }), undefined)
+assert.equal(DEVIN_ACP_HOOKS.toolName({ ...tool, _meta: undefined }), undefined)
 const named: [string | undefined, string | undefined][] = []
-for (const name of [devinToolName(tool), undefined]) {
-  forward({ id: "fixture" }, { sessionId: "fixture", update: tool }, event => {
-    if (event.type === "live-update" && event.update.kind === "tool") named.push([event.update.name, event.update.toolKind])
-  }, () => {}, undefined, name)
+for (const name of [DEVIN_ACP_HOOKS.toolName(tool), undefined]) {
+  for (const item of decodeAcpUpdate(tool, { toolName: name }))
+    if (item.kind === "update" && item.update.kind === "tool") named.push([item.update.name, item.update.toolKind])
 }
 assert.deepEqual(named, [["run_subagent", "other"], [undefined, "other"]], "Shared ACP names a tool only from the provider's hook and keeps ACP's kind beside it")
 

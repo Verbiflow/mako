@@ -130,7 +130,7 @@ export function rpcPeer(child: ChildProcessWithoutNullStreams, options: RpcPeerO
       replies.set(id, { resolve: (message) => { clearTimeout(timer); resolve(message.result) }, reject: (error) => { clearTimeout(timer); reject(error) } })
       send({ id, method, params })
     }),
-    notify: (method: string) => send({ method }),
+    notify: (method: string, params?: JsonObject) => send(params ? { method, params } : { method }),
     close: () => lines.close(),
   }
 }

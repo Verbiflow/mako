@@ -14,6 +14,8 @@ import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
 import {
   HOLD_STALE_MS,
+  LEGACY_ROUTES_RETIRED,
+  LEGACY_ROUTES_RETIRE_MS,
   SessionHeldError,
   SessionMemory,
   rememberedSettings,
@@ -42,6 +44,8 @@ function upgradeLegacyRoutes(): void {
     assert.equal(upgraded.routeForSession("cursor", "old-native")?.conversationId, "new-conversation", "the new local route takes precedence after release")
     const oldWriter = new DatabaseSync(path)
     try {
+      assert.equal(oldWriter.prepare("SELECT count(*) AS n FROM conversation_routes WHERE conversation_id = 'new-conversation'").get()?.["n"], 0, "this build binds without the old routes table")
+      assert.equal(oldWriter.prepare("SELECT socket FROM conversation_journals WHERE conversation_id = 'new-conversation'").get()?.["socket"], "/new.sock")
       oldWriter.prepare("INSERT INTO conversation_routes (conversation_id, provider, native_id, socket) VALUES (?, ?, ?, ?)")
         .run("legacy-writer", "cursor", "legacy-native", "/old.sock")
       oldWriter.prepare("UPDATE conversation_routes SET provider = ?, native_id = ? WHERE conversation_id = ?")
@@ -68,6 +72,64 @@ function upgradeLegacyRoutes(): void {
   } finally {
     reopened.close()
   }
+}
+
+function retireLegacyRoutes(): void {
+  const path = join(root, "retiring.sqlite")
+  const host = { pid: 301, startedAt: 3, label: "retiring host", socket: "/new.sock" }
+  const open = (now: number) => new SessionMemory(path, host, { now: () => now, alive: () => true })
+  const olderBuild = () => {
+    const db = new DatabaseSync(path)
+    db.exec(`CREATE TABLE IF NOT EXISTS conversation_routes (
+        conversation_id TEXT PRIMARY KEY, provider TEXT NOT NULL, native_id TEXT NOT NULL, socket TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX IF NOT EXISTS conversation_routes_native ON conversation_routes(provider, native_id);`)
+    assert.ok(db.prepare("PRAGMA table_info(conversation_routes)").all().some((column) => column.name === "updated_at"))
+    return db
+  }
+  const write = (db: DatabaseSync, conversation: string, native: string) =>
+    db.prepare(`INSERT INTO conversation_routes (conversation_id, provider, native_id, socket, updated_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(conversation_id) DO UPDATE SET provider=excluded.provider, native_id=excluded.native_id, socket=excluded.socket, updated_at=excluded.updated_at`)
+      .run(conversation, "cursor", native, "/old.sock", Date.now())
+  const watch = () => {
+    const db = new DatabaseSync(path)
+    try {
+      return db.prepare("SELECT last_write, retired_at FROM legacy_routes").get()
+    } finally {
+      db.close()
+    }
+  }
+
+  open(0).close()
+  const older = olderBuild()
+  write(older, "older-conversation", "older-native")
+  older.close()
+  const lastWrite = Number(watch()?.["last_write"])
+  assert.ok(lastWrite > 0, "an older build's write is noted")
+
+  const early = open(lastWrite + LEGACY_ROUTES_RETIRE_MS - 1)
+  early.close()
+  assert.equal(watch()?.["retired_at"], null, "the table stays while an older build wrote within the window")
+
+  const retiring = open(lastWrite + LEGACY_ROUTES_RETIRE_MS)
+  try {
+    assert.equal(watch()?.["retired_at"], lastWrite + LEGACY_ROUTES_RETIRE_MS, "a quiet window retires the table")
+    assert.equal(retiring.routeForSession("cursor", "older-native")?.conversationId, "older-conversation", "retiring keeps what older builds bound")
+    retiring.hold("cursor", "fresh-native", "fresh-conversation")
+    retiring.release("cursor", "fresh-native", "fresh-conversation")
+    assert.equal(retiring.routeForSession("cursor", "fresh-native")?.conversationId, "fresh-conversation")
+  } finally {
+    retiring.close()
+  }
+
+  const stale = olderBuild()
+  try {
+    assert.equal(stale.prepare("SELECT count(*) AS n FROM conversation_routes").get()?.["n"], 0, "the retired table holds nothing")
+    assert.throws(() => write(stale, "stale-conversation", "stale-native"), (error: Error) => error.message.includes(LEGACY_ROUTES_RETIRED), "an older build's write fails and says to update")
+  } finally {
+    stale.close()
+  }
+  open(lastWrite + 2 * LEGACY_ROUTES_RETIRE_MS).close()
+  assert.equal(watch()?.["retired_at"], lastWrite + LEGACY_ROUTES_RETIRE_MS, "retiring happens once")
 }
 async function until(condition: () => boolean, what: string): Promise<void> {
   for (let attempt = 0; attempt < 2_000; attempt += 1) {
@@ -275,6 +337,7 @@ const dev = new SessionMemory(ledger, { pid: 200, startedAt: 2, label: "Mako's d
 
 try {
   upgradeLegacyRoutes()
+  retireLegacyRoutes()
   installed.hold("codex", "route-race", "first-owner")
   const firstHold = dev.heldBy("codex", "route-race")!
   installed.release("codex", "route-race", "first-owner")
@@ -444,7 +507,7 @@ try {
   await reconnectAfterRestart()
   await reconnectAfterOwnTurn()
   await backfillFromJournals()
-  console.log("Session memory: cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, quiet reconnect after an interrupted turn, journal backfill")
+  console.log("Session memory: legacy route retirement, cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, quiet reconnect after an interrupted turn, journal backfill")
 } finally {
   installed.close()
   dev.close()

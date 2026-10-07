@@ -69,7 +69,7 @@ async function main(app) {
   await app.whenReady()
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
-  const { reduceLiveUpdates } = await import(join(repo, "dist-electron/contracts/live-content.js"))
+  const { reduceLiveUpdates } = await import(join(repo, "packages/sessions/dist/live-content.js"))
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
   const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
   const { nativePathForSession } = await import(join(repo, "dist-electron/threads.js"))

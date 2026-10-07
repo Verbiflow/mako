@@ -8,7 +8,7 @@ import { LiveJournal } from "../electron/live-journal"
 import {
   LiveUpdateSchema,
   reduceLiveUpdates,
-} from "../electron/contracts/live-content"
+} from "@mako/sessions/live-content"
 import { projectLive } from "../src/state/live-projection"
 import {
   auditId,

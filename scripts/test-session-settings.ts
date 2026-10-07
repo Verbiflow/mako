@@ -1,4 +1,4 @@
-import { forward } from "../electron/acp-notifications.ts"
+import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 import { normalizeCodexModels } from "@mako/sessions/model-catalog"
 import assert from "node:assert/strict"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
@@ -268,32 +268,16 @@ assert.deepEqual(
 assert.deepEqual(codexCollaborationMode({ options: { plan: false } }, undefined), {})
 assert.throws(() => codexCollaborationMode({ options: { plan: true } }, undefined), /needs a model to plan/)
 
-const observedChanges: unknown[] = []
-forward(
-  { id: "live" },
-  {
-    sessionId: "session",
-    update: {
-      sessionUpdate: "config_option_update",
-      configOptions: [{ ...effort, currentValue: "high" }],
-    },
-  },
-  () => assert.fail("config is a state update"),
-  (_live, patch) => observedChanges.push(patch.settings),
-  { model: "a", options: { effort: "low" } }
+const observed = decodeAcpUpdate(
+  { sessionUpdate: "config_option_update", configOptions: [{ ...effort, currentValue: "high" }] },
+  { settings: { model: "a", options: { effort: "low" } } }
 )
-assert.deepEqual(observedChanges, [{ model: "a", options: { effort: "high" } }])
-const unforwarded: string[] = []
-forward(
-  { id: "live" },
-  { sessionId: "session", update: { sessionUpdate: "plan_removed", planId: "plan-1" } },
-  () => assert.fail("an update Mako does not render emits nothing"),
-  () => assert.fail("nor changes state"),
-  undefined,
-  undefined,
-  (kind) => unforwarded.push(kind)
+assert.deepEqual(observed.map((item) => item.kind === "state" ? item.patch.settings : item.kind), [{ model: "a", options: { effort: "high" } }], "config is a state update")
+assert.deepEqual(
+  decodeAcpUpdate({ sessionUpdate: "plan_removed", planId: "plan-1" }),
+  [{ kind: "unknown", type: "plan_removed", reason: "unknown", raw: null }],
+  "an ACP update Mako does not translate is reported by kind, with nothing drawn or changed"
 )
-assert.deepEqual(unforwarded, ["plan_removed"], "an ACP update Mako does not translate is reported by kind")
 
 const { ClaudeSettingsResponseSchema } = await import("../electron/providers/claude/settings.ts")
 const settingsResponse = (effective: Record<string, string | boolean>) => ({type:"control_response",response:{subtype:"success",response:{applied:{effort:"high",model:"fable"},effective,sources:[{secret:"fixture-secret"}]}}})

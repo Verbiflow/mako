@@ -1,4 +1,4 @@
-import { reduceLiveUpdates } from "../electron/contracts/live-content.ts"
+import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import assert from "node:assert/strict"
 import { LineAssembler } from "@mako/sessions"
 import { spawn } from "node:child_process"

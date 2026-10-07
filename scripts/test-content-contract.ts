@@ -10,12 +10,22 @@ const link = {
   url: "https://example.com",
   children: [{ type: "text" as const, value: literal }],
 }
+const snippet = {
+  type: "link" as const,
+  url: "file:///work/notes.md",
+  children: [{ type: "text" as const, value: "notes.md:2-4" }],
+}
+const named = {
+  type: "link" as const,
+  url: "file:///work/notes.md",
+  children: [{ type: "text" as const, value: "other.md:2" }],
+}
 const tree: Root = {
   type: "root",
   children: [
     {
       type: "paragraph",
-      children: [{ type: "text", value: literal }, inline, link],
+      children: [{ type: "text", value: literal }, inline, link, snippet, named],
     },
     code,
     { type: "code", lang: "12:18:src/example.ts", value: "const value = 1" },
@@ -30,6 +40,8 @@ assert.equal(
   "link"
 )
 assert.ok(JSON.stringify(tree).includes("src/example.ts#L12-L18"))
+assert.deepEqual(markdownFileTarget(snippet.url), { path: "/work/notes.md", line: 2, endLine: 4 }, "Devin's `<ref_snippet>` link takes its label's lines")
+assert.equal(named.url, "file:///work/notes.md", "a label naming another file is not a line range")
 for (const target of [
   "/work/src/example.ts:12",
   "src/example.ts#L12-L18",
@@ -38,5 +50,5 @@ for (const target of [
 ])
   assert.equal(markdownFileTarget(target)?.line, 12, target)
 console.log(
-  "Provider citations preserve literal code and resolve file URLs, editor links, line suffixes, and Cursor code ranges"
+  "Provider citations preserve literal code and resolve file URLs, editor links, line suffixes, Devin's labelled snippets, and Cursor code ranges"
 )

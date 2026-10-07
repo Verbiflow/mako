@@ -6,10 +6,12 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations"
 import { LiveJournal } from "../electron/live-journal"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver"
+import type { LiveSnapshot } from "../electron/shared"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { liveContentWeight, residencyPlan } from "../electron/contracts/residency"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
@@ -73,8 +75,40 @@ assert.ok(
 )
 reads.mock.restore()
 
-// Leaving conversations behind unloads all but the two most recent; a running
-// one keeps its transcript, and opening an unloaded one reads it again.
+// The rule both the host and the window keep conversations in memory by.
+const fits = residencyPlan([
+  { id: "a", usedAt: 1, weight: 10, pinned: false },
+  { id: "b", usedAt: 2, weight: 10, pinned: false },
+], { bytes: 100, recent: 0 })
+assert.deepEqual(fits.evict, [], "Under budget nothing goes")
+const tight = residencyPlan([
+  { id: "running", usedAt: 0, weight: 60, pinned: true },
+  { id: "old-small", usedAt: 1, weight: 10, pinned: false },
+  { id: "older-big", usedAt: 2, weight: 50, pinned: false },
+  { id: "recent", usedAt: 4, weight: 20, pinned: false },
+  { id: "middle", usedAt: 3, weight: 20, pinned: false },
+], { bytes: 110, recent: 1 })
+assert.deepEqual(
+  tight.evict,
+  ["older-big"],
+  "Pinned weight counts, the rest fill the budget newest first, and a smaller older one keeps the room a bigger one could not use"
+)
+assert.deepEqual([tight.kept, tight.pinned], [110, 60])
+const heavy = residencyPlan([
+  { id: "recent", usedAt: 2, weight: 500, pinned: false },
+  { id: "older", usedAt: 1, weight: 1, pinned: false },
+], { bytes: 100, recent: 1 })
+assert.deepEqual(heavy.evict, ["older"], "The most recent stays whatever it weighs, and its weight still counts")
+const block = { type: "text" as const, id: "text-0", text: "x".repeat(1000) }
+const once = liveContentWeight({ blocks: [block] })
+assert.ok(once > 2000 && once === liveContentWeight({ blocks: [block] }), "Weight is about twice the JSON and stable")
+assert.ok(liveContentWeight({ blocks: [block, { ...block, id: "text-1" }] }) > once, "A new block adds its weight")
+
+const idle = () => new Promise<void>((resolve) => setTimeout(resolve, 5))
+
+// Leaving conversations behind keeps what fits the window's budget and the two
+// most recent whatever they weigh; a running one keeps its transcript, opening
+// an unloaded one reads it again, and the unloading waits for the window to idle.
 const { watchLiveResidency } = await import("../src/state/live-residency")
 const conversation = (index: number, status: "ready" | "running") => {
   const made = auditSnapshot(20, "claude")
@@ -86,26 +120,39 @@ const all = [...left, working]
 const reread = mock.method(getMako(), "liveSnapshot", async (id: string) => all.find((item) => item.session.id === id) ?? null)
 acpStore.set({ activeKey: null, conversations: {} })
 for (const item of all) applyLiveSnapshot(item)
-const stopResidency = watchLiveResidency()
+const loaded = (id: string) => {
+  const held = acpStore.get().conversations[id]
+  return held?.hydrated === true && held.blocks.length > 0
+}
+const roomy = watchLiveResidency()
 for (const item of left) {
   acp.activate(item.session.id)
   await tick()
   await tick()
 }
-const readsWhileSwitching = reread.mock.callCount()
-const loaded = (id: string) => {
-  const held = acpStore.get().conversations[id]
-  return held?.hydrated === true && held.blocks.length > 0
+await idle()
+assert.deepEqual(left.map((item) => loaded(item.session.id)), [true, true, true, true], "Conversations that fit the budget all stay")
+roomy()
+const stopResidency = watchLiveResidency({ bytes: 0, recent: 2 })
+acp.activate(left[0]!.session.id)
+assert.deepEqual(left.map((item) => loaded(item.session.id)), [true, true, true, true], "Switching never waits on unloading")
+for (const item of left) {
+  acp.activate(item.session.id)
+  await tick()
+  await tick()
 }
+await idle()
+const readsWhileSwitching = reread.mock.callCount()
 assert.deepEqual(
   left.map((item) => loaded(item.session.id)),
   [false, true, true, true],
-  "Only the active conversation and the two before it stay loaded"
+  "Over budget, only the active conversation and the two before it stay loaded"
 )
 assert.equal(loaded(working.session.id), true, "A running conversation keeps its transcript")
 acp.activate(left[0]!.session.id)
 await tick()
 await tick()
+await idle()
 assert.equal(reread.mock.callCount(), readsWhileSwitching + 1)
 assert.equal(loaded(left[0]!.session.id), true, "Opening an unloaded conversation reads it again")
 assert.equal(loaded(left[1]!.session.id), false)
@@ -143,43 +190,64 @@ const driver: ProviderLiveDriver = {
   close: async () => {},
   setMode: async () => {},
 }
-const owner = new LiveConversations({
-  root,
-  appPath: root,
-  driver: () => driver,
-  history: async () => null,
-  emit: () => {},
-})
+let clock = 0
+const host = (conversationMemory: { bytes: number; recent: number; sweepMs: number }) =>
+  new LiveConversations({
+    root,
+    appPath: root,
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    now: () => ++clock,
+    conversationMemory,
+  })
+const owner = host({ bytes: 0, recent: 1, sweepMs: 0 })
+let restarted: LiveConversations | undefined
 try {
-  for (let index = 1; index <= 11; index++) {
-    const id = auditId(index)
+  const ids = [1, 2, 3].map(auditId)
+  for (const [index, id] of ids.entries()) {
     await owner.start("fixture", root, { conversationId: id })
     await tick()
-    owner.observe({
-      type: "live-update",
-      id,
-      update: { kind: "text", text: `Saved ${index}` },
-    })
+    owner.observe({ type: "live-update", id, update: { kind: "text", text: `Saved ${index}` } })
     owner.snapshot(id)
-    await owner.close(id)
   }
-  assert.ok(
-    closed.mock.callCount() >= 3,
-    "Closed leaf journals are evicted from the warm cache"
+  await owner.close(ids[0]!)
+  const left = owner.snapshot(ids[0]!)
+  await owner.close(ids[1]!)
+  await idle()
+  assert.deepEqual(
+    pick(owner.residency().memory),
+    { loaded: 2, unloaded: 1 },
+    "Over budget the least recently used goes; the most recent stays, and a connected one cannot go"
   )
-  assert.equal(owner.summaries().length, 11)
+  const plain = (value: LiveSnapshot | null) => JSON.parse(JSON.stringify(value))
+  assert.deepEqual(plain(owner.snapshot(ids[0]!)), plain(left), "An unloaded conversation comes back exactly as it left")
+  await idle()
+  assert.deepEqual(pick(owner.residency().memory), { loaded: 2, unloaded: 1 }, "Reading one makes it the most recent")
+  assert.equal(owner.summaries().length, 3, "An unloaded conversation is still listed")
+  assert.equal(owner.summaries().find((summary) => summary.session.id === ids[1])?.session.status, "closed")
+  await owner.stop()
+
+  restarted = host({ bytes: 1024 * 1024 * 1024, recent: 0, sweepMs: 0 })
+  for (const id of ids) restarted.snapshot(id)
+  await idle()
+  assert.deepEqual(pick(restarted.residency().memory), { loaded: 3, unloaded: 0 }, "Under budget nothing goes, closed or ready")
+  assert.equal(restarted.snapshot(ids[2]!)?.session.status, "ready")
   assert.ok(
-    owner
-      .snapshot(auditId(1))
-      ?.blocks.some(
-        (block) => block.type === "text" && block.text === "Saved 1"
-      )
+    restarted.snapshot(ids[0]!)?.blocks.some((block) => block.type === "text" && block.text === "Saved 0"),
+    "A restart reads what the journal kept"
   )
+  assert.ok(closed.mock.callCount() >= 1)
   console.log(
-    "Live retention: lazy background history, fresh activation, window residency bounded to recent conversations, bounded closed journals, and lossless journal rehydration verified"
+    "Live retention: lazy background history, fresh activation, window and host memory bounded by size and recency at idle, pinned work kept, and exact reload verified"
   )
 } finally {
-  owner.stop()
+  await owner.stop()
+  await restarted?.stop()
   closed.mock.restore()
   await rm(root, { recursive: true, force: true })
+}
+
+function pick(memory: { loaded: number; unloaded: number }) {
+  return { loaded: memory.loaded, unloaded: memory.unloaded }
 }

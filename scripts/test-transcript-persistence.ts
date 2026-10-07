@@ -8,11 +8,11 @@ import {
   renderTranscriptBundle,
   type ToolDetail,
 } from "@mako/sessions"
-import { forward } from "../electron/acp-notifications.js"
+import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 import {
   reduceLiveUpdates,
   type LiveUpdate,
-} from "../electron/contracts/live-content.js"
+} from "@mako/sessions/live-content"
 import { LiveJournal } from "../electron/live-journal.js"
 import { liveEntries } from "../electron/live-context.js"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.js"
@@ -33,50 +33,33 @@ const details: ToolDetail[] = [
 ]
 try {
   const updates: LiveUpdate[] = [{ kind: "user", text: "Apply the change" }]
-  forward(
-    { id },
-    {
-      sessionId: id,
-      update: {
-        sessionUpdate: "tool_call",
-        toolCallId: "edit",
-        title: "Edit",
-        status: "in_progress",
+  const decode = (update: Parameters<typeof decodeAcpUpdate>[0]) => {
+    for (const item of decodeAcpUpdate(update)) if (item.kind === "update") updates.push(item.update)
+  }
+  decode({
+    sessionUpdate: "tool_call",
+    toolCallId: "edit",
+    title: "Edit",
+    status: "in_progress",
+  })
+  decode({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "edit",
+    status: "completed",
+    content: [
+      {
+        type: "diff",
+        path: "/fixture/app.ts",
+        oldText: "before",
+        newText: "after",
       },
-    },
-    (event) => {
-      if (event.type === "live-update") updates.push(event.update)
-    },
-    () => {}
-  )
-  forward(
-    { id },
-    {
-      sessionId: id,
-      update: {
-        sessionUpdate: "tool_call_update",
-        toolCallId: "edit",
-        status: "completed",
-        content: [
-          {
-            type: "diff",
-            path: "/fixture/app.ts",
-            oldText: "before",
-            newText: "after",
-          },
-          { type: "terminal", terminalId: "terminal-proof" },
-          {
-            type: "content",
-            content: { type: "image", data: "cHJvb2Y=", mimeType: "image/png" },
-          },
-        ],
+      { type: "terminal", terminalId: "terminal-proof" },
+      {
+        type: "content",
+        content: { type: "image", data: "cHJvb2Y=", mimeType: "image/png" },
       },
-    },
-    (event) => {
-      if (event.type === "live-update") updates.push(event.update)
-    },
-    () => {}
-  )
+    ],
+  })
   const blocks = reduceLiveUpdates([], updates)
   blocks.push({
     type: "event",

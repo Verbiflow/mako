@@ -11,7 +11,7 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import { SessionMemory } from "../electron/session-memory.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
-import { reduceLiveUpdates, type LiveUpdate } from "../electron/contracts/live-content.js"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.js"
 import type {
   LiveDriverEvent,
@@ -614,6 +614,73 @@ async function boundsWarmProviders() {
       { active: 0, warm: 2, hibernated: 1 },
       "Diagnostics distinguishes work from retained and hibernated processes"
     )
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function unloadsHibernatedConversations() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-unload-"))
+  const id = randomUUID()
+  let starts = 0
+  let owner: LiveConversations
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      starts++
+      return {
+        id: options.conversationId,
+        nativeId: options.conversationId,
+        nativePath: join(root, options.conversationId),
+        harness: "test-provider",
+        cwd: root,
+        status: "ready",
+        connection: "connected",
+        modes: [],
+        currentMode: null,
+        configOptions: [],
+      }
+    },
+    prompt: async (prompted) => {
+      const current = owner.snapshot(prompted)?.session
+      assert.ok(current)
+      owner.observe({ type: "live-update", id: prompted, update: { kind: "text", text: "kept" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "running" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "ready" } })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: () => {},
+    setMode: async () => {},
+  }
+  owner = new LiveConversations({
+    appPath: root,
+    root: join(root, "journals"),
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    providerIdleMs: 100,
+    providerWarmLimit: 2,
+    conversationMemory: { bytes: 0, recent: 0, sweepMs: 0 },
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  try {
+    await owner.start("test-provider", root, { conversationId: id })
+    owner.submit(id, randomUUID(), "seed")
+    assert.equal(owner.residency().memory.unloaded, 0, "a connected conversation stays in memory over budget")
+    await waitFor(() => owner.residency().memory.unloaded === 1, "the hibernated conversation was not unloaded")
+    const back = owner.snapshot(id)
+    assert.equal(back?.session.connection, "hibernated", "it reloads as it was, not as a restart would leave it")
+    assert.equal(back?.session.error, undefined)
+    assert.ok(back?.blocks.some((block) => block.type === "text" && block.text === "kept"))
+    assert.equal(owner.prewarm(id), "waking", "typing into an unloaded conversation still wakes it")
+    await waitFor(() => owner.snapshot(id)?.session.connection === "connected", "the reloaded conversation did not wake")
+    assert.equal(starts, 2)
+    console.log("PASS: a hibernated conversation leaves memory over budget, reloads exactly, and wakes")
   } finally {
     owner.stop()
     rmSync(root, { recursive: true, force: true })
@@ -1908,6 +1975,7 @@ await resumesAfterQuitInFirstTurn()
 await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()
 await prewarmOverlapsTyping()
+await unloadsHibernatedConversations()
 await failedCloseKeepsOwnership()
 identityAndToolLifecycle()
 console.log(

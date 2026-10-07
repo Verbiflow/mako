@@ -20,7 +20,7 @@ import {
   type ClaudeSdkDependencies,
 } from "../electron/providers/claude/sdk-driver.ts"
 import { claudeExecutablePath } from "../electron/providers/claude/sdk-process.ts"
-import { ClaudeProjection } from "../electron/providers/claude/sdk-projection.ts"
+import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { claudeInputContent, ClaudeInput } from "../electron/providers/claude/input.ts"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
@@ -885,7 +885,7 @@ assert.deepEqual(
       attachments: [
         {
           type: "attachment",
-          name: "Tool image",
+          name: "image",
           mimeType: "image/png",
           source: { kind: "inline", data: "fixture" },
         },

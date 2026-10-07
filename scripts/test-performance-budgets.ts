@@ -19,7 +19,7 @@ import {
   type LiveBlock,
   type LivePending,
   type LiveUpdate,
-} from "../electron/contracts/live-content"
+} from "@mako/sessions/live-content"
 import { SessionUsage, type UsageObservation } from "../electron/session-usage"
 import { decodeSession, decoders, loadFixtures } from "./native-decoding"
 

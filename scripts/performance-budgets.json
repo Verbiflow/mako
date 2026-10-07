@@ -8,7 +8,7 @@
   "claude decodes claude/plan-turn x50": 8.375,
   "codex decodes codex/notices-and-waits x50": 3.499,
   "cursor decodes cursor/plan-and-build x50": 3.186,
-  "grok decodes grok/plan-mode x50": 2.418,
-  "devin decodes devin/plan-approved x50": 9.622,
-  "opencode decodes opencode/plan-and-build x50": 7.289
+  "opencode decodes opencode/plan-and-build x50": 7.289,
+  "grok decodes grok/acp-session x50": 1.455,
+  "devin decodes devin/plan-approved x50": 9.622
 }

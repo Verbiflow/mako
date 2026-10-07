@@ -10,13 +10,13 @@ import { mock } from "node:test"
 import {
   reduceLiveUpdates,
   type LiveUpdate,
-} from "../electron/contracts/live-content.ts"
+} from "@mako/sessions/live-content"
 import { createLiveEngine, type EngineLive } from "../electron/live-engine.ts"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
 import {
   ClaudeProjection,
   claudeRetracted,
-} from "../electron/providers/claude/sdk-projection.ts"
+} from "@mako/sessions/claude-projection"
 import { ClaudeNotices } from "../electron/providers/claude/sdk-notices.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
 

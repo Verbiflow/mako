@@ -18,12 +18,12 @@ import { ThreadEntrySchema } from "@mako/sessions/thread-schema"
 import {
   LiveBlockSchema,
   reduceLiveUpdates,
-} from "../electron/contracts/live-content.ts"
+} from "@mako/sessions/live-content"
 import { LiveJournal } from "../electron/live-journal.ts"
 import { liveEntries } from "../electron/live-context.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
 import { WorkspaceGit } from "../electron/host-git.ts"
-import { claudeProposedPlan } from "../electron/providers/claude/sdk-plan.ts"
+import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { threadToMessages } from "../src/lib/foreign-thread.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"

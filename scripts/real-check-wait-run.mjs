@@ -70,8 +70,7 @@ console.log("slow check ok")
 }
 
 /** An app_check call: by name, or inside a wrapper's input (OpenCode's code mode runs `tools.mako.app_check(...)` in `execute`). */
-const isCheckTool = (block) => /app_check|check app/i.test(`${block.name ?? ""} ${block.title ?? ""}`) || /mako\W+app_check/.test(textOf(block.input))
-const textOf = (value) => typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value)
+const isCheckTool = (block) => /app_check|check app/i.test(`${block.name ?? ""} ${block.title ?? ""}`) || /mako\W+app_check/.test(block.input ?? "")
 
 async function runHarness(harness) {
   const root = await realpath(await mkdtemp(join(out, `${harness}-`)))
@@ -107,8 +106,8 @@ async function runHarness(harness) {
           call.status = block.status
           if (!["pending", "running", "in_progress"].includes(block.status)) call.endedMs ??= Date.now() - started
         }
-        call.input = textOf(block.input).slice(0, 400)
-        call.output = textOf(block.output ?? block.result ?? block.content).slice(0, 1200)
+        call.input = (block.input ?? "").slice(0, 400)
+        call.output = (block.output ?? "").slice(0, 1200)
       }
       const request = snap?.requests?.find((item) => item.id === requestId)
       if (request && ["completed", "failed", "uncertain", "interrupted"].includes(request.status)) {

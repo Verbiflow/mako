@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { JsonValue } from "../electron/codex-app-json.ts"
 import { eventText } from "@mako/sessions/events"
+import type { AttachmentContent } from "@mako/sessions/content"
 import type { ToolCall } from "@/extend/slots"
 import type { Block, ChatMessage } from "@/lib/types"
 import { acpBlocksToMessages } from "@/lib/acp-blocks"
@@ -10,7 +11,7 @@ import { threadToMessages } from "@/lib/foreign-thread"
 import { foldTools, pairTools } from "@/lib/tools"
 import { createLiveEngine, type EngineLive } from "../electron/live-engine.ts"
 import { deliverDecoded } from "../electron/contracts/native-decoding.ts"
-import { reduceLiveUpdates, type LiveUpdate } from "../electron/contracts/live-content.ts"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveSessionState } from "../electron/shared.ts"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.ts"
 import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
@@ -19,7 +20,7 @@ import { CursorProvider } from "../packages/sessions/src/providers/cursor.ts"
 import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
-import { decoderFor, readRecording, type Recording } from "./native-decoding.ts"
+import { decoderFor, readRecording, type Prompt, type Recording } from "./native-decoding.ts"
 
 /**
  * Whether a harness's live wire and its own store say the same thing: the
@@ -29,8 +30,9 @@ import { decoderFor, readRecording, type Recording } from "./native-decoding.ts"
  * boundaries and text chunking left out: a store that writes a reply as two
  * entries and a wire that streams it in forty deltas draw the same.
  *
- * Prompts are left out too. Mako draws its own prompt from the request it
- * sent, not from anything the harness reports back.
+ * Mako draws its own prompts from the requests it sent, so the live side
+ * draws each one the capture recorded where it fell, and a store that loses
+ * one, moves it, or reads a steered message as a new turn draws differently.
  */
 
 /** The store reader for a harness, reading under `home` instead of the person's own. */
@@ -55,19 +57,36 @@ export function liveUpdates(harness: string, recording: Recording): LiveUpdate[]
     id: "compare", harness, nativeId: "compare", cwd: "/", title: "", status: "running",
     connection: "connected", modes: [], currentMode: null, configOptions: [],
   }
+  /** Where each prompt with a native run id began, for a rewind to cut back to; the host reads the store instead. */
+  const runs = new Map<string, number>()
   const live: EngineLive = {
     state,
     emit: (event) => {
       if (event.type === "live-update") updates.push(event.update)
       else if (event.type === "live-updates") updates.push(...event.updates)
+      else if (event.type === "live-rewound") {
+        const at = runs.get(event.run)
+        if (at === undefined) throw new Error(`${harness} rewound to turn ${event.run}, which no prompt in the recording names`)
+        updates.splice(at)
+      }
     },
   }
   const sink = createLiveEngine<EngineLive>().sink(live, { effect: () => undefined })
-  const prompts = new Set(recording.prompts)
+  const prompts = recording.prompts ?? []
+  let next = 0
+  const prompt = (prompted: Prompt) => {
+    if (prompted.steered) return updates.push({ kind: "user", text: prompted.text ?? "", steeringFor: "running" })
+    decoder.prompted?.()
+    if (prompted.run !== undefined) runs.set(prompted.run, updates.length)
+    const attachments = (prompted.attachments ?? []).map(({ name, mimeType }): AttachmentContent =>
+      ({ type: "attachment", name, mimeType, source: { kind: "file", path: name } }))
+    updates.push(attachments.length ? { kind: "user", text: prompted.text ?? "", attachments } : { kind: "user", text: prompted.text ?? "" })
+  }
   recording.messages.forEach((message, index) => {
-    if (prompts.has(index)) updates.push({ kind: "user", text: "" })
+    while (prompts[next]?.at === index) prompt(prompts[next++]!)
     deliverDecoded(decoder.decode(message), sink)
   })
+  for (const prompted of prompts.slice(next)) prompt(prompted)
   return updates
 }
 
@@ -83,8 +102,7 @@ export async function storeDrawing(harness: string, home: string, path: string):
 }
 
 /**
- * One line per drawn block, prompts left out, adjacent text and thinking
- * joined. Tools are drawn as the window pairs them, a call with its result
+ * One line per drawn block, adjacent text and thinking joined. Tools are drawn as the window pairs them, a call with its result
  * on one line; each side namespaces its tool ids its own way, so they are
  * numbered in order of appearance instead.
  */
@@ -112,7 +130,13 @@ export function drawing(messages: readonly ChatMessage[]): string[] {
     lines.push(line)
   }
   for (const message of messages) {
-    if (message.role === "user") continue
+    if (message.role === "user") {
+      const text = message.blocks.flatMap((block) => block.type === "text" ? [block.text] : []).join("").trim()
+      // The store keeps the bytes or a path where Mako kept an asset, so an attachment is drawn as the window labels it.
+      const attached = message.blocks.flatMap((block) => block.type === "attachment" ? [` [${block.name} ${block.mimeType}]`] : []).join("")
+      if (text || attached) push(`${message.steeringFor ? "steered" : "user"}: ${oneLine(text)}${attached}`)
+      continue
+    }
     if (message.note) {
       push(`note: ${eventText(message.note)}`)
       continue
@@ -153,8 +177,15 @@ const JsonText = z.string().transform((text, context): JsonValue => {
     return z.NEVER
   }
 })
-/** Arguments as JSON text read as their value: the same input, pretty or compact, draws the same. */
-const Drawn = z.union([JsonText, z.json()]).optional().catch(undefined)
+/**
+ * Arguments as JSON text read as their value: the same input, pretty or
+ * compact, draws the same. A field left `undefined` is dropped, as JSON
+ * drops it, rather than failing the whole value.
+ */
+const Drawn = z.preprocess((value) => {
+  const text = JSON.stringify(value)
+  return text === undefined ? undefined : JSON.parse(text)
+}, z.union([JsonText, z.json()]).optional())
 
 /** JSON with keys in order at every depth, so the same value reads the same from either side. */
 function stable(value: JsonValue | undefined): string {
