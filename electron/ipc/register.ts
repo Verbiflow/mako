@@ -41,12 +41,12 @@ function refuseOutsideFixture(channel: string, transport: "page" | "socket" = "p
 }
 
 /** Web replies are encoded here so Electron keeps its original structured values. */
-export async function invokeHost(channel: string, args: unknown[], client = "web", history = hostHistoryPaging()): Promise<string> {
+export async function invokeHost(channel: string, args: unknown[], client = "web", history = hostHistoryPaging(), correlationId?: string): Promise<string> {
   refuseOutsideFixture(channel, "socket")
   if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
   const call = calls.get(channel)
   if (!call) throw new Error("Unknown Mako host method")
-  return withHostClient(client, () => call(args, "socket"), history)
+  return withHostClient(client, () => call(args, "socket"), history, correlationId)
 }
 
 /** The same validated handler and client authority, without serializing pixels. */
