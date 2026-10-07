@@ -387,6 +387,31 @@ try {
   assert.deepEqual(plans, [{ type: "proposed-plan", id: "devin:session-3:write_plan:0#1", text: "# Create hello.txt\n\nWrite hello.txt containing hi", status: "proposed" }],
     "a plan reads as the live card: one card per plan file under its first edit's id, revised in place, without front matter")
   console.log("Devin plans read as the cards the live session showed")
+
+  // Shapes from a devin 3000.10.23 steered-shell pair: a message steered in
+  // during `sleep 3` is written when it arrived and stored after the result.
+  const steering = new DatabaseSync(join(dir, "sessions.db"))
+  steering
+    .prepare("INSERT INTO sessions (id, hidden, last_activity_at, working_directory, model, title, created_at, main_chain_id) VALUES (?, 0, ?, ?, ?, ?, ?, ?)")
+    .run("session-4", 40, "/work", "swe-1-6", "Steered", 30, 37)
+  const steerNode = steering.prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+  const made = (role, seconds, body) => JSON.stringify({ role, ...body, metadata: { created_at: `2026-10-07T07:37:${String(seconds).padStart(2, "0")}.000000Z` } })
+  steerNode.run(1031, "session-4", 31, null, made("user", 43, { content: "Run sleep 3" }), 31)
+  steerNode.run(1032, "session-4", 32, 31, made("assistant", 44, { content: "Running it.", tool_calls: [{ id: "exec:1", name: "exec", arguments: { command: "sleep 3" } }] }), 32)
+  steerNode.run(1033, "session-4", 33, 32, made("tool", 47, { tool_call_id: "exec:1", content: "done" }), 33)
+  steerNode.run(1034, "session-4", 34, 33, made("user", 45, { content: "Also read notes.md" }), 34)
+  steerNode.run(1035, "session-4", 35, 34, made("assistant", 49, { content: "", tool_calls: [{ id: "read:2", name: "read", arguments: { file_path: "notes.md" } }] }), 35)
+  steerNode.run(1036, "session-4", 36, 35, made("tool", 50, { tool_call_id: "read:2", content: "Release: Friday" }), 36)
+  steerNode.run(1037, "session-4", 37, 36, made("user", 58, { content: "Which day again?" }), 37)
+  steering.close()
+  const steered = await provider.read(`${join(dir, "sessions.db")}#session-4`)
+  const prompts = steered.entries.filter((entry) => entry.kind === "user").map(({ id, text, steeringFor }) => ({ id, text, steeringFor }))
+  assert.deepEqual(prompts, [
+    { id: "1031", text: "Run sleep 3", steeringFor: undefined },
+    { id: "1034", text: "Also read notes.md", steeringFor: "1031" },
+    { id: "1037", text: "Which day again?", steeringFor: undefined },
+  ], "a message made before the step it follows was steered into that turn; one made after a turn that ended on a tool opens its own")
+  console.log("Devin steered messages read as steering the turn they arrived during")
   provider.close()
   console.log("Devin CLI tests clean: streamed rows, tools, thinking, locks, and incremental follow verified.")
 } finally {

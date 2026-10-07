@@ -193,6 +193,7 @@ const CASES = [
         batches: [
           line({
             type: "user",
+            uuid: "claude-user-1",
             sessionId: "claude-session",
             cwd: "/work",
             timestamp: "2026-01-01T00:00:00Z",
@@ -200,6 +201,7 @@ const CASES = [
           }) +
             line({
               type: "assistant",
+              uuid: "claude-assistant-1",
               sessionId: "claude-session",
               timestamp: "2026-01-01T00:00:01Z",
               message: {
@@ -217,6 +219,7 @@ const CASES = [
             }),
           line({
             type: "user",
+            uuid: "claude-result-1",
             sessionId: "claude-session",
             timestamp: "2026-01-01T00:00:02Z",
             message: {
