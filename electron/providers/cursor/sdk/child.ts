@@ -29,7 +29,7 @@ import {
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 import { unpackedPath } from "../../../asar-unpacked.js"
 // Narrow entries: the package root loads every harness's reader into each Cursor child.
-import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions/cursor-sdk-index"
+import { CURSOR_SDK_IMPORT_METADATA_KEY, readCursorSdkRunResults } from "@mako/sessions/cursor-sdk-index"
 import { z } from "zod"
 import {
   copyLegacyStore,
@@ -41,6 +41,7 @@ import {
 } from "./import.js"
 import { readLegacyStoreSnapshot } from "../legacy-store.js"
 import { lostCursorRun, recordCursorRun, settleCursorRun } from "./run-records.js"
+import type { CursorSdkModelSelection } from "@mako/sessions/cursor-sdk-content"
 import {
   CURSOR_SDK_EXIT,
   CURSOR_SDK_HEADLESS,
@@ -53,9 +54,9 @@ import {
   type SdkChildLine,
   type SdkImportSource,
   type SdkMcpServer,
-  type SdkModelSelection,
   type SdkRequest,
   type SdkResult,
+  type SdkRunResult,
 } from "./wire.js"
 
 const PackageSchema = z.object({ name: z.string(), version: z.string() })
@@ -66,7 +67,7 @@ interface OpenAgent {
   stateRoot: string
   store: SqliteLocalAgentStore
   handle: SDKAgent
-  model: SdkModelSelection | undefined
+  model: CursorSdkModelSelection | undefined
   mcpServers: Record<string, McpServerConfig> | undefined
   name: string | undefined
   /** Exact origin revision admitted by this child, checked again before send. */
@@ -382,8 +383,15 @@ function forwardMessage(turn: string, message: SDKMessage): void {
 }
 
 async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
+  const unended = new Set<string>()
   try {
-    for await (const message of run.stream()) forwardMessage(turn, message)
+    for await (const message of run.stream()) {
+      if (message.type === "tool_call") {
+        if (message.status === "running") unended.add(message.call_id)
+        else unended.delete(message.call_id)
+      }
+      forwardMessage(turn, message)
+    }
   } catch (cause) {
     if (!closing) log("warn", `run stream ended early: ${cursorSdkWireError(cause).message}`)
   }
@@ -412,8 +420,15 @@ async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
       model: result.model,
       durationMs: result.durationMs,
       usage: result.usage,
+      settled: checkpointedResults(open, run.id, unended),
     },
   })
+}
+
+/** What the run's checkpoint kept for calls its stream never ended; undefined when it kept none. */
+function checkpointedResults(open: OpenAgent, runId: string, callIds: ReadonlySet<string>): SdkRunResult["settled"] {
+  const results = readCursorSdkRunResults(open.stateRoot, open.agentId, runId, callIds)
+  return results.size ? [...results].map(([callId, result]) => ({ callId, ...result })) : undefined
 }
 
 const unknownDeltas = new Set<string>()

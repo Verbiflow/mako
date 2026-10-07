@@ -1,4 +1,11 @@
 import { z } from "zod"
+import {
+  CursorSdkDeltaSchema,
+  CursorSdkMessageSchema,
+  CursorSdkModelParamSchema,
+  CursorSdkModelSelectionSchema,
+  CursorSdkTokenUsageSchema,
+} from "@mako/sessions/cursor-sdk-content"
 
 /**
  * The line protocol between the host and the Cursor SDK child.
@@ -48,13 +55,6 @@ export function cursorSdkExitReason(code: number | null): string | undefined {
 export const JsonValueSchema = z.json()
 export type JsonValue = z.infer<typeof JsonValueSchema>
 
-export const SdkModelParamSchema = z.object({ id: z.string(), value: z.string() })
-export const SdkModelSelectionSchema = z.object({
-  id: z.string(),
-  params: z.array(SdkModelParamSchema).optional(),
-})
-export type SdkModelSelection = z.infer<typeof SdkModelSelectionSchema>
-
 export const SdkModelListItemSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -72,7 +72,7 @@ export const SdkModelListItemSchema = z.object({
   variants: z
     .array(
       z.object({
-        params: z.array(SdkModelParamSchema),
+        params: z.array(CursorSdkModelParamSchema),
         displayName: z.string(),
         description: z.string().optional(),
         isDefault: z.boolean().optional(),
@@ -101,112 +101,15 @@ export const SdkMcpServerSchema = z.union([
 ])
 export type SdkMcpServer = z.infer<typeof SdkMcpServerSchema>
 
-export const SdkTokenUsageSchema = z.object({
-  inputTokens: z.number(),
-  outputTokens: z.number(),
-  cacheReadTokens: z.number().optional(),
-  cacheWriteTokens: z.number().optional(),
-  reasoningTokens: z.number().optional(),
-})
-
-const messageBase = { agent_id: z.string(), run_id: z.string() }
-
-/** The SDK's `SDKMessage`, as the child forwards it from `run.stream()`. */
-export const SdkMessageSchema = z.discriminatedUnion("type", [
-  z.object({
-    ...messageBase,
-    type: z.literal("system"),
-    subtype: z.literal("init").optional(),
-    model: SdkModelSelectionSchema.optional(),
-    tools: z.array(z.string()).optional(),
-  }),
-  z.object({
-    ...messageBase,
-    type: z.literal("assistant"),
-    message: z.object({
-      role: z.literal("assistant"),
-      content: z.array(
-        z.discriminatedUnion("type", [
-          z.object({ type: z.literal("text"), text: z.string() }),
-          z.object({
-            type: z.literal("tool_use"),
-            id: z.string(),
-            name: z.string(),
-            input: JsonValueSchema.optional(),
-          }),
-        ])
-      ),
-    }),
-  }),
-  z.object({
-    ...messageBase,
-    type: z.literal("user"),
-    message: z.object({
-      role: z.literal("user"),
-      content: z.array(z.object({ type: z.literal("text"), text: z.string() })),
-    }),
-  }),
-  z.object({
-    ...messageBase,
-    type: z.literal("tool_call"),
-    call_id: z.string(),
-    name: z.string(),
-    status: z.enum(["running", "completed", "error"]),
-    args: JsonValueSchema.optional(),
-    result: JsonValueSchema.optional(),
-    truncated: z.object({ args: z.boolean().optional(), result: z.boolean().optional() }).optional(),
-  }),
-  z.object({
-    ...messageBase,
-    type: z.literal("thinking"),
-    text: z.string(),
-    thinking_duration_ms: z.number().optional(),
-  }),
-  z.object({
-    ...messageBase,
-    type: z.literal("status"),
-    status: z.enum(["CREATING", "RUNNING", "FINISHED", "ERROR", "CANCELLED", "EXPIRED"]),
-    message: z.string().optional(),
-  }),
-  z.object({ ...messageBase, type: z.literal("request"), request_id: z.string() }),
-  z.object({
-    ...messageBase,
-    type: z.literal("task"),
-    status: z.string().optional(),
-    text: z.string().optional(),
-  }),
-  z.object({ ...messageBase, type: z.literal("usage"), usage: SdkTokenUsageSchema }),
-])
-export type SdkMessage = z.infer<typeof SdkMessageSchema>
-
-/** The streamed deltas the transcript renders as they arrive; the rest of the SDK's update union is summarised by `SdkMessage`. */
-export const SdkDeltaSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text-delta"), text: z.string() }),
-  z.object({ type: z.literal("thinking-delta"), text: z.string() }),
-  z.object({ type: z.literal("thinking-completed") }),
-  z.object({ type: z.literal("turn-ended") }),
-  /**
-   * Cursor is summarising the conversation to fit its context;
-   * `summary-completed` ends it. The summary itself arrives as a `task`
-   * message. SDK 1.0.31 withholds all three deltas from `onDelta`, so there
-   * the message is the only sign of a compaction.
-   */
-  z.object({ type: z.literal("summary-started") }),
-  z.object({ type: z.literal("summary-completed") }),
-  /** The tail of what a running shell command printed since the last one, coalesced by the child. */
-  z.object({ type: z.literal("shell-output"), text: z.string() }),
-  /** An update kind this child does not know, sent once per kind. */
-  z.object({ type: z.literal("unhandled"), kind: z.string() }),
-])
-export type SdkDelta = z.infer<typeof SdkDeltaSchema>
-
 export const SdkRunResultSchema = z.object({
   runId: z.string(),
   status: z.enum(["finished", "error", "cancelled"]),
   error: z.object({ message: z.string(), code: z.string().optional() }).optional(),
-  model: SdkModelSelectionSchema.optional(),
+  model: CursorSdkModelSelectionSchema.optional(),
   durationMs: z.number().optional(),
-  usage: SdkTokenUsageSchema.optional(),
+  usage: CursorSdkTokenUsageSchema.optional(),
+  /** Results the run's checkpoint kept for calls its stream never ended (`readCursorSdkRunResults`). */
+  settled: z.array(z.object({ callId: z.string(), output: z.string(), failed: z.boolean() })).optional(),
 })
 export type SdkRunResult = z.infer<typeof SdkRunResultSchema>
 
@@ -273,7 +176,7 @@ export const SdkOpenParamsSchema = z.object({
   /** `true` creates the agent under `agentId`; `false` resumes the one that exists. */
   create: z.boolean(),
   name: z.string().optional(),
-  model: SdkModelSelectionSchema.optional(),
+  model: CursorSdkModelSelectionSchema.optional(),
   mcpServers: z.record(z.string(), SdkMcpServerSchema).optional(),
   /** HTTP/1.1 with SSE for the agent stream; the child's default. `false` uses the SDK's HTTP/2. */
   http1: z.boolean().optional(),
@@ -304,7 +207,7 @@ export const SdkSendParamsSchema = z.object({
   turn: z.string(),
   text: z.string(),
   images: z.array(SdkImageSchema).optional(),
-  model: SdkModelSelectionSchema.optional(),
+  model: CursorSdkModelSelectionSchema.optional(),
   /** Cursor's Plan mode for this send: the agent proposes a plan with `createPlan` and changes nothing. */
   plan: z.boolean().optional(),
 })
@@ -333,7 +236,7 @@ export const SdkResultSchemas = {
   hello: z.object({ wire: z.number(), sdkVersion: z.string(), node: z.string(), ripgrep: z.boolean().optional() }),
   open: z.object({
     agentId: z.string(),
-    model: SdkModelSelectionSchema.optional(),
+    model: CursorSdkModelSelectionSchema.optional(),
     /** Set when this open copied a `cursor-agent` store into a new agent. */
     imported: z.boolean().optional(),
     /** Verified origin for both a fresh copy and a previously indexed import. */
@@ -392,8 +295,8 @@ export const SdkEventSchema = z.discriminatedUnion("event", [
    * `seq` counts the turn's messages from 0 and travels with a replayed
    * message unchanged, so the host can tell a message it was shown before.
    */
-  z.object({ event: z.literal("message"), turn: z.string(), seq: z.number().int().nonnegative().optional(), message: SdkMessageSchema }),
-  z.object({ event: z.literal("delta"), turn: z.string(), delta: SdkDeltaSchema }),
+  z.object({ event: z.literal("message"), turn: z.string(), seq: z.number().int().nonnegative().optional(), message: CursorSdkMessageSchema }),
+  z.object({ event: z.literal("delta"), turn: z.string(), delta: CursorSdkDeltaSchema }),
   z.object({ event: z.literal("result"), turn: z.string(), result: SdkRunResultSchema }),
   z.object({ event: z.literal("login-url"), url: z.string() }),
   z.object({ event: z.literal("log"), level: z.enum(["info", "warn"]), message: z.string() }),

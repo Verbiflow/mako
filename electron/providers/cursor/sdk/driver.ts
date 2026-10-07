@@ -43,7 +43,8 @@ import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from 
 import { CursorSdkClient, CursorSdkError } from "./client.js"
 import { createCursorModelCache, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
-import { cursorConfigOptions, CursorDecoder, type CursorEffect, type CursorTurnOutcome } from "./decoder.js"
+import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
+import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
 import { nativeCapture, type NativeCapture } from "../../../native-capture.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
@@ -54,7 +55,6 @@ import type {
   SdkImportSource,
   SdkMcpServer,
   SdkModelListItem,
-  SdkModelSelection,
   SdkRunResult,
 } from "./wire.js"
 import { cursorSdkExitReason } from "./wire.js"
@@ -173,33 +173,17 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
   return servers
 }
 
-/**
- * Why a tool row is still open when its turn has ended. The SDK has no
- * approval prompt: a call a hook rejects is refused before it runs, the
- * reason is fed to the model only, and no terminal event follows.
- */
-function unfinishedToolNote(outcome: "finished" | "cancelled" | "error", error?: string): string {
-  switch (outcome) {
-    case "cancelled":
-      return "Stopped before this call finished."
-    case "error":
-      return `This call was still running when the turn ended, so it never returned a result${error ? `: ${error}` : "."}`
-    case "finished":
-      return "Cursor did not run this call. A hook in .cursor/hooks.json or the runtime rejected it before it ran and told the agent why; the SDK has no approval prompt."
-  }
-}
-
 const MAX_SETTLED_TURNS = 64
 
-/** Ends the turn's projection, closing any tool row the run left open. */
-function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, error?: string): void {
+/** Ends the turn's projection, closing any tool row the run left open: with what its checkpoint kept, else a note. */
+function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, error?: string, settled?: SdkRunResult["settled"]): void {
   if (live.turn) {
     live.settledTurns.add(live.turn)
     if (live.settledTurns.size > MAX_SETTLED_TURNS)
       live.settledTurns.delete(live.settledTurns.values().next().value!)
   }
   live.turn = null
-  deliver(engine, live, live.decoder.finish(outcome, unfinishedToolNote(outcome, error)))
+  deliver(engine, live, live.decoder.finish(outcome, cursorUnfinishedToolNote(outcome, error), settled))
 }
 
 function deliver(engine: Engine, live: Live, decoded: Decoded<CursorEffect>[]): void {
@@ -231,7 +215,7 @@ function claimTurn(engine: Engine, live: Live, turn: string): boolean {
 }
 
 function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
-  settleTurn(engine, live, result.status, result.error?.message)
+  settleTurn(engine, live, result.status, result.error?.message, result.settled)
   const plan = live.state.settings?.options?.plan
   const settings = result.model ? cursorSdkReportedSettings(result.model, live.models, plan) : live.state.settings
   const patch: Partial<LiveSessionState> = {
@@ -323,7 +307,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return catalog
   }
 
-  function selectionFor(live: Pick<Live, "models">, settings: SessionSettings | undefined, fallback: string | undefined): SdkModelSelection {
+  function selectionFor(live: Pick<Live, "models">, settings: SessionSettings | undefined, fallback: string | undefined): CursorSdkModelSelection {
     const requested = settings?.model ?? fallback ?? live.models[0]?.id
     const resolved = cursorSdkSelection({ ...settings, model: requested }, live.models)
     if (!resolved) throw new Error(`Cursor does not offer the model "${requested ?? ""}" to this account`)
@@ -407,11 +391,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   return {
     provider: "cursor",
     launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
-    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. The SDK has no way to ask for it." },
+    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Its protocol has a summarize action, but the SDK never sends one and offers no way to." },
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
-    planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation" },
+    planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation",
+      feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },
     nativeAgents: { kind: "observed", via: "`task` tool calls and the subagent runs they start." },
-    questions: { kind: "unavailable", reason: "The SDK's `askQuestion` tool has no answer channel in local runs: the SDK makes no interactive request." },
+    questions: { kind: "unavailable", reason: "In local runs the SDK answers every `askQuestion` itself, declining it with \"Interactive questions are not supported in local SDK runs\", and has no way for Mako to answer instead." },
     contextBreakdown: { kind: "unavailable", reason: "The SDK reports a run's token usage, not what fills the context." },
     modeSwitching: { kind: "single", reason: "The SDK runs one mode, agent; Plan is a setting chosen with each message." },
     fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own." },

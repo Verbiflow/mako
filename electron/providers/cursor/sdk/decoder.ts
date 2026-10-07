@@ -3,15 +3,23 @@ import type { SessionModel, SettingValue } from "@mako/sessions/settings"
 import type { Decoded } from "../../../contracts/native-decoding.js"
 import type { NativeAgentObservation } from "../../../contracts/native-agents.js"
 import type { LiveSessionState } from "../../../shared.js"
-import { fromInclusiveCounts, SessionUsage } from "../../../session-usage.js"
+import { inclusiveTokens } from "@mako/sessions/harnesses"
+import { SessionUsage } from "../../../session-usage.js"
+import {
+  compactionSummary,
+  CursorSdkProjection,
+  type CursorSdkDelta,
+  type CursorSdkMessage,
+  type CursorSdkModelSelection,
+  type CursorTurnOutcome,
+} from "@mako/sessions/cursor-sdk-content"
 import { CursorAgents } from "./agents.js"
-import { compactionSummary, CursorSdkProjection } from "./projection.js"
-import type { SdkDelta, SdkEvent, SdkMessage, SdkModelSelection } from "./wire.js"
+import type { SdkEvent, SdkRunResult } from "./wire.js"
 
 /** The selected model's options, with the values `selection` sets as their current ones. */
 export function cursorConfigOptions(
   models: readonly SessionModel[],
-  selection: SdkModelSelection | undefined,
+  selection: CursorSdkModelSelection | undefined,
   plan?: SettingValue
 ): SessionModel["options"] {
   if (!selection) return []
@@ -43,8 +51,6 @@ export interface CursorDecoderView {
  * completion seen first holds it until the summary or the turn's end.
  */
 type CompactionMark = "idle" | "awaiting-summary" | "marked"
-
-export type CursorTurnOutcome = "finished" | "cancelled" | "error"
 
 /**
  * Cursor's child events as Mako's decoded events, one turn at a time. The
@@ -78,16 +84,17 @@ export class CursorDecoder {
       : this.delta(event.delta)
   }
 
-  /** Ends the turn's projection, closing any tool row the run left open with `note`. */
-  finish(outcome: CursorTurnOutcome, note: string): Decoded<CursorEffect>[] {
+  /** Ends the turn's projection, closing any tool row the run left open with what its checkpoint kept (`settled`), else `note`. */
+  finish(outcome: CursorTurnOutcome, note: string, settled?: SdkRunResult["settled"]): Decoded<CursorEffect>[] {
     const decoded = this.releaseCompaction()
     const projection = this.projection
     this.projection = null
-    if (projection) decoded.push(...projection.finish(outcome, note).map((update) => ({ kind: "update" as const, update })))
+    const results = new Map(settled?.map(({ callId, ...result }) => [callId, result]))
+    if (projection) decoded.push(...projection.finish(outcome, note, () => results).map((update) => ({ kind: "update" as const, update })))
     return decoded
   }
 
-  private message(message: SdkMessage, source: string | undefined): Decoded<CursorEffect>[] {
+  private message(message: CursorSdkMessage, source: string | undefined): Decoded<CursorEffect>[] {
     const decoded: Decoded<CursorEffect>[] = []
     if (message.type === "system" && message.model) {
       const plan = this.view.state.settings?.options?.plan
@@ -102,7 +109,7 @@ export class CursorDecoder {
     for (const update of this.projection!.message(message)) decoded.push({ kind: "update", update })
     if (message.type === "usage") {
       // The turn's spend only: SDK 1.0.31 sums the turn's model calls and names no window, so it says nothing about how full the context is.
-      const usage = this.meter.observe({ kind: "spent", tokens: fromInclusiveCounts({
+      const usage = this.meter.observe({ kind: "spent", tokens: inclusiveTokens({
         input: message.usage.inputTokens,
         cacheRead: message.usage.cacheReadTokens,
         cacheWrite: message.usage.cacheWriteTokens,
@@ -121,7 +128,7 @@ export class CursorDecoder {
     return decoded
   }
 
-  private delta(delta: SdkDelta): Decoded<CursorEffect>[] {
+  private delta(delta: CursorSdkDelta): Decoded<CursorEffect>[] {
     const decoded: Decoded<CursorEffect>[] = this.projection!.delta(delta).map((update) => ({ kind: "update", update }))
     switch (delta.type) {
       case "summary-started":

@@ -1,6 +1,6 @@
 import { z } from "zod"
 import type { NativeAgentObservation } from "../../../contracts/native-agents.js"
-import type { SdkMessage } from "./wire.js"
+import type { CursorSdkMessage } from "@mako/sessions/cursor-sdk-content"
 
 const taskArgs = z.object({
   agentId: z.string().min(1).max(512),
@@ -21,7 +21,7 @@ export class CursorAgents {
   private readonly agents = new Map<string, NativeAgentObservation>()
   private readonly calls = new Map<string, string>()
 
-  project(message: SdkMessage): NativeAgentObservation | undefined {
+  project(message: CursorSdkMessage): NativeAgentObservation | undefined {
     if (message.type !== "tool_call" || message.name !== "task") return undefined
     if (!message.call_id || message.call_id.length > 512 || message.truncated?.args) return undefined
     const args = taskArgs.safeParse(message.args)

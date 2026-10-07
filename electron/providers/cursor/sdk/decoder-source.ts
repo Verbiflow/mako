@@ -1,3 +1,4 @@
+import { cursorUnfinishedToolNote } from "@mako/sessions/cursor-sdk-content"
 import type { JsonObject, JsonValue } from "../../../codex-app-json.js"
 import type { Decoded } from "../../../contracts/native-decoding.js"
 import type { LiveSessionState } from "../../../shared.js"
@@ -73,7 +74,8 @@ export const cursorDecoderSource: ProviderDecoderSource = {
           turn = event.turn
           decoder.startTurn(turn)
         }
-        if (event.event === "result") return decoder.finish(event.result.status, "This call was still running when its turn ended.")
+        if (event.event === "result")
+          return decoder.finish(event.result.status, cursorUnfinishedToolNote(event.result.status, event.result.error?.message), event.result.settled)
         const decoded = decoder.decode(event)
         for (const item of decoded) if (item.kind === "state" && item.patch.settings) state = { settings: item.patch.settings }
         return decoded
