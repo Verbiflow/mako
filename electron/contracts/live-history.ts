@@ -1,6 +1,6 @@
 import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
-import type { LiveBlock } from "./live-content.js"
+import type { LiveBlock } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "./live-conversations.js"
 
 export const LiveHistoryCursorSchema = z.object({

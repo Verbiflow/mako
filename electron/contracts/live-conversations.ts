@@ -15,9 +15,8 @@ import type {
   LivePermissionRequest,
   PromptAttachment,
   LiveSessionState,
-  LiveUpdate,
 } from "./providers-acp.js"
-import type { LiveBlock } from "./live-content.js"
+import type { LiveBlock, LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { ProviderFailureKind } from "./provider-failure.js"

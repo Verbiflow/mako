@@ -206,9 +206,6 @@ export const CONNECTION_LOST_STOP = "connection-lost"
  */
 export const RETRIES_EXHAUSTED_STOP = "retries-exhausted"
 
-/** One streamed piece of an interactive turn, reduced for rendering. */
-export type { LiveUpdate } from "./live-content.js"
-
 export interface PromptAttachment {
   name: string
   mimeType: string

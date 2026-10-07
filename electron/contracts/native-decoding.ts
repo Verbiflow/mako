@@ -1,7 +1,7 @@
 import type { Compaction, TranscriptEvent } from "@mako/sessions/events"
 import type { UsageWindow } from "../account-types.js"
 import type { JsonValue } from "../codex-app-json.js"
-import type { LiveUpdate } from "./live-content.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivityObservation, NativeNotice } from "./native-activity.js"
 import type { LiveSessionState } from "./providers-acp.js"
 
