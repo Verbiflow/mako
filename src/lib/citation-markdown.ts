@@ -1,6 +1,6 @@
 import type { Root, PhrasingContent, InlineCode } from "mdast"
 import { visit } from "unist-util-visit"
-import { inlineFileTarget, linkFileCitations } from "./file-citations"
+import { inlineFileTarget, linkFileCitations, markdownFileTarget } from "./file-citations"
 
 /** Transform prose nodes only; code examples and link labels remain literal. */
 export function remarkFileCitations() {
@@ -71,6 +71,14 @@ export function remarkFileCitations() {
       if (!inlineFileTarget(url)) return
       parent.children.splice(index, 1, {type: "link", url, children: [node]})
       return index + 1
+    })
+    // Devin 3000.10.23 renders `<ref_snippet>` as `[notes.md:2-4](file:///…/notes.md)`, its lines only in the label.
+    visit(tree, "link", (node) => {
+      const label = node.children.length === 1 && node.children[0]?.type === "text" ? node.children[0].value : undefined
+      const lines = label === undefined ? null : /^(.+):(\d+)(?:-(\d+))?$/.exec(label)
+      const target = lines ? markdownFileTarget(node.url) : null
+      if (!lines || !target || target.line !== undefined || target.path.split("/").at(-1) !== lines[1]) return
+      node.url += `#L${lines[2]}${lines[3] ? `-L${lines[3]}` : ""}`
     })
     visit(tree, "code", (node, index, parent) => {
       const citation = /^(\d+):(\d+):(.+)$/.exec(node.lang ?? "")

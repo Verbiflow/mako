@@ -2,7 +2,7 @@ import { normalizeToolOutput } from "@mako/sessions/tool-output"
 import { identifyTool, toolKindWork, type ToolIdentity, type ToolSource } from "@mako/sessions/tool-identity"
 import type { Block, ChatMessage, EntryBlock } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
-import type { LiveBlock } from "../../electron/contracts/live-content"
+import type { LiveBlock } from "@mako/sessions/live-content"
 
 export { normalizeToolOutput }
 

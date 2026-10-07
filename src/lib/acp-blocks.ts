@@ -7,8 +7,8 @@ export interface AcpPlanEntry {
   status: string
 }
 
-import { liveToolFinished, type LiveBlock as AcpBlock } from "../../electron/contracts/live-content"
-export type { LiveBlock as AcpBlock } from "../../electron/contracts/live-content"
+import { liveToolFinished, type LiveBlock as AcpBlock } from "@mako/sessions/live-content"
+export type { LiveBlock as AcpBlock } from "@mako/sessions/live-content"
 
 export interface AcpConversation {
   messages: ChatMessage[]
