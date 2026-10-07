@@ -30,7 +30,7 @@ try {
       nativeIdentity: { kind: "unavailable", reason: "Fixture" },
       nativeExclusion: NO_NATIVE_EXCLUSION,
       nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-      planning: { via: "setting", option: "plan", proposal: "Fixture" },
+      planning: { via: "setting", option: "plan", proposal: "Fixture", feedback: { kind: "next-message", reason: "Fixture" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
       turnRecovery: { kind: "manual", reason: "Fixture" },
       start: async () => state,

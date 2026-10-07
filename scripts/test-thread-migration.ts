@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -133,6 +133,8 @@ async function writeNativeStores(): Promise<void> {
   const alias = join(claudeAccount, "projects", relative(join(home, ".claude", "projects"), claudeA.path))
   mkdirSync(dirname(alias), { recursive: true })
   copyFileSync(claudeA.path, alias)
+  mkdirSync(join(home, ".mako"), { recursive: true })
+  writeFileSync(join(home, ".mako", "roots.json"), JSON.stringify({ claude: [join(claudeAccount, "projects")] }))
   await emitCodexSession(conversation("codex-a"), { cwd: CWD, home })
   await emitCodexSession(conversation("codex-b"), { cwd: CWD, home })
   await emitGrokSession(conversation("grok-a"), { cwd: CWD, home })
@@ -152,7 +154,7 @@ async function writeNativeStores(): Promise<void> {
 
 /** Every harness's own reader, as a host reads the catalog. */
 async function readNative(): Promise<{ all: ThreadRef[]; named: Native }> {
-  const claude = await rows(new ClaudeProvider(home, claudeAccount))
+  const claude = await rows(new ClaudeProvider(home))
   const codex = await rows(new CodexProvider(home))
   const grok = await rows(new GrokProvider(home))
   const cursor = await rows(new CursorProvider(home, {}))
@@ -399,7 +401,7 @@ function fixtureDriver(): ProviderLiveDriver {
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
-    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider: "codex",

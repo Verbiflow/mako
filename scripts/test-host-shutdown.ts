@@ -64,7 +64,7 @@ for (const provider of [...registeredHarnessIds(), "future"]) {
     nativeIdentity: { kind: "unavailable", reason: "shutdown fixture" },
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-    planning: { via: "setting", option: "plan", proposal: "shutdown fixture" },
+    planning: { via: "setting", option: "plan", proposal: "shutdown fixture", feedback: { kind: "next-message", reason: "shutdown fixture" } },
     backgroundStop: { kind: "ends-with-turn", evidence: "shutdown fixture" },
     turnRecovery: { kind: "manual", reason: "shutdown fixture" },
     available: () => true,

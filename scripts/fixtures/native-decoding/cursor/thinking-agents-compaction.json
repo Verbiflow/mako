@@ -381,7 +381,7 @@
             "kind": "tool-update",
             "id": "call-2",
             "status": "failed",
-            "output": "This call was still running when its turn ended.",
+            "output": "This call was still running when the turn ended, so it never returned a result: Network error",
             "unfinished": true
           }
         }

@@ -1,0 +1,381 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.3 app-server (v2 protocol) and its rollout, shapes as codex/pairs/write-outside captured them",
+  "native": {
+    "version": "0.159.3",
+    "origin": "written"
+  },
+  "about": "Codex sends no item for a command its sandbox refused; the driver reads the call and its output from the rollout when the next response starts or the turn ends, and draws only the running turn's calls the wire never named. A call the wire drew, another turn's call and an entry in another shape draw nothing, the last kept as unreadable. When Mako itself runs inside a macOS sandbox, Codex's can't start and every sandboxed command fails with sandbox-exec's own error; the first such call adds one notice saying why.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "turn-1",
+            "items": [],
+            "status": "inProgress",
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "turn-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "turn-1",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "turn-1",
+          "item": {
+            "type": "commandExecution",
+            "id": "call_1",
+            "command": "/bin/zsh -lc 'cat notes.md'",
+            "cwd": "/tmp/mako-pair/project",
+            "processId": null,
+            "status": "completed",
+            "commandActions": [],
+            "aggregatedOutput": "The release ships on Friday.\n",
+            "exitCode": 0,
+            "durationMs": 4
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:turn-1:call_1",
+            "title": "cat notes.md",
+            "name": "exec_command",
+            "status": "completed",
+            "input": "{\n  \"command\": \"cat notes.md\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:turn-1:call_1",
+            "status": "completed",
+            "output": "The release ships on Friday.\n"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "command-ended",
+            "itemId": "call_1"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "rollout": [
+          {
+            "call": {
+              "type": "function_call",
+              "id": "fc_call_1",
+              "name": "exec_command",
+              "arguments": "{\"cmd\":\"cat notes.md\"}",
+              "call_id": "call_1",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            },
+            "output": {
+              "type": "function_call_output",
+              "id": "fco_call_1",
+              "call_id": "call_1",
+              "output": "Chunk ID: 01ef23\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 7\nOutput:\nThe release ships on Friday.\n",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            }
+          },
+          {
+            "call": {
+              "type": "function_call",
+              "id": "fc_call_2",
+              "name": "exec_command",
+              "arguments": "{\"cmd\":\"echo hi > ../outside.txt\"}",
+              "call_id": "call_2",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            },
+            "output": {
+              "type": "function_call_output",
+              "id": "fco_call_2",
+              "call_id": "call_2",
+              "output": "Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 12\nOutput:\nzsh:1: operation not permitted: ../outside.txt\n",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            }
+          },
+          {
+            "call": {
+              "type": "function_call",
+              "id": "fc_call_3",
+              "name": "exec_command",
+              "arguments": "{\"cmd\":\"pwd\"}",
+              "call_id": "call_3",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-0"
+              }
+            },
+            "output": {
+              "type": "function_call_output",
+              "id": "fco_call_3",
+              "call_id": "call_3",
+              "output": "Chunk ID: 45ab67\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 3\nOutput:\n/tmp\n",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            }
+          },
+          {
+            "call": {
+              "type": "function_call",
+              "name": "exec_command",
+              "call_id": "call_4"
+            },
+            "output": {
+              "type": "function_call_output",
+              "id": "fco_call_4",
+              "call_id": "call_4",
+              "output": "Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 12\nOutput:\nzsh:1: operation not permitted: ../outside.txt\n",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:turn-1:call_2",
+            "title": "echo hi > ../outside.txt",
+            "name": "exec_command",
+            "status": "pending",
+            "input": "{\n  \"command\": \"echo hi > ../outside.txt\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:turn-1:call_2",
+            "status": "failed",
+            "output": "zsh:1: operation not permitted: ../outside.txt\n"
+          }
+        },
+        {
+          "kind": "unknown",
+          "type": "(rollout calls)",
+          "reason": "unreadable",
+          "raw": {
+            "call": {
+              "type": "function_call",
+              "name": "exec_command",
+              "call_id": "call_4"
+            },
+            "output": {
+              "type": "function_call_output",
+              "id": "fco_call_4",
+              "call_id": "call_4",
+              "output": "Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 12\nOutput:\nzsh:1: operation not permitted: ../outside.txt\n",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "rollout": [
+          {
+            "call": {
+              "type": "function_call",
+              "id": "fc_call_5",
+              "name": "exec_command",
+              "arguments": "{\"cmd\":\"wc -l notes.md\"}",
+              "call_id": "call_5",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            },
+            "output": {
+              "type": "function_call_output",
+              "id": "fco_call_5",
+              "call_id": "call_5",
+              "output": "Chunk ID: 5162c1\nWall time: 0.0000 seconds\nProcess exited with code 71\nOriginal token count: 14\nOutput:\nsandbox-exec: sandbox_apply: Operation not permitted\n",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            }
+          },
+          {
+            "call": {
+              "type": "function_call",
+              "id": "fc_call_6",
+              "name": "exec_command",
+              "arguments": "{\"cmd\":\"cat notes.md\"}",
+              "call_id": "call_6",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            },
+            "output": {
+              "type": "function_call_output",
+              "id": "fco_call_6",
+              "call_id": "call_6",
+              "output": "Chunk ID: 5162c1\nWall time: 0.0000 seconds\nProcess exited with code 71\nOriginal token count: 14\nOutput:\nsandbox-exec: sandbox_apply: Operation not permitted\n",
+              "internal_chat_message_metadata_passthrough": {
+                "turn_id": "turn-1"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:turn-1:call_5",
+            "title": "wc -l notes.md",
+            "name": "exec_command",
+            "status": "pending",
+            "input": "{\n  \"command\": \"wc -l notes.md\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:turn-1:call_5",
+            "status": "failed",
+            "output": "sandbox-exec: sandbox_apply: Operation not permitted\n"
+          }
+        },
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Codex can't sandbox commands",
+            "detail": "Mako is running inside a macOS sandbox, so Codex's own sandbox can't start.",
+            "body": "Every command Codex sandboxes fails. Switch to Full access, or start Mako outside the sandbox.",
+            "tone": "warning"
+          },
+          "source": "(rollout calls):511227ae"
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:turn-1:call_6",
+            "title": "cat notes.md",
+            "name": "exec_command",
+            "status": "pending",
+            "input": "{\n  \"command\": \"cat notes.md\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:turn-1:call_6",
+            "status": "failed",
+            "output": "sandbox-exec: sandbox_apply: Operation not permitted\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "turn-1",
+          "item": {
+            "type": "agentMessage",
+            "id": "msg_1",
+            "text": "",
+            "phase": null,
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "turn-1",
+            "items": [],
+            "status": "completed",
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "turn-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "turn-1",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

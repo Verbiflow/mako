@@ -91,7 +91,7 @@ try {
       questions: { kind: "session", via: "Injected driver fixture", encodeAnswer:codexQuestionAnswer,history:async()=>{if(gate)await gate;if(unavailable)throw Error("Unavailable source");return evidence} },provider,available:()=>true,
       launchEnvironment:{kind:"unavailable",reason:"Fixture"},nativeIdentity:{kind:"unavailable",reason:"Fixture"},
       nativeExclusion:NO_NATIVE_EXCLUSION,nativePromptIdentity:NO_NATIVE_PROMPT_IDENTITY,
-      planning:{via:"setting",option:"plan",proposal:"Fixture"},backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
+      planning:{via:"setting",option:"plan",proposal:"Fixture",feedback:{kind:"next-message",reason:"Fixture"}},backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
       turnRecovery:{kind:"manual",reason:"Fixture"},approvalEvidence:{kind:"submission-only",reason:"Fixture"},start:async()=>{throw Error("Unexpected launch")},prompt:async()=>{writes++},permission:async()=>{writes++},cancel:async()=>{},close(){},setMode:async()=>{}}
     const deps={root:journals,appPath:root,driver:()=>driver,emit(){},history:async()=>({ref:{harness:provider,nativeId:native,path},entries:[],start:0,total:0,hasEarlier:false,checkpoint:1})}
     let owner=new LiveConversations(deps)

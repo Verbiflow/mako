@@ -38,7 +38,7 @@ for (const type of ["string", "array"] as const) {
 // An ACP provider contributes encoding through the same capability as a direct SDK driver.
 const nativeEncoding = () => "a".repeat(64)
 const nativePromptIdentity = { kind: "accepted-message-id", evidence: "Future ACP fixture with a proven message receipt" } as const
-const planning: PlanningCapability = { via: "setting", option: "plan", proposal: "Fixture" }
+const planning: PlanningCapability = { via: "setting", option: "plan", proposal: "Fixture", feedback: { kind: "next-message", reason: "Fixture" } }
 assert.equal(acpLiveDriver({
   ...noAcpCapabilities,
   nativePromptIdentity, planning,
@@ -65,7 +65,7 @@ const driver: ProviderLiveDriver = {
   nativeExclusion: NO_NATIVE_EXCLUSION,
   nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
-  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "test",

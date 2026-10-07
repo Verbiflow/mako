@@ -350,6 +350,25 @@ class Harness {
   }
 }
 
+/** A turn running a tool, steered to put a nonce in its reply, through to its end. */
+async function steeredTurn(h, label) {
+  const { id } = await h.conversation(label)
+  const nonce = `steer-${randomUUID().slice(0, 8)}`
+  const requestId = randomUUID()
+  h.owner.submit(id, requestId, "Run exactly one foreground terminal command: sleep 15. Wait for it to finish, then reply with DONE.")
+  await h.wait(id, "the turn to be running a tool", (snapshot) => h.toolsAfter(id, requestId).length > 0 || !ACTIVE.has(snapshot?.requests[0]?.status ?? "queued"), 120_000)
+  if (!ACTIVE.has(h.request(id, requestId).status)) throw new Error("The turn ended before it could be steered")
+  const action = randomUUID()
+  await h.owner.act(id, { kind: "steer", id: action, requestId, text: `Also put the word ${nonce} in your final reply.`, attachments: [] })
+  await h.wait(id, "the steered turn to end", (snapshot) => !ACTIVE.has(snapshot?.requests[0]?.status ?? "queued"))
+  const receipt = h.snapshot(id).control?.actions?.find((entry) => entry.input?.id === action)
+  if (!["accepted", "completed"].includes(receipt?.state.kind)) throw new Error(`The steer was ${receipt?.state.kind ?? "never recorded"}${receipt?.state.reason ? `: ${receipt.state.reason}` : ""}`)
+  const steering = h.snapshot(id).blocks.filter((block) => block.type === "user" && block.steeringFor === requestId)
+  if (steering.length !== 1) throw new Error(`The transcript shows ${steering.length} steering messages, not 1`)
+  if (!h.reply(id, requestId).includes(nonce)) throw new Error("The final reply ignored the steer")
+  return { id, requestId, nonce, receipt: receipt.state.kind }
+}
+
 // A flow runs when the harness's catalog entry is implemented; otherwise it is
 // skipped with the driver's own reason, the words the window shows.
 function declares(tools, driver, key) {
@@ -456,21 +475,27 @@ const FLOWS = [
     name: "steer",
     declared: (driver, tools) => declares(tools, driver, "steering"),
     async run(h) {
-      const { id } = await h.conversation("steer")
-      const nonce = `steer-${randomUUID().slice(0, 8)}`
-      const requestId = randomUUID()
-      h.owner.submit(id, requestId, "Run exactly one foreground terminal command: sleep 15. Wait for it to finish, then reply with DONE.")
-      await h.wait(id, "the turn to be running a tool", (snapshot) => h.toolsAfter(id, requestId).length > 0 || !ACTIVE.has(snapshot?.requests[0]?.status ?? "queued"), 120_000)
-      if (!ACTIVE.has(h.request(id, requestId).status)) throw new Error("The turn ended before it could be steered")
-      const action = randomUUID()
-      await h.owner.act(id, { kind: "steer", id: action, requestId, text: `Also put the word ${nonce} in your final reply.`, attachments: [] })
-      await h.wait(id, "the steered turn to end", (snapshot) => !ACTIVE.has(snapshot?.requests[0]?.status ?? "queued"))
-      const receipt = h.snapshot(id).control?.actions?.find((entry) => entry.input?.id === action)
-      if (!["accepted", "completed"].includes(receipt?.state.kind)) throw new Error(`The steer was ${receipt?.state.kind ?? "never recorded"}${receipt?.state.reason ? `: ${receipt.state.reason}` : ""}`)
-      const steering = h.snapshot(id).blocks.filter((block) => block.type === "user" && block.steeringFor === requestId)
-      if (steering.length !== 1) throw new Error(`The transcript shows ${steering.length} steering messages, not 1`)
-      if (!h.reply(id, requestId).includes(nonce)) throw new Error("The final reply ignored the steer")
-      return { receipt: receipt.state.kind }
+      const { receipt } = await steeredTurn(h, "steer")
+      return { receipt }
+    },
+  },
+  {
+    // A message sent into a turn is part of it, so a native fork after the turn keeps it.
+    name: "steered-fork",
+    declared: (driver, tools) => {
+      const steering = declares(tools, driver, "steering")
+      if (steering !== true) return steering
+      return driver.fork.kind === "native" ? declares(tools, driver, "fork") : "the harness does not fork natively"
+    },
+    async run(h) {
+      const steered = await steeredTurn(h, "steered-fork")
+      const forkId = randomUUID()
+      h.owner.fork(steered.id, { id: forkId, provider: h.provider, point: { kind: "run", requestId: steered.requestId } })
+      h.open.add(forkId)
+      const requestId = await h.completed(forkId, "What word did I ask you to put in your final reply? Reply with only that word. Do not use any tools.")
+      if (!h.reply(forkId, requestId).includes(steered.nonce)) throw new Error("The fork lost the message sent into the turn it forked after")
+      if (!h.snapshot(forkId).control?.ancestry?.nativeFork) throw new Error("The fork after a steered turn was not native")
+      return { native: "native fork" }
     },
   },
   {

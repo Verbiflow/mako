@@ -1,0 +1,69 @@
+{
+  "harness": "grok",
+  "source": "grok 1.0.46 `agent stdio`: the request test-grok-folder-trust-live.ts receives in a sealed HOME, 2026-10-07, with its paths and session id written in",
+  "native": {
+    "version": "1.0.46",
+    "origin": "written"
+  },
+  "about": "Folder trust: Grok asks a client that sets `x.ai/folderTrust.interactive` before it reads a project's MCP servers, instructions and other settings. Mako shows a card that names what's skipped; Trust project answers `trust`, and Not now or a dropped request answers `reject`.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "request": "_x.ai/folder_trust/request",
+        "params": {
+          "sessionId": "01a10e25-f0f4-77e3-be11-731fad235e24",
+          "cwd": "/work/greeting/app",
+          "workspace": "/work/greeting",
+          "configKinds": [
+            "mcp",
+            "instructions"
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "ask",
+            "ask": {
+              "request": {
+                "title": "Trust this project in Grok?",
+                "detail": "Grok ignores the MCP servers and instructions in /work/greeting until you trust it. A project's settings can run commands on this Mac, so trust only one you know. Instructions, skills and language servers apply from the next conversation.",
+                "options": [
+                  {
+                    "optionId": "trust",
+                    "name": "Trust project",
+                    "kind": "allow_always"
+                  },
+                  {
+                    "optionId": "reject",
+                    "name": "Not now",
+                    "kind": "reject_once"
+                  }
+                ]
+              },
+              "answers": [
+                {
+                  "optionId": "trust",
+                  "result": {
+                    "outcome": "trust"
+                  }
+                },
+                {
+                  "optionId": "reject",
+                  "result": {
+                    "outcome": "reject"
+                  }
+                }
+              ],
+              "dismissed": {
+                "outcome": "reject"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{"capture":1,"harness":"cursor","session":{"settings":{"model":"composer-2.5"}},"native":{"version":"1.0.31","origin":"captured"}}
+{"prompted":true,"text":"Run `sleep 30` in the shell."}
+{"message":{"event":"message","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","seq":0,"message":{"agent_id":"0e1deffb-de1c-46d4-85d1-11cd765213ca","run_id":"run-d6bb3873-1c4b-4dd6-bc94-b50db9fb51bf","type":"status","status":"RUNNING"}}}
+{"message":{"event":"delta","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","delta":{"type":"thinking-delta","text":"Running `sleep 30` in"}}}
+{"message":{"event":"message","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","seq":1,"message":{"agent_id":"0e1deffb-de1c-46d4-85d1-11cd765213ca","run_id":"run-d6bb3873-1c4b-4dd6-bc94-b50db9fb51bf","type":"thinking","text":"Running `sleep 30` in"}}}
+{"message":{"event":"delta","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","delta":{"type":"thinking-delta","text":" the shell."}}}
+{"message":{"event":"message","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","seq":2,"message":{"agent_id":"0e1deffb-de1c-46d4-85d1-11cd765213ca","run_id":"run-d6bb3873-1c4b-4dd6-bc94-b50db9fb51bf","type":"thinking","text":" the shell."}}}
+{"message":{"event":"delta","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","delta":{"type":"thinking-completed"}}}
+{"message":{"event":"message","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","seq":3,"message":{"agent_id":"0e1deffb-de1c-46d4-85d1-11cd765213ca","run_id":"run-d6bb3873-1c4b-4dd6-bc94-b50db9fb51bf","type":"thinking","text":"","thinking_duration_ms":1}}}
+{"message":{"event":"message","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","seq":4,"message":{"agent_id":"0e1deffb-de1c-46d4-85d1-11cd765213ca","run_id":"run-d6bb3873-1c4b-4dd6-bc94-b50db9fb51bf","type":"tool_call","call_id":"tool_f13bff4e-3452-4755-a03f-0208cb2ee0e","name":"shell","status":"running","args":{"command":"sleep 30","timeout":35000}}}}
+{"message":{"event":"message","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","seq":5,"message":{"agent_id":"0e1deffb-de1c-46d4-85d1-11cd765213ca","run_id":"run-d6bb3873-1c4b-4dd6-bc94-b50db9fb51bf","type":"status","status":"CANCELLED"}}}
+{"message":{"event":"result","turn":"b2841abd-cae6-4d92-989c-3819bdf36715","result":{"runId":"run-d6bb3873-1c4b-4dd6-bc94-b50db9fb51bf","status":"cancelled","model":{"id":"composer-2.5"},"durationMs":5661}}}

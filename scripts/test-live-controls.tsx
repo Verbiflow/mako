@@ -37,6 +37,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { LiveActionStatus } from "../src/components/viewer/live-action-status"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
+import { folderTrustRequest } from "../electron/providers/grok/folder-trust"
 import { AccessModeList, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
 import { ContextMeter, UsageDetails } from "../src/components/composer/context-meter"
 import { TooltipProvider } from "../src/components/ui/tooltip"
@@ -96,6 +97,15 @@ assert.match(authenticationMarkup, /Log in with browser/)
 assert.match(authenticationMarkup, /Cancel sign-in/)
 assert.match(authenticationMarkup, /Your prompt waits until sign-in succeeds/)
 assert.doesNotMatch(authenticationMarkup, /Choose how long to allow it/)
+conversation.session = { ...conversation.session, status: "ready", connection: "connected" }
+const trustAsk = folderTrustRequest({ sessionId: id, cwd: "/disposable", workspace: "/disposable", configKinds: ["mcp", "hooks"] })!.ask.request
+conversation.permission = { id: "trust", sessionId: id, ...trustAsk }
+publish()
+const trustMarkup = renderToStaticMarkup(<AcpPanel />)
+assert.match(trustMarkup, /data-request-detail[^>]*>Grok ignores the MCP servers and hooks in \/disposable until you trust it\./, "a request that isn't for a tool says what it asks")
+assert.match(trustMarkup, /Trust project/)
+assert.match(trustMarkup, /Not now/)
+assert.doesNotMatch(trustMarkup, /Choose how long to allow it/)
 conversation.permission = null
 conversation.session = { ...conversation.session, status: "ready", connection: "connected" }
 for (const descriptor of fixtureHarnesses) {
@@ -737,6 +747,21 @@ const spendOnly = renderToStaticMarkup(
 assert.match(spendOnly, />Unavailable</)
 assert.match(spendOnly, /Cursor doesn&#x27;t report how full the context is\./)
 assert.doesNotMatch(spendOnly, /Cache write/)
+assert.doesNotMatch(readingMarkup, /data-unrecorded-spend/, "complete spend carries no note")
+// A harness that says its count left spend out (Grok): the totals are said to be floors, the cost alone when only it is.
+const spendTotals = { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }, cost: { amount: 0.03, currency: "USD" } }
+const undercounted = renderToStaticMarkup(
+  <UsageDetails usage={{ ...spendTotals, unrecorded: { tokens: 1, cost: 1 } }} harness="grok" conversationId={conversation.session.id} />
+)
+assert.match(undercounted, /data-unrecorded-spend[^>]*>Grok left some calls out of its usage count, so these totals may be low\./)
+const partialCost = renderToStaticMarkup(
+  <UsageDetails usage={{ ...spendTotals, unrecorded: { tokens: 0, cost: 2 } }} harness="grok" conversationId={conversation.session.id} />
+)
+assert.match(partialCost, /Grok didn&#x27;t report the cost of every call, so the cost may be low\./)
+const noCostShown = renderToStaticMarkup(
+  <UsageDetails usage={{ tokens: spendTotals.tokens, unrecorded: { tokens: 0, cost: 1 } }} harness="grok" conversationId={conversation.session.id} />
+)
+assert.doesNotMatch(noCostShown, /data-unrecorded-spend/, "a cost left out says nothing when no cost is shown")
 const readingUsage = conversation.session.usage
 conversation.session = { ...conversation.session, usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
 publish()

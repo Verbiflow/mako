@@ -24,6 +24,7 @@ import { liveEntries } from "../electron/live-context.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
 import { WorkspaceGit } from "../electron/host-git.ts"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
+import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { threadToMessages } from "../src/lib/foreign-thread.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
@@ -144,10 +145,21 @@ assert.deepEqual(
   { plan: plan.id, approve: "allow_once" },
   "the plan approval names the plan it implements, so Build answers it instead of sending a prompt"
 )
+assert.equal(permission.request.feedbackOption, "reject_once", "keep planning carries what the person typed")
 permissions.respond("permission", { kind: "choice", optionId: "reject_once" })
 const decision = await response
 assert.ok(decision)
 assert.equal(decision.behavior, "deny")
+assert.equal(decision.message, "The user has not approved implementation. Continue planning.")
+
+const revising = new ClaudePermissions("fixture", () => undefined)
+const revised = revising.tool("ExitPlanMode", { plan: text }, { signal, requestId: "revise", toolUseID: plan.id })
+revising.respond("revise", { kind: "choice", optionId: "reject_once", feedback: "Split the migration into two steps" })
+const revision = await revised
+assert.ok(revision?.behavior === "deny")
+assert.equal(revision.message, planFeedbackMessage("Split the migration into two steps"),
+  "Claude gets the words in the refusal, in grok's wording, so one reader finds them in either transcript")
+assert.equal(planFeedbackOf(revision.message), "Split the migration into two steps")
 
 async function approvePlan(planReturn?: "acceptEdits" | "plan") {
   const asked: LiveDriverEvent[] = []

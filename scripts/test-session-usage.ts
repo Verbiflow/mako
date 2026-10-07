@@ -3,14 +3,15 @@ import type { SDKControlGetContextUsageResponse, SDKMessage } from "@anthropic-a
 import type { OpenCodeEvent } from "@opencode/client"
 import type { Decoded } from "../electron/contracts/native-decoding.ts"
 import type { LiveSessionUsage } from "../electron/contracts/providers-acp.ts"
-import { SessionUsage, carriedUsage, departedBinding, fromInclusiveCounts, restorableTotals, spendBetween } from "../electron/session-usage.ts"
+import { GROK_TICKS_PER_USD, inclusiveTokens } from "@mako/sessions/harnesses"
+import { SessionUsage, carriedUsage, departedBinding, restorableTotals, spendBetween } from "../electron/session-usage.ts"
 import { CodexDecoder } from "../electron/providers/codex/decoder.ts"
 import { OpenCodeDecoder } from "../electron/providers/opencode/decoder.ts"
 import { ClaudeDecoder } from "../electron/providers/claude/decoder.ts"
 import { parseNotification } from "../electron/codex-app-parse.ts"
-import { grokModelWindow, grokUsage, GROK_TICKS_PER_USD } from "../electron/providers/grok/usage.ts"
+import { grokModelWindow, grokUsage } from "../electron/providers/grok/usage.ts"
 import { grokNotification } from "../electron/providers/grok/notifications.ts"
-import { devinUsageUpdate } from "../electron/providers/devin/usage.ts"
+import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { claudeContextBreakdown } from "../electron/providers/claude/context-breakdown.ts"
 
 // The meter: a call's tokens wait for the window they are measured against.
@@ -40,7 +41,7 @@ import { claudeContextBreakdown } from "../electron/providers/claude/context-bre
 }
 
 // OpenAI-style counts include cached input; Mako counts it apart.
-assert.deepEqual(fromInclusiveCounts({ input: 21_221, cacheRead: 0, cacheWrite: 21_217, output: 286 }), { input: 4, cacheRead: 0, cacheWrite: 21_217, output: 286 })
+assert.deepEqual(inclusiveTokens({ input: 21_221, cacheRead: 0, cacheWrite: 21_217, output: 286 }), { input: 4, cacheRead: 0, cacheWrite: 21_217, output: 286 })
 
 // Codex 0.159: the context reading is the last request; the session's spend is the running total.
 {
@@ -81,10 +82,37 @@ assert.deepEqual(fromInclusiveCounts({ input: 21_221, cacheRead: 0, cacheWrite: 
   const turn = grokNotification("_x.ai/session_notification", { sessionId: "s", update: { sessionUpdate: "turn_completed", prompt_id: "p", stop_reason: "end_turn", usage: { inputTokens: 10, outputTokens: 2 } } })
   assert.deepEqual(turn?.notices, [])
   assert.deepEqual(turn?.usage, [{ kind: "spent", tokens: { input: 10, cacheRead: 0, cacheWrite: 0, output: 2 } }])
+
+  // Grok says when its own count of a turn left spend out: the tokens (and the cost Grok then omits), or only the cost.
+  const incomplete = grokUsage("turn_completed", { usage: { inputTokens: 900, outputTokens: 20, usageIsIncomplete: true } })
+  assert.deepEqual(incomplete?.at(-1), { kind: "unrecorded", of: "tokens" })
+  const partial = grokUsage("turn_completed", { usage: { inputTokens: 900, outputTokens: 20, costIsPartial: true } })
+  assert.deepEqual(partial?.at(-1), { kind: "unrecorded", of: "cost" })
+  assert.ok(!grokUsage("turn_completed", { usage: { inputTokens: 900, outputTokens: 20, usageIsIncomplete: false, costIsPartial: "yes" } })?.some((item) => item.kind === "unrecorded"))
+
+  const meter = new SessionUsage()
+  meter.observe(...grokUsage("turn_completed", { usage: { inputTokens: 100, outputTokens: 5, costUsdTicks: 10_000_000 } })!)
+  assert.equal(meter.current?.unrecorded, undefined, "a complete turn marks nothing")
+  const marked = meter.observe(...partial!)
+  assert.deepEqual(marked?.unrecorded, { tokens: 0, cost: 1 }, "a partial cost makes the cost a floor; the tokens stand")
+  assert.deepEqual(meter.observe(...incomplete!)?.unrecorded, { tokens: 1, cost: 2 }, "an incomplete count makes both floors")
+  assert.equal(meter.current?.tokens?.input, 1_900, "what was reported still counts")
+  meter.observe({ kind: "reset" })
+  assert.deepEqual(meter.current?.unrecorded, { tokens: 1, cost: 2 }, "a new conversation in place keeps what was spent, marks included")
+  assert.equal(carriedUsage({ harness: "grok", nativeId: "s", usage: meter.current }, { harness: "grok", nativeId: "s" })?.unrecorded, undefined,
+    "the marks belong to the process's spend, which does not carry to the next process")
+
+  // A request is marked by its own turns' marks, not the session's earlier ones.
+  const before = { tokens: { input: 10, cacheRead: 0, cacheWrite: 0, output: 1 }, unrecorded: { tokens: 1, cost: 1 } }
+  assert.equal(spendBetween(before, { ...before, tokens: { ...before.tokens, input: 30 } }).unrecorded, undefined)
+  assert.equal(spendBetween(before, { ...before, unrecorded: { tokens: 1, cost: 2 } }).unrecorded, "cost")
+  assert.equal(spendBetween(before, { ...before, unrecorded: { tokens: 2, cost: 2 } }).unrecorded, "tokens")
+  assert.equal(spendBetween(before, { tokens: before.tokens, unrecorded: { tokens: 0, cost: 1 } }).unrecorded, "cost", "a meter that started over counts its marks from zero")
 }
 
 // Devin: the call's tokens ride in `_meta`. Each main reading is repeated tagged `root`; a
 // subagent's own call (recorded 2026-10-06: 1,977 in, 41 out) is tagged with its agent id.
+const devinUsageUpdate = devinAcpSource.usageUpdate!
 assert.deepEqual(devinUsageUpdate({ "cognition.ai/inputTokens": 12_238, "cognition.ai/outputTokens": 60, "cognition.ai/cachedReadTokens": 8_192 }), {
   of: "agent", observations: [{ kind: "spent", tokens: { input: 4_046, cacheRead: 8_192, cacheWrite: 0, output: 60 } }],
 })
@@ -248,4 +276,4 @@ const breakdown = (input: number, cached: number, output: number) =>
   assert.equal(carriedUsage({ ...before, usage: { tokens: before.usage.tokens } }, { harness: "claude", nativeId: "a" }), undefined, "Spend alone does not carry")
 }
 
-console.log("Session usage: one meter across harnesses, each harness's counts normalized, Grok cost in its own unit, Claude's context itemized, context and session totals carried across a process restart, and a wake charged only for its own calls on Codex, OpenCode and Claude")
+console.log("Session usage: one meter across harnesses, each harness's counts normalized, Grok cost in its own unit and its word that a turn left spend out, Claude's context itemized, context and session totals carried across a process restart, and a wake charged only for its own calls on Codex, OpenCode and Claude")

@@ -1,11 +1,13 @@
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { devinResumePolicy } from "../electron/providers/devin/resume.ts"
-import { grokAcpSource, grokSessionSource } from "../electron/providers/grok/acp.ts"
+import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { grokCheckpoint } from "../electron/providers/grok/fork.ts"
+import { grokSessionSource } from "../electron/providers/grok/session-source.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
@@ -80,6 +82,30 @@ try {
   writeFileSync(join(grokHome, "sessions", encodeURIComponent("/private/var/work"), grokId, "updates.jsonl"), "")
   assert.equal(grokAcpSource.resume.kind === "native" ? grokAcpSource.resume.locate({ nativeId: grokId, cwd: "/var/work", env: { GROK_HOME: grokHome } }) : undefined,
     join(grokHome, "sessions", encodeURIComponent("/private/var/work"), grokId, "updates.jsonl"), "Grok's sessions are found under the GROK_HOME it runs with")
+
+  // Grok's fork target from its recorded stores: a rewind keeps the turns before it, and a steered message isn't a turn.
+  const pairs = "scripts/fixtures/native-decoding/grok/pairs"
+  for (const [pair, expected] of [["todos-over-two-turns", "1"], ["rewound-turn", "1"], ["steered-shell", "0"]] as const) {
+    const sessions = join(pairs, pair, "home", ".grok", "sessions")
+    const [workspace] = readdirSync(sessions)
+    const [nativeId] = readdirSync(join(sessions, workspace!))
+    assert.equal(grokCheckpoint({ nativeId: nativeId!, env: { GROK_HOME: join(pairs, pair, "home", ".grok") }, cwd: decodeURIComponent(workspace!) }), expected,
+      `${pair}: the checkpoint is Grok's count of the turns its fork keeps`)
+  }
+  const growingHome = join(stores, "grok-growing")
+  const growing = join(growingHome, "sessions", encodeURIComponent("/work"), grokId)
+  mkdirSync(growing, { recursive: true })
+  const prompt = (index: number) => JSON.stringify({ method: "session/update", params: { sessionId: grokId, update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: `turn ${index}` }, _meta: { promptIndex: index } } } })
+  const ended = JSON.stringify({ method: "_x.ai/session/update", params: { sessionId: grokId, update: { sessionUpdate: "turn_completed", stop_reason: "end_turn" } } })
+  const at = { nativeId: grokId, env: { GROK_HOME: growingHome }, cwd: "/work" }
+  writeFileSync(join(growing, "updates.jsonl"), `${prompt(0)}\n${ended}\n`)
+  assert.equal(grokCheckpoint(at), "0")
+  appendFileSync(join(growing, "updates.jsonl"), `${prompt(1)}\n${ended}\n${prompt(2).slice(0, 40)}`)
+  assert.equal(grokCheckpoint(at), "1", "a line still being written waits for its end")
+  appendFileSync(join(growing, "updates.jsonl"), `${prompt(2).slice(40)}\n`)
+  assert.equal(grokCheckpoint(at), "2", "the next read starts where the last one stopped")
+  writeFileSync(join(growing, "updates.jsonl"), `${prompt(0)}\n`)
+  assert.equal(grokCheckpoint(at), "0", "a file that shrank is read again from the start")
 } finally {
   rmSync(stores, { recursive: true, force: true })
 }

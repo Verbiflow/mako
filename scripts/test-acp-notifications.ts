@@ -9,8 +9,11 @@ import type { JsonObject } from "../electron/codex-app-json.ts"
 import type { NativeNotice } from "../electron/contracts/native-activity.ts"
 import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
+import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
 import { AcpDecoder, acpAnswer } from "../electron/acp-decoder.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { folderTrustRequest } from "../electron/providers/grok/folder-trust.ts"
+import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
 import { grokNotification } from "../electron/providers/grok/notifications.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { devinNotification } from "../electron/providers/devin/notifications.ts"
@@ -249,6 +252,19 @@ assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "abandoned"
 assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: "keep-planning" }), { outcome: "cancelled" })
 assert.deepEqual(acpAnswer(exitPlan.ask, { kind: "choice", optionId: null }), { outcome: "cancelled" }, "a request the session dropped keeps planning; it never builds")
 assert.equal(grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { toolCallId: 1 }), undefined, "a malformed request is refused")
+assert.equal(exitPlan.ask.request.feedbackOption, undefined, "with no plan file grok drops the feedback, so none is offered")
+const writtenPlan = grokAcpSource.requests?.decode("_x.ai/exit_plan_mode", { sessionId: "s", toolCallId: "call_2", planContent: "# Plan" })
+assert.ok(writtenPlan)
+assert.equal(writtenPlan.ask.request.feedbackOption, "keep-planning")
+assert.deepEqual(acpAnswer(writtenPlan.ask, { kind: "choice", optionId: "keep-planning", feedback: "Use async" }),
+  { outcome: "cancelled", feedback: "Use async" }, "the words ride in grok's own feedback field")
+assert.deepEqual(acpAnswer(writtenPlan.ask, { kind: "choice", optionId: "approved", feedback: "Use async" }), { outcome: "approved" },
+  "words on another option are never sent")
+assert.equal(planFeedbackOf("The user wants to revise the plan. The user said:\nUse async"), "Use async",
+  "grok's revise_plan_message reads back as the person's words")
+assert.equal(planFeedbackOf("The user wants to revise the plan. Ask the user what changes they would like to make."), undefined)
+assert.equal(planFeedbackOf(planFeedbackMessage("  Split the migration\ninto two steps \n")), "Split the migration\ninto two steps")
+console.log("PASS: plan feedback rides in grok's refusal only for a written plan, and reads back from either harness's wording")
 // The request grok 1.0.44 sent when its model called `ask_user_question` on October 5, 2026.
 const grokQuestion = grokAcpSource.requests?.decode("_x.ai/ask_user_question", {
   sessionId: "s", toolCallId: "call_q", mode: "default",
@@ -267,6 +283,19 @@ assert.deepEqual(acpAnswer(grokQuestion.ask, { kind: "answers", answers: { 0: ["
 assert.deepEqual(acpAnswer(grokQuestion.ask, { kind: "choice", optionId: null }), { outcome: "skip_interview", partial_answers: {} },
   "a dismissed card lets Grok continue without answers")
 assert.equal(grokAcpSource.requests?.decode("_x.ai/ask_user_question", { sessionId: "s", toolCallId: "call_q", questions: [] }), undefined)
+// Grok asks about folder trust only a client that says it can answer, and goes on without the project's config until it does.
+assert.deepEqual(acpClientCapabilities(grokAcpSource)._meta, { "x.ai/folderTrust": { interactive: true } })
+const trust = folderTrustRequest({ sessionId: "s", cwd: "/home/me/repo/app", workspace: "/home/me/repo", configKinds: ["mcp", "hooks", "instructions", "skills"] }, "/home/me")
+assert.ok(trust && grokAcpSource.requests?.methods.has("_x.ai/folder_trust/request"), "Grok's trust request is read, not refused")
+assert.equal(trust.ask.request.title, "Trust this project in Grok?")
+assert.equal(trust.ask.request.detail, "Grok ignores the MCP servers, hooks, instructions and skills in ~/repo until you trust it. "
+  + "A project's settings can run commands on this Mac, so trust only one you know. Instructions, skills and language servers apply from the next conversation.")
+assert.deepEqual(acpAnswer(trust.ask, { kind: "choice", optionId: "trust" }), { outcome: "trust" })
+assert.deepEqual(acpAnswer(trust.ask, { kind: "choice", optionId: "reject" }), { outcome: "reject" })
+assert.deepEqual(acpAnswer(trust.ask, { kind: "choice", optionId: null }), { outcome: "reject" }, "a session that ends unanswered leaves the folder untrusted")
+assert.equal(folderTrustRequest({ sessionId: "s", cwd: "/r", workspace: "/r", configKinds: ["mcp"] })?.ask.request.detail?.includes("next conversation"), false,
+  "MCP servers load once trusted, so nothing waits for the next conversation")
+assert.equal(folderTrustRequest({ sessionId: "s", cwd: "/r", configKinds: [] }), undefined, "a request without the folder it covers is refused")
 // grok 1.0.46 writes chat_history.jsonl from the first prompt and updates.jsonl at the turn's end:
 // a session saved mid-turn and the same session resumed name one record.
 const grokFolder = "/home/.grok/sessions/%2Fwork/01a10e4d-0e30"

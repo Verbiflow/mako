@@ -451,7 +451,8 @@
                 "implementsPlan": {
                   "plan": "grok:01a0f597-8738-71a1-af27-c41317465be0:call_3",
                   "approve": "approved"
-                }
+                },
+                "feedbackOption": "keep-planning"
               },
               "answers": [
                 {

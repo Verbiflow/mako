@@ -230,7 +230,17 @@
           }
         }
       },
-      "decoded": []
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 12000,
+              "size": 200000
+            }
+          }
+        }
+      ]
     },
     {
       "message": {

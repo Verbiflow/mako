@@ -57,7 +57,7 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
       nativeExclusion: NO_NATIVE_EXCLUSION,
       launchEnvironment: { kind: "unavailable", reason: "Injected driver fixture" },
       nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
       turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider: harness,

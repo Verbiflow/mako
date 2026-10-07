@@ -11,7 +11,7 @@ import { runtimeLocation } from "../dist-electron/runtime-service.js"
 import { runtimeInfo } from "../dist-electron/runtime-connection.js"
 import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
 import { readOnlyHostCalls, replayableHostCalls } from "../dist-electron/contracts/host-call-policy.js"
-import { fixtureDeskHostCalls, fixtureDeskRefusal } from "../dist-electron/contracts/fixture-desk-policy.js"
+import { fixtureCloudHostCalls, fixtureDeskHostCalls, fixtureDeskRefusal } from "../dist-electron/contracts/fixture-desk-policy.js"
 import { publishDevRendererRegistration } from "../dist-electron/dev-renderer-registration.js"
 import { registeredDeskBrowsers } from "../packages/control-runtime/dist/desk-browser-registration.js"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
@@ -21,6 +21,11 @@ for (const channel of fixtureDeskHostCalls) {
   // Boot builds the provider-free workspace shell, which is state, so it is not replay-safe.
   assert.ok(readOnlyHostCalls.has(channel) || channel === "mako:boot", `${channel} is a read`)
   assert.ok(!replayableHostCalls.has(channel), `${channel} is not a replayed mutation`)
+}
+// The Mako account reaches only a cloud on loopback from a fixture desk; `CloudAccounts` enforces that.
+for (const channel of fixtureCloudHostCalls) {
+  assert.ok(channel in hostCallInputs, `${channel} is a host call`)
+  assert.equal(fixtureDeskRefusal(channel), undefined, `${channel} is allowed`)
 }
 for (const channel of ["mako:live-start", "mako:list-models", "mako:git-status", "mako:terminal-create", "mako:live-read", "mako:browser-control-status", "mako:control-preview"])
   assert.ok(fixtureDeskRefusal(channel), `${channel} is refused`)
@@ -99,7 +104,12 @@ try {
   const automationsFile = join(root, ".mako", "automations.json")
   const savedAutomations = () => readFile(automationsFile, "utf8").catch(() => null)
   const automations = await savedAutomations()
-  for (const channel of ["mako:live-start", "mako:list-models", "mako:git-status", "mako:terminal-create", "mako:save-automations", "mako:relaunch", "mako:thread-archive", "mako:not-a-channel"]) {
+  // The Mako account reaches only a cloud on loopback from a fixture desk; `CloudAccounts` enforces that.
+for (const channel of fixtureCloudHostCalls) {
+  assert.ok(channel in hostCallInputs, `${channel} is a host call`)
+  assert.equal(fixtureDeskRefusal(channel), undefined, `${channel} is allowed`)
+}
+for (const channel of ["mako:live-start", "mako:list-models", "mako:git-status", "mako:terminal-create", "mako:save-automations", "mako:relaunch", "mako:thread-archive", "mako:not-a-channel"]) {
     const reply = await socketCall(call(channel, { garbage: true }, 7))
     assert.equal(reply.ok, false, channel)
     assert.equal(reply.code, "fixture-refused", `${channel} on the socket: ${JSON.stringify(reply)}`)
@@ -113,7 +123,12 @@ try {
   const malformed = await socketCall("{\"channel\":")
   assert.equal(malformed.ok, false, "A malformed call is not run")
 
-  for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-models", "mako:not-a-channel"]) {
+  // The Mako account reaches only a cloud on loopback from a fixture desk; `CloudAccounts` enforces that.
+for (const channel of fixtureCloudHostCalls) {
+  assert.ok(channel in hostCallInputs, `${channel} is a host call`)
+  assert.equal(fixtureDeskRefusal(channel), undefined, `${channel} is allowed`)
+}
+for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-models", "mako:not-a-channel"]) {
     const { reply } = await pageCall(call(channel, { kind: "cancel" }))
     assert.equal(reply.code, "fixture-refused", `${channel} through the page proxy: ${JSON.stringify(reply)}`)
   }

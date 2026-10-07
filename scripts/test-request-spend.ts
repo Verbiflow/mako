@@ -13,8 +13,8 @@ import { providerHost } from "../electron/providers/index.ts"
 import { usageHarnesses, usageSummary } from "../electron/usage.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
-// Cursor's and Devin's stores keep no token counts, so what Mako measured
-// while a request ran is the record the usage summary reads for them.
+// Cursor's store keeps no token counts, so what Mako measured while a
+// request ran is the record the usage summary reads for it.
 const tokens = (input: number, cacheRead: number, output: number) => ({ input, cacheRead, cacheWrite: 0, output })
 assert.deepEqual(spendBetween({ tokens: tokens(100, 50, 10) }, { tokens: tokens(160, 90, 25) }), { tokens: tokens(60, 40, 15) })
 assert.deepEqual(spendBetween({ tokens: tokens(500, 0, 50) }, { tokens: tokens(30, 0, 5) }), { tokens: tokens(30, 0, 5) }, "a meter that started over counts from zero")
@@ -33,7 +33,7 @@ const driver: ProviderLiveDriver = {
   nativeExclusion: NO_NATIVE_EXCLUSION,
   nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
   approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
-  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "cursor",
@@ -61,7 +61,7 @@ const driver: ProviderLiveDriver = {
     const session = sessions.get(id)!
     const emit = emitters.get(id)!
     emit({ type: "live-session", session: { ...session, status: "running" } })
-    setTimeout(() => emit({ type: "live-session", session: { ...session, status: "ready", usage: { tokens: tokens(160, 90, 25) } } }), 5)
+    setTimeout(() => emit({ type: "live-session", session: { ...session, status: "ready", usage: { tokens: tokens(160, 90, 25), unrecorded: { tokens: 1, cost: 1 } } } }), 5)
   },
   async cancel() {},
   async permission() {},
@@ -100,6 +100,7 @@ try {
   assert.equal(request.spend?.provider, "cursor")
   assert.equal(request.spend?.model, "composer-2")
   assert.deepEqual(request.spend?.tokens, tokens(60, 40, 15))
+  assert.equal(request.spend?.unrecorded, "tokens", "the harness said this request's turn left calls out of its count")
   await owner.close(id)
 
   const summary = await usageSummary(usageHarnesses(providerHost), join(root, "no-sessions"), join(root, "home"), conversations)
@@ -110,7 +111,8 @@ try {
   assert.equal(cursor?.cacheRead, 40)
   assert.equal(cursor?.output, 15)
   assert.equal(summary.models?.[0]?.model, "composer-2")
-  console.log("Request spend: a Cursor turn records what it spent from the meter, and the usage summary counts it")
+  assert.deepEqual(summary.incomplete, ["Cursor"], "so the summary says its totals may be low")
+  console.log("Request spend: a Cursor turn records what it spent from the meter, and the usage summary counts it, saying when the harness left spend out")
 } catch (error) {
   console.error(error)
   process.exitCode = 1

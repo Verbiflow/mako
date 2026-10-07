@@ -22,17 +22,22 @@ import { ProviderLaunchTrace } from "../electron/provider-launch.ts"
 import { claudeAcknowledged } from "../electron/providers/claude/sdk-message-kinds.ts"
 import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
 import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
+import { CodexRolloutCalls, codexRolloutDue } from "../electron/providers/codex/rollout-calls.ts"
 import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig } from "../electron/providers/codex/settings.ts"
 import { OPENCODE_DEFAULT_MODE, openCodeAgentForMode, openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
 import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
 import { openCodeMessageId, promptFiles } from "../electron/providers/opencode/live-driver.ts"
-import { OPENCODE_PLAN_AGENT } from "@mako/sessions"
+import { cursorSdkSelection, cursorSdkStateRoot, cursorSdkStorePath, normalizeCursorSdkModels, OPENCODE_PLAN_AGENT } from "@mako/sessions"
+import { build } from "esbuild"
+import { readCursorCliApiKey } from "../electron/providers/cursor/sdk/cli-keychain.ts"
+import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
+import type { SdkEvent, SdkImage } from "../electron/providers/cursor/sdk/wire.ts"
 import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
 import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { acpClientCapabilities, type ProviderAcpSource } from "../electron/providers/acp-source.ts"
-import { describeLeaks, machineIdentity, scrubTree, treeLeaks } from "./fixture-privacy.ts"
+import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
 import { differences, liveDrawing, PairSchema, PAIRS_FOLDER, storeDrawing, storeReader, type Pair } from "./decode-compare.ts"
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
 import { FIXTURE_ROOT, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
@@ -87,6 +92,8 @@ interface Recorder {
   controls: Record<Control, "driven" | { absent: string }>
   /** The store files kept beside a pair: the session's own, not the harness's indexes or prompts. */
   keeps: (file: string) => boolean
+  /** The folder `keeps` looks through, when the session needs more than its store's own folder. */
+  storeFolder?: (store: string) => string
   record: (sandbox: Sandbox, scenario: Scenario) => Promise<RecordedPair>
   /** Credential values the run had, which nothing recorded may contain. Read here, never printed or kept. */
   secrets?: () => Promise<string[]>
@@ -140,7 +147,7 @@ async function grokRewind(call: AcpCall, sessionId: string, target: number): Pro
 /** Grok over ACP, as Mako's ACP source launches it. */
 const grok: Recorder = {
   model: { kind: "scripted", tools: GROK_TOOLS },
-  controls: { steer: "driven", rewind: "driven" },
+  controls: { steer: "driven", rewind: "driven", compact: "driven" },
   keeps: (file) => /\/sessions\/[^/]+\/[^/]+\/(updates\.jsonl|summary\.json)$/.test(file),
   async record(sandbox, scenario) {
     const version = await versionOf("grok")
@@ -197,6 +204,7 @@ const claude: Recorder = {
   controls: {
     steer: "driven",
     rewind: { absent: "Claude Code 2.1.283's SDK rewinds files only (`rewindFiles`); its conversation rewind is the TUI's /rewind" },
+    compact: "driven",
   },
   keeps: (file) => /\/projects\/[^/]+\/.+\.jsonl$/.test(file),
   async record(sandbox, scenario) {
@@ -342,6 +350,7 @@ const codex: Recorder = {
   controls: {
     steer: "driven",
     rewind: { absent: "Codex 0.159.3's app-server has no rollback; its generated protocol names none" },
+    compact: "driven",
   },
   keeps: (file) => /\/sessions\/\d{4}\/\d\d\/\d\d\/rollout-[^/]+\.jsonl$/.test(file),
   async record(sandbox, scenario) {
@@ -360,6 +369,7 @@ const codex: Recorder = {
     const prompts: Prompt[] = []
     let turnDone = () => {}
     let stopTurn: (() => void) | undefined
+    let rollout: { thread: string; calls: CodexRolloutCalls } | undefined
     const peer = rpcPeer(child, {
       jsonrpc: false,
       timeoutMs: TURN_MS,
@@ -368,7 +378,13 @@ const codex: Recorder = {
       received: (message) => {
         if (!message.method) return
         if (message.id !== undefined) return void messages.push({ request: message.method, id: message.id, params: z.json().parse(message.params ?? {}) })
-        messages.push({ method: message.method, params: z.record(z.string(), z.json()).parse(message.params ?? {}) })
+        const params = z.record(z.string(), z.json()).parse(message.params ?? {})
+        // As Mako's driver reads the rollout (`codex-app-protocol.ts`).
+        if (rollout && codexRolloutDue(message.method, params, rollout.thread)) {
+          const calls = rollout.calls.read()
+          if (calls.length) messages.push({ rollout: calls })
+        }
+        messages.push({ method: message.method, params })
         if (message.method === "turn/completed") turnDone()
         if (message.method === "item/started" && CodexToolStarted.safeParse(message.params).success) {
           const stopping = stopTurn
@@ -386,7 +402,8 @@ const codex: Recorder = {
       await peer.call("initialize", { clientInfo: { name: "mako-decode-pairs", version: "0" }, capabilities: CODEX_CLIENT_CAPABILITIES })
       peer.notify("initialized")
       const codeMode = scenario.needs?.includes("codeMode") && !("absent" in CODEX_TOOLS.codeMode) ? CODEX_TOOLS.codeMode.model : undefined
-      const thread = z.object({ thread: z.object({ id: z.string() }) }).parse(await peer.call("thread/start", { cwd: sandbox.project, model: codeMode ?? CODEX_MODEL, config: codexInteractiveConfig() }))
+      const thread = z.object({ thread: z.object({ id: z.string(), path: z.string().nullish() }) }).parse(await peer.call("thread/start", { cwd: sandbox.project, model: codeMode ?? CODEX_MODEL, config: codexInteractiveConfig() }))
+      if (thread.thread.path) rollout = { thread: thread.thread.id, calls: new CodexRolloutCalls(thread.thread.path) }
       const threadModel = codeMode ?? CODEX_MODEL
       const planning = scenario.turns.some((turn) => turn.plan)
       for (const turn of scenario.turns) {
@@ -455,6 +472,7 @@ const opencode: Recorder = {
   controls: {
     steer: "driven",
     rewind: "driven",
+    compact: "driven",
   },
   keeps: (file) => /\/opencode\/opencode(?:-next)?\.db$/.test(file),
   async record(sandbox, scenario) {
@@ -631,8 +649,9 @@ const devin: Recorder = {
   },
   controls: {
     steer: "driven",
-    // Mako doesn't advertise `cognition.ai/revert`, so its Devin has no revert; the pair turns it on to read what one writes.
+    // Mako's conversation process doesn't advertise `cognition.ai/revert` (only its fork process does, `devin/fork.ts`); the pair turns it on to read what a revert writes.
     rewind: "driven",
+    compact: "driven",
   },
   keeps: (file) => file.endsWith("/devin/cli/sessions.db"),
   secrets: async () => credentialValues(await readFile(DEVIN_CREDENTIALS, "utf8")),
@@ -656,6 +675,123 @@ const devin: Recorder = {
     const [file] = await storeReader("devin", sandbox.home).discover()
     if (!file) throw new Error("Devin wrote no session to its store")
     return { version, recording: { harness: "devin", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire }, store: file.path }
+  },
+}
+
+/** Cursor's own agent model, which follows the scenarios' prompts and costs little. */
+const CURSOR_MODEL = "composer-2.5"
+const CURSOR_CHILD = join(process.cwd(), "node_modules", ".tmp", "decode-pairs", "cursor-child.js")
+
+/** The SDK child as Mako ships it, bundled privately: the app's own build belongs to whoever runs the app. */
+async function cursorChild(): Promise<string> {
+  await build({
+    entryPoints: ["electron/providers/cursor/sdk/child.ts"], outfile: CURSOR_CHILD,
+    bundle: true, platform: "node", format: "esm", packages: "external", target: "node22", logLevel: "warning",
+  })
+  return CURSOR_CHILD
+}
+
+/** The key Mako's resolver would hand a child (`CursorSdkAuth`), minus the one Mako keeps encrypted, which needs Electron. */
+async function cursorKey(): Promise<string> {
+  const key = process.env.CURSOR_API_KEY || await readCursorCliApiKey()
+  if (!key) throw new Error("Cursor isn't signed in; set CURSOR_API_KEY or run `cursor-agent login`")
+  return key
+}
+
+/** A turn's attachments as `promptImages` in the Cursor driver sends them; the scenarios attach only images. */
+function cursorImages(attachments: readonly PromptAttachment[]): SdkImage[] {
+  return attachments.map(({ name, data, mimeType }) => {
+    if (!data || !mimeType.startsWith("image/")) throw new Error(`decode-pairs sends Cursor only images, not ${name}`)
+    return { data, mimeType }
+  })
+}
+
+/**
+ * Cursor's SDK child as Mako's driver runs it, from a private bundle, with
+ * the sandbox as its home, so the agent's `store.db` lands under the
+ * sandbox's `.mako/cursor-sdk`. The child gets the person's key in its
+ * environment, as Mako's children do. Its model answers for real, which
+ * spends usage.
+ */
+const cursor: Recorder = {
+  model: {
+    kind: "own",
+    why: "Cursor's model is behind Cursor's own service, which the scripted model can't stand in for",
+    lacks: {
+      codeMode: "Cursor SDK 1.0.31 reports no tool that runs code calling its other tools (native-tools/cursor-1.0.31.json)",
+      ask: "Cursor SDK 1.0.31 declines every `askQuestion` itself in local runs (\"Interactive questions are not supported in local SDK runs\"), so Mako declares questions unavailable",
+    },
+  },
+  controls: {
+    steer: "driven",
+    rewind: { absent: "Cursor SDK 1.0.31 has no rewind; Mako forks by writing the conversation into a new agent" },
+    compact: { absent: "Cursor summarizes on its server when the context fills; its protocol's summarize action is never sent by SDK 1.0.31, which offers no way to ask" },
+  },
+  // The agent's root is named in the SDK's `index.db`, not in its own store.
+  keeps: (file) => /\/\.mako\/cursor-sdk\/(index\.db|agents\/agent-[0-9a-f]+\/store\.db)$/.test(file),
+  storeFolder: (store) => dirname(dirname(dirname(store))),
+  secrets: async () => [await cursorKey()],
+  async record(sandbox, scenario) {
+    const entry = await cursorChild()
+    const messages: JsonValue[] = []
+    const prompts: Prompt[] = []
+    let turnDone = (_turn: string) => {}
+    let toolStarted: (() => void) | undefined
+    const client = new CursorSdkClient({
+      owner: "mako-decode-pairs", cwd: sandbox.project, entry, execPath: process.execPath,
+      env: { ...sandbox.env, ...scenario.env, CURSOR_API_KEY: await cursorKey() },
+      onEvent: (event: SdkEvent) => {
+        if (event.event === "log" || event.event === "login-url") return
+        messages.push(z.json().parse(event))
+        if (event.event === "result") turnDone(event.turn)
+        if (event.event === "message" && event.message.type === "tool_call" && event.message.status === "running" && toolStarted) {
+          const started = toolStarted
+          toolStarted = undefined
+          setTimeout(started, STOP_AFTER_MS)
+        }
+      },
+    })
+    try {
+      const { sdkVersion } = await client.hello()
+      const catalog = normalizeCursorSdkModels((await client.request("models", undefined)).models)
+      const model = cursorSdkSelection({ model: CURSOR_MODEL }, catalog.models)?.selection
+      if (!model) throw new Error(`Cursor doesn't offer ${CURSOR_MODEL} to this account`)
+      const opened = await client.request("open", { cwd: sandbox.project, stateRoot: cursorSdkStateRoot(sandbox.env, sandbox.home), agentId: randomUUID(), create: true, model })
+      for (const turn of scenario.turns) {
+        const id = randomUUID()
+        const done = new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`Cursor did not finish a ${scenario.name} turn within ${TURN_MS / 1000}s`)), TURN_MS)
+          turnDone = (ended) => {
+            if (ended !== id) return
+            clearTimeout(timer)
+            resolve()
+          }
+        })
+        const attachments = await staged(sandbox.project, turn)
+        prompts.push(prompted(messages.length, turn.prompt, attachments))
+        const images = cursorImages(attachments)
+        if (turn.stop) toolStarted = () => void client.request("cancel", undefined).catch(() => undefined)
+        const text = turn.steer
+        let steered: Promise<void> | undefined
+        // As Mako steers Cursor (the driver's `steering.steer`).
+        if (text) toolStarted = () => {
+          steered = client.request("steer", { text }).then(({ outcome }) => {
+            if (outcome !== "complete_delivered") throw new Error(`Cursor didn't take the steer: ${outcome}`)
+            prompts.push({ at: messages.length, text, steered: true })
+          })
+          steered.catch(() => undefined)
+        }
+        await client.request("send", { turn: id, text: turn.prompt, images: images.length ? images : undefined, model, plan: turn.plan })
+        await done
+        if (text && !steered) throw new Error(`Cursor ran no tool to steer ${JSON.stringify(text)} into`)
+        await steered
+      }
+      const store = cursorSdkStorePath(cursorSdkStateRoot(sandbox.env, sandbox.home), opened.agentId)
+      if (!existsSync(store)) throw new Error("Cursor wrote no session to its store")
+      return { version: sdkVersion, recording: { harness: "cursor", session: { settings: { model: model.id } }, native: { version: sdkVersion, origin: "captured" }, messages, prompts }, store }
+    } finally {
+      await client.close().catch(() => client.kill())
+    }
   },
 }
 
@@ -689,7 +825,7 @@ const CodexToolStarted = z.object({ item: z.object({ type: z.enum(["commandExecu
 /** An ACP update that starts a tool. */
 const AcpToolStarted = z.object({ update: z.object({ sessionUpdate: z.literal("tool_call") }).loose() }).loose()
 
-const RECORDERS = new Map<string, Recorder>([["claude", claude], ["codex", codex], ["devin", devin], ["grok", grok], ["opencode", opencode]])
+const RECORDERS = new Map<string, Recorder>([["claude", claude], ["codex", codex], ["cursor", cursor], ["devin", devin], ["grok", grok], ["opencode", opencode]])
 
 async function versionOf(command: string): Promise<string> {
   const executable = resolveExecutable(command, process.env)
@@ -806,13 +942,15 @@ async function acpSession(
           const option = options.find((candidate) => candidate.kind === "allow_once") ?? options[0]
           return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : undefined
         }
-        // Grok's question and plan requests, answered as Mako answers them: each question's first option, keyed by its text; the plan approved.
+        // Grok's question, plan and trust requests, answered as Mako answers them: each question's first option, keyed by its text; the plan approved; the throwaway project trusted.
         case "_x.ai/ask_user_question": {
           const { questions } = GrokQuestions.parse(message.params)
           return { outcome: "accepted", answers: Object.fromEntries(questions.map((question) => [question.question, question.options[0]?.label ?? ""])), annotations: {} }
         }
         case "_x.ai/exit_plan_mode":
           return { outcome: "approved" }
+        case "_x.ai/folder_trust/request":
+          return { outcome: "trust" }
         case "elicitation/create":
           return { action: "accept", content: elicitationAnswer(message.params) }
         default:
@@ -900,6 +1038,17 @@ function rootedAt(replacements: readonly Replacement[]): (text: string) => strin
   return (text) => replacements.reduce((scrubbed, [from, to]) => scrubbed.replaceAll(from, to), text)
 }
 
+/** `rootedAt` for JSON Lines, also across the fragments a harness streamed a path in (`scrubJsonLines`). */
+function linesRootedAt(replacements: readonly Replacement[]): (text: string) => string {
+  const substitutions = rootSubstitutions(replacements)
+  const scrub = rootedAt(replacements)
+  return (text) => scrubJsonLines(scrub(text), substitutions)
+}
+
+function rootSubstitutions(replacements: readonly Replacement[]): Substitution[] {
+  return replacements.map(([from, to]) => literally(from, to))
+}
+
 async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Pair["known"]): Promise<string> {
   const folder = join(FIXTURE_ROOT, harness, PAIRS_FOLDER, scenario.name)
   const before = await readFile(join(folder, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
@@ -919,9 +1068,9 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
   }
   const body = pair.recording.messages.flatMap((message, index) => [...prompts.filter((prompt) => prompt.at === index).map(promptLine), { message }])
   body.push(...prompts.filter((prompt) => prompt.at >= pair.recording.messages.length).map(promptLine))
-  const lines = [header, ...body].map((line) => scrub(JSON.stringify(line)))
-  await writeFile(join(folder, "capture.jsonl"), `${lines.join("\n")}\n`)
-  await copyScrubbed(dirname(pair.store), join(folder, "home"), sandbox.home, replacements, recorder.keeps)
+  const lines = [header, ...body].map((line) => JSON.stringify(line))
+  await writeFile(join(folder, "capture.jsonl"), linesRootedAt(replacements)(`${lines.join("\n")}\n`))
+  await copyScrubbed(recorder.storeFolder?.(pair.store) ?? dirname(pair.store), join(folder, "home"), sandbox.home, replacements, recorder.keeps)
   const reasons = new Map(before?.known.map((difference) => [`${difference.side}${difference.line}`, difference.reason]))
   const kept: Pair = {
     harness,
@@ -952,14 +1101,16 @@ async function copyScrubbed(from: string, into: string, home: string, replacemen
   const scrub = rootedAt(replacements)
   const target = join(into, scrub(relative(home, from)))
   await mkdir(dirname(target), { recursive: true })
-  if (/\.(jsonl?|json|md|txt)$/.test(from)) await writeFile(target, scrub(await readFile(from, "utf8")))
+  if (from.endsWith(".jsonl")) await writeFile(target, linesRootedAt(replacements)(await readFile(from, "utf8")))
+  else if (/\.(json|md|txt)$/.test(from)) await writeFile(target, scrub(await readFile(from, "utf8")))
   else if (from.endsWith(".db")) await copyDatabase(from, target, replacements)
   else await cp(from, target)
 }
 
 /**
  * A SQLite store with its write-ahead log folded in and the sandbox's paths
- * replaced in every text value, kept in rollback-journal mode: a reader opening
+ * replaced in every text value and inside every binary one (`rewriteBlob`),
+ * kept in rollback-journal mode: a reader opening
  * a WAL database grows `-wal` and `-shm` files beside it, inside the fixtures.
  */
 async function copyDatabase(from: string, target: string, replacements: readonly Replacement[]): Promise<void> {
@@ -967,12 +1118,7 @@ async function copyDatabase(from: string, target: string, replacements: readonly
   await cp(`${from}-wal`, `${target}-wal`).catch(() => undefined)
   const database = new DatabaseSync(target)
   try {
-    const tables = z.array(z.object({ name: z.string() })).parse(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all())
-    for (const { name } of tables) {
-      const columns = z.array(z.object({ name: z.string() })).parse(database.prepare(`SELECT name FROM pragma_table_info(?)`).all(name))
-      for (const column of columns) for (const [from, to] of replacements)
-        database.prepare(`UPDATE "${name}" SET "${column.name}" = replace("${column.name}", ?, ?) WHERE typeof("${column.name}") = 'text' AND instr("${column.name}", ?) > 0`).run(from, to, from)
-    }
+    rewriteDatabase(database, rootedAt(replacements), rootSubstitutions(replacements))
     database.exec("PRAGMA journal_mode = DELETE")
     database.exec("VACUUM")
   } finally {

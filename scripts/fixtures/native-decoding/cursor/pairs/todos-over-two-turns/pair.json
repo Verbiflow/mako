@@ -1,0 +1,9 @@
+{
+  "harness": "cursor",
+  "native": {
+    "version": "1.0.31"
+  },
+  "about": "Use your todo list to plan the release in two items: QA sign-off, in progress, then shipping the release, pending. Don't run commands or change files. / QA signed off. Update the todo list: QA sign-off completed, shipping in progress. Don't run commands or change files. A todo list in the first turn, updated in the second.",
+  "store": ".mako/cursor-sdk/agents/agent-93ce0509d7685532ecdbe28a0600fad84f7042fdd57d9488ed7952766534df9c/store.db",
+  "known": []
+}

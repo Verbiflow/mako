@@ -1,13 +1,17 @@
 import assert from "node:assert/strict"
-import { clip, compactionSummary, CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
+import {
+  clip,
+  compactionSummary,
+  CursorSdkProjection,
+  type CursorSdkDelta,
+  type CursorSdkMessage,
+} from "@mako/sessions/cursor-sdk-content"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "../electron/providers/cursor/sdk/modes.ts"
 import {
   SdkChildLineSchema,
   SdkRequestSchema,
   type JsonValue,
-  type SdkDelta,
   type SdkEvent,
-  type SdkMessage,
   type SdkMethod,
   type SdkResult,
   type SdkRunResult,
@@ -17,12 +21,12 @@ import { RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.ts"
 
 const run = { agent_id: "agent-1", run_id: "run-1" } as const
 
-function assistant(text: string): SdkMessage {
+function assistant(text: string): CursorSdkMessage {
   return { ...run, type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } }
 }
 
-function thinking(text: string, durationMs?: number): SdkMessage {
-  const message: SdkMessage = { ...run, type: "thinking", text }
+function thinking(text: string, durationMs?: number): CursorSdkMessage {
+  const message: CursorSdkMessage = { ...run, type: "thinking", text }
   if (durationMs !== undefined) message.thinking_duration_ms = durationMs
   return message
 }
@@ -42,7 +46,7 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
 {
   const projection = new CursorSdkProjection("t1")
   const updates: LiveUpdate[] = []
-  const feed = (item: { delta: SdkDelta } | { message: SdkMessage }) => {
+  const feed = (item: { delta: CursorSdkDelta } | { message: CursorSdkMessage }) => {
     updates.push(...("delta" in item ? projection.delta(item.delta) : projection.message(item.message)))
   }
   feed({ delta: { type: "thinking-delta", text: "Running `echo`" } })
@@ -228,8 +232,8 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
 // dropped while two are; the completed call's whole output replaces it.
 {
   const projection = new CursorSdkProjection("t-shell")
-  const shell = (id: string, status: "running" | "completed"): SdkMessage => {
-    const message: SdkMessage = { ...run, type: "tool_call", call_id: id, name: "shell", status, args: { command: "make test" } }
+  const shell = (id: string, status: "running" | "completed"): CursorSdkMessage => {
+    const message: CursorSdkMessage = { ...run, type: "tool_call", call_id: id, name: "shell", status, args: { command: "make test" } }
     if (status === "completed") message.result = { status: "success", value: { exitCode: 0, stdout: "all passed\n", stderr: "" } }
     return message
   }
@@ -253,7 +257,7 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
 // final plan carries the completed arguments.
 {
   const projection = new CursorSdkProjection("t4")
-  const running = (todos: { content: string; status: string }[]): SdkMessage => ({
+  const running = (todos: { content: string; status: string }[]): CursorSdkMessage => ({
     ...run,
     type: "tool_call",
     call_id: "tool-todos",
@@ -303,8 +307,8 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
 // artifact: drafting while it fills, proposed when the call completes.
 {
   const projection = new CursorSdkProjection("t-plan")
-  const call = (status: "running" | "completed", args: JsonValue, result?: JsonValue): SdkMessage => {
-    const message: SdkMessage = {
+  const call = (status: "running" | "completed", args: JsonValue, result?: JsonValue): CursorSdkMessage => {
+    const message: CursorSdkMessage = {
       ...run,
       type: "tool_call",
       call_id: "tool-plan",
@@ -369,8 +373,8 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
 // it does not spin forever, and a completed call is left alone.
 {
   const projection = new CursorSdkProjection("t5")
-  const shell = (id: string, status: "running" | "completed"): SdkMessage => {
-    const message: SdkMessage = {
+  const shell = (id: string, status: "running" | "completed"): CursorSdkMessage => {
+    const message: CursorSdkMessage = {
       ...run,
       type: "tool_call",
       call_id: id,
@@ -401,6 +405,18 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
   assert.deepEqual(crashed.finish("error", "The process exited."), [
     { kind: "tool-update", id: "open", status: "failed", output: "The process exited.", unfinished: true },
   ], "only a run that died leaves its calls without a result; a refused or stopped call is not that")
+
+  // A read that fails streams no end either (SDK 1.0.31); its checkpoint kept
+  // "Error: File not found", which the row shows instead of guessing why.
+  const missing = new CursorSdkProjection("t6c")
+  missing.message({ ...run, type: "tool_call", call_id: "read", name: "read", status: "running", args: { path: "missing.md" } })
+  missing.message(shell("refused", "running"))
+  const kept = new Map([["read", { output: "Error: File not found", failed: true }]])
+  const closed = missing.finish("finished", "Cursor did not run this call.", () => kept)
+  assert.deepEqual(closed.filter((update) => update.kind === "tool-update").map((update) => [update.id, update.status, update.output]), [
+    ["read", "failed", "Error: File not found"],
+    ["refused", "failed", "Cursor did not run this call."],
+  ], "a call its checkpoint answered shows that answer; one it didn't keeps the note")
 }
 
 // A subagent's row is its reply to the parent, not its run. The run carries

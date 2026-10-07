@@ -1,0 +1,9 @@
+{
+  "harness": "claude",
+  "native": {
+    "version": "2.1.283"
+  },
+  "about": "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked. A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
+  "store": ".claude/projects/-tmp-mako-pair-project/0a981e6e-e79c-4983-8d8c-f2c02a38dc37.jsonl",
+  "known": []
+}

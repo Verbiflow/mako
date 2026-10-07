@@ -5,7 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { McpServer, OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
-import { OpenCodeContent } from "../electron/providers/opencode/content.ts"
+import { OpenCodeContent } from "@mako/sessions/opencode-content"
+import { openCodeEventUpdates } from "../electron/providers/opencode/content.ts"
 import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "../electron/providers/opencode/interactions.ts"
 import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
 import { createOpenCodeDriver, openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
@@ -28,22 +29,22 @@ const message = "msg_assistant"
 // Content projection.
 {
   const content = new OpenCodeContent(root, cwd)
-  assert.deepEqual(content.observe(event("session.text.delta", { sessionID: root, assistantMessageID: message, ordinal: 0, delta: "Hi" })),
+  assert.deepEqual(openCodeEventUpdates(content, event("session.text.delta", { sessionID: root, assistantMessageID: message, ordinal: 0, delta: "Hi" })),
     [{ kind: "text", id: `${message}:0`, text: "Hi" }])
-  assert.deepEqual(content.observe(event("session.reasoning.delta", { sessionID: root, assistantMessageID: message, ordinal: 1, delta: "hm" })),
+  assert.deepEqual(openCodeEventUpdates(content, event("session.reasoning.delta", { sessionID: root, assistantMessageID: message, ordinal: 1, delta: "hm" })),
     [{ kind: "thinking", id: `${message}:reasoning:1`, text: "hm" }])
-  assert.deepEqual(content.observe(event("session.text.delta", { sessionID: child, assistantMessageID: "msg_c", ordinal: 0, delta: "child prose" })), [],
+  assert.deepEqual(openCodeEventUpdates(content, event("session.text.delta", { sessionID: child, assistantMessageID: "msg_c", ordinal: 0, delta: "child prose" })), [],
     "a child's prose stays in its own session")
 
-  const started = content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "t1", name: "bash" }))
+  const started = openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "t1", name: "bash" }))
   assert.deepEqual(started, [{ kind: "tool", id: `${root}:t1`, title: "bash", name: "bash", toolKind: "execute", status: "pending" }])
-  const [called] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "t1", input: { command: "ls -la" }, executed: false }))
+  const [called] = openCodeEventUpdates(content, event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "t1", input: { command: "ls -la" }, executed: false }))
   assert.equal(called.kind, "tool-update")
   assert.equal(called.kind === "tool-update" && called.title, "ls -la")
   assert.equal(called.kind === "tool-update" && called.status, "in_progress")
   assert.equal(content.title(root, "t1"), "ls -la")
   assert.equal(content.name(root, "t1"), "bash")
-  const [done] = content.observe(event("session.tool.success", { sessionID: root, assistantMessageID: message, id: "t1",
+  const [done] = openCodeEventUpdates(content, event("session.tool.success", { sessionID: root, assistantMessageID: message, id: "t1",
     content: [{ type: "text", text: "total 0" }, { type: "file", uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png", name: "shot.png" }] }))
   assert.equal(done.kind === "tool-update" && done.status, "completed")
   assert.equal(done.kind === "tool-update" && done.output, "total 0")
@@ -52,48 +53,48 @@ const message = "msg_assistant"
 
   content.nameSession(child, "Explore the repo")
   assert.equal(content.prefix(child), "Explore the repo: ")
-  const childRow = content.observe(event("session.tool.input.started", { sessionID: child, assistantMessageID: "msg_c", id: "t1", name: "read" }))
+  const childRow = openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: child, assistantMessageID: "msg_c", id: "t1", name: "read" }))
   assert.deepEqual(childRow, [{ kind: "tool", id: `${child}:t1`, title: "Explore the repo: read", name: "read", toolKind: "read", status: "pending" }],
     "a child's call ID never collides with its parent's")
-  const [childCalled] = content.observe(event("session.tool.called", { sessionID: child, assistantMessageID: "msg_c", id: "t1", input: { filePath: "src/a.ts" }, executed: false }))
+  const [childCalled] = openCodeEventUpdates(content, event("session.tool.called", { sessionID: child, assistantMessageID: "msg_c", id: "t1", input: { filePath: "src/a.ts" }, executed: false }))
   assert.deepEqual(childCalled.kind === "tool-update" && childCalled.details, [{ type: "location", path: "/work/src/a.ts" }])
   assert.equal(childCalled.kind === "tool-update" && childCalled.title, "Explore the repo: src/a.ts")
 
   const unknown: string[] = []
-  assert.deepEqual(content.observe(event("session.step.started", { sessionID: root }), (type) => unknown.push(type)), [])
-  assert.deepEqual(content.observe(event("session.future.thing", { sessionID: root }), (type) => unknown.push(type)), [])
+  assert.deepEqual(openCodeEventUpdates(content, event("session.step.started", { sessionID: root }), (type) => unknown.push(type)), [])
+  assert.deepEqual(openCodeEventUpdates(content, event("session.future.thing", { sessionID: root }), (type) => unknown.push(type)), [])
   assert.deepEqual(unknown, ["session.future.thing"], "only an event the projection does not know is reported")
 
-  content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "w", name: "write" }))
-  const [write] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "w", input: { filePath: "/abs/new.txt", content: "fresh" }, executed: false }))
+  openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "w", name: "write" }))
+  const [write] = openCodeEventUpdates(content, event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "w", input: { filePath: "/abs/new.txt", content: "fresh" }, executed: false }))
   assert.deepEqual(write.kind === "tool-update" && write.details, [{ type: "location", path: "/abs/new.txt" }, { type: "diff", path: "/abs/new.txt", oldText: null, newText: "fresh" }])
-  content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "e", name: "edit" }))
-  const [edit] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "e", input: { filePath: "b.txt", oldString: "a", newString: "b" }, executed: false }))
+  openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "e", name: "edit" }))
+  const [edit] = openCodeEventUpdates(content, event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "e", input: { filePath: "b.txt", oldString: "a", newString: "b" }, executed: false }))
   assert.deepEqual(edit.kind === "tool-update" && edit.details?.[1], { type: "diff", path: "/work/b.txt", oldText: "a", newText: "b" })
-  content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "todo", name: "todowrite" }))
-  const todo = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "todo", input: { todos: [{ content: "Ship it", status: "pending" }] }, executed: false }))
+  openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "todo", name: "todowrite" }))
+  const todo = openCodeEventUpdates(content, event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "todo", input: { todos: [{ content: "Ship it", status: "pending" }] }, executed: false }))
   assert.deepEqual(todo.find(update => update.kind === "plan"), { kind: "plan", entries: [{ content: "Ship it", status: "pending" }] })
 
-  assert.deepEqual(content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "q", name: "question" })),
+  assert.deepEqual(openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "q", name: "question" })),
     [{ kind: "tool", id: `${root}:q`, title: "question", name: "question", toolKind: "question", status: "pending" }], "the question leaves a row beside its form")
-  const [asked] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "q", executed: false,
+  const [asked] = openCodeEventUpdates(content, event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "q", executed: false,
     input: { questions: [{ header: "Colour", question: "Which colour?", options: [{ label: "red", description: "" }], multiple: false }] } }))
   assert.equal(asked.kind === "tool-update" && asked.title, "Which colour?", "the row names the question it asked")
 
-  const [failed] = content.observe(event("session.tool.failed", { sessionID: root, assistantMessageID: message, id: "e", error: { type: "tool", message: "no match" }, content: [{ type: "text", text: "detail" }] }))
+  const [failed] = openCodeEventUpdates(content, event("session.tool.failed", { sessionID: root, assistantMessageID: message, id: "e", error: { type: "tool", message: "no match" }, content: [{ type: "text", text: "detail" }] }))
   assert.equal(failed.kind === "tool-update" && failed.status, "failed")
   assert.equal(failed.kind === "tool-update" && failed.output, "no match\ndetail")
-  content.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "stopped", name: "bash" }))
-  const [stopped] = content.observe(event("session.tool.failed", { sessionID: root, assistantMessageID: message, id: "stopped", error: { type: "aborted", message: "Tool execution interrupted" } }))
+  openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "stopped", name: "bash" }))
+  const [stopped] = openCodeEventUpdates(content, event("session.tool.failed", { sessionID: root, assistantMessageID: message, id: "stopped", error: { type: "aborted", message: "Tool execution interrupted" } }))
   assert.equal(stopped.kind === "tool-update" && stopped.status, "cancelled", "a call the user stopped reads as cancelled, not failed")
 
   // A resubscribed stream first sees a call at its result; the driver opens it under its native name.
   assert.deepEqual(content.open(root, "late", "grep"), [{ kind: "tool", id: `${root}:late`, title: "grep", name: "grep", toolKind: "grep", status: "pending" }])
   assert.deepEqual(content.open(root, "late", "grep"), [], "opening is idempotent")
-  const [lateCalled] = content.observe(event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "late", input: { pattern: "TODO" }, executed: false }))
+  const [lateCalled] = openCodeEventUpdates(content, event("session.tool.called", { sessionID: root, assistantMessageID: message, id: "late", input: { pattern: "TODO" }, executed: false }))
   assert.equal(lateCalled.kind === "tool-update" && lateCalled.title, "TODO")
   assert.equal(content.open(root, "late-question", "question").length, 1)
-  const [answered] = content.observe(event("session.tool.success", { sessionID: root, assistantMessageID: message, id: "late-question",
+  const [answered] = openCodeEventUpdates(content, event("session.tool.success", { sessionID: root, assistantMessageID: message, id: "late-question",
     content: [{ type: "text", text: "User has answered your questions: \"Which colour?\"=\"red\"." }] }))
   assert.equal(answered.kind === "tool-update" && answered.output, "User has answered your questions: \"Which colour?\"=\"red\".",
     "the answered row keeps the answer after its form closes")
@@ -109,11 +110,11 @@ const message = "msg_assistant"
 
   // A Plan step that ends the turn: its streamed reply folds into the plan card.
   const planning = new OpenCodeContent(root, cwd)
-  const step = (id: string, agent: string) => planning.observe(event("session.step.started", { sessionID: root, assistantMessageID: id, agent,
+  const step = (id: string, agent: string) => openCodeEventUpdates(planning, event("session.step.started", { sessionID: root, assistantMessageID: id, agent,
     model: { id: "m", providerID: "p" } }))
   const text = (id: string, ordinal: number, value: string) =>
-    planning.observe(event("session.text.ended", { sessionID: root, assistantMessageID: id, ordinal, text: value }))
-  const ended = (id: string, finish: string, sessionID = root) => planning.observe(event("session.step.ended", { sessionID, assistantMessageID: id, finish,
+    openCodeEventUpdates(planning, event("session.text.ended", { sessionID: root, assistantMessageID: id, ordinal, text: value }))
+  const ended = (id: string, finish: string, sessionID = root) => openCodeEventUpdates(planning, event("session.step.ended", { sessionID, assistantMessageID: id, finish,
     cost: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }))
   assert.deepEqual(step("msg_look", "plan"), [])
   text("msg_look", 0, "Let me read the code first.")
@@ -134,7 +135,7 @@ const message = "msg_assistant"
 
   const bounded = new OpenCodeContent(root, cwd)
   for (let index = 0; index <= 4096; index++)
-    bounded.observe(event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: `b${index}`, name: "bash" }))
+    openCodeEventUpdates(bounded, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: `b${index}`, name: "bash" }))
   assert.equal(bounded.name(root, "b0"), undefined, "the oldest open call leaves first")
   assert.equal(bounded.name(root, "b4096"), "bash")
 }

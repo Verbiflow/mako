@@ -1,0 +1,15 @@
+{
+  "harness": "cursor",
+  "native": {
+    "version": "1.0.31"
+  },
+  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "store": ".mako/cursor-sdk/agents/agent-e59ca221620fb5e7f7ca2f82f36faa2e08c1158c69a85addba90ceed37e78c9b/store.db",
+  "known": [
+    {
+      "side": "+",
+      "line": "note: Interrupted",
+      "reason": "The window draws a stopped turn's stop as its footer: live from the host's turn state, which the pair's live drawing doesn't include, and reopened from this marker, which it then hides beside the footer (notesBesideStop, src/lib/exchanges.ts)."
+    }
+  ]
+}

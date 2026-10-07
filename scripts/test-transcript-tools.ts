@@ -5,7 +5,7 @@ import { isInterruptedNote, notesBesideStop, promptLabel, responseSections, toEx
 import { textOf } from "../src/lib/format.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
 import type { AttachmentContent } from "@mako/sessions"
-import { CursorSdkProjection } from "../electron/providers/cursor/sdk/projection.ts"
+import { CursorSdkProjection } from "@mako/sessions/cursor-sdk-content"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 
 // SDK wire -> canonical live blocks -> shared row, and retained blocks -> the same row.

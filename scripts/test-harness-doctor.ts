@@ -75,7 +75,7 @@ try {
   assert.equal(codex.version.verdict, "newer-than-fixtures")
   assert.equal(codex.version.newestFixture, "0.159.3")
   assert.equal(codex.version.newestCaptured, null)
-  assert.deepEqual([codex.decoder.fixtures, codex.decoder.captured, codex.decoder.written], [10, 0, 10])
+  assert.deepEqual([codex.decoder.fixtures, codex.decoder.captured, codex.decoder.written], [11, 0, 11])
   assert.deepEqual(codex.decoder.unexercised, [])
   assert.ok(codex.families.some((family) => family.family === "live" && family.status === "capability"))
   assert.ok(codex.families.some((family) => family.family === "acp" && family.status === "lacks" && family.reason))

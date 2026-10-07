@@ -1,0 +1,9 @@
+{
+  "harness": "cursor",
+  "native": {
+    "version": "1.0.31"
+  },
+  "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
+  "store": ".mako/cursor-sdk/agents/agent-e313905709672e169fc3a98b65cc2f7e15c612deeee667010613398401080a10/store.db",
+  "known": []
+}

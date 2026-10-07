@@ -1,0 +1,9 @@
+{
+  "harness": "cursor",
+  "native": {
+    "version": "1.0.31"
+  },
+  "about": "Without the shell, use your file search tools to find the Markdown files in this project, then search them for the word Friday and tell me which ones mention it. A file search matching in two files of three, one in a subdirectory, then the answer naming them.",
+  "store": ".mako/cursor-sdk/agents/agent-12275c02e5c94681cc3aade73ec790151b5a39b3d8f8b53d87aa31dd9c183a6c/store.db",
+  "known": []
+}

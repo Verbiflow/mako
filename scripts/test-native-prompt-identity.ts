@@ -13,7 +13,7 @@ assert.equal(acpLiveDriver({
   ...noAcpCapabilities,
   provider: "future-acp-fixture", nativePromptIdentity: capability,
   approvalEvidence: { kind: "submission-only", reason: "Fixture" },
-  planning: { via: "setting", option: "plan", proposal: "Fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Fixture", feedback: { kind: "next-message", reason: "Fixture" } },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   available: () => true, launch: async () => null,
 }).nativePromptIdentity, capability, "ACP forwards the provider contribution instead of fixing its availability in transport")

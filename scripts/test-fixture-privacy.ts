@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { describeLeaks, FIXTURE_FOLDERS, leaksIn, machineIdentity, scrubIdentity, scrubTree, STAND_INS, treeLeaks, type Identity } from "./fixture-privacy.ts"
+import { describeLeaks, FIXTURE_FOLDERS, leaksIn, machineIdentity, rewriteBlob, scrubIdentity, scrubJsonLines, scrubTree, STAND_INS, treeLeaks, type Identity } from "./fixture-privacy.ts"
 
 const ana: Identity[] = [
   { kind: "home", pattern: /\/Users\/ana/g, standIn: STAND_INS.home },
@@ -46,12 +46,63 @@ try {
   assert.deepEqual(await scrubTree(root, ana), [], "scrubbing again changes nothing")
 
   const blob = new DatabaseSync(join(root, "store.db"))
-  blob.prepare("UPDATE rows SET raw = ? WHERE id = 2").run(Buffer.from("cached for Ana-MacBook"))
+  blob.prepare("UPDATE rows SET raw = ? WHERE id = 2").run(Buffer.from('{"role":"user","content":"cached for Ana-MacBook"}'))
   blob.close()
-  assert.deepEqual((await treeLeaks(root, ana)).map(({ kinds }) => kinds), [["machine host", "machine user"]], "a blob that holds text is checked, though only text is rewritten")
+  assert.deepEqual((await treeLeaks(root, ana)).map(({ kinds }) => kinds), [["machine host", "machine user"]], "a blob that holds text is checked")
+  assert.deepEqual(await scrubTree(root, ana), [join(root, "store.db")], "and rewritten")
+  assert.deepEqual(await treeLeaks(root, ana), [])
 } finally {
   await rm(root, { recursive: true, force: true })
 }
+
+// A Cursor step: field 3 (thinking_message) holding field 1 (text) and field 2 (a duration).
+const step = (text: string) => {
+  const body = Buffer.from(text)
+  const thinking = Buffer.concat([Buffer.from([0x0a, body.length]), body, Buffer.from([0x10, 0x07])])
+  return Buffer.concat([Buffer.from([0x1a, thinking.length]), thinking])
+}
+const toStandIn = (text: string) => scrubIdentity(text, ana)
+assert.deepEqual(rewriteBlob(step("reading /Users/ana/notes.md"), toStandIn), step("reading /Users/mako/notes.md"), "a protobuf's strings are rewritten and every length around them encoded again")
+const before = `${"x".repeat(116)} /Users/ana`
+assert.deepEqual(
+  rewriteBlob(Buffer.concat([Buffer.from([0x0a, 127]), Buffer.from(before)]), toStandIn),
+  Buffer.concat([Buffer.from([0x0a, 0x80, 0x01]), Buffer.from(toStandIn(before))]),
+  "a length of 127 that grows to 128 takes two bytes",
+)
+const untouched = step("nothing to replace")
+assert.equal(rewriteBlob(untouched, toStandIn), untouched, "a value with nothing to replace is the same value")
+const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x01])
+assert.equal(rewriteBlob(bytes, toStandIn), bytes, "bytes that are neither protobuf nor text are left alone")
+
+const delta = (text: string) => JSON.stringify({ message: { delta: { type: "text-delta", text } } })
+const thinking = (text: string) => JSON.stringify({ message: { delta: { type: "thinking-delta", text } } })
+const streamed = [delta("see `/Use"), thinking("/Users/a"), delta("rs/ana/x` and /Users/a"), delta("na"), delta("/y"), JSON.stringify({ turn: "t" })].join("\n")
+assert.deepEqual(
+  scrubJsonLines(`${streamed}\n`, ana).split("\n").filter(Boolean),
+  [delta("see `/Users/mako"), thinking("/Users/a"), delta("/x` and /Users/mako"), delta(""), delta("/y"), JSON.stringify({ turn: "t" })],
+  "a match split across a stream's fragments is written whole where it starts and cut from the rest; another stream's fragments don't join it",
+)
+const streamRoot = await mkdtemp(join(tmpdir(), "mako-fixture-privacy-"))
+try {
+  await writeFile(join(streamRoot, "capture.jsonl"), `${streamed}\n`)
+  assert.deepEqual((await treeLeaks(streamRoot, ana)).map(({ kinds }) => kinds), [["home path", "machine home", "machine user"]], "a name only a stream read whole shows still leaks")
+  assert.deepEqual(await scrubTree(streamRoot, ana), [join(streamRoot, "capture.jsonl")])
+  assert.deepEqual(await treeLeaks(streamRoot, ana), [])
+  const events = new DatabaseSync(join(streamRoot, "index.db"))
+  events.exec("CREATE TABLE run_events (seq INTEGER, payload_json TEXT)")
+  const insert = events.prepare("INSERT INTO run_events VALUES (?, ?)")
+  streamed.split("\n").forEach((line, seq) => insert.run(seq, line))
+  events.close()
+  assert.deepEqual((await treeLeaks(streamRoot, ana)).map(({ kinds }) => kinds), [["home path", "machine home", "machine user"]], "a column of JSON rows streams like JSON Lines")
+  assert.deepEqual(await scrubTree(streamRoot, ana), [join(streamRoot, "index.db")])
+  const rows = new DatabaseSync(join(streamRoot, "index.db"), { readOnly: true })
+  assert.deepEqual(rows.prepare("SELECT payload_json AS line FROM run_events ORDER BY seq").all().map((row) => row["line"]), scrubJsonLines(scrubIdentity(streamed, ana), ana).split("\n"), "each row is rewritten as its line in the stream, as a JSON Lines file is")
+  rows.close()
+  assert.deepEqual(await treeLeaks(streamRoot, ana), [])
+} finally {
+  await rm(streamRoot, { recursive: true, force: true })
+}
+assert.equal(scrubJsonLines("not json\n/Users/ana", ana), "not json\n/Users/ana", "a text that isn't JSON Lines is left to the plain scrub")
 
 const identity = machineIdentity()
 const leaks = (await Promise.all(FIXTURE_FOLDERS.map((folder) => treeLeaks(folder, identity)))).flat()

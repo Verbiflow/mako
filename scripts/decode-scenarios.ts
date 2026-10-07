@@ -96,7 +96,7 @@ export interface Step {
 export type Need = "todos" | "search" | "codeMode" | "ask" | "plan"
 
 /** What a scenario does to a running session besides prompting it, which each recorder drives or says why it can't. */
-export type Control = "steer" | "rewind"
+export type Control = "steer" | "rewind" | "compact"
 
 export interface Scenario {
   name: string
@@ -271,6 +271,19 @@ export const SCENARIOS: Scenario[] = [
     }],
   },
   {
+    name: "write-outside",
+    about: "A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
+    files: { "notes.md": NOTES },
+    scripted: "the model has to write outside the project on cue",
+    turns: [{
+      prompt: "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked.",
+      steps: [
+        { call: (tools) => tools.shell("echo hi > ../outside.txt", "Write outside the project") },
+        { text: "That is what the shell reported." },
+      ],
+    }],
+  },
+  {
     name: "long-read",
     about: "One read of a file longer than a harness shows at once, then the answer.",
     files: { "log.md": LONG_LOG },
@@ -364,6 +377,7 @@ export const SCENARIOS: Scenario[] = [
     name: "compaction",
     about: "A turn, a manual compaction, then a turn that leans on the summary.",
     files: { "notes.md": NOTES },
+    controls: ["compact"],
     turns: [
       {
         prompt: "Read notes.md and tell me the release day. Don't run commands.",

@@ -2,6 +2,9 @@ import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import assert from "node:assert/strict"
 import { LineAssembler } from "@mako/sessions"
 import { spawn } from "node:child_process"
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   handleServerRequest,
   resolvePermission,
@@ -28,6 +31,7 @@ import {
   CodexDecoder,
   type ProtocolContext,
 } from "../electron/codex-app-protocol.ts"
+import { CodexRolloutCalls } from "../electron/providers/codex/rollout-calls.ts"
 import type {
   LiveDriverEvent,
   LiveSessionState,
@@ -770,4 +774,51 @@ console.log("PASS: Codex approval missing request, validation refusal and unconf
   await Promise.all([started, listed])
   silent.kill("SIGTERM")
   console.log("PASS: Codex turn/start outlives the request deadline")
+}
+
+// Codex 0.159.3 sends no item for a command its sandbox refused, though its
+// rollout keeps the call; the driver draws it when the next response starts.
+{
+  const dir = mkdtempSync(join(tmpdir(), "mako-codex-rollout-"))
+  const path = join(dir, "rollout.jsonl")
+  const record = (payload: JsonObject) => `${JSON.stringify({ timestamp: "2026-10-07T12:00:00.000Z", type: "response_item", payload })}\n`
+  const call = (id: string, cmd: string, turn: string) => record({
+    type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd }), call_id: id,
+    internal_chat_message_metadata_passthrough: { turn_id: turn },
+  })
+  const output = (id: string, text: string, code: number) => record({
+    type: "function_call_output", call_id: id,
+    output: `Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code ${code}\nOriginal token count: 9\nOutput:\n${text}`,
+  })
+  writeFileSync(path, call("call_0", "ls", "turn-0") + output("call_0", "notes.md\n", 0))
+  const drawn: LiveUpdate[] = []
+  const refused: ProtocolContext = {
+    ...context,
+    rollout: new CodexRolloutCalls(path),
+    decoder: new CodexDecoder({ threadId: "thread-1", state }),
+    stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
+    protocol: { ...context.protocol, emitUpdate: (update) => void drawn.push(update) },
+  }
+  const notify = (method: string, params: JsonObject) => consumeStdout(refused, Buffer.from(`${JSON.stringify({ method, params })}\n`))
+  const tools = () => reduceLiveUpdates([], drawn).flatMap((block) => (block.type === "tool" ? [block] : []))
+  notify("turn/started", { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress", error: null, items: [] } })
+  notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: {
+    type: "commandExecution", id: "call_1", command: "cat notes.md", cwd: "/tmp/project", status: "completed", aggregatedOutput: "Friday\n", exitCode: 0,
+  } })
+  const refusal = output("call_2", "zsh:1: operation not permitted: ../outside.txt\n", 1)
+  appendFileSync(path, call("call_1", "cat notes.md", "turn-1") + output("call_1", "Friday\n", 0) +
+    call("call_2", "echo hi > ../outside.txt", "turn-1") + call("call_3", "pwd", "turn-0") + output("call_3", "/tmp\n", 0) + refusal.slice(0, 40))
+  notify("item/started", { threadId: "thread-1", turnId: "turn-1", item: { type: "reasoning", id: "why", summary: [], content: [] } })
+  assert.deepEqual(tools().map((tool) => tool.id), ["codex:turn-1:call_1"], "history, a drawn call, another turn's call and a half-written output draw nothing")
+  appendFileSync(path, refusal.slice(40))
+  notify("item/started", { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "answer", text: "" } })
+  assert.deepEqual(tools().map(({ id, title, status, output }) => ({ id, title, status, output })), [
+    { id: "codex:turn-1:call_1", title: "cat notes.md", status: "completed", output: "Friday\n" },
+    { id: "codex:turn-1:call_2", title: "echo hi > ../outside.txt", status: "failed", output: "zsh:1: operation not permitted: ../outside.txt\n" },
+  ], "the refused command draws as the wire would have drawn it, once its output is whole")
+  writeFileSync(path, call("call_4", "pwd", "turn-1") + output("call_4", "/tmp\n", 0))
+  notify("turn/completed", { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, items: [] } })
+  assert.equal(tools().at(-1)?.id, "codex:turn-1:call_4", "a rewritten rollout is read from its start, and the turn's end reads it too")
+  rmSync(dir, { recursive: true, force: true })
+  console.log("PASS: Codex commands its sandbox refused are drawn from the rollout")
 }

@@ -6,7 +6,7 @@ import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { ClaudeAgents } from "../electron/providers/claude/sdk-agents.ts"
 import { CursorAgents } from "../electron/providers/cursor/sdk/agents.ts"
-import type { SdkMessage } from "../electron/providers/cursor/sdk/wire.ts"
+import type { CursorSdkMessage } from "@mako/sessions/cursor-sdk-content"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import {
   CodexAgents,
@@ -35,7 +35,7 @@ const claude = new ClaudeAgents()
     type: "tool_call", agent_id: "parent", run_id: "parent-run", name: "task",
     call_id: "native-invocation-1", status: "running",
     args: { agentId: "native-child", description: "Sleep then reply", subagentType: { kind: "unspecified" } },
-  } satisfies SdkMessage
+  } satisfies CursorSdkMessage
   const result = { status: "success", value: { agentId: "native-child", isBackground: false } }
   assert.equal(cursor.project({ type: "task", agent_id: "parent", run_id: "parent-run", status: "completed" }), undefined)
   assert.equal(cursor.project({ ...task, name: "shell" }), undefined)
@@ -290,7 +290,7 @@ const driver: ProviderLiveDriver = {
   nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
   nativeExclusion: NO_NATIVE_EXCLUSION,
   nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+  planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "fixture",

@@ -137,11 +137,10 @@ claudeSettings(grokRepo, "settings.json", { permissions: { defaultMode: "auto", 
 const untrusted = grokPermissionPolicy(grokPaths)
 assert.equal(untrusted.mode?.mode, "bypassPermissions", "an untrusted project's mode is skipped, as Grok skips it")
 assert.deepEqual(untrusted.rules, [], "and so are its rules")
-assert.deepEqual(untrusted.untrusted, [join(grokRepo, ".claude", "settings.json")])
 const untrustedLaunch = await grokAcpSource.launch({ ...grokLaunch, access: "ask" })
 assert.equal(untrustedLaunch?.access, "full")
-assert.deepEqual(untrustedLaunch?.notices?.map((notice) => [notice.label, notice.setup]), [["Grok overrides Ask", true], ["Grok skips project permissions", true]],
-  "the conversation is told which project settings Grok skips")
+assert.deepEqual(untrustedLaunch?.notices?.map((notice) => [notice.label, notice.setup]), [["Grok overrides Ask", true]],
+  "what Grok skips in an untrusted folder is Grok's to say, in its trust request")
 
 trustRepo()
 assert.deepEqual(grokPermissionPolicy(grokPaths).mode, { mode: "auto", file: join(grokRepo, ".claude", "settings.json") },
@@ -328,12 +327,16 @@ assert.throws(
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.planning.via === "mode" ? `mode ${driver.planning.mode}` : `setting ${driver.planning.option}`])), {
   cursor: "setting plan", devin: "mode plan", grok: "mode plan", opencode: "mode plan", codex: "setting plan", claude: "mode plan",
 })
-assert.throws(() => validateLiveDriver({ ...claudeLiveDriver, planning: { via: "mode", mode: "acceptEdits", proposal: "x" } }), /doesn't offer as Plan/,
+assert.throws(() => validateLiveDriver({ ...claudeLiveDriver, planning: { via: "mode", mode: "acceptEdits", proposal: "x", feedback: { kind: "next-message", reason: "x" } } }), /doesn't offer as Plan/,
   "a harness can't plan through a mode its ladder doesn't offer as Plan")
 assert.throws(() => validateLiveDriver({ ...claudeLiveDriver, defaultMode: "plan" }), /can't start in Plan unasked/)
 assert.throws(() => validateLiveDriver(codexWithout("planning")), /how it plans/,
   "registration rejects a new adapter that doesn't say how it plans")
-assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: { via: "setting", option: "plan", proposal: " " } }), /how its plan reaches Mako/)
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: { via: "setting", option: "plan", proposal: " ", feedback: { kind: "next-message", reason: "x" } } }), /how its plan reaches Mako/)
+assert.throws(() => validateLiveDriver({ ...codexLiveDriver, planning: { ...codexLiveDriver.planning, feedback: { kind: "next-message", reason: " " } } }), /how a reply to its plan reaches it/)
+assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.planning.feedback.kind])), {
+  cursor: "next-message", devin: "next-message", grok: "in-refusal", opencode: "next-message", codex: "next-message", claude: "in-refusal",
+}, "a reply to a waiting plan goes inside the refusal where the harness takes words there, and as the next message elsewhere")
 
 // Stop ends the turn and the background work it started on every harness.
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.backgroundStop.kind])), {

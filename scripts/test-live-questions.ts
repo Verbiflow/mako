@@ -39,7 +39,7 @@ try {
       provider, approvalEvidence:{kind:"submission-only",reason:"Fixture"}, available:()=>true,
       launchEnvironment:{kind:"unavailable",reason:"Fixture"}, nativeIdentity:{kind:"unavailable",reason:"Fixture"},
       nativeExclusion:NO_NATIVE_EXCLUSION, nativePromptIdentity:NO_NATIVE_PROMPT_IDENTITY,
-      planning:{via:"setting",option:"plan",proposal:"Fixture"}, backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
+      planning:{via:"setting",option:"plan",proposal:"Fixture",feedback:{kind:"next-message",reason:"Fixture"}}, backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
       turnRecovery:{kind:"manual",reason:"Fixture"},
       start:async()=>{state={...state,status:"ready",connection:"connected"};return state},
       prompt:async(_id,text,_attachments,_settings,dispatch)=>{

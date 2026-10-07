@@ -44,7 +44,7 @@ for (const { provider, nativeSource } of cases) {
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
     approvalEvidence: { kind: "submission-only", reason: "Injected driver fixture" },
-    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+    planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
     backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
     turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
     provider,

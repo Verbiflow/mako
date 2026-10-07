@@ -7,6 +7,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
+import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
+import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import type { LivePermissionResponse, LiveSessionState } from "../electron/shared.js"
@@ -33,7 +35,7 @@ try {
       nativeIdentity: { kind: "unavailable", reason: "Injected driver fixture" },
       nativeExclusion: NO_NATIVE_EXCLUSION,
       nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture" },
+      planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
       backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
       turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider, available: () => true,
@@ -69,6 +71,8 @@ try {
       assert.equal(ask(), first, "duplicate native observation keeps the same occurrence")
       const before = owner.snapshot(id)
       await assert.rejects(owner.permission(id, first, { kind: "choice", optionId: "invalid" }), /unavailable/)
+      await assert.rejects(owner.permission(id, first, { kind: "choice", optionId: "deny", feedback: "Use async" }), /can't carry a message/,
+        "a request with no feedback option takes no words")
       assert.equal(calls, 0)
       const response: LivePermissionResponse = { kind: "choice", optionId: "allow" }
       const gate = Promise.withResolvers<void>()
@@ -224,3 +228,11 @@ try {
     } finally { owner.stop() }
   }
 } finally { rmSync(root, { recursive: true, force: true }) }
+
+const permissionCall = hostCallInputs["mako:live-permission"]
+assert.deepEqual(permissionCall.parse(["live", "request", { kind: "choice", optionId: "keep", feedback: " Use async " }])[2],
+  { kind: "choice", optionId: "keep", feedback: "Use async" }, "the window's words cross IPC instead of being stripped")
+assert.throws(() => permissionCall.parse(["live", "request", { kind: "choice", optionId: "keep", feedback: "  " }]))
+assert.equal(approvalAnswerDigest({ kind: "choice", optionId: "keep", feedback: "Use async" }), approvalAnswerDigest({ kind: "choice", optionId: "keep" }),
+  "a receipt names the decision, never the words, so the native record of the same refusal matches it")
+console.log("PASS: plan feedback crosses IPC, is refused on options that can't carry it, and stays out of receipts")

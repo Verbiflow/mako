@@ -422,9 +422,25 @@ async function keptLedger(root: string): Promise<void> {
     assert.equal(straddling.indexOf('"token_count"'), 4 * 1024 * 1024 - 5)
     await writeFile(seam, `${straddling}\n{"other":1}\n`)
     const seen: number[] = []
-    const read = await readAppended(seam, 0, ['"token_count"'], (line) => seen.push(line.length))
+    const read = await readAppended(seam, 0, { needles: ['"token_count"'] }, (line) => seen.push(line.length))
     assert.deepEqual(seen, [straddling.length])
     assert.deepEqual(read, { end: straddling.length + 13, oversized: 0 })
+
+    // Screened by its head, a line is found by where its record names its type: a head cut by a read's end still
+    // counts, and a needle past the head is not the record's.
+    const headed = join(root, "headed.jsonl")
+    const named = (type: string, padding: number) => JSON.stringify({ timestamp: "t", type, payload: "p".repeat(padding) })
+    const filler = "f".repeat(4 * 1024 * 1024 - 20)
+    const cut = named("token_count", 10)
+    const long = named("token_count", 5 * 1024 * 1024)
+    const mention = JSON.stringify({ timestamp: "t", type: "response_item", payload: { text: "m".repeat(300), kind: "token_count" } })
+    await writeFile(headed, [filler, cut, long, mention, named("token_count", 0)].join("\n") + "\n")
+    const headSeen: number[] = []
+    await readAppended(headed, 0, { needles: ['"token_count"'], within: 64 }, (line) => headSeen.push(line.length))
+    assert.deepEqual(headSeen, [cut.length, long.length, named("token_count", 0).length], "a head across two reads and a line longer than one are found whole; a mention further in is not")
+    const everywhere: number[] = []
+    await readAppended(headed, 0, { needles: ['"token_count"'] }, (line) => everywhere.push(line.length))
+    assert.equal(everywhere.length, 4, "without a head the mention is a match too")
     console.log("Kept ledger: appended bytes only, moved rollouts counted once, exact window, long lines whole or reported")
   } finally {
     ledger.close()
