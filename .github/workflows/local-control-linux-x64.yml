@@ -1,0 +1,125 @@
+name: Local Control native Linux x64 acceptance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/local-control-linux-x64.yml
+      - electron/**
+      - packages/control/**
+      - packages/control-runtime/**
+      - runtime/control/**
+      - scripts/**
+      - vendor/cua-driver/**
+      - package.json
+      - package-lock.json
+      - tsconfig*.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-control-x64-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-x64:
+    # Fork code executes only on a disposable hosted VM, without cloud secrets,
+    # OIDC, environments, write tokens, or a self-hosted runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Record and require native x64 execution
+        shell: bash
+        run: |
+          mkdir -p evidence/jobs evidence/recording
+          uname -a > evidence/uname.txt
+          lscpu --json > evidence/cpu.json
+          docker info --format '{{.Architecture}}' > evidence/docker-architecture.txt
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          assert.equal(process.arch, 'x64');
+          const cpu=JSON.parse(readFileSync('evidence/cpu.json')).lscpu;
+          assert.equal(cpu.find(row=>row.field==='Architecture:')?.data, 'x86_64');
+          assert.match(cpu.find(row=>row.field==='Vendor ID:')?.data ?? '', /^(GenuineIntel|AuthenticAMD)$/);
+          assert.match(readFileSync('evidence/docker-architecture.txt','utf8').trim(), /^(x86_64|amd64)$/);
+          JS
+      - run: npm ci
+      - name: Verify acceptance payload boundaries
+        run: node scripts/linux-control/test-acceptance-payload.mjs
+      - name: Compile the shared control host and its package references
+        run: npm run build:control-runtime
+      - name: Verify packed public imports and CLI
+        run: node scripts/test-control-package-consumer.mjs
+      - name: Reconstruct reviewed native source
+        shell: bash
+        run: |
+          native_checkout="$RUNNER_TEMP/mako-native-driver"
+          git init "$native_checkout"
+          git -C "$native_checkout" remote add origin https://github.com/trycua/cua.git
+          base=$(node -p 'require("./vendor/cua-driver/release.json").base')
+          git -C "$native_checkout" fetch --depth=1 origin "$base"
+          git -C "$native_checkout" checkout --detach FETCH_HEAD
+          git -C "$native_checkout" apply "$GITHUB_WORKSPACE/vendor/cua-driver/release.patch"
+          git -C "$native_checkout" add -N libs/cua-driver/rust libs/cua-driver/wayland-helper
+          echo "MAKO_NATIVE_CHECKOUT=$native_checkout" >> "$GITHUB_ENV"
+      - name: Build and audit the x64 driver package
+        run: |
+          docker build --platform linux/amd64 -t mako-control-linux:x64 - < scripts/linux-control/Dockerfile
+          node scripts/package-control-driver-linux.mjs "$MAKO_NATIVE_CHECKOUT" --arch=x64 --image=mako-control-linux:x64
+          version=$(node -p 'require("./vendor/cua-driver/release.json").version')
+          echo "MAKO_DRIVER_PACKAGE=$GITHUB_WORKSPACE/release/control-driver/$version/linux-x64" >> "$GITHUB_ENV"
+      - name: Prepare credential-free test payload
+        run: |
+          node scripts/linux-control/prepare-acceptance.mjs "$MAKO_DRIVER_PACKAGE" "$RUNNER_TEMP/local-control-acceptance"
+      - name: X11 jobs and recordings plus Sway scale and rotation without network access
+        run: |
+          sh "$RUNNER_TEMP/local-control-acceptance/scripts/linux-control/run-acceptance.sh"
+      - name: Verify standalone release boundaries
+        run: node scripts/test-control-runtime-package.mjs
+      - name: Build standalone cloud runtime and fixture image
+        run: |
+          node scripts/package-control-runtime.mjs --output="$RUNNER_TEMP/cloud-control" --platform=linux-x64 --driver="$MAKO_DRIVER_PACKAGE"
+          docker build --platform linux/amd64 -f runtime/control/Dockerfile --target acceptance -t mako-cloud-control:acceptance "$RUNNER_TEMP/cloud-control"
+      - name: Standalone lifecycle and complete-job acceptance
+        run: |
+          mkdir -p evidence/cloud-runtime
+          docker run --rm --init --network none --platform linux/amd64 --user "$(id -u):$(id -g)" --entrypoint node \
+            -v "$PWD/scripts/test-cloud-control.mjs:/tmp/test-cloud-control.mjs:ro" \
+            -v "$PWD/scripts/linux-control/fixture.py:/tmp/fixture.py:ro" \
+            -v "$PWD/evidence/cloud-runtime:/evidence" -e MAKO_RUNTIME_EVIDENCE=/evidence \
+            mako-cloud-control:acceptance /tmp/test-cloud-control.mjs
+      - name: Standalone browser and native CLI acceptance
+        shell: bash
+        run: |
+          set -o pipefail
+          for suite in linux native-linux; do
+            mkdir -p "evidence/cloud-runtime/cli-$suite"
+            docker run --rm --init --network none --platform linux/amd64 --shm-size=1g --user "$(id -u):$(id -g)" --entrypoint node \
+              -v "$PWD/scripts/test-control-cli-$suite.mjs:/tmp/cli-acceptance.mjs:ro" \
+              -v "$PWD/scripts/linux-control/fixture.py:/tmp/fixture.py:ro" \
+              -v "$PWD/evidence/cloud-runtime/cli-$suite:/evidence" -e MAKO_RUNTIME_EVIDENCE=/evidence \
+              mako-cloud-control:acceptance /tmp/cli-acceptance.mjs 2>&1 | tee "evidence/cloud-runtime/cli-$suite.log"
+          done
+      - name: Collect diagnostics
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "$RUNNER_TEMP/local-control-acceptance/evidence" ]; then
+            cp -R "$RUNNER_TEMP/local-control-acceptance/evidence/." evidence/
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: local-control-native-x64-evidence
+          path: evidence/
+          retention-days: 14
+          include-hidden-files: false

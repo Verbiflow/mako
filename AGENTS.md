@@ -73,6 +73,19 @@ captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
 
+The live decoder and the history reader must draw a session the same way.
+`npm run decode -- <capture> --compare <store file>` draws both, aligned, as
+the window pairs them (`scripts/decode-compare.ts`). Pairs under
+`fixtures/native-decoding/<harness>/pairs/` hold a capture, the store the
+same session wrote, and each known difference with its reason;
+`test:decoders` fails on any other. `npm run harness:decode-pairs -- grok
+--write` records them from the real CLI, sealed against
+`scripts/scripted-model.ts`, so no account is used. A difference is fixed on
+whichever side is wrong; one is listed only when the harness itself stores
+something other than what it streamed. ACP captures mark where Mako sent a
+prompt (`prompted`), because the wire doesn't echo it and the reducer scopes
+plans and tool ids to the turn.
+
 A marker about the harness's setup rather than the current turn (an MCP
 server that didn't start, a configuration warning, an imported setting, a
 failed start hook) is `setup: true`; build MCP failures with
@@ -2105,7 +2118,12 @@ projection, journal, selector and catalogue scaling, and
 SDK/app-server payload amplification and long-answer fidelity. These use synthetic
 fixtures, never real provider prompts. `node scripts/audit-render-performance.mjs
 --production` builds production components into a private temporary directory and
-measures real Electron rendering and trusted input. `--file` checks production
+measures real Electron rendering and trusted input. Its agent-session cases
+shape conversations like long agent work (few prompts, hundreds of tool calls
+and answers each), time key-to-paint with Event Timing while a turn streams,
+and assert that streaming reparses no unchanged prose and that switching keeps
+at most three conversations loaded; `Input.insertText` returns on dispatch and
+times nothing a person feels. `--file` checks production
 file-URL loading and its worker assets. `--local-markdown` disables parser offload
 only in the audit build; `--baseline-markdown` additionally restores per-update
 Markdown subtree work. Compare rendered HTML hashes, not just speed. Omit
