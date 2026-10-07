@@ -11,7 +11,9 @@ import {
   type AttachmentContent,
 } from "../content.js"
 import { acpShownDetails, acpToolFields, AcpToolUpdateSchema, mergeAcpTool, type AcpToolFields } from "../acp-tool-details.js"
-import { DEVIN_TOOL_READING } from "../harnesses/devin.js"
+import { DEVIN_TOOL_READING, DevinCallMetrics, devinStoredTokens } from "../harnesses/devin.js"
+import { tokenSum } from "../harnesses/tokens.js"
+import { devinCliDirectory } from "./devin-location.js"
 import {
   DevinPlanCallSchema,
   DevinPlanTracker,
@@ -170,8 +172,13 @@ export class DevinCliProvider implements SessionProvider {
   private db: DatabaseSync | null = null
   private dbIdentity: string | null = null
 
-  constructor(home = homedir()) {
-    this.dir = join(home, ".local", "share", "devin", "cli")
+  /**
+   * `env` is the environment Devin runs with. The process's own is read only
+   * for the default home: a provider built on another home is an isolated
+   * world (a fixture, a mirror).
+   */
+  constructor(home?: string, env = home === undefined ? process.env : {}) {
+    this.dir = devinCliDirectory(env, home ?? homedir())
   }
 
   roots(): string[] {
@@ -948,20 +955,11 @@ const SummarizedFromSchema = z.object({ summarized_from: z.number() })
 function usageFromMetadata(
   metadata: JsonValue | undefined
 ): TurnUsage | undefined {
-  if (!isJsonObject(metadata) || !isJsonObject(metadata.metrics))
-    return undefined
-  const values = {
-    input: jsonNumber(metadata.metrics.input_tokens),
-    output: jsonNumber(metadata.metrics.output_tokens),
-    cacheRead: jsonNumber(metadata.metrics.cache_read_tokens),
-    cacheWrite: jsonNumber(metadata.metrics.cache_creation_tokens),
-  }
-  const usage = Object.fromEntries(
-    Object.entries(values).filter(
-      (entry): entry is [string, number] => entry[1] !== undefined
-    )
-  ) satisfies TurnUsage
-  return Object.keys(usage).length > 0 ? usage : undefined
+  const metrics = isJsonObject(metadata) ? DevinCallMetrics.safeParse(metadata.metrics).data : undefined
+  if (!metrics) return undefined
+  const tokens = devinStoredTokens(metrics)
+  const { input, output, cacheRead, cacheWrite } = tokens
+  return tokenSum(tokens) > 0 ? { input, output, cacheRead, cacheWrite } : undefined
 }
 
 function parseMetadata(text: string | undefined): JsonValue | undefined {
@@ -1029,13 +1027,6 @@ function sqliteText(value: SQLOutputValue | undefined): string | undefined {
 
 function jsonText(value: JsonValue | undefined): string | undefined {
   return isTextValue(value) ? value : undefined
-}
-
-function jsonNumber(value: JsonValue | undefined): number | undefined {
-  return Object.prototype.toString.call(value) === "[object Number]" &&
-    Number.isFinite(Number(value))
-    ? Number(value)
-    : undefined
 }
 
 function sqliteNumber(value: SQLOutputValue | undefined): StoredTimestamp {

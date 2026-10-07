@@ -3,7 +3,7 @@ import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
 import { cursorFailure, cursorTaskOpener } from "./cursor-presentation.js"
 import { compactionEvent } from "../events.js"
-import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent, type ProposedPlan } from "../content.js"
+import { proposedPlanBlock, type ProposedPlan } from "../content.js"
 /**
  * Cursor CLI sessions.
  *
@@ -36,13 +36,14 @@ import {
   cursorSdkAgentIdForDirectory,
   readCursorSdkAgent,
   readCursorSdkAgentStamps,
-  readCursorSdkRunStream,
+  readCursorSdkRunEvents,
   removeCursorSdkAgent,
   type CursorSdkAgentMatch,
   type CursorSdkAgentRecord,
   type CursorSdkAgentStamp,
-  type CursorSdkEndedRun,
+  type CursorSdkRun,
 } from "./cursor-sdk-index.js"
+import { cursorRunEntries, type CursorSdkReplay } from "../cursor-sdk-content.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
 import {
   cursorChatIdentity,
@@ -51,7 +52,7 @@ import {
   cursorSdkStorePath,
 } from "./cursor-sdk-paths.js"
 import { dirname, join, basename, sep } from "node:path"
-import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
+import type { DatabaseSync, StatementSync } from "node:sqlite"
 import {
   clip,
   EntrySink,
@@ -61,7 +62,28 @@ import {
   type ThreadEntry,
   type ThreadRef,
 } from "../format.js"
-import { normalizeToolOutput } from "../tool-output.js"
+import {
+  type JsonValue,
+  type CursorRoot,
+  type CursorTextContent,
+  type SqliteStatementResult,
+  isStringValue,
+  isNumberValue,
+  isBytesValue,
+  isJsonObject,
+  stringValue,
+  parseJson,
+  eachField,
+  parseRoot,
+  parseBlobDataRow,
+  formatToolResult,
+  plainText,
+  cursorAttachments,
+  cursorToolResults,
+  parseRootExtent,
+  readCursorMessage,
+  type CursorRootExtent,
+} from "./cursor-records.js"
 import { todoDetails } from "../tool-plan.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import { openNativeStore } from "../read-only-sqlite.js"
@@ -84,15 +106,27 @@ interface ExchangeStart {
  * last checkpoint ended, an unrecorded one where the conversation stood when
  * it started.
  */
-type RunStops = Map<number, CursorSdkEndedRun[]>
+type RunStops = Map<number, CursorSdkRun[]>
 
-/** What a fold reads: the root, its whole hash list, its summaries and its stopped runs. */
+/**
+ * A run whose messages `run_events` kept, by where it sits in the hash list:
+ * from its prompt up to where its last checkpoint ended. The fold replays it
+ * (`cursorRunEntries`) instead of reading the messages it checkpointed.
+ */
+interface RunSpan {
+  run: CursorSdkRun
+  end: number
+}
+
+/** What a fold reads: the root, its whole hash list, its summaries, its stopped runs and the runs it replays. */
 interface FoldInput {
   rootId: string
   hashes: string[]
   compactions: Compactions
   stops: RunStops
-  /** Where each unrecorded run's prompt and output are read from. */
+  /** Replayed runs by their prompt's index. */
+  spans: Map<number, RunSpan>
+  /** Where each run's messages and an unrecorded run's prompt are read from. */
   indexPath: string
 }
 
@@ -100,14 +134,61 @@ function stopKey(stops: RunStops): string {
   return JSON.stringify(
     [...stops]
       .sort(([a], [b]) => a - b)
-      .map(([at, runs]) => [at, runs.map((run) => [run.runId, run.end.kind, run.endedAt])])
+      .map(([at, runs]) => [at, runs.map((run) => [run.runId, run.end?.kind, run.endedAt])])
   )
 }
 
-/** One translated store, keyed by the root blob and stops that produced it. */
+/** Every index each hash sits at, ascending: a message can repeat. */
+function hashPositions(hashes: readonly string[]): Map<string, number[]> {
+  const positions = new Map<string, number[]>()
+  hashes.forEach((hash, index) => {
+    const known = positions.get(hash)
+    if (known) known.push(index)
+    else positions.set(hash, [index])
+  })
+  return positions
+}
+
+/** The index in `indices` closest to `target`. */
+function nearest(indices: readonly number[] | undefined, target: number): number | undefined {
+  let best: number | undefined
+  for (const index of indices ?? []) if (best === undefined || Math.abs(index - target) < Math.abs(best - target)) best = index
+  return best
+}
+
+/**
+ * How a run's turn ended, as the live driver settles it: a run that expired
+ * lost the process running it, so its open calls stopped midway like a
+ * failed run's. Absent while it runs.
+ */
+function runEnding(run: CursorSdkRun): CursorSdkReplay["ending"] {
+  if (run.running) return undefined
+  const outcome = run.end?.kind === "cancelled" ? "cancelled" : run.end ? "error" : "finished"
+  const error = run.end?.kind === "failed" ? run.end.error : undefined
+  return { outcome, ...error && { error }, ...run.endedAt && { at: run.endedAt } }
+}
+
+/** Each replayed run at its prompt, with what changes its replay: where it ends and whether it has. */
+function spanKeys(spans: Map<number, RunSpan>): SpanKey[] {
+  return [...spans]
+    .sort(([a], [b]) => a - b)
+    .map(([prompt, { run, end }]) => ({ prompt, key: `${run.runId}:${end}:${run.running ? "running" : (run.end?.kind ?? "finished")}` }))
+}
+
+interface SpanKey {
+  prompt: number
+  key: string
+}
+
+function sameSpans(left: readonly SpanKey[], right: readonly SpanKey[]): boolean {
+  return left.length === right.length && left.every((span, index) => span.key === right[index]?.key && span.prompt === right[index]?.prompt)
+}
+
+/** One translated store, keyed by the root blob, stops and replayed runs that produced it. */
 interface StoreFold {
   rootId: string
   stopKey: string
+  spans: SpanKey[]
   hashes: string[]
   entries: ThreadEntry[]
   exchanges: ExchangeStart[]
@@ -134,12 +215,8 @@ interface FoldedHashes {
  */
 const FOLD_INCREMENTAL_LIMIT = 6000
 
-type JsonScalar = boolean | number | string | null
-type JsonValue = JsonScalar | JsonObject | JsonValue[]
-
-interface JsonObject {
-  [key: string]: JsonValue | undefined
-}
+/** Checkpoints whose placement is kept: every run of the few longest agents. */
+const MAX_CHECKPOINTS = 4096
 
 interface CursorMeta {
   agentId?: string
@@ -159,11 +236,6 @@ interface CursorSidecar {
   model?: string
 }
 
-interface CursorRoot {
-  hashes: string[]
-  cwd?: string
-}
-
 /** Indices in `hashes` where a summary replaced everything before them, with the summary when the window kept it. */
 type Compactions = Map<number, string | undefined>
 
@@ -172,88 +244,11 @@ interface CursorConversation extends CursorRoot {
   compactions: Compactions
 }
 
-interface ParsedRoot extends CursorRoot {
-  /** Blob ids of the archived windows, oldest first. */
-  windows: string[]
-}
-
-interface CursorTextPart {
-  type: "text"
-  text: string
-}
-
-interface CursorReasoningPart {
-  type: "reasoning"
-  text: string
-}
-
-interface CursorToolCallPart {
-  type: "tool-call"
-  toolName: string
-  args?: JsonValue
-  toolCallId?: string
-}
-
-interface CursorToolResultPart {
-  type: "tool-result"
-  toolCallId: string
-  result?: JsonValue
-  attachments: AttachmentContent[]
-}
-
-interface CursorOtherPart {
-  type: "other"
-}
-
-type CursorAssistantPart =
-  | CursorTextPart
-  | CursorReasoningPart
-  | CursorToolCallPart
-  | CursorOtherPart
-  | { type: "attachment"; value: AttachmentContent }
-type CursorToolPart = CursorToolResultPart | CursorOtherPart
-type CursorTextContent = string | CursorTextPart[]
-
-interface CursorUserMessage {
-  role: "user"
-  attachments: AttachmentContent[]
-  content: CursorTextContent
-  /** The summary a compaction left the model in place of what came before. */
-  summary: boolean
-}
-
-interface CursorAssistantMessage {
-  role: "assistant"
-  content: CursorAssistantPart[]
-  model?: string
-}
-
-interface CursorToolMessage {
-  role: "tool"
-  content: CursorToolPart[]
-  isError: boolean
-}
-
-interface CursorOtherMessage {
-  role: "other"
-}
-
-type CursorMessage =
-  | CursorUserMessage
-  | CursorAssistantMessage
-  | CursorToolMessage
-  | CursorOtherMessage
-
-type SqliteStatementResult = ReturnType<StatementSync["get"]>
 type SqliteRows = ReturnType<StatementSync["all"]>
 type ToolBlock = Extract<EntryBlock, { type: "tool" }>
 
 interface MetaValueRow {
   value: string | NodeJS.NonSharedUint8Array
-}
-
-interface BlobDataRow {
-  data: NodeJS.NonSharedUint8Array
 }
 
 let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
@@ -276,41 +271,8 @@ async function openDatabase(path: string): Promise<DatabaseSync | null> {
   }
 }
 
-function isStringValue(
-  value: JsonValue | SQLOutputValue | undefined
-): value is string {
-  return Object.prototype.toString.call(value) === "[object String]"
-}
-
-function isNumberValue(value: JsonValue | SQLOutputValue | undefined): value is number {
-  return Object.prototype.toString.call(value) === "[object Number]"
-}
-
-function isBytesValue(
-  value: SQLOutputValue | undefined
-): value is NodeJS.NonSharedUint8Array {
-  return Object.prototype.toString.call(value) === "[object Uint8Array]"
-}
-
-function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return Object.prototype.toString.call(value) === "[object Object]"
-}
-
-function stringValue(value: JsonValue | undefined): string | undefined {
-  return isStringValue(value) ? value : undefined
-}
-
 function numberValue(value: JsonValue | undefined): number | undefined {
   return isNumberValue(value) && Number.isFinite(value) ? value : undefined
-}
-
-function parseJson(raw: string): JsonValue | undefined {
-  try {
-    const value: JsonValue = JSON.parse(raw)
-    return value
-  } catch {
-    return undefined
-  }
 }
 
 /** Epoch millis or an ISO string — Cursor's meta has carried both. */
@@ -321,78 +283,6 @@ function isoOf(value: string | number | undefined): string | undefined {
   if (Number.isFinite(asNumber) && asNumber > 1e12)
     return new Date(asNumber).toISOString()
   return value
-}
-
-/**
- * The protobuf reads the root blob needs: hash list, workspace URI and
- * archived windows. When Cursor summarizes a long conversation, the root's
- * hash list restarts with the system prompt, workspace context and the
- * summary, and field 13 keeps one blob per summarized window, oldest first.
- * A window's field 1 is the hash list it replaced, so windows plus the live
- * list are the whole conversation. Verified 2026-09-26 against 223 local
- * stores: 61 had windows (123 in all), none overlapping, with every message
- * blob present.
- */
-/** Visit a protobuf message's top-level varint and length-delimited fields. */
-function eachField(
-  data: Uint8Array,
-  visit: (field: number, value: number | Uint8Array) => void
-): void {
-  let index = 0
-  const varint = (): number | undefined => {
-    let value = 0
-    let shift = 0
-    while (index < data.length && shift <= 49) {
-      const byte = data[index]
-      if (byte === undefined) return undefined
-      index += 1
-      value += (byte & 0x7f) * 2 ** shift
-      if ((byte & 0x80) === 0) return value
-      shift += 7
-    }
-    return undefined
-  }
-  while (index < data.length) {
-    const tag = varint()
-    if (tag === undefined) break
-    const field = Math.floor(tag / 8)
-    const wire = tag % 8
-    if (wire === 0) {
-      const value = varint()
-      if (value === undefined) break
-      visit(field, value)
-    } else if (wire === 2) {
-      const length = varint()
-      if (length === undefined || length > data.length - index) break
-      const bytes = data.subarray(index, index + length)
-      index += length
-      visit(field, bytes)
-    } else if (wire === 5) {
-      if (data.length - index < 4) break
-      index += 4
-    } else if (wire === 1) {
-      if (data.length - index < 8) break
-      index += 8
-    } else {
-      break // An unknown wire type means we are lost; stop rather than misread.
-    }
-  }
-}
-
-function parseRoot(data: Uint8Array): ParsedRoot {
-  const hashes: string[] = []
-  const windows: string[] = []
-  let cwd: string | undefined
-  eachField(data, (field, value) => {
-    if (!(value instanceof Uint8Array)) return
-    if (field === 1 && value.length === 32) hashes.push(Buffer.from(value).toString("hex"))
-    if (field === 13 && value.length === 32) windows.push(Buffer.from(value).toString("hex"))
-    if (field === 9) {
-      const uri = Buffer.from(value).toString("utf8")
-      if (uri.startsWith("file://")) cwd = decodeURIComponent(uri.slice(7))
-    }
-  })
-  return { hashes, cwd, windows }
 }
 
 /** The summary an archived window was replaced by: its field 2. */
@@ -513,6 +403,8 @@ export class CursorProvider implements SessionProvider {
    * costs one query instead of one per message.
    */
   private lastFold: (StoreFold & { path: string }) | null = null
+  private readonly checkpoints = new Map<string, { length: number; last?: string }>()
+  private readonly extents = new Map<string, CursorRootExtent>()
 
   constructor(home = homedir(), env: NodeJS.ProcessEnv = process.env) {
     this.desktop = new CursorDesktopStore(home)
@@ -637,11 +529,11 @@ export class CursorProvider implements SessionProvider {
   }
 
   /**
-   * The root to fold and, for an SDK agent, where each stopped run sits. A
-   * run's checkpoint places it only while that checkpoint is a prefix of the
-   * current conversation from its first spoken turn on: the SDK rewrites the
-   * leading system prompt and context whenever the model changes, and a
-   * rewritten history places nothing.
+   * The root to fold and, for an SDK agent, where each stopped run sits and
+   * which runs it replays. A run's checkpoint places it only while that
+   * checkpoint is a prefix of the current conversation from its first spoken
+   * turn on: the SDK rewrites the leading system prompt and context whenever
+   * the model changes, and a rewritten history places nothing.
    */
   private foldInput(database: DatabaseSync, path: string): FoldInput | null {
     const meta = this.readMeta(database, path)
@@ -652,15 +544,36 @@ export class CursorProvider implements SessionProvider {
     if (rootId && !root) return null
     const hashes = root?.hashes ?? []
     const stops: RunStops = new Map()
+    const spans = new Map<number, RunSpan>()
     let spoken: number | undefined
-    for (const run of agent?.ended ?? []) {
-      const checkpoint = run.recorded ? run.rootId : run.startRootId
-      const at = checkpoint ? this.readRoot(database, checkpoint)?.hashes : []
-      if (!at || (run.recorded && !at.length) || at.length > hashes.length) continue
+    let positions: Map<string, number[]> | undefined
+    // A checkpoint ends where its last message is. Usually that is its
+    // length, but a compaction rewrites messages ahead of the live list, so
+    // an older checkpoint's last message sits a few places off its length:
+    // on an agent with 53 compactions, 100 of 112 checkpoints did.
+    const place = (checkpoint: string | undefined): number | undefined => {
+      if (!checkpoint) return 0
+      const at = this.checkpointOf(database, checkpoint)
+      if (!at) return undefined
+      if (at.length <= hashes.length && hashes[at.length - 1] === at.last) return at.length
       spoken ??= this.firstSpokenIndex(database, hashes)
-      const from = spoken
-      if (at.some((hash, index) => index >= from && hash !== hashes[index])) continue
-      stops.set(at.length, [...(stops.get(at.length) ?? []), run])
+      if (at.length <= spoken) return at.length
+      if (at.last === undefined) return undefined
+      positions ??= hashPositions(hashes)
+      const found = nearest(positions.get(at.last), at.length - 1)
+      return found === undefined ? undefined : found + 1
+    }
+    for (const run of agent?.runs ?? []) {
+      const start = place(run.startRootId)
+      if (run.end) {
+        const stop = run.rootId ? place(run.rootId) : start
+        if (stop !== undefined && (!run.rootId || stop > 0)) stops.set(stop, [...(stops.get(stop) ?? []), run])
+      }
+      if (start === undefined || !run.evented || (!run.rootId && !run.running)) continue
+      const end = run.running ? hashes.length : place(run.rootId)
+      if (end === undefined || end <= start) continue
+      const prompt = this.promptIn(database, hashes, start, end)
+      if (prompt !== undefined) spans.set(prompt, { run, end })
     }
     if (!rootId && !stops.size) return null
     return {
@@ -668,8 +581,67 @@ export class CursorProvider implements SessionProvider {
       hashes,
       compactions: root?.compactions ?? new Map(),
       stops,
+      spans,
       indexPath: cursorSdkIndexPath(this.sdkStateRoot),
     }
+  }
+
+  /**
+   * A checkpoint's length and last message. A checkpoint is content
+   * addressed, so what it holds never changes: a long agent has a few
+   * hundred runs, each checkpoint a few hundred kilobytes of hashes, and
+   * each is read once.
+   */
+  private checkpointOf(database: DatabaseSync, id: string): { length: number; last?: string } | undefined {
+    const known = this.checkpoints.get(id)
+    if (known) return known
+    const blobs = database.prepare("SELECT data FROM blobs WHERE id = ?")
+    const extent = this.rootExtent(blobs, id)
+    if (!extent) return undefined
+    let length = extent.count
+    let last = extent.last
+    for (const window of extent.windows) {
+      const archived = this.rootExtent(blobs, window)
+      if (!archived) continue
+      length += archived.count
+      if (!extent.count) last = archived.last ?? last
+    }
+    const checkpoint = last ? { length, last } : { length }
+    this.remember(this.checkpoints, id, checkpoint)
+    return checkpoint
+  }
+
+  /** A root or window's extent. A window never changes and later checkpoints keep every earlier one, so each is read once. */
+  private rootExtent(blobs: StatementSync, id: string): CursorRootExtent | undefined {
+    const known = this.extents.get(id)
+    if (known) return known
+    try {
+      const row = parseBlobDataRow(blobs.get(id))
+      if (!row) return undefined
+      const extent = parseRootExtent(row.data)
+      if (extent.windows.length === 0) this.remember(this.extents, id, extent)
+      return extent
+    } catch {
+      return undefined
+    }
+  }
+
+  private remember<Value>(cache: Map<string, Value>, id: string, value: Value): void {
+    cache.set(id, value)
+    if (cache.size > MAX_CHECKPOINTS) cache.delete(cache.keys().next().value ?? "")
+  }
+
+  /** Where in `hashes[start..end)` the person's prompt is: the first message the fold draws as theirs. */
+  private promptIn(database: DatabaseSync, hashes: readonly string[], start: number, end: number): number | undefined {
+    const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
+    for (let index = start; index < end; index++) {
+      const hash = hashes[index]
+      const message = hash === undefined ? null : readCursorMessage(statement, hash)
+      if (message?.role !== "user" || message.summary) continue
+      if (cursorTaskOpener(plainText(message.content), hash ?? "")) return undefined
+      if (spokenText(message.content) || message.attachments.length) return index
+    }
+    return undefined
   }
 
   /** Index of the first message the user typed; everything before it is injected preamble. */
@@ -677,7 +649,7 @@ export class CursorProvider implements SessionProvider {
     const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
     for (let index = 0; index < hashes.length; index++) {
       const hash = hashes[index]
-      const message = hash === undefined ? null : this.readMessage(statement, hash)
+      const message = hash === undefined ? null : readCursorMessage(statement, hash)
       if (message?.role === "user" && spokenText(message.content)) return index
     }
     return hashes.length
@@ -884,7 +856,7 @@ export class CursorProvider implements SessionProvider {
               "SELECT data FROM blobs WHERE id = ?"
             )
             for (const hash of root.hashes) {
-              const message = this.readMessage(statement, hash)
+              const message = readCursorMessage(statement, hash)
               if (message?.role === "user") {
                 const spoken = spokenText(message.content)
                 if (spoken) ref.title = titleFrom(spoken)
@@ -934,7 +906,7 @@ export class CursorProvider implements SessionProvider {
           const input = this.foldInput(database, path)
           offset = file.bytes
           if (!input) return unchanged()
-          if (fold && fold.rootId === input.rootId && fold.stopKey === stopKey(input.stops)) return unchanged()
+          if (fold && fold.rootId === input.rootId && fold.stopKey === stopKey(input.stops) && sameSpans(fold.spans, spanKeys(input.spans))) return unchanged()
           const next = fold
             ? this.foldFrom(database, fold, input)
             : this.foldStore(database, input)
@@ -971,7 +943,7 @@ export class CursorProvider implements SessionProvider {
       const input = this.foldInput(database, path)
       if (!input) return { ref, entries: [] }
       const held = this.lastFold
-      if (held && held.path === path && held.rootId === input.rootId && held.stopKey === stopKey(input.stops))
+      if (held && held.path === path && held.rootId === input.rootId && held.stopKey === stopKey(input.stops) && sameSpans(held.spans, spanKeys(input.spans)))
         return { ref, entries: held.entries }
       const { fold } = this.foldStore(database, input)
       this.lastFold = { ...fold, path }
@@ -1005,11 +977,13 @@ export class CursorProvider implements SessionProvider {
         if (hash === undefined) continue
         const size = sizes.get(hash)?.["size"]
         read += isNumberValue(size) ? size : 0
-        const message = this.readMessage(blobs, hash)
+        const message = readCursorMessage(blobs, hash)
         if (message?.role === "user" && (spokenText(message.content) || message.attachments.length))
           start = index
       }
       if (index < 0 || !start) return null
+      // A message steered into a replayed run is drawn by that run's replay, so the window starts at the run's prompt.
+      for (const [prompt, span] of input.spans) if (prompt < start && start < span.end) start = prompt
       const folded = this.foldHashes(database, input, start)
       return folded.dropped ? null : folded.entries
     } finally {
@@ -1025,6 +999,7 @@ export class CursorProvider implements SessionProvider {
       fold: {
         rootId,
         stopKey: stopKey(stops),
+        spans: spanKeys(input.spans),
         hashes,
         entries: folded.entries,
         // Dropped history shifts every index; no exchange is a safe restart.
@@ -1049,6 +1024,7 @@ export class CursorProvider implements SessionProvider {
     const { rootId, hashes, stops } = input
     // A stop recorded after its messages lands inside entries already kept.
     if (previous.stopKey !== stopKey(stops)) return this.foldStore(database, input)
+    const spans = spanKeys(input.spans)
     let shared = 0
     while (
       shared < previous.hashes.length &&
@@ -1056,6 +1032,10 @@ export class CursorProvider implements SessionProvider {
       previous.hashes[shared] === hashes[shared]
     )
       shared++
+    // A run that ended, or moved, replays again from its prompt.
+    const moved = spans.findIndex((span, index) => span.key !== previous.spans[index]?.key || span.prompt !== previous.spans[index]?.prompt)
+    const changed = moved < 0 ? undefined : Math.min(spans[moved]?.prompt ?? hashes.length, previous.spans[moved]?.prompt ?? hashes.length)
+    if (changed !== undefined) shared = Math.min(shared, changed)
     if (shared === previous.hashes.length && previous.exchanges.length) {
       // Pure append. When the first new message opens an exchange of its
       // own, nothing before it can merge with it and the previous entries
@@ -1072,6 +1052,7 @@ export class CursorProvider implements SessionProvider {
           fold: {
             rootId,
             stopKey: previous.stopKey,
+            spans,
             hashes,
             entries: [...previous.entries, ...appended.entries],
             exchanges: [
@@ -1099,6 +1080,7 @@ export class CursorProvider implements SessionProvider {
       fold: {
         rootId,
         stopKey: previous.stopKey,
+        spans,
         hashes,
         entries: [...previous.entries.slice(0, exchange.entry), ...tail.entries],
         exchanges: [
@@ -1137,25 +1119,22 @@ export class CursorProvider implements SessionProvider {
     const stop = (index: number) => {
       if (index === start) return
       for (const run of stops.get(index) ?? []) {
-        if (!run.recorded) {
+        const end = run.end
+        if (!end) continue
+        if (!run.rootId) {
           const turn = this.unrecordedTurn(database, input.indexPath, run)
           if (!turn.length) continue
-          assistant = null
           calls = []
-          for (const entry of turn) {
-            sink.push(entry)
-            if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool") calls.push(block)
-          }
+          for (const entry of turn) sink.push(entry)
         }
-        const failed = run.end.kind === "failed"
         for (const call of calls) {
           if (call.output !== undefined || call.error) continue
-          if (failed) call.error = true
+          if (end.kind === "failed") call.error = true
           else call.canceled = true
         }
         calls = []
         assistant = null
-        const marker = run.end.kind === "failed" ? cursorFailure(run.end.error ?? "") : { label: "Interrupted" }
+        const marker = end.kind === "failed" ? cursorFailure(end.error ?? "") : { label: "Interrupted" }
         sink.push(run.endedAt ? { kind: "event", at: run.endedAt, ...marker } : { kind: "event", ...marker })
       }
     }
@@ -1178,7 +1157,7 @@ export class CursorProvider implements SessionProvider {
       compacted = compact(index) ?? compacted
       const hash = hashes[index]
       if (hash === undefined) continue
-      const message = this.readMessage(statement, hash)
+      const message = readCursorMessage(statement, hash)
       if (!message) continue
       switch (message.role) {
         case "user": {
@@ -1202,12 +1181,18 @@ export class CursorProvider implements SessionProvider {
             sink.push(opener)
             continue
           }
+          const span = input.spans.get(index)
           sink.push({
             kind: "user",
             id: hash,
+            ...span?.run.startedAt && { at: span.run.startedAt },
             text: spoken ?? "",
             attachments: message.attachments,
           })
+          if (!span) continue
+          for (const entry of this.replayRun(database, input, span.run, hash, index, span.end)) sink.push(entry)
+          for (let passed = index + 1; passed < span.end; passed++) stop(passed)
+          index = span.end - 1
           continue
         }
         case "tool":
@@ -1399,57 +1384,36 @@ export class CursorProvider implements SessionProvider {
     }
   }
 
-  private readMessage(
-    statement: StatementSync,
-    hash: string
-  ): CursorMessage | null {
-    try {
-      const row = parseBlobDataRow(statement.get(hash))
-      return row
-        ? parseCursorMessage(Buffer.from(row.data).toString("utf8"))
-        : null
-    } catch {
-      return null
-    }
-  }
-
   /** The turn a run stopped before its first checkpoint: its prompt, then what it streamed. */
-  private unrecordedTurn(
-    database: DatabaseSync,
-    indexPath: string,
-    run: Extract<CursorSdkEndedRun, { recorded: false }>
-  ): ThreadEntry[] {
+  private unrecordedTurn(database: DatabaseSync, indexPath: string, run: CursorSdkRun): ThreadEntry[] {
     const entries: ThreadEntry[] = []
     const prompt = this.promptBetween(database, run)
     if (prompt) {
       const projected = readPromptAttachments(prompt.text)
-      entries.push({ kind: "user", id: prompt.id, text: projected.text, attachments: projected.attachments })
+      entries.push({ kind: "user", id: prompt.id, ...run.startedAt && { at: run.startedAt }, text: projected.text, attachments: projected.attachments })
     }
-    const blocks: EntryBlock[] = []
-    for (const part of readCursorSdkRunStream(indexPath, run.runId)) {
-      if (part.type !== "tool") {
-        if (part.text.trim()) blocks.push({ type: part.type, text: part.text })
-        continue
-      }
-      const block: ToolBlock = {
-        type: "tool",
-        id: part.callId,
-        name: part.name,
-        input: clip(JSON.stringify(part.args ?? {})),
-      }
-      const result = isJsonObject(part.result) ? part.result : undefined
-      if (part.status === "completed" && result) {
-        const value = result["value"]
-        block.output = clip(formatToolResult(value ?? result))
-        // An MCP tool can answer and still report failure with `isError`.
-        if (result["status"] === "error" || (isJsonObject(value) && value["isError"] === true)) block.error = true
-      } else if (part.status === "error") {
-        block.error = true
-      }
-      blocks.push(block)
-    }
-    if (blocks.length) entries.push({ kind: "assistant", id: run.runId, blocks })
+    const replay: CursorSdkReplay = { runId: run.runId, ...prompt && { prompt: prompt.id }, ...run.model && { model: run.model } }
+    const ending = runEnding(run)
+    if (ending) replay.ending = ending
+    entries.push(...cursorRunEntries(readCursorSdkRunEvents(indexPath, run.runId), replay))
     return entries
+  }
+
+  /**
+   * A run as the live window drew it, from the messages `run_events` kept.
+   * A call its stream never ended takes the result the run checkpointed in
+   * `hashes[from..end)`, read only when there is such a call.
+   */
+  private replayRun(database: DatabaseSync, input: FoldInput, run: CursorSdkRun, prompt: string, from: number, end: number): ThreadEntry[] {
+    const replay: CursorSdkReplay = {
+      runId: run.runId,
+      prompt,
+      ...run.model && { model: run.model },
+      settled: (callIds) => cursorToolResults(database.prepare("SELECT data FROM blobs WHERE id = ?"), input.hashes, from, end, callIds),
+    }
+    const ending = runEnding(run)
+    if (ending) replay.ending = ending
+    return cursorRunEntries(readCursorSdkRunEvents(input.indexPath, run.runId), replay)
   }
 
   /**
@@ -1458,10 +1422,7 @@ export class CursorProvider implements SessionProvider {
    * does. Blobs are appended, so the search starts at the run's starting
    * checkpoint and ends at the first record past the stop.
    */
-  private promptBetween(
-    database: DatabaseSync,
-    run: Extract<CursorSdkEndedRun, { recorded: false }>
-  ): { id: string; text: string } | null {
+  private promptBetween(database: DatabaseSync, run: CursorSdkRun): { id: string; text: string } | null {
     const from = run.startedAt ? Date.parse(run.startedAt) : -Infinity
     const to = run.endedAt ? Date.parse(run.endedAt) : Infinity
     try {
@@ -1492,12 +1453,6 @@ function parseMetaValueRow(result: SqliteStatementResult): MetaValueRow | null {
   return isStringValue(value) || isBytesValue(value) ? { value } : null
 }
 
-function parseBlobDataRow(result: SqliteStatementResult): BlobDataRow | null {
-  if (!result) return null
-  const data = result["data"]
-  return isBytesValue(data) ? { data } : null
-}
-
 function parseCursorMeta(raw: string): CursorMeta | null {
   const value = parseJson(raw)
   if (!isJsonObject(value)) return null
@@ -1525,174 +1480,8 @@ function parseSidecar(raw: string): CursorSidecar | null {
   }
 }
 
-function parseCursorMessage(raw: string): CursorMessage | null {
-  const value = parseJson(raw)
-  if (!isJsonObject(value)) return null
-  switch (stringValue(value["role"])) {
-    case "user": {
-      const content = parseTextContent(value["content"])
-      const prompt = readPromptAttachments(plainText(content))
-      return {
-        role: "user",
-        content: prompt.text,
-        attachments: [...cursorAttachments(value["content"]), ...prompt.attachments],
-        summary: cursorOption(value["providerOptions"], "isSummary") === true,
-      }
-    }
-    case "assistant":
-      return {
-        role: "assistant",
-        content: parseAssistantContent(value["content"]),
-        model: stringValue(value["model"]),
-      }
-    case "tool":
-      return {
-        role: "tool",
-        content: parseToolContent(value["content"]),
-        isError: cursorToolError(value["providerOptions"]),
-      }
-    default:
-      return { role: "other" }
-  }
-}
-
-function parseTextContent(value: JsonValue | undefined): CursorTextContent {
-  if (isStringValue(value)) return value
-  if (!Array.isArray(value)) return []
-  const parts: CursorTextPart[] = []
-  for (const candidate of value) {
-    if (!isJsonObject(candidate) || stringValue(candidate["type"]) !== "text")
-      continue
-    const text = stringValue(candidate["text"])
-    if (text !== undefined) parts.push({ type: "text", text })
-  }
-  return parts
-}
-
-function parseAssistantContent(
-  value: JsonValue | undefined
-): CursorAssistantPart[] {
-  if (!Array.isArray(value)) return []
-  return value.map(parseAssistantPart)
-}
-
-function parseAssistantPart(value: JsonValue): CursorAssistantPart {
-  if (!isJsonObject(value)) return { type: "other" }
-  const attachment = cursorAttachments([value])[0]
-  if (attachment) return { type: "attachment", value: attachment }
-  switch (stringValue(value["type"])) {
-    case "text": {
-      const text = stringValue(value["text"])
-      return text === undefined ? { type: "other" } : { type: "text", text }
-    }
-    case "reasoning": {
-      const text = stringValue(value["text"])
-      return text === undefined
-        ? { type: "other" }
-        : { type: "reasoning", text }
-    }
-    case "tool-call":
-      return {
-        type: "tool-call",
-        toolName: stringValue(value["toolName"]) ?? "tool",
-        args: value["args"],
-        toolCallId: stringValue(value["toolCallId"]),
-      }
-    default:
-      return { type: "other" }
-  }
-}
-
-/** A field of a message's `providerOptions.cursor`. */
-function cursorOption(value: JsonValue | undefined, key: string): JsonValue | undefined {
-  const provider = isJsonObject(value) ? value : undefined
-  const cursor = isJsonObject(provider?.["cursor"]) ? provider["cursor"] : undefined
-  return cursor?.[key]
-}
-
-function cursorToolError(value: JsonValue | undefined): boolean {
-  const result = cursorOption(value, "highLevelToolCallResult")
-  return isJsonObject(result) && result["isError"] === true
-}
-
-function parseToolContent(value: JsonValue | undefined): CursorToolPart[] {
-  if (!Array.isArray(value)) return []
-  return value.map(parseToolPart)
-}
-
-function parseToolPart(value: JsonValue): CursorToolPart {
-  if (!isJsonObject(value) || stringValue(value["type"]) !== "tool-result") {
-    return { type: "other" }
-  }
-  return {
-    type: "tool-result",
-    toolCallId: stringValue(value["toolCallId"]) ?? "",
-    result: value["result"],
-    attachments: cursorAttachments(value["experimental_content"]),
-  }
-}
-
 function formatJson(value: JsonValue | undefined): string | undefined {
   return value === undefined ? undefined : JSON.stringify(value)
-}
-
-function formatToolResult(value: JsonValue | undefined): string {
-  const text = isStringValue(value)
-    ? value
-    : (JSON.stringify(value ?? "") ?? "")
-  return normalizeToolOutput(text)
-}
-
-function plainText(content: CursorTextContent): string {
-  return Array.isArray(content)
-    ? content.map((part) => part.text).join("")
-    : content
-}
-
-function cursorAttachments(
-  content: JsonValue | undefined
-): AttachmentContent[] {
-  if (!Array.isArray(content)) return []
-  const result: AttachmentContent[] = []
-  for (const candidate of content) {
-    if (!isJsonObject(candidate)) continue
-    const type = stringValue(candidate["type"])
-    if (type !== "image" && type !== "file") continue
-    const name = stringValue(candidate["filename"]) ?? type
-    const mimeType =
-      stringValue(candidate["mimeType"]) ??
-      stringValue(candidate["mediaType"]) ??
-      (type === "image" ? "image/png" : "application/octet-stream")
-    const value =
-      stringValue(candidate["image"]) ??
-      stringValue(candidate["data"]) ??
-      stringValue(candidate["url"])
-    const path = stringValue(candidate["path"])
-    result.push(
-      value
-        ? /^(?:https?:|file:|data:)/.test(value)
-          ? attachmentFromUrl(name, mimeType, value)
-          : {
-              type: "attachment",
-              name,
-              mimeType,
-              source: { kind: "inline", data: value },
-            }
-        : {
-            type: "attachment",
-            name,
-            mimeType,
-            source: path
-              ? { kind: "file", path }
-              : {
-                  kind: "unavailable",
-                  reason:
-                    "Attachment bytes are unavailable in this native record",
-                },
-          }
-    )
-  }
-  return result
 }
 
 /**

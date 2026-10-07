@@ -19,6 +19,8 @@ import {
   type TranscriptEvent,
 } from "../events.js"
 import { codexPlanDetails } from "../tool-plan.js"
+import { CodexRolloutUsage, codexTokens } from "../harnesses/codex.js"
+import type { HarnessTokens } from "../harnesses/tokens.js"
 import { codexServiceTier } from "../model-catalog.js"
 import type { SessionSettings } from "../settings.js"
 import { attachmentFromUrl, ProposedPlans, type AttachmentContent } from "../content.js"
@@ -123,18 +125,14 @@ interface CodexUserMessageEvent extends CodexRolloutBase {
   text: string
 }
 
-interface CodexTokenUsage {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
+interface CallUsage extends HarnessTokens {
   /** Tokens in the context window at that request. */
   context: number
 }
 
 interface CodexTokenCountEvent extends CodexRolloutBase {
   kind: "token_count_event"
-  usage?: CodexTokenUsage
+  usage?: CallUsage
 }
 
 interface CodexUserResponse extends CodexRolloutBase {
@@ -352,20 +350,9 @@ function outputText(output: JsonValue | undefined): string {
   return normalizeToolOutput(text)
 }
 
-function parseTokenUsage(payload: JsonObject): CodexTokenUsage | undefined {
-  const info = objectValue(payload["info"])
-  const usage = objectValue(info?.["last_token_usage"])
-  if (!usage) return undefined
-  // Codex counts cached input inside `input_tokens`; Mako counts it apart.
-  const cacheRead = Number(usage["cached_input_tokens"] ?? 0)
-  const cacheWrite = Number(usage["cache_write_input_tokens"] ?? 0)
-  return {
-    input: Math.max(0, Number(usage["input_tokens"] ?? 0) - cacheRead - cacheWrite),
-    output: Number(usage["output_tokens"] ?? 0),
-    cacheRead,
-    cacheWrite,
-    context: Number(usage["total_tokens"] ?? 0),
-  }
+function parseTokenUsage(payload: JsonObject): CallUsage | undefined {
+  const usage = CodexRolloutUsage.safeParse(objectValue(payload["info"])?.["last_token_usage"]).data
+  return usage && { ...codexTokens(usage), context: usage.total ?? 0 }
 }
 
 /** Codex's `SUMMARY_PREFIX`, which opens a locally made compaction summary. */
@@ -1188,14 +1175,17 @@ function translator(): CodexTranslator {
         return
       case "token_count_event":
         if (event.usage?.context) contextTokens = event.usage.context
+        // One entry can hold several calls' work, a tool call and the reply after it; it carries what they all spent.
         if (event.usage && assistant) {
+          const before = assistant.usage
           const usage: TurnUsage = {
-            input: event.usage.input,
-            output: event.usage.output,
-            cacheRead: event.usage.cacheRead,
-            cacheWrite: event.usage.cacheWrite,
+            input: (before?.input ?? 0) + event.usage.input,
+            output: (before?.output ?? 0) + event.usage.output,
+            cacheRead: (before?.cacheRead ?? 0) + event.usage.cacheRead,
+            cacheWrite: (before?.cacheWrite ?? 0) + event.usage.cacheWrite,
           }
           assistant.usage = usage
+          sink.edited(assistant)
         }
         return
       case "user_response": {

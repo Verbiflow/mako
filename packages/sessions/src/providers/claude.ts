@@ -19,6 +19,8 @@ import {
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import { claudeAttachment, ClaudeProjection } from "../claude-projection.js"
+import { claudeTokens, ClaudeUsage } from "../harnesses/claude.js"
+import type { HarnessTokens } from "../harnesses/tokens.js"
 import type { AttachmentContent } from "../content.js"
 import { reduceLiveUpdates, type LiveBlock } from "../live-content.js"
 import { liveEvent, liveToolEntry } from "../live-entries.js"
@@ -35,8 +37,8 @@ import { liveEvent, liveToolEntry } from "../live-entries.js"
  */
 
 import { homedir } from "node:os"
-import { join } from "node:path"
-import { existsSync, readFileSync, realpathSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
+import { claudeTranscriptRoots } from "./claude-location.js"
 import { stat, rm } from "node:fs/promises"
 import {
   titleFrom,
@@ -95,19 +97,17 @@ type ClaudeContentBlock =
   | { type: "attachment"; value: AttachmentContent }
 type ClaudeContent = string | ClaudeContentBlock[]
 
-interface ClaudeUsage {
+interface SavedUsage extends HarnessTokens {
   speed?: string
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
 }
 
 interface ClaudeMessage {
+  /** The API message; Claude Code writes each of its content blocks as its own line, all with this id. */
+  id?: string
   role?: string
   model?: string
   content?: ClaudeContent
-  usage?: ClaudeUsage
+  usage?: SavedUsage
   /** `tool_use` while the turn waits on a call, `end_turn` once it answered. */
   stopReason?: string
 }
@@ -283,21 +283,12 @@ function parseContent(
   return value.map(parseContentBlock)
 }
 
-function tokenCount(value: ClaudeJsonValue | undefined): number {
-  return Number(value ?? 0)
-}
-
 function parseUsage(
   value: ClaudeJsonValue | undefined
-): ClaudeUsage | undefined {
+): SavedUsage | undefined {
   if (!isJsonObject(value)) return undefined
-  return {
-    speed: stringValue(value["speed"]),
-    input: tokenCount(value["input_tokens"]),
-    output: tokenCount(value["output_tokens"]),
-    cacheRead: tokenCount(value["cache_read_input_tokens"]),
-    cacheWrite: tokenCount(value["cache_creation_input_tokens"]),
-  }
+  const usage = ClaudeUsage.parse(value)
+  return usage.speed ? { speed: usage.speed, ...claudeTokens(usage) } : claudeTokens(usage)
 }
 
 function parseMessage(
@@ -305,6 +296,7 @@ function parseMessage(
 ): ClaudeMessage | undefined {
   if (!isJsonObject(value)) return undefined
   return {
+    id: stringValue(value["id"]),
     role: stringValue(value["role"]),
     model: stringValue(value["model"]),
     content: parseContent(value["content"]),
@@ -355,21 +347,6 @@ function forkedFromSession(
   return isJsonObject(value) ? stringValue(value["sessionId"]) : undefined
 }
 
-function parseDeclaredRoots(raw: string): string[] {
-  try {
-    const parsed: ClaudeJsonValue = JSON.parse(raw)
-    if (!isJsonObject(parsed)) return []
-    const roots = parsed["claude"]
-    if (!Array.isArray(roots)) return []
-    return roots.flatMap((root) => {
-      const path = stringValue(root)
-      return path === undefined ? [] : [path]
-    })
-  } catch {
-    return []
-  }
-}
-
 function plainText(content: ClaudeContent | undefined): string {
   if (!Array.isArray(content)) return content ?? ""
   return content
@@ -408,39 +385,23 @@ export class ClaudeProvider implements SessionProvider {
   activityFromContent = true
   /** 2: rows carry `currentCwd` (EnterWorktree, or the shell changing folder), one folder's two spellings counted as one. */
   peekVersion = 2
-  private root: string
   private home: string
-  private configDir: string | undefined
-  private extraRoots: { at: number; value: string[] } | null = null
+  private extraRoots: { at: number; root: string; value: string[] } | null = null
 
-  /**
-   * `configDir` is the `CLAUDE_CONFIG_DIR` this provider honours. The
-   * process's own is read only for the default home: a provider built on
-   * another home is an isolated world (a fixture, a mirror), and a shell
-   * inside Claude Code sets the variable for its own store, whose sessions
-   * would otherwise be listed among the fixture's.
-   */
-  constructor(
-    home?: string,
-    configDir = home === undefined
-      ? process.env["CLAUDE_CONFIG_DIR"]
-      : undefined
-  ) {
-    this.home = home ?? homedir()
-    this.root = join(this.home, ".claude", "projects")
-    this.configDir = configDir
+  constructor(home = homedir()) {
+    this.home = home
   }
 
   /**
-   * Claude does not always live in ~/.claude: a CLAUDE_CONFIG_DIR moves the
-   * whole store. Roots therefore are: the default, the env override, and
-   * anything declared in ~/.mako/roots.json ({"claude": ["/abs/projects", …]}).
-   * Cached briefly — roots() is called on every watch/scan setup.
+   * `claudeTranscriptRoots`, each folder once. Cached briefly: roots() is
+   * called on every watch and scan setup, and the declared ones are read
+   * from a file.
    */
   roots(): string[] {
     if (this.extraRoots && Date.now() - this.extraRoots.at < 60_000) {
-      return [this.root, ...this.extraRoots.value]
+      return [this.extraRoots.root, ...this.extraRoots.value]
     }
+    const [root, ...declared] = claudeTranscriptRoots(this.home)
     const extras: string[] = []
     // Identity is the *real* path: account homes symlink their projects dir
     // straight back at ~/.claude/projects, and scanning the same store
@@ -453,25 +414,16 @@ export class ClaudeProvider implements SessionProvider {
         return dir
       }
     }
-    if (existsSync(this.root)) seen.add(realOf(this.root))
-    const push = (dir: string) => {
-      if (!dir || !existsSync(dir)) return
+    if (existsSync(root)) seen.add(realOf(root))
+    for (const dir of declared) {
+      if (!existsSync(dir)) continue
       const real = realOf(dir)
-      if (seen.has(real)) return
+      if (seen.has(real)) continue
       seen.add(real)
       extras.push(real)
     }
-    if (this.configDir) push(join(this.configDir, "projects"))
-    try {
-      const declared = parseDeclaredRoots(
-        readFileSync(join(this.home, ".mako", "roots.json"), "utf8")
-      )
-      for (const dir of declared) push(dir)
-    } catch {
-      // No declaration file: nothing declared.
-    }
-    this.extraRoots = { at: Date.now(), value: extras }
-    return [this.root, ...extras]
+    this.extraRoots = { at: Date.now(), root, value: extras }
+    return [root, ...extras]
   }
 
   async discover(): Promise<NativeFile[]> {
@@ -642,6 +594,12 @@ function translator(): ClaudeTranslator {
   let command: { entry: EventEntry; name: string } | null = null
   /** Fallback markers by API request: the reply's `fallback` block and Claude's notice after it are one change. */
   const fallbacks = new Map<string, EventEntry>()
+  /**
+   * The entry carrying each API call's usage. Every line of a reply repeats
+   * it, the later ones with more output streamed, so one entry holds the
+   * latest reading and the call counts once.
+   */
+  const spent = new Map<string, AssistantEntry>()
 
   const mark = (
     marker: TranscriptEvent,
@@ -934,7 +892,17 @@ function translator(): ClaudeTranslator {
         }
       }
     }
-    if (message.usage) turn.usage = message.usage
+    if (message.usage) {
+      const call = message.id && `${message.id}:${line.requestId ?? ""}`
+      const owner = call ? spent.get(call) : undefined
+      if (owner) {
+        owner.usage = message.usage
+        if (owner !== turn) sink.edited(owner)
+      } else {
+        turn.usage = message.usage
+        if (call) spent.set(call, turn)
+      }
+    }
     if (line.isAbortedMidStream) {
       sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
       assistant = null

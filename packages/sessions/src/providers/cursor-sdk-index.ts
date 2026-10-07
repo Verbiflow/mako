@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto"
-import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
+import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import { z } from "zod"
-import type { CursorSdkModelSelection } from "./cursor-sdk-models.js"
+import { CursorSdkMessageSchema, type CursorSdkModelSelection, type CursorSdkRunEvent } from "../cursor-sdk-content.js"
+import { cursorToolResults, parseBlobDataRow, parseRoot, type CursorToolResult } from "./cursor-records.js"
+import { cursorSdkIndexPath, cursorSdkStorePath } from "./cursor-sdk-paths.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { openNativeStore, refuseNativeWrite } from "../read-only-sqlite.js"
 
@@ -33,8 +35,8 @@ export interface CursorSdkAgentRecord {
   turns: number
   /** Whether the newest run is still non-terminal. */
   running: boolean
-  /** Runs stopped, expired or failed after they wrote to the conversation, oldest first. */
-  ended: CursorSdkEndedRun[]
+  /** Every run, oldest first. */
+  runs: CursorSdkRun[]
   /**
    * Set when Mako created this agent from a `cursor-agent` store (an
    * `acp-sessions` or `chats` session) so the conversation could go on
@@ -65,38 +67,28 @@ export type CursorSdkRunEnd =
   | { kind: "expired" }
   | { kind: "failed"; error?: string }
 
-/** A run that ended short of finishing, oldest first. */
-export type CursorSdkEndedRun =
-  | {
-      recorded: true
-      runId: string
-      end: CursorSdkRunEnd
-      /** Blob id of the root the run last checkpointed: the conversation as it stopped. */
-      rootId: string
-      /** When it was stopped or failed; an expired run's expiry is when the next send found it, so it has none. */
-      endedAt?: string
-    }
-  | {
-      /**
-       * Stopped before its first checkpoint: the conversation never took its
-       * prompt or output. The prompt record and the run's event log still
-       * hold them.
-       */
-      recorded: false
-      runId: string
-      end: CursorSdkRunEnd
-      /** The conversation the run started from; absent for an agent's first run. */
-      startRootId?: string
-      startedAt?: string
-      endedAt?: string
-    }
-
-/** What a run streamed, in order: text and thinking deltas joined, each tool call at its latest state. */
-export type CursorSdkStreamPart =
-  | { type: "text" | "thinking"; text: string }
-  | { type: "tool"; callId: string; name: string; status?: string; args?: CursorSdkJson; result?: CursorSdkJson }
-
-export type CursorSdkJson = string | number | boolean | null | CursorSdkJson[] | { [key: string]: CursorSdkJson | undefined }
+/** One send to an agent, as the index records it. */
+export interface CursorSdkRun {
+  runId: string
+  /** How it ended short of finishing; absent for a run that finished or is still going. */
+  end?: CursorSdkRunEnd
+  running: boolean
+  /** The conversation the run started from; absent for an agent's first run. */
+  startRootId?: string
+  /**
+   * The conversation as the run last checkpointed it, when that moved past
+   * `startRootId`. A run stopped before its first checkpoint has none: the
+   * conversation never took its prompt or output, and the prompt record and
+   * the run's event log still hold them.
+   */
+  rootId?: string
+  model?: string
+  startedAt?: string
+  /** When it finished, was stopped or failed; an expired run's expiry is when the next send found it, so it has none. */
+  endedAt?: string
+  /** `run_events` holds its messages (`readCursorSdkRunEvents`). */
+  evented: boolean
+}
 
 /** The key under which the import record sits in the agent's `metadata_json`. */
 export const CURSOR_SDK_IMPORT_METADATA_KEY = "makoImport"
@@ -223,127 +215,126 @@ function modelParams(raw: string | undefined): CursorSdkModelSelection["params"]
   }
 }
 
-/** An index without run checkpoints records no stops, not an unreadable agent. */
-function endedRuns(database: DatabaseSync, agentId: string): CursorSdkEndedRun[] {
+/** An index without run checkpoints records no runs to place, not an unreadable agent. */
+function agentRuns(database: DatabaseSync, agentId: string): CursorSdkRun[] {
+  const evented = database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'run_events'").get() !== undefined
   let rows: ReturnType<ReturnType<DatabaseSync["prepare"]>["all"]>
   try {
     rows = database
-      .prepare("SELECT * FROM runs WHERE agent_id = ? AND status IN ('CANCELLED', 'EXPIRED', 'ERROR') ORDER BY turn_number")
+      .prepare(`SELECT *, ${evented ? "EXISTS (SELECT 1 FROM run_events WHERE run_events.run_id = runs.run_id)" : "0"} AS evented FROM runs WHERE agent_id = ? ORDER BY turn_number`)
       .all(agentId)
   } catch {
     return []
   }
-  const ended: CursorSdkEndedRun[] = []
+  const runs: CursorSdkRun[] = []
   for (const row of rows) {
     if (!("latest_checkpoint_ref_json" in row)) return []
     const runId = text(row["run_id"])
     if (!runId) continue
-    const end = runEnd(text(row["status"]), text(row["error_code"]))
-    const rootId = checkpointBlobId(text(row["latest_checkpoint_ref_json"]))
+    const status = text(row["status"])
+    const run: CursorSdkRun = { runId, running: status === undefined || !TERMINAL.has(status), evented: row["evented"] === 1 }
+    const end = runEnd(status, text(row["error_code"]))
+    if (end) run.end = end
     const startRootId = checkpointBlobId(text(row["start_checkpoint_ref_json"]))
-    const endedAt = end.kind === "cancelled" ? text(row["cancelled_at"]) : end.kind === "failed" ? text(row["finished_at"]) : undefined
-    if (rootId && rootId !== startRootId) {
-      const run: Extract<CursorSdkEndedRun, { recorded: true }> = { recorded: true, runId, end, rootId }
-      if (endedAt) run.endedAt = endedAt
-      ended.push(run)
-      continue
-    }
-    const startedAt = text(row["started_at"])
-    const run: Extract<CursorSdkEndedRun, { recorded: false }> = { recorded: false, runId, end }
     if (startRootId) run.startRootId = startRootId
+    const rootId = checkpointBlobId(text(row["latest_checkpoint_ref_json"]))
+    if (rootId && rootId !== startRootId) run.rootId = rootId
+    const model = text(row["model"])
+    if (model) run.model = model
+    const startedAt = text(row["started_at"])
     if (startedAt) run.startedAt = startedAt
+    const endedAt = end?.kind === "cancelled" ? text(row["cancelled_at"]) : end?.kind === "expired" ? undefined : text(row["finished_at"])
     if (endedAt) run.endedAt = endedAt
-    ended.push(run)
+    runs.push(run)
   }
-  return ended
+  return runs
 }
 
-function runEnd(status: string | undefined, error: string | undefined): CursorSdkRunEnd {
+function runEnd(status: string | undefined, error: string | undefined): CursorSdkRunEnd | undefined {
+  if (status === "CANCELLED") return { kind: "cancelled" }
   if (status === "EXPIRED") return { kind: "expired" }
   if (status === "ERROR") return error ? { kind: "failed", error } : { kind: "failed" }
-  return { kind: "cancelled" }
+  return undefined
 }
 
-/** The `run_events` messages history reads; any other message is skipped. */
-const RunEventSchema = z.object({
-  message: z.discriminatedUnion("type", [
-    z.object({ type: z.literal("thinking"), text: z.string().optional().catch(undefined) }),
-    z.object({
-      type: z.literal("assistant"),
-      message: z.object({ content: z.array(z.unknown()) }).optional().catch(undefined),
-    }),
-    z.object({
-      type: z.literal("tool_call"),
-      call_id: z.string().min(1),
-      name: z.string().min(1),
-      status: z.string().optional().catch(undefined),
-      args: z.json().optional(),
-      result: z.json().optional(),
-    }),
-  ]),
-})
-const TextPartSchema = z.object({ type: z.literal("text"), text: z.string() })
+const RunEventSchema = z.object({ type: z.literal("sdk_message"), message: CursorSdkMessageSchema })
+const RunEventRow = z.tuple([z.string().nullable(), z.string().nullable()])
 
 /**
- * The run's own event log: what the SDK streamed while it ran. An index
- * without `run_events` records none.
+ * Every message a run streamed, as the SDK keeps it in `run_events`: the
+ * live child's messages, deltas aside. A message this SDK version's
+ * vocabulary doesn't describe is skipped, as the live decoder skips it.
  */
-export function readCursorSdkRunStream(indexPath: string, runId: string): CursorSdkStreamPart[] {
+export function readCursorSdkRunEvents(indexPath: string, runId: string): CursorSdkRunEvent[] {
   const database = openReadOnly(indexPath)
   if (!database) return []
-  const parts: CursorSdkStreamPart[] = []
-  const tools = new Map<string, Extract<CursorSdkStreamPart, { type: "tool" }>>()
-  const append = (type: "text" | "thinking", delta: string) => {
-    const last = parts.at(-1)
-    if (last?.type === type) last.text += delta
-    else parts.push({ type, text: delta })
-  }
+  const events: CursorSdkRunEvent[] = []
   try {
-    const rows = database
-      .prepare("SELECT payload_json FROM run_events WHERE run_id = ? ORDER BY seq")
-      .all(runId)
-    for (const row of rows) {
-      let payload: CursorSdkJson
+    const statement = database.prepare("SELECT payload_json, created_at FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' ORDER BY seq")
+    // A long agent keeps hundreds of thousands of these: rows as arrays skip an object each.
+    statement.setReturnArrays(true)
+    for (const row of statement.iterate(runId)) {
+      const columns = RunEventRow.safeParse(row)
+      if (!columns.success) continue
+      const [raw, created] = columns.data
+      let payload: unknown
       try {
-        payload = JSON.parse(text(row["payload_json"]) ?? "")
+        payload = JSON.parse(raw ?? "")
       } catch {
         continue
       }
       const event = RunEventSchema.safeParse(payload)
       if (!event.success) continue
-      const message = event.data.message
-      switch (message.type) {
-        case "thinking": {
-          if (message.text) append("thinking", message.text)
-          break
-        }
-        case "assistant": {
-          for (const part of message.message?.content ?? []) {
-            const delta = TextPartSchema.safeParse(part).data?.text
-            if (delta) append("text", delta)
-          }
-          break
-        }
-        case "tool_call": {
-          const known = tools.get(message.call_id)
-          const tool = known ?? { type: "tool" as const, callId: message.call_id, name: message.name }
-          if (message.status) tool.status = message.status
-          if (message.args !== undefined) tool.args = message.args
-          if (message.result !== undefined) tool.result = message.result
-          if (!known) {
-            tools.set(message.call_id, tool)
-            parts.push(tool)
-          }
-          break
-        }
-      }
+      events.push(created ? { message: event.data.message, at: created } : { message: event.data.message })
     }
-    return parts
+    return events
   } catch {
     return []
   } finally {
     database.close()
   }
+}
+
+/**
+ * What a run's own checkpoint kept for `callIds`, calls its stream never
+ * ended (`CursorSdkProjection.finish`). Only the run's messages are searched:
+ * past the checkpoint it started from, up to the latest it wrote. Empty when
+ * the run wrote no checkpoint or the stores can't be read.
+ */
+export function readCursorSdkRunResults(stateRoot: string, agentId: string, runId: string, callIds: ReadonlySet<string>): Map<string, CursorToolResult> {
+  if (!callIds.size) return new Map()
+  const index = openReadOnly(cursorSdkIndexPath(stateRoot))
+  if (!index) return new Map()
+  let start: string | undefined
+  let latest: string | undefined
+  try {
+    const row = index.prepare("SELECT start_checkpoint_ref_json AS start, latest_checkpoint_ref_json AS latest FROM runs WHERE run_id = ?").get(runId)
+    start = checkpointBlobId(text(row?.["start"]))
+    latest = checkpointBlobId(text(row?.["latest"]))
+  } catch {
+    return new Map()
+  } finally {
+    index.close()
+  }
+  if (!latest || latest === start) return new Map()
+  const store = openReadOnly(cursorSdkStorePath(stateRoot, agentId))
+  if (!store) return new Map()
+  try {
+    const blobs = store.prepare("SELECT data FROM blobs WHERE id = ?")
+    const hashes = rootHashes(blobs, latest)
+    if (!hashes) return new Map()
+    const from = start ? rootHashes(blobs, start)?.length ?? 0 : 0
+    return cursorToolResults(blobs, hashes, from <= hashes.length ? from : 0, hashes.length, callIds)
+  } catch {
+    return new Map()
+  } finally {
+    store.close()
+  }
+}
+
+function rootHashes(blobs: StatementSync, rootId: string): string[] | undefined {
+  const row = parseBlobDataRow(blobs.get(rootId))
+  return row ? parseRoot(row.data).hashes : undefined
 }
 
 /** One agent's index row plus its newest run, or null when the index has none. */
@@ -367,14 +358,13 @@ export function readCursorSdkAgent(
       .get(agentId, agentId)
     const modelId = text(run?.["model"])
     const runStatus = text(run?.["status"])
-    const ended = endedRuns(database, agentId)
     const record: CursorSdkAgentRecord = {
       agentId,
       cwd: text(agent["workspace_ref"]) ?? "",
       status: statusOf(text(agent["status"])),
       turns: count(run?.["turns"]),
       running: runStatus !== undefined && !TERMINAL.has(runStatus),
-      ended,
+      runs: agentRuns(database, agentId),
     }
     const name = text(agent["name"])
     if (name) record.name = name

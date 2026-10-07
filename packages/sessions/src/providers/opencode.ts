@@ -1,14 +1,20 @@
 import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "../content.js"
 import { stat } from "node:fs/promises"
 import { OPENCODE_IMPORTED_MODEL } from "../emit.js"
+import { OpenCodeSavedTokens, openCodeTokens } from "../harnesses/opencode.js"
+import { tokenSum } from "../harnesses/tokens.js"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { openNativeStore } from "../read-only-sqlite.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
+import { reduceLiveUpdates, type LiveUpdate } from "../live-content.js"
+import { liveEntryBlocks } from "../live-entries.js"
+import { OpenCodeContent, type OpenCodeToolContent } from "../opencode-content.js"
 import { openCodeDatabasePaths } from "./opencode-location.js"
 import { isOpenCodeInstruction, openCodeNoticeLabel, openCodeTurnFailed } from "./opencode-notice.js"
 import { openCodePlan } from "./opencode-plan.js"
-import { OpenCodeEditInput, OpenCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./opencode-tools.js"
+import { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./opencode-tools.js"
+import { z } from "zod"
 import { compactionEvent, compactionFailedEvent, event, type TranscriptEvent } from "../events.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
@@ -618,7 +624,7 @@ function currentEntries(
   const execution: Execution = { running: false }
   for (const fields of stored) {
     const row = parseStoredRow(fields)
-    if (row) pushCurrent(sink, row, execution, cwd)
+    if (row) pushCurrent(sink, row, execution, sessionId, cwd)
   }
   return sink.done()
 }
@@ -683,7 +689,7 @@ interface Execution {
  * `system` rows (instructions and date updates OpenCode tells the model) and
  * `skill` rows are protocol, not conversation, and are left out.
  */
-function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, cwd: string): void {
+function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, sessionId: string, cwd: string): void {
   const type = row.type ?? jsonText(row.data.type)
   const at = isoOf(timeCreated(row.data) ?? row.timeCreated)
   const steers = type === "user" && execution.running ? execution.prompt : undefined
@@ -720,7 +726,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, cwd:
     return
   }
   if (type === "assistant") {
-    const blocks = withPlanCard(row.id, row.data, assistantContent(row.data.content, cwd))
+    const blocks = storedReply(sessionId, row.id, row.data, cwd)
     const usage = usageFrom(row.data)
     const model = modelFromData(row.data)
     if (blocks.length > 0 || usage)
@@ -834,7 +840,7 @@ function pushLegacy(
       continue
     }
     if (type === "tool") {
-      blocks.push(toolBlock(part.data, "legacy", cwd))
+      blocks.push(legacyTool(part.data, cwd))
       continue
     }
     if (type === "step-finish") usage = usageFrom(part.data) ?? usage
@@ -876,29 +882,70 @@ function withPlanCard(messageId: string, data: JsonObject, blocks: EntryBlock[])
   return card ? [...blocks.filter((block) => block.type !== "text"), card] : blocks
 }
 
-function assistantContent(value: JsonValue | undefined, cwd: string): EntryBlock[] {
-  if (!Array.isArray(value)) return []
-  const blocks: EntryBlock[] = []
-  for (const part of value) {
-    if (!isJsonObject(part)) continue
-    const type = jsonText(part.type)
-    if (type === "text") {
-      const text = jsonText(part.text)
-      if (text) blocks.push({ type: "text", text })
-      continue
+const StoredToolContent = z.union([
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({ type: z.literal("file"), name: z.string().optional(), mime: z.string(), uri: z.string() }),
+])
+const StoredTool = z.object({
+  type: z.literal("tool"),
+  id: z.string(),
+  name: z.string(),
+  state: z.object({
+    status: z.string(),
+    input: z.json().optional(),
+    content: z.array(z.json()).optional(),
+    metadata: z.json().optional(),
+    error: z.object({ type: z.string(), message: z.string() }).optional(),
+  }).optional(),
+})
+const StoredPart = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({ type: z.literal("reasoning"), text: z.string() }),
+  StoredTool,
+])
+
+/**
+ * A current assistant message as the live projection draws it: each part it
+ * keeps goes in as the event that streamed it (`OpenCodeContent`). A tool
+ * keeps the call id it is saved under.
+ */
+function storedReply(sessionId: string, messageId: string, data: JsonObject, cwd: string): EntryBlock[] {
+  const projection = new OpenCodeContent(sessionId, cwd)
+  const updates: LiveUpdate[] = []
+  projection.stepStarted(sessionId, messageId, jsonText(data.agent) ?? "")
+  const parts = Array.isArray(data.content) ? data.content : []
+  parts.forEach((part, ordinal) => {
+    const read = StoredPart.safeParse(part).data
+    if (read?.type === "text") {
+      updates.push(...projection.text(sessionId, messageId, ordinal, read.text))
+      projection.textEnded(sessionId, messageId, ordinal, read.text)
+      return
     }
-    if (type === "reasoning") {
-      const text = jsonText(part.text)
-      if (text) blocks.push({ type: "thinking", text })
-      continue
+    if (read?.type === "reasoning") return void updates.push(...projection.reasoning(sessionId, messageId, ordinal, read.text))
+    if (!read) {
+      for (const attachment of fileParts([part])) updates.push({ kind: "attachment", attachment })
+      return
     }
-    if (type === "file") blocks.push(...fileParts([part]))
-    if (type === "tool") blocks.push(toolBlock(part, "current", cwd))
-  }
-  return blocks
+    const tool = read
+    updates.push(...projection.toolStarted(sessionId, tool.id, tool.name))
+    const state = tool.state
+    if (!state || state.status === "pending") return
+    updates.push(...projection.toolCalled(sessionId, tool.id, state.input ?? {}))
+    const content = state.content?.flatMap((item): OpenCodeToolContent[] => {
+      const read = StoredToolContent.safeParse(item).data
+      return read ? [read] : []
+    })
+    if (state.status === "completed") updates.push(...projection.toolEnded(sessionId, tool.id, { content, metadata: state.metadata }))
+    else if (state.status === "error") updates.push(...projection.toolEnded(sessionId, tool.id, { content, error: state.error ?? { type: "error", message: "" } }))
+  })
+  updates.push(...projection.stepEnded(sessionId, messageId, jsonText(data.finish)))
+  const session = `${sessionId}:`
+  return liveEntryBlocks(reduceLiveUpdates([], updates)).map((block) =>
+    block.type === "tool" && block.id?.startsWith(session) ? { ...block, id: block.id.slice(session.length) } : block)
 }
 
-function toolBlock(data: JsonObject, kind: StoreKind, cwd: string): ToolBlock {
+/** A legacy (OpenCode 1.x) `part` row's tool. */
+function legacyTool(data: JsonObject, cwd: string): ToolBlock {
   const state = jsonObject(data.state)
   const status = state ? jsonText(state.status) : undefined
   const name = jsonText(data.tool) ?? jsonText(data.name) ?? "tool"
@@ -916,43 +963,32 @@ function toolBlock(data: JsonObject, kind: StoreKind, cwd: string): ToolBlock {
   const attachments = fileParts(state.attachments ?? state.content)
   if (attachments.length) block.attachments = attachments
   if (status === "completed") {
-    const output =
-      kind === "legacy"
-        ? jsonText(state.output)
-        : contentText(state.content) || formatJson(state.result)
-    block.output = clip(normalizeToolOutput(output))
-    if (OpenCodeFailedExit.safeParse(state.metadata).success) block.error = true
+    block.output = clip(normalizeToolOutput(jsonText(state.output)))
+    if (openCodeFailedExit(state.metadata)) block.error = true
     return block
   }
   if (status === "error") {
-    const error =
-      kind === "legacy"
-        ? jsonText(state.error)
-        : contentText(state.content) || errorText(state.error)
-    block.output = clip(normalizeToolOutput(error))
-    if (kind === "current" && isAborted(state.error)) block.canceled = true
-    else block.error = true
+    block.output = clip(normalizeToolOutput(jsonText(state.error)))
+    block.error = true
   }
   if (/cancel/i.test(status ?? "")) block.canceled = true
   return block
 }
 
 function usageFrom(data: JsonObject): TurnUsage | undefined {
-  const tokens = jsonObject(data.tokens)
-  const cache = tokens ? jsonObject(tokens.cache) : undefined
-  const values = {
-    input: tokens ? jsonNumber(tokens.input) : undefined,
-    output: tokens ? jsonNumber(tokens.output) : undefined,
-    cacheRead: cache ? jsonNumber(cache.read) : undefined,
-    cacheWrite: cache ? jsonNumber(cache.write) : undefined,
-    costUsd: jsonNumber(data.cost),
+  const tokens = OpenCodeSavedTokens.parse(data.tokens)
+  const cost = jsonNumber(data.cost)
+  if (!tokens && cost === undefined) return undefined
+  const usage: TurnUsage = {}
+  if (tokens) {
+    const counted = openCodeTokens(tokens)
+    usage.input = counted.input
+    usage.output = counted.output
+    usage.cacheRead = counted.cacheRead
+    usage.cacheWrite = counted.cacheWrite
   }
-  const usage = Object.fromEntries(
-    Object.entries(values).filter(
-      (entry): entry is [string, number] => entry[1] !== undefined
-    )
-  ) satisfies TurnUsage
-  return Object.keys(usage).length > 0 ? usage : undefined
+  if (cost !== undefined) usage.costUsd = cost
+  return usage
 }
 
 function modelFromSession(
@@ -1001,11 +1037,8 @@ function compactionTrigger(reason: string | undefined): "automatic" | "manual" |
 
 /** Context tokens of one step, as the live session reads them. */
 function contextTokens(data: JsonObject): number | undefined {
-  const tokens = jsonObject(data.tokens)
-  if (!tokens) return undefined
-  const cache = jsonObject(tokens.cache)
-  const counts = [tokens.input, tokens.output, tokens.reasoning, cache?.read, cache?.write].map(jsonNumber)
-  const total = counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
+  const tokens = OpenCodeSavedTokens.parse(data.tokens)
+  const total = tokens ? tokenSum(openCodeTokens(tokens)) : 0
   return total > 0 ? total : undefined
 }
 
@@ -1058,11 +1091,6 @@ function isInterrupted(data: JsonObject): boolean {
   )
 }
 
-/** OpenCode 2 records a call the user stopped as an `aborted` error. */
-function isAborted(value: JsonValue | undefined): boolean {
-  return isJsonObject(value) && jsonText(value.type) === "aborted"
-}
-
 function errorText(value: JsonValue | undefined): string {
   if (isStringValue(value)) return value
   if (!isJsonObject(value)) return ""
@@ -1072,21 +1100,6 @@ function errorText(value: JsonValue | undefined): string {
   return data ? (jsonText(data.message) ?? "") : ""
 }
 
-function contentText(value: JsonValue | undefined): string {
-  if (isStringValue(value)) return value
-  if (Array.isArray(value))
-    return value.map(contentText).filter(Boolean).join("\n")
-  if (!isJsonObject(value)) return ""
-  const text = jsonText(value.text)
-  if (text) return text
-  if (
-    isStringValue(value.value) ||
-    isNumberValue(value.value) ||
-    isBooleanValue(value.value)
-  )
-    return String(value.value)
-  return value.content !== undefined ? contentText(value.content) : ""
-}
 
 function parseStoredRow(fields: SqliteFields): StoredRow | null {
   const id = sqliteText(fields.id)

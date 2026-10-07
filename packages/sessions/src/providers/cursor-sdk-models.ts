@@ -1,3 +1,4 @@
+import type { CursorSdkModelSelection } from "../cursor-sdk-content.js"
 import type { HarnessModelCatalog } from "../model-catalog.js"
 import {
   modelByIdentity,
@@ -48,11 +49,6 @@ export const CURSOR_PLAN_OPTION: ModelOption = {
   label: "Plan mode",
   role: "plan",
   current: false,
-}
-
-export interface CursorSdkModelSelection {
-  id: string
-  params?: { id: string; value: string }[]
 }
 
 /**

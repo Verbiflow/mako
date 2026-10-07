@@ -2,6 +2,8 @@ import { basename, isAbsolute, join } from "node:path"
 import { z } from "zod"
 import type { ToolDetail } from "../content.js"
 
+type JsonValue = string | number | boolean | null | { readonly [key: string]: JsonValue | undefined } | readonly JsonValue[]
+
 /** The fields of an OpenCode tool's input that name a file and a change to it. */
 export const OpenCodeEditInput = z.object({ path: z.string().optional(), filePath: z.string().optional(), oldString: z.string().optional(), newString: z.string().optional(), content: z.string().optional() })
 
@@ -23,9 +25,15 @@ export function openCodeFileName(name: string | undefined): string {
   return name ? basename(name) : "Attachment"
 }
 
+const ExitMetadata = z.object({ exit: z.number().nullish().catch(undefined) }).nullish().catch(undefined)
+
 /**
- * A tool result's metadata when its shell exited non-zero. OpenCode 2.0.1
- * keeps such a command `completed`, `exit: 1`, its output ending "Command
- * exited with code 1."; the window shows it failed, as every harness's.
+ * Whether a tool result's metadata says its shell exited non-zero. OpenCode
+ * 2.0.1 keeps such a command `completed`, `exit: 1`, its output ending
+ * "Command exited with code 1."; the window shows it failed, as every
+ * harness's. Most results carry no `exit`, so the schema never fails.
  */
-export const OpenCodeFailedExit = z.object({ exit: z.number().refine((code) => code !== 0) })
+export function openCodeFailedExit(metadata: JsonValue | undefined): boolean {
+  const exit = ExitMetadata.parse(metadata)?.exit
+  return exit != null && exit !== 0
+}

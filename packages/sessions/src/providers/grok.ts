@@ -1,7 +1,7 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { AcpSavedTurns, acpSavedNotification, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { GROK_ACP_HOOKS } from "../harnesses/grok.js"
+import { GROK_ACP_HOOKS, grokCost, grokTokens, GrokTurnUsage } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
 import type { LiveBlock } from "../live-content.js"
 import { backgroundCommandLabel, PROVIDER_TURN_FALLBACK, subagentLabel } from "../provider-turn.js"
@@ -32,7 +32,7 @@ import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTER
 
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { readdir, readFile, stat, rm } from "node:fs/promises"
 import {
   clip,
@@ -404,30 +404,12 @@ function isHiddenSession(
 }
 
 function parseUsage(value: JsonValue | undefined): TurnUsage | undefined {
-  const usage = objectValue(value)
+  const usage = GrokTurnUsage.safeParse(value).data
   if (!usage) return undefined
-  const input = numberValue(usage["inputTokens"])
-  const output = numberValue(usage["outputTokens"])
-  const cacheRead = numberValue(usage["cachedReadTokens"])
-  const cacheWrite = numberValue(usage["cacheCreationTokens"])
-  const costTicks = numberValue(usage["costUsdTicks"])
-  if (
-    input === undefined &&
-    output === undefined &&
-    cacheRead === undefined &&
-    cacheWrite === undefined &&
-    costTicks === undefined
-  ) {
-    return undefined
-  }
-  const parsed: TurnUsage = {}
-  // Grok's turn totals count cached input inside `inputTokens`; Mako counts it apart.
-  if (input !== undefined) parsed.input = Math.max(0, input - (cacheRead ?? 0) - (cacheWrite ?? 0))
-  if (output !== undefined) parsed.output = output
-  if (cacheRead !== undefined) parsed.cacheRead = cacheRead
-  if (cacheWrite !== undefined) parsed.cacheWrite = cacheWrite
-  // Grok's own documentation: 1 USD is 10^10 ticks.
-  if (costTicks !== undefined) parsed.costUsd = costTicks / 10_000_000_000
+  const { input, output, cacheRead, cacheWrite } = grokTokens(usage)
+  const parsed: TurnUsage = { input, output, cacheRead, cacheWrite }
+  const cost = grokCost(usage)
+  if (cost !== undefined) parsed.costUsd = cost
   return parsed
 }
 
@@ -519,13 +501,42 @@ function parseLegacyLine(raw: string): LegacyGrokLine | null {
   }
 }
 
+/** Grok's own folder: `GROK_HOME`, else `~/.grok`. Its sessions, sign-in, skills and model cache live there. */
+export function grokHome(env: NodeJS.ProcessEnv, home = homedir()): string {
+  return env.GROK_HOME || join(home, ".grok")
+}
+
+/**
+ * The working directory a folder under Grok's `sessions` stands for. Grok
+ * names it by the URL-encoded path, or, past 255 bytes, by a `slug-hash`
+ * with the path in `.cwd` (`decode_cwd_from_dirname`, xai-grok-config).
+ */
+export function grokWorkspaceCwd(folder: string): string | undefined {
+  try {
+    const decoded = decodeURIComponent(basename(folder))
+    if (decoded.startsWith("/")) return decoded
+  } catch {
+    // A slug-hash name is not URL-encoded; its path is in `.cwd`.
+  }
+  try {
+    return readFileSync(join(folder, ".cwd"), "utf8").trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
 export class GrokProvider implements SessionProvider {
   harness = "grok" as const
   displayName = "Grok"
   private root: string
 
-  constructor(home = homedir()) {
-    this.root = join(home, ".grok", "sessions")
+  /**
+   * `env` is the environment Grok runs with. The process's own is read only
+   * for the default home: a provider built on another home is an isolated
+   * world (a fixture, a mirror).
+   */
+  constructor(home?: string, env: NodeJS.ProcessEnv = home === undefined ? process.env : {}) {
+    this.root = join(grokHome(env, home), "sessions")
   }
 
   roots(): string[] {
