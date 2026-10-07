@@ -483,79 +483,137 @@ export class EntrySink {
   private maxCharacters: number
   private droppedEntries = 0
   private droppedUsers = 0
-  entries: ThreadEntry[] = []
+  private list: ThreadEntry[] = []
+  /**
+   * The weights of the settled entries, every one but the last: those were
+   * cleaned and weighed once. The last entry is the one still being
+   * written; a translator that changes an earlier one says so with `edited`.
+   */
+  private weights: number[] = []
+  private weighed = 0
+  /** The first entry pushed, replaced or cut since the last snapshot. */
+  private touched = 0
+  /** `droppedEntries` at the last snapshot. */
+  private reported = 0
+  private unchangedCount = 0
 
   constructor(max = 6000, maxCharacters = 32 * 1024 * 1024) {
     this.max = max
     this.maxCharacters = maxCharacters
   }
 
+  /**
+   * What the sink holds, oldest first. Change it through `push`, `replace`
+   * and `truncate`; an entry pushed earlier than the last and then changed
+   * in place must be reported with `edited`.
+   */
+  get entries(): readonly ThreadEntry[] {
+    return this.list
+  }
+
+  /**
+   * How many leading entries the last snapshot returned as the one before it
+   * did. The last entry never counts: it is the one still being written.
+   */
+  get unchanged(): number {
+    return this.unchangedCount
+  }
+
+  /** Records that a pushed entry changed in place. */
+  edited(entry: ThreadEntry): void {
+    const index = this.list.lastIndexOf(entry)
+    if (index >= 0) this.unsettle(index)
+  }
+
   push(entry: ThreadEntry): void {
-    this.entries.push(entry)
-    if (this.entries.length > this.max) this.drop(Math.ceil(this.max / 4))
+    this.touched = Math.min(this.touched, this.list.length)
+    this.list.push(entry)
+    if (this.list.length > this.max) this.drop(Math.ceil(this.max / 4))
+  }
+
+  replace(index: number, entry: ThreadEntry): void {
+    this.list[index] = entry
+    this.unsettle(index)
+  }
+
+  truncate(length: number): void {
+    if (length >= this.list.length) return
+    this.list.length = length
+    this.unsettle(length)
   }
 
   snapshot(): ThreadEntry[] {
-    for (const entry of this.entries) {
-      if (entry.kind === "user") {
-        entry.text = withoutMakoFraming(entry.text)
-        const portable = extractAttachmentEnvelope(entry.text)
-        if (portable.attachments.length) {
-          entry.text = portable.text
-          entry.attachments = [
-            ...(entry.attachments ?? []),
-            ...portable.attachments,
-          ]
-        }
-      } else if (entry.kind === "assistant") {
-        if (
-          entry.blocks.some(
-            (block) =>
-              block.type === "text" && block.text.includes("<mako-attachments>")
-          )
-        )
-          entry.blocks = entry.blocks.flatMap((block): EntryBlock[] => {
-            if (block.type !== "text") return [block]
-            const portable = extractAttachmentEnvelope(block.text)
-            return portable.attachments.length
-              ? [{ type: "text", text: portable.text }, ...portable.attachments]
-              : [block]
-          })
-      }
+    const last = this.list.length - 1
+    for (let index = this.weights.length; index <= last; index++) {
+      const entry = this.list[index]!
+      cleanEntry(entry)
+      if (index === last) break
+      const weight = entryCharacters(entry)
+      this.weights.push(weight)
+      this.weighed += weight
     }
-    let characters = this.entries.reduce(
-      (sum, entry) => sum + entryCharacters(entry),
-      0
-    )
-    while (this.entries.length > 1 && characters > this.maxCharacters) {
-      const count = Math.max(1, Math.ceil(this.entries.length / 8))
-      const removed = this.entries.slice(0, count)
-      characters -= removed.reduce(
-        (sum, entry) => sum + entryCharacters(entry),
-        0
-      )
+    const tail = last >= this.weights.length ? entryCharacters(this.list[last]!) : 0
+    let characters = this.weighed + tail
+    while (this.list.length > 1 && characters > this.maxCharacters) {
+      const count = Math.max(1, Math.ceil(this.list.length / 8))
+      for (let index = 0; index < count; index++) characters -= this.weights[index]!
       this.drop(count)
     }
-    return this.droppedEntries > 0
+    const header = this.droppedEntries > 0 ? 1 : 0
+    this.unchangedCount = this.droppedEntries === this.reported ? header + Math.max(0, Math.min(this.touched, this.list.length - 1)) : 0
+    this.reported = this.droppedEntries
+    this.touched = this.list.length
+    return header
       ? [
           {
             kind: "event",
             label: "Earlier history not shown",
             detail: `${this.droppedEntries} earlier entries (${this.droppedUsers} user turns) remain in the native session file`,
           },
-          ...this.entries,
+          ...this.list,
         ]
-      : this.entries
+      : this.list
   }
 
   done(): ThreadEntry[] {
     return this.snapshot()
   }
 
+  private unsettle(index: number): void {
+    this.touched = Math.min(this.touched, index)
+    if (index >= this.weights.length) return
+    for (const weight of this.weights.splice(index)) this.weighed -= weight
+  }
+
   private drop(count: number): void {
-    const cut = this.entries.splice(0, count)
+    const cut = this.list.splice(0, count)
     this.droppedEntries += cut.length
     this.droppedUsers += cut.filter((entry) => entry.kind === "user").length
+    for (const weight of this.weights.splice(0, count)) this.weighed -= weight
+    this.touched = 0
+  }
+}
+
+/**
+ * Takes Mako's own framing out of an entry: the wrapper it sends around a
+ * prompt, and attachments it carried in the text for a harness that takes
+ * none. Running it again changes nothing.
+ */
+export function cleanEntry(entry: ThreadEntry): void {
+  if (entry.kind === "user") {
+    entry.text = withoutMakoFraming(entry.text)
+    const portable = extractAttachmentEnvelope(entry.text)
+    if (portable.attachments.length) {
+      entry.text = portable.text
+      entry.attachments = [...(entry.attachments ?? []), ...portable.attachments]
+    }
+  } else if (entry.kind === "assistant") {
+    if (entry.blocks.some((block) => block.type === "text" && block.text.includes("<mako-attachments>")))
+      entry.blocks = entry.blocks.flatMap((block): EntryBlock[] => {
+        if (block.type !== "text") return [block]
+        const portable = extractAttachmentEnvelope(block.text)
+        return portable.attachments.length ? [{ type: "text", text: portable.text }, ...portable.attachments] : [block]
+      })
   }
 }
 

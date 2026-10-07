@@ -130,17 +130,17 @@ export function proposedPlanBlock(id: string, text: string): ProposedPlan | unde
 export class ProposedPlans {
   private readonly placed = new Map<string, ProposedPlan>()
 
-  /** The card to place for a new plan; a revision or a blank plan places none. */
-  propose(id: string, text: string): ProposedPlan | undefined {
+  /** The card to place for a new plan, or the placed card a revision rewrote; a blank plan is neither. */
+  propose(id: string, text: string): { card: ProposedPlan; revised: boolean } | undefined {
     const block = proposedPlanBlock(id, text)
     if (!block) return undefined
     const placed = this.placed.get(id)
     if (!placed) {
       this.placed.set(id, block)
-      return block
+      return { card: block, revised: false }
     }
     delete placed.truncated
     Object.assign(placed, block)
-    return undefined
+    return { card: placed, revised: true }
   }
 }

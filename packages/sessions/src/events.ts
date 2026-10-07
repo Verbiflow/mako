@@ -125,6 +125,15 @@ export function compactionEvent(compaction: Compaction = {}): TranscriptEvent {
   )
 }
 
+/**
+ * `marker` as the person's own compaction. Grok 1.0.46 reports /compact
+ * with `auto_compact_completed`, the notice of its own compactions.
+ */
+export function manualCompaction<T extends Pick<TranscriptEvent, "label" | "detail">>(marker: T): T {
+  if (marker.label !== CONTEXT_COMPACTED || !marker.detail?.startsWith(TRIGGER.automatic)) return marker
+  return { ...marker, detail: TRIGGER.manual + marker.detail.slice(TRIGGER.automatic.length) }
+}
+
 /** Elapsed time at the precision a person reads it: "8s", "1m 04s", "1h 02m". */
 export function durationText(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000))

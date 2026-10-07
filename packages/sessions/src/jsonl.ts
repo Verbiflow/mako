@@ -11,7 +11,7 @@
 
 import { statSync } from "node:fs"
 import { open } from "node:fs/promises"
-import { EntrySink, type ThreadEntry } from "./format.js"
+import type { ThreadEntry } from "./format.js"
 import type { SessionFollower, SessionUpdate } from "./providers/types.js"
 
 const CHUNK = 512 * 1024
@@ -21,8 +21,14 @@ const MAX_FOLLOW_RESET_BYTES = 64 * 1024 * 1024
 export interface LineTranslator {
   push(raw: string): void
   snapshot(): ThreadEntry[]
-  commitBatch?(): void
   readonly needsReset?: boolean
+  /**
+   * How many leading entries the last `snapshot` returned exactly as the one
+   * before it did. A follower serializes and compares only the rest, so a
+   * batch costs what changed rather than the whole conversation. Without it
+   * every entry is compared.
+   */
+  readonly unchanged?: number
 }
 
 type JsonScalar = boolean | number | string | null
@@ -30,10 +36,6 @@ type JsonValue = JsonScalar | JsonRecord | JsonValue[]
 
 interface JsonRecord {
   [key: string]: JsonValue | undefined
-}
-
-export function snapshotSink(sink: EntrySink): ThreadEntry[] {
-  return sink.snapshot()
 }
 
 interface LineRead {
@@ -233,7 +235,6 @@ export function createJsonlFollower(
           Math.max(0, read.size - MAX_FOLLOW_RESET_BYTES),
           parser.push
         )
-        parser.commitBatch?.()
         cursor = read.nextByte
         identity = read.identity
         synchronized = true
@@ -248,7 +249,6 @@ export function createJsonlFollower(
         }
       }
 
-      parser.commitBatch?.()
       if (!synchronized && parser.needsReset) {
         parser = createTranslator()
         read = await readLineBatch(
@@ -256,7 +256,6 @@ export function createJsonlFollower(
           Math.max(0, read.size - MAX_FOLLOW_RESET_BYTES),
           parser.push
         )
-        parser.commitBatch?.()
         cursor = read.nextByte
         identity = read.identity
         synchronized = true
@@ -274,31 +273,20 @@ export function createJsonlFollower(
       cursor = Math.max(cursor, read.nextByte)
       identity = read.identity
       const current = parser.snapshot()
-      const currentValues = serializeEntries(current)
-      const appended =
-        current.length >= previousValues.length &&
-        previousValues.every((entry, index) => entry === currentValues[index])
-      let replaceFrom: number | undefined
-      if (!appended) {
-        replaceFrom = 0
-        const shared = Math.min(previousValues.length, current.length)
-        while (
-          replaceFrom < shared &&
-          previousValues[replaceFrom] === currentValues[replaceFrom]
-        ) {
-          replaceFrom += 1
-        }
-      }
-      const entries = appended
-        ? current.slice(previousValues.length)
-        : current.slice(replaceFrom)
+      const kept = Math.min(parser.unchanged ?? 0, previousValues.length, current.length)
+      const changed = serializeEntries(current.slice(kept))
+      const shared = Math.min(previousValues.length, current.length)
+      let replaceFrom = kept
+      while (replaceFrom < shared && previousValues[replaceFrom] === changed[replaceFrom - kept]) replaceFrom += 1
+      const appended = replaceFrom === previousValues.length
       const update: SessionUpdate = {
-        entries: cloneEntries(entries),
+        entries: cloneEntries(current.slice(replaceFrom)),
         nextByte: cursor,
         replace: !appended,
       }
-      if (replaceFrom !== undefined) update.replaceFrom = replaceFrom
-      previousValues = currentValues
+      if (!appended) update.replaceFrom = replaceFrom
+      previousValues.length = kept
+      for (const value of changed) previousValues.push(value)
       return update
     },
   }
