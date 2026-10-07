@@ -1,0 +1,3710 @@
+{
+  "harness": "claude",
+  "version": "2.1.283",
+  "on": "2026-10-06",
+  "source": "the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off",
+  "configurations": [
+    {
+      "name": "default",
+      "tools": {
+        "Agent": {
+          "form": "function",
+          "description": {
+            "chars": 1668,
+            "sha": "645950071bae"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "subagent_type": {
+              "type": "string",
+              "required": false
+            },
+            "model": {
+              "type": "enum",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "AskUserQuestion": {
+          "form": "function",
+          "description": {
+            "chars": 1097,
+            "sha": "80bb13574cbf"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            },
+            "annotations": {
+              "type": "object",
+              "required": false
+            },
+            "metadata": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "Bash": {
+          "form": "function",
+          "description": {
+            "chars": 1315,
+            "sha": "a2ebad367df5"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Edit": {
+          "form": "function",
+          "description": {
+            "chars": 360,
+            "sha": "2eaaa8e08e0b"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "ListAgents": {
+          "form": "function",
+          "description": {
+            "chars": 777,
+            "sha": "398d4802fc23"
+          },
+          "parameters": {
+            "channel": {
+              "type": "string",
+              "required": false
+            },
+            "q": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Read": {
+          "form": "function",
+          "description": {
+            "chars": 790,
+            "sha": "80fb15d2d15c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ReportFindings": {
+          "form": "function",
+          "description": {
+            "chars": 574,
+            "sha": "59ea4187fcd5"
+          },
+          "parameters": {
+            "level": {
+              "type": "enum",
+              "required": false
+            },
+            "findings": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "ScheduleWakeup": {
+          "form": "function",
+          "description": {
+            "chars": 3396,
+            "sha": "cd114f81a9f2"
+          },
+          "parameters": {
+            "delaySeconds": {
+              "type": "number",
+              "required": false
+            },
+            "reason": {
+              "type": "string",
+              "required": false
+            },
+            "prompt": {
+              "type": "string",
+              "required": false
+            },
+            "stop": {
+              "type": "boolean",
+              "required": false
+            },
+            "noop": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Skill": {
+          "form": "function",
+          "description": {
+            "chars": 1417,
+            "sha": "a58970596b9b"
+          },
+          "parameters": {
+            "skill": {
+              "type": "string",
+              "required": true
+            },
+            "args": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ToolSearch": {
+          "form": "function",
+          "description": {
+            "chars": 953,
+            "sha": "88033eceb421"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "max_results": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "Workflow": {
+          "form": "function",
+          "description": {
+            "chars": 3480,
+            "sha": "78a113f0d17e"
+          },
+          "parameters": {
+            "script": {
+              "type": "string",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "title": {
+              "type": "string",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "scriptPath": {
+              "type": "string",
+              "required": false
+            },
+            "resumeFromRunId": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Write": {
+          "form": "function",
+          "description": {
+            "chars": 240,
+            "sha": "c5d31bd00109"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "CronCreate": {
+          "form": "function",
+          "description": {
+            "chars": 2595,
+            "sha": "0ef63049ccf6"
+          },
+          "parameters": {
+            "cron": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "recurring": {
+              "type": "boolean",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "CronDelete": {
+          "form": "function",
+          "description": {
+            "chars": 100,
+            "sha": "8e4b55fe3c76"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "CronList": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "e828588f12f7"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "DesignSync": {
+          "form": "function",
+          "description": {
+            "chars": 3742,
+            "sha": "8d8f442d32f8"
+          },
+          "parameters": {
+            "method": {
+              "type": "enum",
+              "required": true
+            },
+            "projectId": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "writes": {
+              "type": "array",
+              "required": false
+            },
+            "deletes": {
+              "type": "array",
+              "required": false
+            },
+            "planId": {
+              "type": "string",
+              "required": false
+            },
+            "files": {
+              "type": "array",
+              "required": false
+            },
+            "paths": {
+              "type": "array",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "assets": {
+              "type": "array",
+              "required": false
+            },
+            "localDir": {
+              "type": "string",
+              "required": false
+            },
+            "counts": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "EnterPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 4011,
+            "sha": "369ad265a133"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "EnterWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 3220,
+            "sha": "6e2930159e8f"
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 1849,
+            "sha": "9a76355a2730"
+          },
+          "parameters": {
+            "allowedPrompts": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 1923,
+            "sha": "63e763304c95"
+          },
+          "parameters": {
+            "action": {
+              "type": "enum",
+              "required": true
+            },
+            "discard_changes": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "Monitor": {
+          "form": "function",
+          "description": {
+            "chars": 6354,
+            "sha": "0d17339834b6"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "number",
+              "required": true
+            },
+            "command": {
+              "type": "string",
+              "required": false
+            },
+            "ws": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "NotebookEdit": {
+          "form": "function",
+          "description": {
+            "chars": 619,
+            "sha": "88008ce01b87"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_id": {
+              "type": "string",
+              "required": false
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "PushNotification": {
+          "form": "function",
+          "description": {
+            "chars": 1362,
+            "sha": "fbfbfe6d3a26"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "status": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "SendMessage": {
+          "form": "function",
+          "description": {
+            "chars": 4259,
+            "sha": "6b002c247f9b"
+          },
+          "parameters": {
+            "to": {
+              "type": "string",
+              "required": true
+            },
+            "summary": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "notify_when_idle": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "TaskStop": {
+          "form": "function",
+          "description": {
+            "chars": 378,
+            "sha": "c712879f9958"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": false
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "WebFetch": {
+          "form": "function",
+          "description": {
+            "chars": 469,
+            "sha": "28495ef9c5ab"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "WebSearch": {
+          "form": "function",
+          "description": {
+            "chars": 310,
+            "sha": "8d34a6d547a8"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array",
+              "required": false
+            },
+            "blocked_domains": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        }
+      }
+    },
+    {
+      "name": "acceptEdits",
+      "tools": {
+        "Agent": {
+          "form": "function",
+          "description": {
+            "chars": 1668,
+            "sha": "645950071bae"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "subagent_type": {
+              "type": "string",
+              "required": false
+            },
+            "model": {
+              "type": "enum",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "AskUserQuestion": {
+          "form": "function",
+          "description": {
+            "chars": 1097,
+            "sha": "80bb13574cbf"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            },
+            "annotations": {
+              "type": "object",
+              "required": false
+            },
+            "metadata": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "Bash": {
+          "form": "function",
+          "description": {
+            "chars": 1315,
+            "sha": "a2ebad367df5"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Edit": {
+          "form": "function",
+          "description": {
+            "chars": 360,
+            "sha": "2eaaa8e08e0b"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "ListAgents": {
+          "form": "function",
+          "description": {
+            "chars": 777,
+            "sha": "398d4802fc23"
+          },
+          "parameters": {
+            "channel": {
+              "type": "string",
+              "required": false
+            },
+            "q": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Read": {
+          "form": "function",
+          "description": {
+            "chars": 790,
+            "sha": "80fb15d2d15c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ReportFindings": {
+          "form": "function",
+          "description": {
+            "chars": 574,
+            "sha": "59ea4187fcd5"
+          },
+          "parameters": {
+            "level": {
+              "type": "enum",
+              "required": false
+            },
+            "findings": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "ScheduleWakeup": {
+          "form": "function",
+          "description": {
+            "chars": 3396,
+            "sha": "cd114f81a9f2"
+          },
+          "parameters": {
+            "delaySeconds": {
+              "type": "number",
+              "required": false
+            },
+            "reason": {
+              "type": "string",
+              "required": false
+            },
+            "prompt": {
+              "type": "string",
+              "required": false
+            },
+            "stop": {
+              "type": "boolean",
+              "required": false
+            },
+            "noop": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Skill": {
+          "form": "function",
+          "description": {
+            "chars": 1417,
+            "sha": "a58970596b9b"
+          },
+          "parameters": {
+            "skill": {
+              "type": "string",
+              "required": true
+            },
+            "args": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ToolSearch": {
+          "form": "function",
+          "description": {
+            "chars": 953,
+            "sha": "88033eceb421"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "max_results": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "Workflow": {
+          "form": "function",
+          "description": {
+            "chars": 3480,
+            "sha": "78a113f0d17e"
+          },
+          "parameters": {
+            "script": {
+              "type": "string",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "title": {
+              "type": "string",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "scriptPath": {
+              "type": "string",
+              "required": false
+            },
+            "resumeFromRunId": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Write": {
+          "form": "function",
+          "description": {
+            "chars": 240,
+            "sha": "c5d31bd00109"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "CronCreate": {
+          "form": "function",
+          "description": {
+            "chars": 2595,
+            "sha": "0ef63049ccf6"
+          },
+          "parameters": {
+            "cron": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "recurring": {
+              "type": "boolean",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "CronDelete": {
+          "form": "function",
+          "description": {
+            "chars": 100,
+            "sha": "8e4b55fe3c76"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "CronList": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "e828588f12f7"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "DesignSync": {
+          "form": "function",
+          "description": {
+            "chars": 3742,
+            "sha": "8d8f442d32f8"
+          },
+          "parameters": {
+            "method": {
+              "type": "enum",
+              "required": true
+            },
+            "projectId": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "writes": {
+              "type": "array",
+              "required": false
+            },
+            "deletes": {
+              "type": "array",
+              "required": false
+            },
+            "planId": {
+              "type": "string",
+              "required": false
+            },
+            "files": {
+              "type": "array",
+              "required": false
+            },
+            "paths": {
+              "type": "array",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "assets": {
+              "type": "array",
+              "required": false
+            },
+            "localDir": {
+              "type": "string",
+              "required": false
+            },
+            "counts": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "EnterPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 4011,
+            "sha": "369ad265a133"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "EnterWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 3220,
+            "sha": "6e2930159e8f"
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 1849,
+            "sha": "9a76355a2730"
+          },
+          "parameters": {
+            "allowedPrompts": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 1923,
+            "sha": "63e763304c95"
+          },
+          "parameters": {
+            "action": {
+              "type": "enum",
+              "required": true
+            },
+            "discard_changes": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "Monitor": {
+          "form": "function",
+          "description": {
+            "chars": 6354,
+            "sha": "0d17339834b6"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "number",
+              "required": true
+            },
+            "command": {
+              "type": "string",
+              "required": false
+            },
+            "ws": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "NotebookEdit": {
+          "form": "function",
+          "description": {
+            "chars": 619,
+            "sha": "88008ce01b87"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_id": {
+              "type": "string",
+              "required": false
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "PushNotification": {
+          "form": "function",
+          "description": {
+            "chars": 1362,
+            "sha": "fbfbfe6d3a26"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "status": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "SendMessage": {
+          "form": "function",
+          "description": {
+            "chars": 4259,
+            "sha": "6b002c247f9b"
+          },
+          "parameters": {
+            "to": {
+              "type": "string",
+              "required": true
+            },
+            "summary": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "notify_when_idle": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "TaskStop": {
+          "form": "function",
+          "description": {
+            "chars": 378,
+            "sha": "c712879f9958"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": false
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "WebFetch": {
+          "form": "function",
+          "description": {
+            "chars": 469,
+            "sha": "28495ef9c5ab"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "WebSearch": {
+          "form": "function",
+          "description": {
+            "chars": 310,
+            "sha": "8d34a6d547a8"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array",
+              "required": false
+            },
+            "blocked_domains": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        }
+      }
+    },
+    {
+      "name": "plan",
+      "tools": {
+        "Agent": {
+          "form": "function",
+          "description": {
+            "chars": 1668,
+            "sha": "645950071bae"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "subagent_type": {
+              "type": "string",
+              "required": false
+            },
+            "model": {
+              "type": "enum",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "AskUserQuestion": {
+          "form": "function",
+          "description": {
+            "chars": 1097,
+            "sha": "80bb13574cbf"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            },
+            "annotations": {
+              "type": "object",
+              "required": false
+            },
+            "metadata": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "Bash": {
+          "form": "function",
+          "description": {
+            "chars": 1005,
+            "sha": "d76c02a8ae0a"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Edit": {
+          "form": "function",
+          "description": {
+            "chars": 360,
+            "sha": "2eaaa8e08e0b"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "ListAgents": {
+          "form": "function",
+          "description": {
+            "chars": 777,
+            "sha": "398d4802fc23"
+          },
+          "parameters": {
+            "channel": {
+              "type": "string",
+              "required": false
+            },
+            "q": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Read": {
+          "form": "function",
+          "description": {
+            "chars": 790,
+            "sha": "80fb15d2d15c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ReportFindings": {
+          "form": "function",
+          "description": {
+            "chars": 574,
+            "sha": "59ea4187fcd5"
+          },
+          "parameters": {
+            "level": {
+              "type": "enum",
+              "required": false
+            },
+            "findings": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "ScheduleWakeup": {
+          "form": "function",
+          "description": {
+            "chars": 3396,
+            "sha": "cd114f81a9f2"
+          },
+          "parameters": {
+            "delaySeconds": {
+              "type": "number",
+              "required": false
+            },
+            "reason": {
+              "type": "string",
+              "required": false
+            },
+            "prompt": {
+              "type": "string",
+              "required": false
+            },
+            "stop": {
+              "type": "boolean",
+              "required": false
+            },
+            "noop": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Skill": {
+          "form": "function",
+          "description": {
+            "chars": 1417,
+            "sha": "a58970596b9b"
+          },
+          "parameters": {
+            "skill": {
+              "type": "string",
+              "required": true
+            },
+            "args": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ToolSearch": {
+          "form": "function",
+          "description": {
+            "chars": 953,
+            "sha": "88033eceb421"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "max_results": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "Workflow": {
+          "form": "function",
+          "description": {
+            "chars": 3480,
+            "sha": "78a113f0d17e"
+          },
+          "parameters": {
+            "script": {
+              "type": "string",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "title": {
+              "type": "string",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "scriptPath": {
+              "type": "string",
+              "required": false
+            },
+            "resumeFromRunId": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Write": {
+          "form": "function",
+          "description": {
+            "chars": 240,
+            "sha": "c5d31bd00109"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "CronCreate": {
+          "form": "function",
+          "description": {
+            "chars": 2595,
+            "sha": "0ef63049ccf6"
+          },
+          "parameters": {
+            "cron": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "recurring": {
+              "type": "boolean",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "CronDelete": {
+          "form": "function",
+          "description": {
+            "chars": 100,
+            "sha": "8e4b55fe3c76"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "CronList": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "e828588f12f7"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "DesignSync": {
+          "form": "function",
+          "description": {
+            "chars": 3742,
+            "sha": "8d8f442d32f8"
+          },
+          "parameters": {
+            "method": {
+              "type": "enum",
+              "required": true
+            },
+            "projectId": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "writes": {
+              "type": "array",
+              "required": false
+            },
+            "deletes": {
+              "type": "array",
+              "required": false
+            },
+            "planId": {
+              "type": "string",
+              "required": false
+            },
+            "files": {
+              "type": "array",
+              "required": false
+            },
+            "paths": {
+              "type": "array",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "assets": {
+              "type": "array",
+              "required": false
+            },
+            "localDir": {
+              "type": "string",
+              "required": false
+            },
+            "counts": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "EnterPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 4011,
+            "sha": "369ad265a133"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "EnterWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 3220,
+            "sha": "6e2930159e8f"
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 1849,
+            "sha": "9a76355a2730"
+          },
+          "parameters": {
+            "allowedPrompts": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 1923,
+            "sha": "63e763304c95"
+          },
+          "parameters": {
+            "action": {
+              "type": "enum",
+              "required": true
+            },
+            "discard_changes": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "Monitor": {
+          "form": "function",
+          "description": {
+            "chars": 6354,
+            "sha": "0d17339834b6"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "number",
+              "required": true
+            },
+            "command": {
+              "type": "string",
+              "required": false
+            },
+            "ws": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "NotebookEdit": {
+          "form": "function",
+          "description": {
+            "chars": 619,
+            "sha": "88008ce01b87"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_id": {
+              "type": "string",
+              "required": false
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "PushNotification": {
+          "form": "function",
+          "description": {
+            "chars": 1362,
+            "sha": "fbfbfe6d3a26"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "status": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "SendMessage": {
+          "form": "function",
+          "description": {
+            "chars": 4259,
+            "sha": "6b002c247f9b"
+          },
+          "parameters": {
+            "to": {
+              "type": "string",
+              "required": true
+            },
+            "summary": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "notify_when_idle": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "TaskStop": {
+          "form": "function",
+          "description": {
+            "chars": 378,
+            "sha": "c712879f9958"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": false
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "WebFetch": {
+          "form": "function",
+          "description": {
+            "chars": 469,
+            "sha": "28495ef9c5ab"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "WebSearch": {
+          "form": "function",
+          "description": {
+            "chars": 310,
+            "sha": "8d34a6d547a8"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array",
+              "required": false
+            },
+            "blocked_domains": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        }
+      }
+    },
+    {
+      "name": "dontAsk",
+      "tools": {
+        "Agent": {
+          "form": "function",
+          "description": {
+            "chars": 1668,
+            "sha": "645950071bae"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "subagent_type": {
+              "type": "string",
+              "required": false
+            },
+            "model": {
+              "type": "enum",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "AskUserQuestion": {
+          "form": "function",
+          "description": {
+            "chars": 1097,
+            "sha": "80bb13574cbf"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            },
+            "annotations": {
+              "type": "object",
+              "required": false
+            },
+            "metadata": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "Bash": {
+          "form": "function",
+          "description": {
+            "chars": 1315,
+            "sha": "a2ebad367df5"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Edit": {
+          "form": "function",
+          "description": {
+            "chars": 360,
+            "sha": "2eaaa8e08e0b"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "ListAgents": {
+          "form": "function",
+          "description": {
+            "chars": 777,
+            "sha": "398d4802fc23"
+          },
+          "parameters": {
+            "channel": {
+              "type": "string",
+              "required": false
+            },
+            "q": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Read": {
+          "form": "function",
+          "description": {
+            "chars": 790,
+            "sha": "80fb15d2d15c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ReportFindings": {
+          "form": "function",
+          "description": {
+            "chars": 574,
+            "sha": "59ea4187fcd5"
+          },
+          "parameters": {
+            "level": {
+              "type": "enum",
+              "required": false
+            },
+            "findings": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "ScheduleWakeup": {
+          "form": "function",
+          "description": {
+            "chars": 3396,
+            "sha": "cd114f81a9f2"
+          },
+          "parameters": {
+            "delaySeconds": {
+              "type": "number",
+              "required": false
+            },
+            "reason": {
+              "type": "string",
+              "required": false
+            },
+            "prompt": {
+              "type": "string",
+              "required": false
+            },
+            "stop": {
+              "type": "boolean",
+              "required": false
+            },
+            "noop": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Skill": {
+          "form": "function",
+          "description": {
+            "chars": 1417,
+            "sha": "a58970596b9b"
+          },
+          "parameters": {
+            "skill": {
+              "type": "string",
+              "required": true
+            },
+            "args": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ToolSearch": {
+          "form": "function",
+          "description": {
+            "chars": 953,
+            "sha": "88033eceb421"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "max_results": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "Workflow": {
+          "form": "function",
+          "description": {
+            "chars": 3480,
+            "sha": "78a113f0d17e"
+          },
+          "parameters": {
+            "script": {
+              "type": "string",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "title": {
+              "type": "string",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "scriptPath": {
+              "type": "string",
+              "required": false
+            },
+            "resumeFromRunId": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Write": {
+          "form": "function",
+          "description": {
+            "chars": 240,
+            "sha": "c5d31bd00109"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "CronCreate": {
+          "form": "function",
+          "description": {
+            "chars": 2595,
+            "sha": "0ef63049ccf6"
+          },
+          "parameters": {
+            "cron": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "recurring": {
+              "type": "boolean",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "CronDelete": {
+          "form": "function",
+          "description": {
+            "chars": 100,
+            "sha": "8e4b55fe3c76"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "CronList": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "e828588f12f7"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "DesignSync": {
+          "form": "function",
+          "description": {
+            "chars": 3742,
+            "sha": "8d8f442d32f8"
+          },
+          "parameters": {
+            "method": {
+              "type": "enum",
+              "required": true
+            },
+            "projectId": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "writes": {
+              "type": "array",
+              "required": false
+            },
+            "deletes": {
+              "type": "array",
+              "required": false
+            },
+            "planId": {
+              "type": "string",
+              "required": false
+            },
+            "files": {
+              "type": "array",
+              "required": false
+            },
+            "paths": {
+              "type": "array",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "assets": {
+              "type": "array",
+              "required": false
+            },
+            "localDir": {
+              "type": "string",
+              "required": false
+            },
+            "counts": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "EnterPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 4011,
+            "sha": "369ad265a133"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "EnterWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 3220,
+            "sha": "6e2930159e8f"
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 1849,
+            "sha": "9a76355a2730"
+          },
+          "parameters": {
+            "allowedPrompts": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 1923,
+            "sha": "63e763304c95"
+          },
+          "parameters": {
+            "action": {
+              "type": "enum",
+              "required": true
+            },
+            "discard_changes": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "Monitor": {
+          "form": "function",
+          "description": {
+            "chars": 6354,
+            "sha": "0d17339834b6"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "number",
+              "required": true
+            },
+            "command": {
+              "type": "string",
+              "required": false
+            },
+            "ws": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "NotebookEdit": {
+          "form": "function",
+          "description": {
+            "chars": 619,
+            "sha": "88008ce01b87"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_id": {
+              "type": "string",
+              "required": false
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "PushNotification": {
+          "form": "function",
+          "description": {
+            "chars": 1362,
+            "sha": "fbfbfe6d3a26"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "status": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "SendMessage": {
+          "form": "function",
+          "description": {
+            "chars": 4259,
+            "sha": "6b002c247f9b"
+          },
+          "parameters": {
+            "to": {
+              "type": "string",
+              "required": true
+            },
+            "summary": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "notify_when_idle": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "TaskStop": {
+          "form": "function",
+          "description": {
+            "chars": 378,
+            "sha": "c712879f9958"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": false
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "WebFetch": {
+          "form": "function",
+          "description": {
+            "chars": 469,
+            "sha": "28495ef9c5ab"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "WebSearch": {
+          "form": "function",
+          "description": {
+            "chars": 310,
+            "sha": "8d34a6d547a8"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array",
+              "required": false
+            },
+            "blocked_domains": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        }
+      }
+    },
+    {
+      "name": "auto",
+      "tools": {
+        "Agent": {
+          "form": "function",
+          "description": {
+            "chars": 1668,
+            "sha": "645950071bae"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "subagent_type": {
+              "type": "string",
+              "required": false
+            },
+            "model": {
+              "type": "enum",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "AskUserQuestion": {
+          "form": "function",
+          "description": {
+            "chars": 1097,
+            "sha": "80bb13574cbf"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            },
+            "annotations": {
+              "type": "object",
+              "required": false
+            },
+            "metadata": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "Bash": {
+          "form": "function",
+          "description": {
+            "chars": 1005,
+            "sha": "d76c02a8ae0a"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Edit": {
+          "form": "function",
+          "description": {
+            "chars": 360,
+            "sha": "2eaaa8e08e0b"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "ListAgents": {
+          "form": "function",
+          "description": {
+            "chars": 777,
+            "sha": "398d4802fc23"
+          },
+          "parameters": {
+            "channel": {
+              "type": "string",
+              "required": false
+            },
+            "q": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Read": {
+          "form": "function",
+          "description": {
+            "chars": 790,
+            "sha": "80fb15d2d15c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ReportFindings": {
+          "form": "function",
+          "description": {
+            "chars": 574,
+            "sha": "59ea4187fcd5"
+          },
+          "parameters": {
+            "level": {
+              "type": "enum",
+              "required": false
+            },
+            "findings": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "ScheduleWakeup": {
+          "form": "function",
+          "description": {
+            "chars": 3396,
+            "sha": "cd114f81a9f2"
+          },
+          "parameters": {
+            "delaySeconds": {
+              "type": "number",
+              "required": false
+            },
+            "reason": {
+              "type": "string",
+              "required": false
+            },
+            "prompt": {
+              "type": "string",
+              "required": false
+            },
+            "stop": {
+              "type": "boolean",
+              "required": false
+            },
+            "noop": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Skill": {
+          "form": "function",
+          "description": {
+            "chars": 1417,
+            "sha": "a58970596b9b"
+          },
+          "parameters": {
+            "skill": {
+              "type": "string",
+              "required": true
+            },
+            "args": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ToolSearch": {
+          "form": "function",
+          "description": {
+            "chars": 953,
+            "sha": "88033eceb421"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "max_results": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "Workflow": {
+          "form": "function",
+          "description": {
+            "chars": 3480,
+            "sha": "78a113f0d17e"
+          },
+          "parameters": {
+            "script": {
+              "type": "string",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "title": {
+              "type": "string",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "scriptPath": {
+              "type": "string",
+              "required": false
+            },
+            "resumeFromRunId": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Write": {
+          "form": "function",
+          "description": {
+            "chars": 240,
+            "sha": "c5d31bd00109"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "CronCreate": {
+          "form": "function",
+          "description": {
+            "chars": 2595,
+            "sha": "0ef63049ccf6"
+          },
+          "parameters": {
+            "cron": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "recurring": {
+              "type": "boolean",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "CronDelete": {
+          "form": "function",
+          "description": {
+            "chars": 100,
+            "sha": "8e4b55fe3c76"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "CronList": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "e828588f12f7"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "DesignSync": {
+          "form": "function",
+          "description": {
+            "chars": 3742,
+            "sha": "8d8f442d32f8"
+          },
+          "parameters": {
+            "method": {
+              "type": "enum",
+              "required": true
+            },
+            "projectId": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "writes": {
+              "type": "array",
+              "required": false
+            },
+            "deletes": {
+              "type": "array",
+              "required": false
+            },
+            "planId": {
+              "type": "string",
+              "required": false
+            },
+            "files": {
+              "type": "array",
+              "required": false
+            },
+            "paths": {
+              "type": "array",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "assets": {
+              "type": "array",
+              "required": false
+            },
+            "localDir": {
+              "type": "string",
+              "required": false
+            },
+            "counts": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "EnterPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 4011,
+            "sha": "369ad265a133"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "EnterWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 3220,
+            "sha": "6e2930159e8f"
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 1849,
+            "sha": "9a76355a2730"
+          },
+          "parameters": {
+            "allowedPrompts": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 1923,
+            "sha": "63e763304c95"
+          },
+          "parameters": {
+            "action": {
+              "type": "enum",
+              "required": true
+            },
+            "discard_changes": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "Monitor": {
+          "form": "function",
+          "description": {
+            "chars": 6354,
+            "sha": "0d17339834b6"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "number",
+              "required": true
+            },
+            "command": {
+              "type": "string",
+              "required": false
+            },
+            "ws": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "NotebookEdit": {
+          "form": "function",
+          "description": {
+            "chars": 619,
+            "sha": "88008ce01b87"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_id": {
+              "type": "string",
+              "required": false
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "PushNotification": {
+          "form": "function",
+          "description": {
+            "chars": 1362,
+            "sha": "fbfbfe6d3a26"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "status": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "SendMessage": {
+          "form": "function",
+          "description": {
+            "chars": 4259,
+            "sha": "6b002c247f9b"
+          },
+          "parameters": {
+            "to": {
+              "type": "string",
+              "required": true
+            },
+            "summary": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "notify_when_idle": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "TaskStop": {
+          "form": "function",
+          "description": {
+            "chars": 378,
+            "sha": "c712879f9958"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": false
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "WebFetch": {
+          "form": "function",
+          "description": {
+            "chars": 469,
+            "sha": "28495ef9c5ab"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "WebSearch": {
+          "form": "function",
+          "description": {
+            "chars": 310,
+            "sha": "8d34a6d547a8"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array",
+              "required": false
+            },
+            "blocked_domains": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        }
+      }
+    },
+    {
+      "name": "bypassPermissions",
+      "tools": {
+        "Agent": {
+          "form": "function",
+          "description": {
+            "chars": 1668,
+            "sha": "645950071bae"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "subagent_type": {
+              "type": "string",
+              "required": false
+            },
+            "model": {
+              "type": "enum",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "AskUserQuestion": {
+          "form": "function",
+          "description": {
+            "chars": 1097,
+            "sha": "80bb13574cbf"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            },
+            "annotations": {
+              "type": "object",
+              "required": false
+            },
+            "metadata": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "Bash": {
+          "form": "function",
+          "description": {
+            "chars": 1005,
+            "sha": "d76c02a8ae0a"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Edit": {
+          "form": "function",
+          "description": {
+            "chars": 360,
+            "sha": "2eaaa8e08e0b"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "ListAgents": {
+          "form": "function",
+          "description": {
+            "chars": 777,
+            "sha": "398d4802fc23"
+          },
+          "parameters": {
+            "channel": {
+              "type": "string",
+              "required": false
+            },
+            "q": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Read": {
+          "form": "function",
+          "description": {
+            "chars": 790,
+            "sha": "80fb15d2d15c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ReportFindings": {
+          "form": "function",
+          "description": {
+            "chars": 574,
+            "sha": "59ea4187fcd5"
+          },
+          "parameters": {
+            "level": {
+              "type": "enum",
+              "required": false
+            },
+            "findings": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "ScheduleWakeup": {
+          "form": "function",
+          "description": {
+            "chars": 3396,
+            "sha": "cd114f81a9f2"
+          },
+          "parameters": {
+            "delaySeconds": {
+              "type": "number",
+              "required": false
+            },
+            "reason": {
+              "type": "string",
+              "required": false
+            },
+            "prompt": {
+              "type": "string",
+              "required": false
+            },
+            "stop": {
+              "type": "boolean",
+              "required": false
+            },
+            "noop": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "Skill": {
+          "form": "function",
+          "description": {
+            "chars": 1417,
+            "sha": "a58970596b9b"
+          },
+          "parameters": {
+            "skill": {
+              "type": "string",
+              "required": true
+            },
+            "args": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ToolSearch": {
+          "form": "function",
+          "description": {
+            "chars": 953,
+            "sha": "88033eceb421"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "max_results": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "Workflow": {
+          "form": "function",
+          "description": {
+            "chars": 3480,
+            "sha": "78a113f0d17e"
+          },
+          "parameters": {
+            "script": {
+              "type": "string",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": false
+            },
+            "title": {
+              "type": "string",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "scriptPath": {
+              "type": "string",
+              "required": false
+            },
+            "resumeFromRunId": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "Write": {
+          "form": "function",
+          "description": {
+            "chars": 240,
+            "sha": "c5d31bd00109"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "CronCreate": {
+          "form": "function",
+          "description": {
+            "chars": 2595,
+            "sha": "0ef63049ccf6"
+          },
+          "parameters": {
+            "cron": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "recurring": {
+              "type": "boolean",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "CronDelete": {
+          "form": "function",
+          "description": {
+            "chars": 100,
+            "sha": "8e4b55fe3c76"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "CronList": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "e828588f12f7"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "DesignSync": {
+          "form": "function",
+          "description": {
+            "chars": 3742,
+            "sha": "8d8f442d32f8"
+          },
+          "parameters": {
+            "method": {
+              "type": "enum",
+              "required": true
+            },
+            "projectId": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "writes": {
+              "type": "array",
+              "required": false
+            },
+            "deletes": {
+              "type": "array",
+              "required": false
+            },
+            "planId": {
+              "type": "string",
+              "required": false
+            },
+            "files": {
+              "type": "array",
+              "required": false
+            },
+            "paths": {
+              "type": "array",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "assets": {
+              "type": "array",
+              "required": false
+            },
+            "localDir": {
+              "type": "string",
+              "required": false
+            },
+            "counts": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "EnterPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 4011,
+            "sha": "369ad265a133"
+          },
+          "parameters": {},
+          "deferred": true
+        },
+        "EnterWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 3220,
+            "sha": "6e2930159e8f"
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitPlanMode": {
+          "form": "function",
+          "description": {
+            "chars": 1849,
+            "sha": "9a76355a2730"
+          },
+          "parameters": {
+            "allowedPrompts": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "ExitWorktree": {
+          "form": "function",
+          "description": {
+            "chars": 1923,
+            "sha": "63e763304c95"
+          },
+          "parameters": {
+            "action": {
+              "type": "enum",
+              "required": true
+            },
+            "discard_changes": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "Monitor": {
+          "form": "function",
+          "description": {
+            "chars": 6354,
+            "sha": "0d17339834b6"
+          },
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "number",
+              "required": true
+            },
+            "command": {
+              "type": "string",
+              "required": false
+            },
+            "ws": {
+              "type": "object",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "NotebookEdit": {
+          "form": "function",
+          "description": {
+            "chars": 619,
+            "sha": "88008ce01b87"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_id": {
+              "type": "string",
+              "required": false
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "PushNotification": {
+          "form": "function",
+          "description": {
+            "chars": 1362,
+            "sha": "fbfbfe6d3a26"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "status": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "SendMessage": {
+          "form": "function",
+          "description": {
+            "chars": 4259,
+            "sha": "6b002c247f9b"
+          },
+          "parameters": {
+            "to": {
+              "type": "string",
+              "required": true
+            },
+            "summary": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "notify_when_idle": {
+              "type": "boolean",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "TaskStop": {
+          "form": "function",
+          "description": {
+            "chars": 378,
+            "sha": "c712879f9958"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": false
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            }
+          },
+          "deferred": true
+        },
+        "WebFetch": {
+          "form": "function",
+          "description": {
+            "chars": 469,
+            "sha": "28495ef9c5ab"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "deferred": true
+        },
+        "WebSearch": {
+          "form": "function",
+          "description": {
+            "chars": 310,
+            "sha": "8d34a6d547a8"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array",
+              "required": false
+            },
+            "blocked_domains": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "deferred": true
+        }
+      }
+    }
+  ]
+}

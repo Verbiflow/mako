@@ -1,0 +1,285 @@
+{
+  "harness": "cursor",
+  "version": "1.0.31",
+  "on": "2026-10-06",
+  "source": "the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions",
+  "configurations": [
+    {
+      "name": "sdk",
+      "tools": {
+        "shell": {
+          "form": "function",
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "workingDirectory": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "fileText": {
+              "type": "string",
+              "required": true
+            },
+            "returnFileContentAfterWrite": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "delete": {
+          "form": "function",
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "glob": {
+          "form": "function",
+          "parameters": {
+            "targetDirectory": {
+              "type": "string",
+              "required": false
+            },
+            "globPattern": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "glob": {
+              "type": "string",
+              "required": false
+            },
+            "outputMode": {
+              "type": "string",
+              "required": false
+            },
+            "contextBefore": {
+              "type": "number",
+              "required": false
+            },
+            "contextAfter": {
+              "type": "number",
+              "required": false
+            },
+            "context": {
+              "type": "number",
+              "required": false
+            },
+            "caseInsensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "type": {
+              "type": "string",
+              "required": false
+            },
+            "headLimit": {
+              "type": "number",
+              "required": false
+            },
+            "offset": {
+              "type": "number",
+              "required": false
+            },
+            "multiline": {
+              "type": "boolean",
+              "required": false
+            },
+            "sort": {
+              "type": "string",
+              "required": false
+            },
+            "sortAscending": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "edit": {
+          "form": "function",
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "ls": {
+          "form": "function",
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "ignore": {
+              "type": "array",
+              "required": false
+            }
+          }
+        },
+        "readLints": {
+          "form": "function",
+          "parameters": {
+            "paths": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "mcp": {
+          "form": "function",
+          "parameters": {
+            "args": {
+              "type": "object",
+              "required": false
+            },
+            "providerIdentifier": {
+              "type": "string",
+              "required": false
+            },
+            "toolName": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "generateImage": {
+          "form": "function",
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "filePath": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "recordScreen": {
+          "form": "function",
+          "parameters": {
+            "mode": {
+              "type": "enum",
+              "required": true
+            }
+          }
+        },
+        "semSearch": {
+          "form": "function",
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "targetDirectories": {
+              "type": "array",
+              "required": false
+            },
+            "explanation": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "createPlan": {
+          "form": "function",
+          "parameters": {
+            "plan": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "updateTodos": {
+          "form": "function",
+          "parameters": {
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "task": {
+          "form": "function",
+          "parameters": {
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "subagentType": {
+              "type": "object",
+              "required": false
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "resume": {
+              "type": "string",
+              "required": false
+            },
+            "agentId": {
+              "type": "string",
+              "required": false
+            },
+            "attachments": {
+              "type": "array",
+              "required": false
+            },
+            "mode": {
+              "type": "enum",
+              "required": false
+            },
+            "respondingToMessageIds": {
+              "type": "array",
+              "required": false
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,962 @@
+{
+  "harness": "opencode",
+  "version": "2.0.1",
+  "on": "2026-10-06",
+  "source": "the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model",
+  "configurations": [
+    {
+      "name": "anthropic, plan",
+      "tools": {
+        "edit": {
+          "form": "function",
+          "description": {
+            "chars": 589,
+            "sha": "4194c06076ef"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "oldString": {
+              "type": "string",
+              "required": true
+            },
+            "newString": {
+              "type": "string",
+              "required": true
+            },
+            "replaceAll": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "glob": {
+          "form": "function",
+          "description": {
+            "chars": 77,
+            "sha": "e31392c5c846"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "hidden": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 255,
+            "sha": "7f673e0439d3"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "include": {
+              "type": "string",
+              "required": false
+            },
+            "literal": {
+              "type": "boolean",
+              "required": false
+            },
+            "caseSensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "question": {
+          "form": "function",
+          "description": {
+            "chars": 596,
+            "sha": "f1f6cb9f895d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 489,
+            "sha": "e6ecb6c16212"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "shell": {
+          "form": "function",
+          "description": {
+            "chars": 532,
+            "sha": "4e87032485a0"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "skill": {
+          "form": "function",
+          "description": {
+            "chars": 220,
+            "sha": "54cd97d5d528"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1275,
+            "sha": "58cc52cb86c7"
+          },
+          "parameters": {
+            "agent": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "sessionID": {
+              "type": "string",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 287,
+            "sha": "b958b70f4a4e"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "format": {
+              "type": "enum",
+              "required": false
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "websearch": {
+          "form": "function",
+          "description": {
+            "chars": 216,
+            "sha": "a99cebc6723d"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "95008cb3f8ec"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "execute": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "ceec24147543"
+          },
+          "parameters": {
+            "code": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "anthropic, build",
+      "tools": {
+        "edit": {
+          "form": "function",
+          "description": {
+            "chars": 589,
+            "sha": "4194c06076ef"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "oldString": {
+              "type": "string",
+              "required": true
+            },
+            "newString": {
+              "type": "string",
+              "required": true
+            },
+            "replaceAll": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "glob": {
+          "form": "function",
+          "description": {
+            "chars": 77,
+            "sha": "e31392c5c846"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "hidden": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 255,
+            "sha": "7f673e0439d3"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "include": {
+              "type": "string",
+              "required": false
+            },
+            "literal": {
+              "type": "boolean",
+              "required": false
+            },
+            "caseSensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "question": {
+          "form": "function",
+          "description": {
+            "chars": 596,
+            "sha": "f1f6cb9f895d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 489,
+            "sha": "e6ecb6c16212"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "shell": {
+          "form": "function",
+          "description": {
+            "chars": 532,
+            "sha": "4e87032485a0"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "skill": {
+          "form": "function",
+          "description": {
+            "chars": 220,
+            "sha": "54cd97d5d528"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1275,
+            "sha": "58cc52cb86c7"
+          },
+          "parameters": {
+            "agent": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "sessionID": {
+              "type": "string",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 287,
+            "sha": "b958b70f4a4e"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "format": {
+              "type": "enum",
+              "required": false
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "websearch": {
+          "form": "function",
+          "description": {
+            "chars": 216,
+            "sha": "a99cebc6723d"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "95008cb3f8ec"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "execute": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "ceec24147543"
+          },
+          "parameters": {
+            "code": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "openai, plan",
+      "tools": {
+        "glob": {
+          "form": "function",
+          "description": {
+            "chars": 77,
+            "sha": "e31392c5c846"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "hidden": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 255,
+            "sha": "7f673e0439d3"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "include": {
+              "type": "string",
+              "required": false
+            },
+            "literal": {
+              "type": "boolean",
+              "required": false
+            },
+            "caseSensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "patch": {
+          "form": "function",
+          "description": {
+            "chars": 1086,
+            "sha": "6decf236ce2c"
+          },
+          "parameters": {
+            "patchText": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "question": {
+          "form": "function",
+          "description": {
+            "chars": 596,
+            "sha": "f1f6cb9f895d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 489,
+            "sha": "e6ecb6c16212"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "shell": {
+          "form": "function",
+          "description": {
+            "chars": 532,
+            "sha": "4e87032485a0"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "skill": {
+          "form": "function",
+          "description": {
+            "chars": 220,
+            "sha": "54cd97d5d528"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1275,
+            "sha": "58cc52cb86c7"
+          },
+          "parameters": {
+            "agent": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "sessionID": {
+              "type": "string",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 287,
+            "sha": "b958b70f4a4e"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "format": {
+              "type": "enum",
+              "required": false
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "websearch": {
+          "form": "function",
+          "description": {
+            "chars": 216,
+            "sha": "a99cebc6723d"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "execute": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "ceec24147543"
+          },
+          "parameters": {
+            "code": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "openai, build",
+      "tools": {
+        "glob": {
+          "form": "function",
+          "description": {
+            "chars": 77,
+            "sha": "e31392c5c846"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "hidden": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 255,
+            "sha": "7f673e0439d3"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "include": {
+              "type": "string",
+              "required": false
+            },
+            "literal": {
+              "type": "boolean",
+              "required": false
+            },
+            "caseSensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "patch": {
+          "form": "function",
+          "description": {
+            "chars": 1086,
+            "sha": "6decf236ce2c"
+          },
+          "parameters": {
+            "patchText": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "question": {
+          "form": "function",
+          "description": {
+            "chars": 596,
+            "sha": "f1f6cb9f895d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 489,
+            "sha": "e6ecb6c16212"
+          },
+          "parameters": {
+            "path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "shell": {
+          "form": "function",
+          "description": {
+            "chars": 532,
+            "sha": "4e87032485a0"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "skill": {
+          "form": "function",
+          "description": {
+            "chars": 220,
+            "sha": "54cd97d5d528"
+          },
+          "parameters": {
+            "id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1275,
+            "sha": "58cc52cb86c7"
+          },
+          "parameters": {
+            "agent": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "sessionID": {
+              "type": "string",
+              "required": false
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 287,
+            "sha": "b958b70f4a4e"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            },
+            "format": {
+              "type": "enum",
+              "required": false
+            },
+            "timeout": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "websearch": {
+          "form": "function",
+          "description": {
+            "chars": 216,
+            "sha": "a99cebc6723d"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "execute": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "ceec24147543"
+          },
+          "parameters": {
+            "code": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,5436 @@
+{
+  "harness": "codex",
+  "version": "0.159.3",
+  "on": "2026-10-06",
+  "source": "the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan",
+  "configurations": [
+    {
+      "name": "gpt-6-astra",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-6-astra, plan",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-6.1-sol",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-6.1-sol, plan",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-6-sol",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-6-sol, plan",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-6-luna",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-6-luna, plan",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20918,
+            "sha": "68f98efd1a3d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "clock__curr_time": {
+          "form": "function",
+          "description": {
+            "chars": 31,
+            "sha": "4d309e80bc89"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "request_user_input_async": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 556,
+            "sha": "f7f47603a915"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "sleep": {
+          "namespace": "clock",
+          "form": "function",
+          "description": {
+            "chars": 143,
+            "sha": "f98e23608973"
+          },
+          "parameters": {
+            "duration_ms": {
+              "type": "number",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-sol",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20627,
+            "sha": "1f246c67f98d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-sol, plan",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20627,
+            "sha": "1f246c67f98d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-terra",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20627,
+            "sha": "1f246c67f98d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-terra, plan",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20627,
+            "sha": "1f246c67f98d"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "followup_task": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 232,
+            "sha": "fb29da0ce679"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "interrupt_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 136,
+            "sha": "07f744a6e472"
+          },
+          "parameters": {
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "list_agents": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "c050cd421fdd"
+          },
+          "parameters": {
+            "path_prefix": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 105,
+            "sha": "e0cae526e53d"
+          },
+          "parameters": {
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "spawn_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 1829,
+            "sha": "0b7d0bfcc5ad"
+          },
+          "parameters": {
+            "fork_turns": {
+              "type": "string",
+              "required": false
+            },
+            "message": {
+              "type": "string",
+              "required": true
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "required": false
+            },
+            "task_name": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "wait_agent": {
+          "namespace": "collaboration",
+          "form": "function",
+          "description": {
+            "chars": 383,
+            "sha": "6efad2e8999e"
+          },
+          "parameters": {
+            "timeout_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-luna",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20835,
+            "sha": "2433eeec6934"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-luna, plan",
+      "tools": {
+        "exec": {
+          "namespace": "functions",
+          "form": "freeform",
+          "description": {
+            "chars": 20835,
+            "sha": "2433eeec6934"
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          },
+          "within": "exec"
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {},
+          "within": "exec"
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          },
+          "within": "exec"
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "web__run": {
+          "form": "function",
+          "description": {
+            "chars": 7506,
+            "sha": "702d064bfdf7"
+          },
+          "parameters": {
+            "click": {
+              "type": "array",
+              "required": false
+            },
+            "finance": {
+              "type": "array",
+              "required": false
+            },
+            "find": {
+              "type": "array",
+              "required": false
+            },
+            "image_query": {
+              "type": "array",
+              "required": false
+            },
+            "open": {
+              "type": "array",
+              "required": false
+            },
+            "response_length": {
+              "type": "enum",
+              "required": false
+            },
+            "screenshot": {
+              "type": "array",
+              "required": false
+            },
+            "search_query": {
+              "type": "array",
+              "required": false
+            },
+            "sports": {
+              "type": "array",
+              "required": false
+            },
+            "time": {
+              "type": "array",
+              "required": false
+            },
+            "weather": {
+              "type": "array",
+              "required": false
+            }
+          },
+          "within": "exec"
+        },
+        "wait": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 769,
+            "sha": "582eb96e50ee"
+          },
+          "parameters": {
+            "cell_id": {
+              "type": "string",
+              "required": true
+            },
+            "max_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "terminate": {
+              "type": "boolean",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "namespace": "functions",
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.5",
+      "tools": {
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          }
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {}
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          }
+        },
+        "tool_search": {
+          "form": "hosted",
+          "description": {
+            "chars": 475,
+            "sha": "8cca88be41a9"
+          }
+        },
+        "web_search": {
+          "form": "hosted",
+          "description": {
+            "chars": 0,
+            "sha": "e3b0c44298fc"
+          }
+        }
+      }
+    },
+    {
+      "name": "gpt-5.5, plan",
+      "tools": {
+        "exec_command": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "10ad9a9a47ef"
+          },
+          "parameters": {
+            "cmd": {
+              "type": "string",
+              "required": true
+            },
+            "justification": {
+              "type": "string",
+              "required": false
+            },
+            "login": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "prefix_rule": {
+              "type": "array",
+              "required": false
+            },
+            "sandbox_permissions": {
+              "type": "enum",
+              "required": false
+            },
+            "shell": {
+              "type": "string",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "write_stdin": {
+          "form": "function",
+          "description": {
+            "chars": 80,
+            "sha": "7f2fa7791a63"
+          },
+          "parameters": {
+            "chars": {
+              "type": "string",
+              "required": false
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "required": false
+            },
+            "session_id": {
+              "type": "number",
+              "required": true
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "required": false
+            }
+          }
+        },
+        "request_user_input": {
+          "form": "function",
+          "description": {
+            "chars": 131,
+            "sha": "76814804de66"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "apply_patch": {
+          "form": "freeform",
+          "description": {
+            "chars": 108,
+            "sha": "1d2e0992b289"
+          }
+        },
+        "view_image": {
+          "form": "function",
+          "description": {
+            "chars": 124,
+            "sha": "0a5b48aa388f"
+          },
+          "parameters": {
+            "detail": {
+              "type": "enum",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "get_goal": {
+          "form": "function",
+          "description": {
+            "chars": 122,
+            "sha": "d86378be0753"
+          },
+          "parameters": {}
+        },
+        "create_goal": {
+          "form": "function",
+          "description": {
+            "chars": 265,
+            "sha": "b16e4399147c"
+          },
+          "parameters": {
+            "objective": {
+              "type": "string",
+              "required": true
+            },
+            "token_budget": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "update_goal": {
+          "form": "function",
+          "description": {
+            "chars": 1541,
+            "sha": "5d7192dc9175"
+          },
+          "parameters": {
+            "status": {
+              "type": "enum",
+              "required": true
+            }
+          }
+        },
+        "tool_search": {
+          "form": "hosted",
+          "description": {
+            "chars": 475,
+            "sha": "8cca88be41a9"
+          }
+        },
+        "web_search": {
+          "form": "hosted",
+          "description": {
+            "chars": 0,
+            "sha": "e3b0c44298fc"
+          }
+        }
+      }
+    }
+  ]
+}

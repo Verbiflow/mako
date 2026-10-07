@@ -1,0 +1,2312 @@
+{
+  "harness": "grok",
+  "version": "1.0.46",
+  "on": "2026-10-06",
+  "source": "the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode",
+  "configurations": [
+    {
+      "name": "plan",
+      "tools": {
+        "run_terminal_command": {
+          "form": "function",
+          "description": {
+            "chars": 1068,
+            "sha": "9ea75a2e907e"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "block_until_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read_file": {
+          "form": "function",
+          "description": {
+            "chars": 579,
+            "sha": "29845cf72022"
+          },
+          "parameters": {
+            "target_file": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string|null",
+              "required": false
+            },
+            "format": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "search_replace": {
+          "form": "function",
+          "description": {
+            "chars": 399,
+            "sha": "7da85001765c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "list_dir": {
+          "form": "function",
+          "description": {
+            "chars": 242,
+            "sha": "ebd8fdfea247"
+          },
+          "parameters": {
+            "target_directory": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 669,
+            "sha": "64ff9099877b"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string|null",
+              "required": false
+            },
+            "glob": {
+              "type": "string|null",
+              "required": false
+            },
+            "-B": {
+              "type": "integer",
+              "required": false
+            },
+            "-A": {
+              "type": "integer",
+              "required": false
+            },
+            "-C": {
+              "type": "integer",
+              "required": false
+            },
+            "-i": {
+              "type": "boolean",
+              "required": false
+            },
+            "type": {
+              "type": "string|null",
+              "required": false
+            },
+            "head_limit": {
+              "type": "integer",
+              "required": false
+            },
+            "multiline": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "kill_command_or_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 359,
+            "sha": "297171507e7f"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 150,
+            "sha": "4a3be17f5cb3"
+          },
+          "parameters": {
+            "merge": {
+              "type": "boolean",
+              "required": false
+            },
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "get_command_or_subagent_output": {
+          "form": "function",
+          "description": {
+            "chars": 502,
+            "sha": "73b631c37363"
+          },
+          "parameters": {
+            "task_ids": {
+              "type": "array",
+              "required": false
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "spawn_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1785,
+            "sha": "6c27d7a98b60"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "string|null",
+              "required": false
+            },
+            "resume_from": {
+              "type": "string|null",
+              "required": false
+            },
+            "cwd": {
+              "type": "string|null",
+              "required": false
+            },
+            "model": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "scheduler_create": {
+          "form": "function",
+          "description": {
+            "chars": 717,
+            "sha": "e6696ddeb1ca"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string|null",
+              "required": false
+            },
+            "interval": {
+              "type": "string|null",
+              "required": false
+            },
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "fire_immediately": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "scheduler_delete": {
+          "form": "function",
+          "description": {
+            "chars": 33,
+            "sha": "a3c8bbfddcd9"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "scheduler_list": {
+          "form": "function",
+          "description": {
+            "chars": 76,
+            "sha": "61bddaf5ac19"
+          },
+          "parameters": {}
+        },
+        "monitor": {
+          "form": "function",
+          "description": {
+            "chars": 1035,
+            "sha": "720ca9e1b23d"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "persistent": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "search_tool": {
+          "form": "function",
+          "description": {
+            "chars": 125,
+            "sha": "589aaffafc2a"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "limit": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "use_tool": {
+          "form": "function",
+          "description": {
+            "chars": 529,
+            "sha": "e8ee15c875ee"
+          },
+          "parameters": {
+            "tool_name": {
+              "type": "string",
+              "required": false
+            },
+            "tool_input": {
+              "type": "object",
+              "required": false
+            },
+            "tool_input_file": {
+              "type": "string",
+              "required": false
+            },
+            "file": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "workflow": {
+          "form": "function",
+          "description": {
+            "chars": 592,
+            "sha": "d78593fdfd49"
+          },
+          "parameters": {
+            "source": {
+              "type": "object",
+              "required": true
+            },
+            "agent_budget": {
+              "type": "integer|null",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "validate_only": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "enter_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 188,
+            "sha": "4e1986a5e08d"
+          },
+          "parameters": {}
+        },
+        "exit_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "8a6a5cffa6f2"
+          },
+          "parameters": {}
+        },
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 225,
+            "sha": "61e8dfc5856d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "send_feedback": {
+          "form": "function",
+          "description": {
+            "chars": 577,
+            "sha": "0846600de431"
+          },
+          "parameters": {
+            "title": {
+              "type": "string",
+              "required": true
+            },
+            "details": {
+              "type": "string",
+              "required": true
+            },
+            "product_area": {
+              "type": "string|null",
+              "required": false
+            },
+            "type": {
+              "type": "enum",
+              "required": true
+            },
+            "task_category": {
+              "type": "string|null",
+              "required": false
+            },
+            "failure_mode": {
+              "type": "string|null",
+              "required": false
+            },
+            "draft_id": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "web_search": {
+          "form": "function",
+          "description": {
+            "chars": 39,
+            "sha": "e6f592edb552"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array|null",
+              "required": false
+            }
+          }
+        },
+        "image_gen": {
+          "form": "function",
+          "description": {
+            "chars": 374,
+            "sha": "298a9a2c0718"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_edit": {
+          "form": "function",
+          "description": {
+            "chars": 610,
+            "sha": "747748e90cb5"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "image": {
+              "type": "array",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 639,
+            "sha": "4887f055da87"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "image": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "reference_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 1665,
+            "sha": "9cb5a5363977"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "images": {
+              "type": "array",
+              "required": false
+            },
+            "first_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "last_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "keyframes": {
+              "type": "array",
+              "required": false
+            },
+            "voices": {
+              "type": "array",
+              "required": false
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 189,
+            "sha": "6a421d882a5f"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "access:ask",
+      "tools": {
+        "run_terminal_command": {
+          "form": "function",
+          "description": {
+            "chars": 1068,
+            "sha": "9ea75a2e907e"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "block_until_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read_file": {
+          "form": "function",
+          "description": {
+            "chars": 579,
+            "sha": "29845cf72022"
+          },
+          "parameters": {
+            "target_file": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string|null",
+              "required": false
+            },
+            "format": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "search_replace": {
+          "form": "function",
+          "description": {
+            "chars": 399,
+            "sha": "7da85001765c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "list_dir": {
+          "form": "function",
+          "description": {
+            "chars": 242,
+            "sha": "ebd8fdfea247"
+          },
+          "parameters": {
+            "target_directory": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 669,
+            "sha": "64ff9099877b"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string|null",
+              "required": false
+            },
+            "glob": {
+              "type": "string|null",
+              "required": false
+            },
+            "-B": {
+              "type": "integer",
+              "required": false
+            },
+            "-A": {
+              "type": "integer",
+              "required": false
+            },
+            "-C": {
+              "type": "integer",
+              "required": false
+            },
+            "-i": {
+              "type": "boolean",
+              "required": false
+            },
+            "type": {
+              "type": "string|null",
+              "required": false
+            },
+            "head_limit": {
+              "type": "integer",
+              "required": false
+            },
+            "multiline": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "kill_command_or_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 359,
+            "sha": "297171507e7f"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 150,
+            "sha": "4a3be17f5cb3"
+          },
+          "parameters": {
+            "merge": {
+              "type": "boolean",
+              "required": false
+            },
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "get_command_or_subagent_output": {
+          "form": "function",
+          "description": {
+            "chars": 502,
+            "sha": "73b631c37363"
+          },
+          "parameters": {
+            "task_ids": {
+              "type": "array",
+              "required": false
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "spawn_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1785,
+            "sha": "6c27d7a98b60"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "string|null",
+              "required": false
+            },
+            "resume_from": {
+              "type": "string|null",
+              "required": false
+            },
+            "cwd": {
+              "type": "string|null",
+              "required": false
+            },
+            "model": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "scheduler_create": {
+          "form": "function",
+          "description": {
+            "chars": 717,
+            "sha": "e6696ddeb1ca"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string|null",
+              "required": false
+            },
+            "interval": {
+              "type": "string|null",
+              "required": false
+            },
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "fire_immediately": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "scheduler_delete": {
+          "form": "function",
+          "description": {
+            "chars": 33,
+            "sha": "a3c8bbfddcd9"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "scheduler_list": {
+          "form": "function",
+          "description": {
+            "chars": 76,
+            "sha": "61bddaf5ac19"
+          },
+          "parameters": {}
+        },
+        "monitor": {
+          "form": "function",
+          "description": {
+            "chars": 1035,
+            "sha": "720ca9e1b23d"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "persistent": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "search_tool": {
+          "form": "function",
+          "description": {
+            "chars": 125,
+            "sha": "589aaffafc2a"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "limit": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "use_tool": {
+          "form": "function",
+          "description": {
+            "chars": 529,
+            "sha": "e8ee15c875ee"
+          },
+          "parameters": {
+            "tool_name": {
+              "type": "string",
+              "required": false
+            },
+            "tool_input": {
+              "type": "object",
+              "required": false
+            },
+            "tool_input_file": {
+              "type": "string",
+              "required": false
+            },
+            "file": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "workflow": {
+          "form": "function",
+          "description": {
+            "chars": 592,
+            "sha": "d78593fdfd49"
+          },
+          "parameters": {
+            "source": {
+              "type": "object",
+              "required": true
+            },
+            "agent_budget": {
+              "type": "integer|null",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "validate_only": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "enter_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 188,
+            "sha": "4e1986a5e08d"
+          },
+          "parameters": {}
+        },
+        "exit_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "8a6a5cffa6f2"
+          },
+          "parameters": {}
+        },
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 225,
+            "sha": "61e8dfc5856d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "send_feedback": {
+          "form": "function",
+          "description": {
+            "chars": 577,
+            "sha": "0846600de431"
+          },
+          "parameters": {
+            "title": {
+              "type": "string",
+              "required": true
+            },
+            "details": {
+              "type": "string",
+              "required": true
+            },
+            "product_area": {
+              "type": "string|null",
+              "required": false
+            },
+            "type": {
+              "type": "enum",
+              "required": true
+            },
+            "task_category": {
+              "type": "string|null",
+              "required": false
+            },
+            "failure_mode": {
+              "type": "string|null",
+              "required": false
+            },
+            "draft_id": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "web_search": {
+          "form": "function",
+          "description": {
+            "chars": 39,
+            "sha": "e6f592edb552"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array|null",
+              "required": false
+            }
+          }
+        },
+        "image_gen": {
+          "form": "function",
+          "description": {
+            "chars": 374,
+            "sha": "298a9a2c0718"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_edit": {
+          "form": "function",
+          "description": {
+            "chars": 610,
+            "sha": "747748e90cb5"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "image": {
+              "type": "array",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 639,
+            "sha": "4887f055da87"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "image": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "reference_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 1665,
+            "sha": "9cb5a5363977"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "images": {
+              "type": "array",
+              "required": false
+            },
+            "first_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "last_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "keyframes": {
+              "type": "array",
+              "required": false
+            },
+            "voices": {
+              "type": "array",
+              "required": false
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 189,
+            "sha": "6a421d882a5f"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "access:auto",
+      "tools": {
+        "run_terminal_command": {
+          "form": "function",
+          "description": {
+            "chars": 1068,
+            "sha": "9ea75a2e907e"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "block_until_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read_file": {
+          "form": "function",
+          "description": {
+            "chars": 579,
+            "sha": "29845cf72022"
+          },
+          "parameters": {
+            "target_file": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string|null",
+              "required": false
+            },
+            "format": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "search_replace": {
+          "form": "function",
+          "description": {
+            "chars": 399,
+            "sha": "7da85001765c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "list_dir": {
+          "form": "function",
+          "description": {
+            "chars": 242,
+            "sha": "ebd8fdfea247"
+          },
+          "parameters": {
+            "target_directory": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 669,
+            "sha": "64ff9099877b"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string|null",
+              "required": false
+            },
+            "glob": {
+              "type": "string|null",
+              "required": false
+            },
+            "-B": {
+              "type": "integer",
+              "required": false
+            },
+            "-A": {
+              "type": "integer",
+              "required": false
+            },
+            "-C": {
+              "type": "integer",
+              "required": false
+            },
+            "-i": {
+              "type": "boolean",
+              "required": false
+            },
+            "type": {
+              "type": "string|null",
+              "required": false
+            },
+            "head_limit": {
+              "type": "integer",
+              "required": false
+            },
+            "multiline": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "kill_command_or_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 359,
+            "sha": "297171507e7f"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 150,
+            "sha": "4a3be17f5cb3"
+          },
+          "parameters": {
+            "merge": {
+              "type": "boolean",
+              "required": false
+            },
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "get_command_or_subagent_output": {
+          "form": "function",
+          "description": {
+            "chars": 502,
+            "sha": "73b631c37363"
+          },
+          "parameters": {
+            "task_ids": {
+              "type": "array",
+              "required": false
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "spawn_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1785,
+            "sha": "6c27d7a98b60"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "string|null",
+              "required": false
+            },
+            "resume_from": {
+              "type": "string|null",
+              "required": false
+            },
+            "cwd": {
+              "type": "string|null",
+              "required": false
+            },
+            "model": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "scheduler_create": {
+          "form": "function",
+          "description": {
+            "chars": 717,
+            "sha": "e6696ddeb1ca"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string|null",
+              "required": false
+            },
+            "interval": {
+              "type": "string|null",
+              "required": false
+            },
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "fire_immediately": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "scheduler_delete": {
+          "form": "function",
+          "description": {
+            "chars": 33,
+            "sha": "a3c8bbfddcd9"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "scheduler_list": {
+          "form": "function",
+          "description": {
+            "chars": 76,
+            "sha": "61bddaf5ac19"
+          },
+          "parameters": {}
+        },
+        "monitor": {
+          "form": "function",
+          "description": {
+            "chars": 1035,
+            "sha": "720ca9e1b23d"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "persistent": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "search_tool": {
+          "form": "function",
+          "description": {
+            "chars": 125,
+            "sha": "589aaffafc2a"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "limit": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "use_tool": {
+          "form": "function",
+          "description": {
+            "chars": 529,
+            "sha": "e8ee15c875ee"
+          },
+          "parameters": {
+            "tool_name": {
+              "type": "string",
+              "required": false
+            },
+            "tool_input": {
+              "type": "object",
+              "required": false
+            },
+            "tool_input_file": {
+              "type": "string",
+              "required": false
+            },
+            "file": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "workflow": {
+          "form": "function",
+          "description": {
+            "chars": 592,
+            "sha": "d78593fdfd49"
+          },
+          "parameters": {
+            "source": {
+              "type": "object",
+              "required": true
+            },
+            "agent_budget": {
+              "type": "integer|null",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "validate_only": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "enter_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 188,
+            "sha": "4e1986a5e08d"
+          },
+          "parameters": {}
+        },
+        "exit_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "8a6a5cffa6f2"
+          },
+          "parameters": {}
+        },
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 225,
+            "sha": "61e8dfc5856d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "send_feedback": {
+          "form": "function",
+          "description": {
+            "chars": 577,
+            "sha": "0846600de431"
+          },
+          "parameters": {
+            "title": {
+              "type": "string",
+              "required": true
+            },
+            "details": {
+              "type": "string",
+              "required": true
+            },
+            "product_area": {
+              "type": "string|null",
+              "required": false
+            },
+            "type": {
+              "type": "enum",
+              "required": true
+            },
+            "task_category": {
+              "type": "string|null",
+              "required": false
+            },
+            "failure_mode": {
+              "type": "string|null",
+              "required": false
+            },
+            "draft_id": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "web_search": {
+          "form": "function",
+          "description": {
+            "chars": 39,
+            "sha": "e6f592edb552"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array|null",
+              "required": false
+            }
+          }
+        },
+        "image_gen": {
+          "form": "function",
+          "description": {
+            "chars": 374,
+            "sha": "298a9a2c0718"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_edit": {
+          "form": "function",
+          "description": {
+            "chars": 610,
+            "sha": "747748e90cb5"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "image": {
+              "type": "array",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 639,
+            "sha": "4887f055da87"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "image": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "reference_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 1665,
+            "sha": "9cb5a5363977"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "images": {
+              "type": "array",
+              "required": false
+            },
+            "first_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "last_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "keyframes": {
+              "type": "array",
+              "required": false
+            },
+            "voices": {
+              "type": "array",
+              "required": false
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 189,
+            "sha": "6a421d882a5f"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "access:full",
+      "tools": {
+        "run_terminal_command": {
+          "form": "function",
+          "description": {
+            "chars": 1068,
+            "sha": "9ea75a2e907e"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "block_until_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read_file": {
+          "form": "function",
+          "description": {
+            "chars": 579,
+            "sha": "29845cf72022"
+          },
+          "parameters": {
+            "target_file": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            },
+            "pages": {
+              "type": "string|null",
+              "required": false
+            },
+            "format": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "search_replace": {
+          "form": "function",
+          "description": {
+            "chars": 399,
+            "sha": "7da85001765c"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "list_dir": {
+          "form": "function",
+          "description": {
+            "chars": 242,
+            "sha": "ebd8fdfea247"
+          },
+          "parameters": {
+            "target_directory": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 669,
+            "sha": "64ff9099877b"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string|null",
+              "required": false
+            },
+            "glob": {
+              "type": "string|null",
+              "required": false
+            },
+            "-B": {
+              "type": "integer",
+              "required": false
+            },
+            "-A": {
+              "type": "integer",
+              "required": false
+            },
+            "-C": {
+              "type": "integer",
+              "required": false
+            },
+            "-i": {
+              "type": "boolean",
+              "required": false
+            },
+            "type": {
+              "type": "string|null",
+              "required": false
+            },
+            "head_limit": {
+              "type": "integer",
+              "required": false
+            },
+            "multiline": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "kill_command_or_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 359,
+            "sha": "297171507e7f"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 150,
+            "sha": "4a3be17f5cb3"
+          },
+          "parameters": {
+            "merge": {
+              "type": "boolean",
+              "required": false
+            },
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "get_command_or_subagent_output": {
+          "form": "function",
+          "description": {
+            "chars": 502,
+            "sha": "73b631c37363"
+          },
+          "parameters": {
+            "task_ids": {
+              "type": "array",
+              "required": false
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "spawn_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 1785,
+            "sha": "6c27d7a98b60"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "background": {
+              "type": "boolean",
+              "required": false
+            },
+            "isolation": {
+              "type": "string|null",
+              "required": false
+            },
+            "resume_from": {
+              "type": "string|null",
+              "required": false
+            },
+            "cwd": {
+              "type": "string|null",
+              "required": false
+            },
+            "model": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "scheduler_create": {
+          "form": "function",
+          "description": {
+            "chars": 717,
+            "sha": "e6696ddeb1ca"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string|null",
+              "required": false
+            },
+            "interval": {
+              "type": "string|null",
+              "required": false
+            },
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "durable": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "fire_immediately": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "scheduler_delete": {
+          "form": "function",
+          "description": {
+            "chars": 33,
+            "sha": "a3c8bbfddcd9"
+          },
+          "parameters": {
+            "task_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "scheduler_list": {
+          "form": "function",
+          "description": {
+            "chars": 76,
+            "sha": "61bddaf5ac19"
+          },
+          "parameters": {}
+        },
+        "monitor": {
+          "form": "function",
+          "description": {
+            "chars": 1035,
+            "sha": "720ca9e1b23d"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "description": {
+              "type": "string",
+              "required": true
+            },
+            "timeout_ms": {
+              "type": "integer|null",
+              "required": false
+            },
+            "persistent": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "search_tool": {
+          "form": "function",
+          "description": {
+            "chars": 125,
+            "sha": "589aaffafc2a"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "limit": {
+              "type": "integer|null",
+              "required": false
+            }
+          }
+        },
+        "use_tool": {
+          "form": "function",
+          "description": {
+            "chars": 529,
+            "sha": "e8ee15c875ee"
+          },
+          "parameters": {
+            "tool_name": {
+              "type": "string",
+              "required": false
+            },
+            "tool_input": {
+              "type": "object",
+              "required": false
+            },
+            "tool_input_file": {
+              "type": "string",
+              "required": false
+            },
+            "file": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "workflow": {
+          "form": "function",
+          "description": {
+            "chars": 592,
+            "sha": "d78593fdfd49"
+          },
+          "parameters": {
+            "source": {
+              "type": "object",
+              "required": true
+            },
+            "agent_budget": {
+              "type": "integer|null",
+              "required": false
+            },
+            "args": {
+              "type": "any",
+              "required": false
+            },
+            "validate_only": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "enter_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 188,
+            "sha": "4e1986a5e08d"
+          },
+          "parameters": {}
+        },
+        "exit_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 88,
+            "sha": "8a6a5cffa6f2"
+          },
+          "parameters": {}
+        },
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 225,
+            "sha": "61e8dfc5856d"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "send_feedback": {
+          "form": "function",
+          "description": {
+            "chars": 577,
+            "sha": "0846600de431"
+          },
+          "parameters": {
+            "title": {
+              "type": "string",
+              "required": true
+            },
+            "details": {
+              "type": "string",
+              "required": true
+            },
+            "product_area": {
+              "type": "string|null",
+              "required": false
+            },
+            "type": {
+              "type": "enum",
+              "required": true
+            },
+            "task_category": {
+              "type": "string|null",
+              "required": false
+            },
+            "failure_mode": {
+              "type": "string|null",
+              "required": false
+            },
+            "draft_id": {
+              "type": "string|null",
+              "required": false
+            }
+          }
+        },
+        "web_search": {
+          "form": "function",
+          "description": {
+            "chars": 39,
+            "sha": "e6f592edb552"
+          },
+          "parameters": {
+            "query": {
+              "type": "string",
+              "required": true
+            },
+            "allowed_domains": {
+              "type": "array|null",
+              "required": false
+            }
+          }
+        },
+        "image_gen": {
+          "form": "function",
+          "description": {
+            "chars": 374,
+            "sha": "298a9a2c0718"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_edit": {
+          "form": "function",
+          "description": {
+            "chars": 610,
+            "sha": "747748e90cb5"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "image": {
+              "type": "array",
+              "required": true
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "image_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 639,
+            "sha": "4887f055da87"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string|null",
+              "required": false
+            },
+            "image": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "reference_to_video": {
+          "form": "function",
+          "description": {
+            "chars": 1665,
+            "sha": "9cb5a5363977"
+          },
+          "parameters": {
+            "prompt": {
+              "type": "string",
+              "required": true
+            },
+            "images": {
+              "type": "array",
+              "required": false
+            },
+            "first_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "last_frame": {
+              "type": "string|null",
+              "required": false
+            },
+            "keyframes": {
+              "type": "array",
+              "required": false
+            },
+            "voices": {
+              "type": "array",
+              "required": false
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "required": true
+            },
+            "duration": {
+              "type": "integer|null",
+              "required": false
+            },
+            "resolution_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 189,
+            "sha": "6a421d882a5f"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    }
+  ]
+}
