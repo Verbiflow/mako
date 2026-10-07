@@ -1,7 +1,7 @@
 import { basename } from "node:path"
 import { z } from "zod"
 import type { ToolDetail } from "@mako/sessions"
-import { MAX_STREAMED_TOOL_OUTPUT, type LiveUpdate } from "../../../contracts/live-content.js"
+import { MAX_STREAMED_TOOL_OUTPUT, type LiveUpdate } from "@mako/sessions/live-content"
 import { sameJson } from "../../../codex-app-json.js"
 import type { JsonValue, SdkDelta, SdkMessage } from "./wire.js"
 
