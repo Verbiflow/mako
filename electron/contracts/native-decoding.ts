@@ -17,6 +17,8 @@ import type { LiveSessionState } from "./providers-acp.js"
  * - `marker`, `compacted`: transcript markers. `source` is the native record
  *   the marker stands for, so a replayed record is drawn once.
  * - `usage`: plan-limit windows the account just reported.
+ * - `rewound`: the harness dropped its own history from the turn whose
+ *   native run id is `run` on; its store holds what remains.
  * - `unknown`: a message the decoder has no meaning for, kept with its raw
  *   record. `unreadable` is a kind it knows sent in a shape it can't read.
  * - `effect`: a fact only this harness's driver acts on (a turn id it needs
@@ -31,6 +33,7 @@ export type Decoded<Effect = never> =
   | { kind: "marker"; marker: TranscriptEvent; source?: string }
   | { kind: "compacted"; compaction?: Compaction; source?: string }
   | { kind: "usage"; windows: UsageWindow[] }
+  | { kind: "rewound"; run: string }
   | { kind: "unknown"; type: string; reason: "unknown" | "unreadable"; raw: JsonValue }
   | { kind: "effect"; effect: Effect }
 
@@ -42,6 +45,7 @@ export interface DecodedSink<Effect = never> {
   marker(marker: TranscriptEvent, source?: string): void
   compacted(compaction?: Compaction, source?: string): void
   usage(windows: UsageWindow[]): void
+  rewound(run: string): void
   unknown(type: string, reason: "unknown" | "unreadable", raw: JsonValue): void
   effect(effect: Effect): void
 }
@@ -85,6 +89,9 @@ export function deliverDecoded<Effect>(decoded: readonly Decoded<Effect>[], sink
       case "usage":
         sink.usage(item.windows)
         break
+      case "rewound":
+        sink.rewound(item.run)
+        break
       case "unknown":
         sink.unknown(item.type, item.reason, item.raw)
         break
@@ -106,6 +113,7 @@ export function decodedNotices(notices: readonly NativeNotice[], source?: string
   const id = () => (source ? (markers++ === 0 ? source : `${source}:${markers}`) : undefined)
   return notices.map((notice) =>
     notice.kind === "activity" ? decoded.activity(notice.activity)
+      : notice.kind === "rewound" ? decoded.rewound(notice.run)
       : notice.kind === "compacted" ? decoded.compacted(notice.compaction, id())
         : decoded.marker(notice.event, id()))
 }
@@ -124,6 +132,7 @@ export const decoded = {
     return item
   },
   usage: (windows: UsageWindow[]): Decoded<never> => ({ kind: "usage", windows }),
+  rewound: (run: string): Decoded<never> => ({ kind: "rewound", run }),
   unknown: (type: string, raw: JsonValue, reason: "unknown" | "unreadable" = "unknown"): Decoded<never> =>
     ({ kind: "unknown", type, reason, raw }),
   effect: <Effect>(effect: Effect): Decoded<Effect> => ({ kind: "effect", effect }),

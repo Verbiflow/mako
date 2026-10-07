@@ -41,3 +41,5 @@ export type NativeNotice =
   | { kind: "activity"; activity: NativeActivityObservation | null }
   | { kind: "compacted"; compaction?: Compaction }
   | { kind: "event"; event: TranscriptEvent }
+  /** The harness dropped its history from its turn `run` on. */
+  | { kind: "rewound"; run: string }

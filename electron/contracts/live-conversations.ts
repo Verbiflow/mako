@@ -376,4 +376,6 @@ export type LiveDriverEvent =
   | { type: "live-session"; session: LiveSessionState }
   | { type: "live-update"; id: string; update: LiveUpdate }
   | { type: "live-updates"; id: string; updates: LiveUpdate[] }
+  /** The harness dropped its own history from the turn whose native run id is `run` on. */
+  | { type: "live-rewound"; id: string; run: string }
   | { type: "live-permission"; request: LivePermissionRequest }
