@@ -663,7 +663,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     nativeIdentity: OPENCODE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "accepted-message-id", evidence: "OpenCode v2 session.prompt returns the accepted inbox ID; the native user message stores that same ID. Commands without that receipt remain uncorrelated." },
-    planning: { via: "mode", mode: OPENCODE_PLAN_AGENT, proposal: "The Plan agent's reply to a step that ends its turn, built by a message to Build" },
+    planning: { via: "mode", mode: OPENCODE_PLAN_AGENT, proposal: "The Plan agent's reply to a step that ends its turn, built by a message to Build",
+      feedback: { kind: "next-message", reason: "the plan is the Plan agent's reply, and nothing waits on an answer." } },
     approvalEvidence: {
       kind: "native-decisions",
       recovery: "retained-observer",

@@ -1,220 +1,44 @@
 import type { OpenCodeEvent } from "@opencode/client"
-import { clip, normalizeToolOutput, OpenCodeEditInput, OpenCodeFailedExit, openCodeFileName, openCodePlan, openCodeToolDetails } from "@mako/sessions"
-import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "@mako/sessions/content"
-import { z } from "zod"
+import type { OpenCodeContent } from "@mako/sessions/opencode-content"
 import type { LiveUpdate } from "../../shared.js"
 
-const Todo = z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() })) })
-const Titled = z.object({ command: z.string().optional(), path: z.string().optional(), filePath: z.string().optional(), pattern: z.string().optional(), url: z.string().optional(), query: z.string().optional(), description: z.string().optional(),
-  questions: z.array(z.object({ question: z.string() })).optional() })
-const MAX_OPEN_TOOLS = 4096
-
-type ToolEvent = Extract<OpenCodeEvent, { type: `session.tool.${string}` }>
-type ToolInput = Extract<ToolEvent, { type: "session.tool.called" }>["data"]["input"]
-interface Tool { sessionID: string; name: string; title: string; input: ToolInput }
-interface Step { agent: string; texts: Map<number, string> }
-type StepEnded = Extract<OpenCodeEvent, { type: "session.step.ended" }>
-const MAX_OPEN_STEPS = 64
-
-/** Native names become the transcript's shared vocabulary; unknown names stay themselves. */
-export function openCodeToolKind(name: string): string {
-  switch (name) {
-    case "shell": case "bash": return "execute"
-    case "edit": case "patch": case "apply_patch": case "multiedit": return "edit"
-    case "write": return "write"
-    case "read": return "read"
-    default: return name
-  }
-}
-
-function toolTitle(name: string, input: ToolInput): string {
-  const value = Titled.safeParse(input)
-  if (!value.success) return name
-  const { command, path, filePath, pattern, url, query, description, questions } = value.data
-  switch (name) {
-    case "shell": case "bash": return command ?? name
-    case "read": case "edit": case "write": case "patch": case "multiedit": return path ?? filePath ?? name
-    case "grep": case "glob": return pattern ?? name
-    case "webfetch": return url ?? name
-    case "websearch": return query ?? name
-    case "subagent": case "task": return description ?? name
-    case "question": return questions?.[0]?.question ?? name
-    default: return name
-  }
-}
-
-/**
- * One conversation's native stream, reduced to live transcript updates.
- * Tool IDs are session scoped, so a child's call never overwrites its parent's.
- * Child sessions contribute tool rows under their own title; their prose stays
- * in their own native session.
- */
-export class OpenCodeContent {
-  private readonly tools = new Map<string, Tool>()
-  private readonly titles = new Map<string, string>()
-  /** The root's running steps: the agent of each, and its finished text parts by ordinal. */
-  private readonly steps = new Map<string, Step>()
-  private readonly root: string
-  private readonly cwd: string
-  constructor(root: string, cwd: string) {
-    this.root = root
-    this.cwd = cwd
-  }
-
-  /** Child session titles, from `session.created`, prefix that child's tool rows. */
-  nameSession(sessionID: string, title: string | undefined): void {
-    if (sessionID !== this.root && title) this.titles.set(sessionID, title)
-  }
-
-  /** The row title for a native tool call, when it is still open. */
-  title(sessionID: string, toolID: string): string | undefined {
-    return this.tools.get(`${sessionID}:${toolID}`)?.title
-  }
-
-  /** The native tool name of an open call. */
-  name(sessionID: string, toolID: string): string | undefined {
-    return this.tools.get(`${sessionID}:${toolID}`)?.name
-  }
-
-  /** What a child session's rows and requests are prefixed with. */
-  prefix(sessionID: string): string {
-    return sessionID === this.root ? "" : `${this.titles.get(sessionID) ?? "Subagent"}: `
-  }
-
-  /** `unknown` hears an event this projection does not know. */
-  observe(event: OpenCodeEvent, unknown?: (type: string) => void): LiveUpdate[] {
-    switch (event.type) {
-      case "session.text.delta":
-        return event.data.sessionID === this.root
-          ? [{ kind: "text", id: `${event.data.assistantMessageID}:${event.data.ordinal}`, text: event.data.delta }] : []
-      case "session.reasoning.delta":
-        return event.data.sessionID === this.root
-          ? [{ kind: "thinking", id: `${event.data.assistantMessageID}:reasoning:${event.data.ordinal}`, text: event.data.delta }] : []
-      case "session.tool.input.started":
-      case "session.tool.called":
-      case "session.tool.progress":
-      case "session.tool.success":
-      case "session.tool.failed":
-        return this.tool(event)
-      case "session.step.started":
-        if (event.data.sessionID === this.root) {
-          if (this.steps.size >= MAX_OPEN_STEPS) this.steps.delete(this.steps.keys().next().value!)
-          this.steps.set(event.data.assistantMessageID, { agent: event.data.agent, texts: new Map() })
-        }
-        return []
-      case "session.text.ended":
-        if (event.data.sessionID === this.root) this.steps.get(event.data.assistantMessageID)?.texts.set(event.data.ordinal, event.data.text)
-        return []
-      case "session.step.ended":
-        return this.stepEnded(event)
-      // Their content arrives as the deltas and tool results above.
-      case "session.text.started":
-      case "session.reasoning.started":
-      case "session.reasoning.ended":
-      case "session.tool.input.delta":
-      case "session.tool.input.ended":
-      case "session.step.streamed":
-      case "session.step.failed":
-      case "session.status":
-      case "session.idle":
-        return []
-      default:
-        unknown?.(event.type)
-        return []
-    }
-  }
-
-  /** A Plan step that ends the turn folds its streamed reply into the plan card (`openCodePlan`). */
-  private stepEnded(event: StepEnded): LiveUpdate[] {
-    const { sessionID, assistantMessageID, finish } = event.data
-    const step = sessionID === this.root ? this.steps.get(assistantMessageID) : undefined
-    this.steps.delete(assistantMessageID)
-    if (!step) return []
-    const ordinals = [...step.texts.keys()].sort((a, b) => a - b)
-    const plan = openCodePlan(assistantMessageID, step.agent, finish, ordinals.map((ordinal) => step.texts.get(ordinal)!))
-    if (!plan) return []
-    return [
-      { kind: "retract", ids: ordinals.map((ordinal) => `${assistantMessageID}:${ordinal}`) },
-      { kind: "proposed-plan", id: plan.id, text: plan.text, status: "proposed", replace: true },
-    ]
-  }
-
-  /** Rows a session left open when its execution stopped without finishing them. */
-  settle(sessionID: string, status: "cancelled" | "failed", note: string): LiveUpdate[] {
-    const updates: LiveUpdate[] = []
-    for (const [id, tool] of this.tools) {
-      if (tool.sessionID !== sessionID) continue
-      this.tools.delete(id)
-      const update: LiveUpdate = { kind: "tool-update", id, status, output: note }
-      if (status === "failed") update.unfinished = true
-      updates.push(update)
-    }
-    return updates
-  }
-
-  /**
-   * Open a call whose start was missed (a resubscribed stream), under the
-   * name its native message records.
-   */
-  open(sessionID: string, toolID: string, name: string): LiveUpdate[] {
-    const id = `${sessionID}:${toolID}`
-    if (this.tools.has(id)) return []
-    return this.start(sessionID, id, name)
-  }
-
-  private start(sessionID: string, id: string, name: string): LiveUpdate[] {
-    if (this.tools.size >= MAX_OPEN_TOOLS) this.tools.delete(this.tools.keys().next().value!)
-    this.tools.set(id, { sessionID, name, title: name, input: {} })
-    return [{ kind: "tool", id, title: `${this.prefix(sessionID)}${name}`, name, toolKind: openCodeToolKind(name), status: "pending" }]
-  }
-
-  private tool(event: Extract<ToolEvent, { type: "session.tool.input.started" | "session.tool.called" | "session.tool.progress" | "session.tool.success" | "session.tool.failed" }>): LiveUpdate[] {
-    const { sessionID } = event.data
-    const id = `${sessionID}:${event.data.id}`
-    const prefix = this.prefix(sessionID)
-    const updates: LiveUpdate[] = []
-    if (!this.tools.has(id)) {
-      if (event.type === "session.tool.progress") return []
-      updates.push(...this.start(sessionID, id, event.type === "session.tool.input.started" ? event.data.name : "tool"))
-    }
-    const tool = this.tools.get(id)!
-    switch (event.type) {
-      case "session.tool.input.started":
-        return updates
-      case "session.tool.called": {
-        tool.input = event.data.input
-        tool.title = toolTitle(tool.name, tool.input)
-        updates.push({ kind: "tool-update", id, title: `${prefix}${tool.title}`, status: "in_progress",
-          input: JSON.stringify(tool.input, null, 2), details: this.details(tool) })
-        if (tool.name === "todowrite") {
-          const todo = Todo.safeParse(tool.input)
-          if (todo.success) updates.push({ kind: "plan", entries: todo.data.todos })
-        }
-        return updates
-      }
-      case "session.tool.progress":
-        return updates
-      case "session.tool.success":
-      case "session.tool.failed": {
-        this.tools.delete(id)
-        const content = event.data.content ?? []
-        const text = content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n")
-        const output = event.type === "session.tool.failed"
-          ? [event.data.error.message, text].filter(Boolean).join("\n")
-          : text
-        const attachments: AttachmentContent[] = content.flatMap(part =>
-          part.type === "file" ? [attachmentFromUrl(openCodeFileName(part.name), part.mime, part.uri)] : [])
-        const status = event.type === "session.tool.failed"
-          ? event.data.error.type === "aborted" ? "cancelled" : "failed"
-          : OpenCodeFailedExit.safeParse(event.data.metadata).success ? "failed" : "completed"
-        updates.push({ kind: "tool-update", id, status,
-          output: clip(normalizeToolOutput(output)), attachments: attachments.length ? attachments : undefined })
-        return updates
-      }
-    }
-  }
-
-  private details(tool: Tool): ToolDetail[] | undefined {
-    return openCodeToolDetails(tool.name, OpenCodeEditInput.safeParse(tool.input).data, this.cwd)
+/** One stream event through the conversation's projection; `unknown` hears an event it does not know. */
+export function openCodeEventUpdates(content: OpenCodeContent, event: OpenCodeEvent, unknown?: (type: string) => void): LiveUpdate[] {
+  switch (event.type) {
+    case "session.text.delta":
+      return content.text(event.data.sessionID, event.data.assistantMessageID, event.data.ordinal, event.data.delta)
+    case "session.reasoning.delta":
+      return content.reasoning(event.data.sessionID, event.data.assistantMessageID, event.data.ordinal, event.data.delta)
+    case "session.tool.input.started":
+      return content.toolStarted(event.data.sessionID, event.data.id, event.data.name)
+    case "session.tool.called":
+      return content.toolCalled(event.data.sessionID, event.data.id, event.data.input)
+    case "session.tool.success":
+      return content.toolEnded(event.data.sessionID, event.data.id, { content: event.data.content, metadata: event.data.metadata })
+    case "session.tool.failed":
+      return content.toolEnded(event.data.sessionID, event.data.id, { content: event.data.content, error: event.data.error })
+    case "session.step.started":
+      content.stepStarted(event.data.sessionID, event.data.assistantMessageID, event.data.agent)
+      return []
+    case "session.text.ended":
+      content.textEnded(event.data.sessionID, event.data.assistantMessageID, event.data.ordinal, event.data.text)
+      return []
+    case "session.step.ended":
+      return content.stepEnded(event.data.sessionID, event.data.assistantMessageID, event.data.finish)
+    // Their content arrives as the deltas and tool results above; a call's progress has nothing to draw.
+    case "session.tool.progress":
+    case "session.text.started":
+    case "session.reasoning.started":
+    case "session.reasoning.ended":
+    case "session.tool.input.delta":
+    case "session.tool.input.ended":
+    case "session.step.streamed":
+    case "session.step.failed":
+    case "session.status":
+    case "session.idle":
+      return []
+    default:
+      unknown?.(event.type)
+      return []
   }
 }

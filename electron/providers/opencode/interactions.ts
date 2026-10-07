@@ -10,7 +10,7 @@ import { readLegacyOpenCodeDecisions } from "./legacy-approval-decisions.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { hostWarn } from "../../host-log.js"
 import { NativeForm, openCodeQuestions, openCodeFormAnswer, openCodeAnswerDigest } from "./forms.js"
-import { openCodeToolKind } from "./content.js"
+import { openCodeToolKind } from "@mako/sessions/opencode-content"
 
 const NativePermission = z.object({
   id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), action: z.string(), message: z.string().optional(),

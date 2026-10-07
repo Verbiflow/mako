@@ -1,15 +1,16 @@
 import type { OpenCodeEvent } from "@opencode/client"
 import { openCodeTurnFailed } from "@mako/sessions"
+import { openCodeTokens } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import type { AccessTier } from "../../contracts/access.js"
 import type { Decoded } from "../../contracts/native-decoding.js"
-import type { TokenCounts } from "../../contracts/providers-acp.js"
 import { SessionUsage, type UsageObservation } from "../../session-usage.js"
 import { openCodeModeForAgent } from "./access.js"
 import type { OpenCodeAgents } from "./agents.js"
 import { OpenCodeShells } from "./background.js"
 import type { OpenCodeModelRef } from "./catalog.js"
-import { OpenCodeContent } from "./content.js"
+import { OpenCodeContent } from "@mako/sessions/opencode-content"
+import { openCodeEventUpdates } from "./content.js"
 import { openCodeIgnores } from "./notices.js"
 
 /** OpenCode's facts the driver acts on beyond the transcript. */
@@ -89,18 +90,6 @@ export const OPENCODE_DECODED = new Set<string>([
 ])
 
 const SessionScope = z.object({ sessionID: z.string() })
-
-/** OpenCode counts reasoning beside output and cached input beside input. */
-function openCodeTokens(tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }): TokenCounts {
-  const counts: TokenCounts = {
-    input: tokens.input,
-    cacheRead: tokens.cache.read,
-    cacheWrite: tokens.cache.write,
-    output: tokens.output + tokens.reasoning,
-  }
-  if (tokens.reasoning) counts.reasoning = tokens.reasoning
-  return counts
-}
 
 /** A catalog change for `cwd`; it arrives before the session exists too. */
 export function openCodeCatalogChange(event: OpenCodeEvent, cwd: string): boolean {
@@ -231,18 +220,20 @@ export class OpenCodeDecoder {
 
   private contentOf(event: OpenCodeEvent): Decoded<OpenCodeEffect>[] {
     const decoded: Decoded<OpenCodeEffect>[] = []
-    if (event.type === "session.step.ended") {
-      const tokens = openCodeTokens(event.data.tokens)
+    // A stopped or failed step spent what it streamed before it stopped, and says so as an ended one does.
+    const step = event.type === "session.step.ended" || event.type === "session.step.failed" ? event.data : undefined
+    if (step?.tokens) {
+      const tokens = openCodeTokens(step.tokens)
       const observations: UsageObservation[] = [{ kind: "spent", tokens }]
-      if (event.data.cost > 0) observations.push({ kind: "costSpent", amount: event.data.cost, currency: "USD" })
-      if (event.data.sessionID === this.root) observations.push({ kind: "call", tokens })
+      if (step.cost) observations.push({ kind: "costSpent", amount: step.cost, currency: "USD" })
+      if (step.sessionID === this.root) observations.push({ kind: "call", tokens })
       decoded.push(...this.usage(...observations))
     }
     // The observer reads the call's name: a start opens it and a result closes it.
     const ends = event.type === "session.tool.success" || event.type === "session.tool.failed"
     const ending = ends ? this.agentCall(event) : undefined
     if (ending) decoded.push(ending)
-    for (const update of this.content.observe(event, (type) => decoded.push({ kind: "unknown", type, reason: "unknown", raw: z.json().parse(event) })))
+    for (const update of openCodeEventUpdates(this.content, event, (type) => decoded.push({ kind: "unknown", type, reason: "unknown", raw: z.json().parse(event) })))
       decoded.push({ kind: "update", update })
     const call = ends ? undefined : this.agentCall(event)
     if (call) decoded.push(call)

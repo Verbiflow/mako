@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs"
 import type { DatabaseSync } from "node:sqlite"
-import { join } from "node:path"
+import { basename } from "node:path"
+import { openCodeDatabasePaths } from "@mako/sessions"
+import { OpenCodeSavedTokens, openCodeTokens } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import { numberValue, objectValue, stringValue, type JsonObject } from "../../codex-app-json.js"
-import type { UsageTokenCounts } from "../../usage-pricing.js"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
-import { parseObject, tokenTotal, tokenValue, yieldToMain, type UsageEvent, type UsageScan } from "../../usage-scan.js"
+import { parseObject, tokenTotal, usageCounts, yieldToMain, type UsageEvent, type UsageScan } from "../../usage-scan.js"
 import type { ProviderUsageHistory } from "../usage-history.js"
 
 const OpenCodeRowSchema = z.object({
@@ -33,13 +34,13 @@ const CHANGED_MS = (alias: string, updated: string) =>
 /**
  * Each database is read from the last change the previous read saw. A
  * message still streaming changes again and is read again; its key keeps
- * the larger counts.
+ * the larger counts. The newer database is read first: a message both
+ * hold counts in the session the newer one files it under.
  */
 async function scan(scan: UsageScan): Promise<void> {
-  const root = join(scan.homeRoot, ".local", "share", "opencode")
-  for (const name of ["opencode-next.db", "opencode.db"]) {
-    const path = join(root, name)
+  for (const path of openCodeDatabasePaths(scan.env, scan.homeRoot).reverse()) {
     if (!existsSync(path)) continue
+    const name = basename(path)
     await scan.store(path, async (cursor) => {
       const db = openNativeStore(path)
       try {
@@ -153,15 +154,9 @@ function parseOpenCodeEvent(source: string, row: OpenCodeRow): UsageEvent | null
   const data = parseObject(row.data)
   if (!data) return null
   const assistant = objectValue(objectValue(data.metadata)?.assistant)
-  const tokens = objectValue(data.tokens) ?? objectValue(assistant?.tokens)
+  const tokens = OpenCodeSavedTokens.parse(data.tokens ?? assistant?.tokens)
   if (!tokens) return null
-  const cache = objectValue(tokens.cache)
-  const counts: UsageTokenCounts = {
-    input: tokenValue(tokens.input),
-    output: tokenValue(tokens.output) + tokenValue(tokens.reasoning),
-    cacheRead: tokenValue(cache?.read),
-    cacheWrite: tokenValue(cache?.write),
-  }
+  const counts = usageCounts(openCodeTokens(tokens))
   const cost = numberValue(data.cost) ?? numberValue(assistant?.cost)
   if (tokenTotal(counts) === 0 && (cost === undefined || cost < 0)) return null
   const timestamp = openCodeTimestamp(
