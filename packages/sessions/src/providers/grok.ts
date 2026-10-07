@@ -1,10 +1,9 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
-import { z } from "zod"
-import { AcpUpdateDecoder } from "../acp-decoder.js"
-import { AcpContentBlockSchema, acpAttachments, acpText } from "../acp-tool-details.js"
+import { AcpSavedTurns, acpSavedNotification, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
+import { acpAttachments, acpText } from "../acp-tool-details.js"
 import { GROK_ACP_HOOKS } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
-import { liveToolFinished, reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "../live-content.js"
+import type { LiveBlock } from "../live-content.js"
 import { backgroundCommandLabel, PROVIDER_TURN_FALLBACK, subagentLabel } from "../provider-turn.js"
 import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_FAILED, turnFailedEvent, type TranscriptEvent } from "../events.js"
 /**
@@ -37,7 +36,6 @@ import { existsSync } from "node:fs"
 import { readdir, readFile, stat, rm } from "node:fs/promises"
 import {
   clip,
-  cleanEntry,
   titleFrom,
   EntrySink,
   type EntryBlock,
@@ -99,7 +97,7 @@ type SavedLine =
       /** A message steered into the running turn (`_meta.interjection`), which carries no `promptIndex`. */
       steered: boolean
     }
-  | { kind: "update"; at?: string; notification: SessionNotification; tool?: { id: string; opens: boolean } }
+  | { kind: "update"; at?: string; notification: SessionNotification }
   | {
       kind: "turn-end"
       at?: string
@@ -433,21 +431,6 @@ function parseUsage(value: JsonValue | undefined): TurnUsage | undefined {
   return parsed
 }
 
-/**
- * What the shared decoder reads of a saved update, checked before it gets
- * one; Grok's hooks parse what they read themselves. The kinds `summary.json`
- * answers for (mode, options, title) and those only the live desk shows
- * (commands, usage) are not read.
- */
-const SavedUpdateSchema = z.discriminatedUnion("sessionUpdate", [
-  z.looseObject({ sessionUpdate: z.literal("agent_message_chunk"), content: AcpContentBlockSchema }),
-  z.looseObject({ sessionUpdate: z.literal("agent_thought_chunk"), content: AcpContentBlockSchema }),
-  z.looseObject({ sessionUpdate: z.literal("tool_call"), toolCallId: z.string(), title: z.string().nullish(), kind: z.string().nullish(), status: z.string().nullish() }),
-  z.looseObject({ sessionUpdate: z.literal("tool_call_update"), toolCallId: z.string(), title: z.string().nullish(), status: z.string().nullish() }),
-  z.looseObject({ sessionUpdate: z.literal("plan"), entries: z.array(z.looseObject({ content: z.string(), status: z.string() })) }),
-])
-const SavedSessionSchema = z.looseObject({ sessionId: z.string(), update: SavedUpdateSchema })
-
 function parseSavedLine(raw: string): SavedLine | null {
   const root = parseJsonObject(raw)
   if (!root) return null
@@ -489,17 +472,9 @@ function parseSavedLine(raw: string): SavedLine | null {
       return method === "_x.ai/session/update" && target !== undefined ? { kind: "rewind", at, target } : null
     }
   }
-  if (method === "session/update") {
-    const screened = SavedSessionSchema.safeParse(params)
-    if (screened.success) {
-      const saved = screened.data.update
-      // SAFETY: the screen checked every field `decodeAcpUpdate` reads of this kind, and Grok's hooks parse what they read.
-      const notification = screened.data as SessionNotification
-      const tool = saved.sessionUpdate === "tool_call" || saved.sessionUpdate === "tool_call_update"
-        ? { id: saved.toolCallId, opens: saved.sessionUpdate === "tool_call" } : undefined
-      return { kind: "update", at, notification, tool }
-    }
-  }
+  const saved = method === "session/update" ? SavedAcpNotificationSchema.safeParse(params).data : undefined
+  const notification = saved && acpSavedNotification(saved)
+  if (notification) return { kind: "update", at, notification }
   const marker = grokUpdateMarker(sessionUpdate, update)
   return marker ? { kind: "marker", at, marker } : null
 }
@@ -834,98 +809,38 @@ class GrokTurnCount {
   }
 }
 
-/** A run of the person's user chunks, joined until another line ends it. */
-interface UserRun {
-  at?: string
-  /** `prompt-<promptIndex>`, which a message steered into its turn names. */
-  id?: string
-  steeringFor?: string
-  text: string
-  attachments: AttachmentContent[]
-  /** Files from before `hostTurn` mark Grok's own turns only by their reminder text. */
-  opener?: string
-}
-
 /**
- * `updates.jsonl` read as a locator: each saved update goes through the
- * decoder the live client runs (`AcpUpdateDecoder` with `GROK_ACP_HOOKS`)
- * and the reducer the window runs (`reduceLiveUpdates`), so a reopened
- * session draws what the live one did. The reader adds only what the live
- * client knows another way: the person's prompts, the end of each turn and
- * rewinds. A turn becomes entries when it ends, so memory holds one turn's
- * blocks, and entries already saved are never changed in place.
+ * `updates.jsonl` read as a locator (`AcpSavedTurns` with `GROK_ACP_HOOKS`).
+ * Grok marks the rest itself: the person's prompts and the messages they
+ * steered in, the end of each turn, its markers, and rewinds.
  */
 function updatesTranslator(): GrokTranslator {
-  const sink = new EntrySink()
-  const decoder = new AcpUpdateDecoder(GROK_ACP_HOOKS)
-  const turns = new GrokTurnCount()
+  const turns = new AcpSavedTurns(GROK_ACP_HOOKS)
+  const count = new GrokTurnCount()
   /** The entry each counted turn begins with, so a rewind cuts where Grok's replay does. */
   const counted: ThreadEntry[] = []
-  /** When each block was written: the line that placed it, and for a plan the line that last changed it. */
-  const written = new WeakMap<LiveBlock, string | undefined>()
-  const tools = new Set<string>()
-  let blocks: LiveBlock[] = []
-  let pending: LiveUpdate[] = []
-  let pendingAt: (string | undefined)[] = []
-  let run: UserRun | undefined
   /** The id of the open turn's prompt, which a steered message names. */
   let prompt: string | undefined
   /** The open turn is one a rewind counts. */
   let counts = false
   /** The turn already showed its failure, as Grok's retry banner does, so its end adds none. */
   let failed = false
-  let started = false
-  let needsReset = false
-  let unchanged = 0
 
-  const queue = (update: LiveUpdate, at: string | undefined): void => {
-    pending.push(update)
-    pendingAt.push(at)
-  }
-
-  const reduce = (): void => {
-    if (!pending.length) return
-    const times = pendingAt
-    blocks = reduceLiveUpdates(blocks, pending, (block, previous, update) => {
-      written.set(block, previous && block.type !== "plan" ? written.get(previous) : times[update])
-    })
-    pending = []
-    pendingAt = []
-  }
-
-  const closeRun = (): void => {
-    if (!run) return
-    queue(run.opener ? { kind: "provider-turn", reason: run.opener } : userUpdate(run), run.at)
-    run = undefined
-  }
-
-  /** Ends the open turn: its blocks become saved entries, and the next starts empty. */
   const commit = (usage?: TurnUsage): void => {
-    closeRun()
-    reduce()
-    const entries = turnEntries(blocks, written, usage)
-    if (counts && entries[0]) counted.push(entries[0])
-    for (const entry of entries) sink.push(entry)
-    blocks = []
+    const first = turns.commit(usage)
+    if (counts && first) counted.push(first)
     counts = false
     prompt = undefined
   }
 
   /** Grok 1.0.46 saves a /compact the person typed as its own turn, after the compaction it ran. */
   const relabelCompaction = (): void => {
-    reduce()
-    for (let index = blocks.length - 1; index >= 0; index--) {
-      const block = blocks[index]!
-      if (block.type !== "event" || block.label !== CONTEXT_COMPACTED) continue
-      const manual = manualCompaction(block)
-      written.set(manual, written.get(block))
-      blocks = [...blocks.slice(0, index), manual, ...blocks.slice(index + 1)]
-      return
-    }
-    for (let index = sink.entries.length - 1; index >= 0; index--) {
-      const entry = sink.entries[index]!
+    if (turns.replaceLast((block): block is Extract<LiveBlock, { type: "event" }> => block.type === "event" && block.label === CONTEXT_COMPACTED, manualCompaction)) return
+    const entries = turns.sink.entries
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index]!
       if (entry.kind !== "event" || entry.label !== CONTEXT_COMPACTED) continue
-      sink.replace(index, manualCompaction(entry))
+      turns.sink.replace(index, manualCompaction(entry))
       return
     }
   }
@@ -933,8 +848,8 @@ function updatesTranslator(): GrokTranslator {
   const push = (raw: string): void => {
     const line = parseSavedLine(raw)
     if (line?.kind !== "user" || line.hostTurn) {
-      turns.other()
-      closeRun()
+      count.other()
+      turns.close()
     }
     if (!line) return
 
@@ -943,11 +858,12 @@ function updatesTranslator(): GrokTranslator {
         if (line.hostTurn && line.text.trim() === "/compact") return relabelCompaction()
         if (line.hostTurn) {
           commit()
-          started = true
-          queue({ kind: "provider-turn", reason: backgroundReminderLabel(line.text) ?? PROVIDER_TURN_FALLBACK }, line.at)
+          turns.prompted({ at: line.at, text: "", attachments: [], opener: backgroundReminderLabel(line.text) ?? PROVIDER_TURN_FALLBACK })
+          turns.close()
           return
         }
-        const opening = turns.user(line.promptIndex)
+        const opening = count.user(line.promptIndex)
+        const run = turns.prompt
         if (run && !opening.opens) {
           run.text += line.text
           run.attachments.push(...line.attachments)
@@ -955,39 +871,31 @@ function updatesTranslator(): GrokTranslator {
         }
         if (!line.text && !line.attachments.length) return
         if (line.steered && prompt) {
-          closeRun()
-          run = { at: line.at, steeringFor: prompt, text: line.text, attachments: [...line.attachments] }
+          turns.prompted({ at: line.at, steeringFor: prompt, text: line.text, attachments: [...line.attachments] })
           return
         }
         commit()
-        started = true
         counts = opening.counts
         prompt = line.promptIndex === undefined ? undefined : `prompt-${line.promptIndex}`
-        run = {
+        turns.prompted({
           at: line.at,
           id: prompt,
           text: line.text,
           attachments: [...line.attachments],
           opener: line.attachments.length ? undefined : backgroundReminderLabel(line.text),
-        }
+        })
         return
       }
-      case "update": {
-        const { tool } = line
-        if (tool?.opens) tools.add(tool.id)
-        // A follower that starts mid-file sees replies and calls whose turn it never read.
-        if (tool && !tool.opens ? !tools.has(tool.id) : !started && line.notification.update.sessionUpdate !== "plan") needsReset = true
-        started = true
-        for (const item of decoder.update(line.notification)) if (item.kind === "update") queue(item.update, line.at)
+      case "update":
+        turns.update(line.notification, line.at)
         return
-      }
       case "marker":
         if (line.marker.label === TURN_FAILED) failed = true
-        queue({ kind: "event", ...line.marker }, line.at)
+        turns.queue({ kind: "event", ...line.marker }, line.at)
         return
       case "turn-end": {
         const ended = failed ? undefined : grokTurnEnd(line.stopReason, line.result)
-        if (ended) queue({ kind: "event", ...ended }, line.at)
+        if (ended) turns.queue({ kind: "event", ...ended }, line.at)
         commit(line.usage)
         failed = false
         return
@@ -998,132 +906,26 @@ function updatesTranslator(): GrokTranslator {
         // A target past the last turn keeps everything, as Grok's replay does.
         if (!start) return
         counted.length = line.target
-        sink.truncate(Math.max(0, sink.entries.indexOf(start)))
+        turns.sink.truncate(Math.max(0, turns.sink.entries.indexOf(start)))
         return
       }
     }
   }
 
-  const snapshot = (): ThreadEntry[] => {
-    reduce()
-    const saved = sink.snapshot()
-    unchanged = sink.unchanged
-    // A steered run opens inside the turn, after the blocks it has so far.
-    const open = run ? [...turnEntries(blocks, written), runEntry(run)] : turnEntries(blocks, written)
-    for (const entry of open) cleanEntry(entry)
-    return open.length ? [...saved, ...open] : saved
-  }
-
-  const done = (): ThreadEntry[] => {
-    commit()
-    const entries = sink.snapshot()
-    unchanged = sink.unchanged
-    return entries
-  }
-
   return {
     push,
-    snapshot,
-    done,
+    snapshot: () => turns.snapshot(),
+    done: () => {
+      commit()
+      return turns.done()
+    },
     get needsReset() {
-      return needsReset
+      return turns.needsReset
     },
     get unchanged() {
-      return unchanged
+      return turns.unchanged
     },
   }
-}
-
-function userUpdate(run: UserRun): LiveUpdate {
-  return {
-    kind: "user",
-    ...run.id && { requestId: run.id },
-    ...run.steeringFor && { steeringFor: run.steeringFor },
-    text: run.text,
-    ...run.attachments.length && { attachments: run.attachments },
-  }
-}
-
-function runEntry(run: UserRun): ThreadEntry {
-  if (run.opener) return { kind: "event", at: run.at, label: run.opener, opensTurn: true }
-  return userEntry(run.at, run.id, run.steeringFor, run.text, run.attachments)
-}
-
-function userEntry(at: string | undefined, id: string | undefined, steeringFor: string | undefined, text: string, attachments: readonly AttachmentContent[] | undefined): ThreadEntry {
-  return { kind: "user", ...id && { id }, at, ...steeringFor && { steeringFor }, text, ...attachments?.length && { attachments: [...attachments] } }
-}
-
-/** A turn's blocks as saved entries: what the person said, what Grok did, and its markers. */
-function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveBlock, string | undefined>, usage?: TurnUsage): ThreadEntry[] {
-  const entries: ThreadEntry[] = []
-  let assistant: AssistantEntry | undefined
-  let replied: AssistantEntry | undefined
-  const reply = (block: LiveBlock): AssistantEntry => {
-    if (!assistant) {
-      assistant = { kind: "assistant", at: written.get(block), blocks: [] }
-      entries.push(assistant)
-      replied = assistant
-    }
-    return assistant
-  }
-  for (const block of blocks) {
-    const at = written.get(block)
-    switch (block.type) {
-      case "user":
-        assistant = undefined
-        entries.push(userEntry(at, block.requestId, block.steeringFor, block.text, block.attachments))
-        break
-      case "provider-turn":
-        assistant = undefined
-        entries.push({ kind: "event", at, label: block.reason, opensTurn: true })
-        break
-      case "event":
-        assistant = undefined
-        entries.push(eventEntry(block, at))
-        break
-      case "plan":
-        assistant = undefined
-        entries.push({ kind: "assistant", at, blocks: [{ type: "tool", name: "Plan", output: "", details: [{ type: "plan", entries: block.entries }] }] })
-        break
-      case "text":
-      case "thinking":
-        reply(block).blocks.push({ type: block.type, text: block.text })
-        break
-      case "attachment":
-        reply(block).blocks.push(block.attachment)
-        break
-      case "proposed-plan":
-        reply(block).blocks.push({ type: block.type, id: block.id, text: block.text, status: block.status, ...block.truncated && { truncated: true } })
-        break
-      case "tool":
-        reply(block).blocks.push(toolEntry(block))
-        break
-    }
-  }
-  if (usage && replied) replied.usage = usage
-  return entries
-}
-
-function eventEntry(block: Extract<LiveBlock, { type: "event" }>, at: string | undefined): ThreadEntry {
-  const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", at, label: block.label }
-  if (block.detail !== undefined) entry.detail = block.detail
-  if (block.body !== undefined) entry.body = block.body
-  if (block.tone !== undefined) entry.tone = block.tone
-  if (block.source !== undefined) entry.source = block.source
-  return entry
-}
-
-function toolEntry(block: Extract<LiveBlock, { type: "tool" }>): GrokToolBlock {
-  const tool: GrokToolBlock = { type: "tool", id: block.id, name: block.name ?? block.title, input: clip(block.input) }
-  const output = clip(normalizeToolOutput(block.output))
-  if (output) tool.output = output
-  if (block.details?.length) tool.details = block.details
-  if (block.attachments?.length) tool.attachments = block.attachments
-  if (block.status === "failed") tool.error = true
-  if (/cancel/i.test(block.status)) tool.canceled = true
-  // A finished tool without words still finished; with no output the window draws it pending.
-  if (liveToolFinished(block.status)) tool.output ??= ""
-  return tool
 }
 
 function legacyTranslator(): GrokTranslator {

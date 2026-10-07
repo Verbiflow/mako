@@ -1,5 +1,7 @@
 import { z } from "zod"
+import type { AcpDecoderHooks } from "../acp-decoder.js"
 import type { AcpToolReading } from "../acp-tool-details.js"
+import { DevinPlanUpdates } from "../providers/devin-plans.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /** Names are `_meta["cognition.ai/inferenceToolName"]` live and in the IDE journal, and the chat tool name in the CLI store. */
@@ -88,3 +90,20 @@ export const DEVIN_TOOL_READING: AcpToolReading = {
 }
 
 const PlanFileInputSchema = z.object({ file_path: z.string() })
+
+const InferenceMeta = z.object({ "cognition.ai/inferenceToolName": z.string().trim().min(1).max(512) })
+
+/** What Devin's updates mean beyond ACP's own fields, read the same live and from its IDE journal. */
+export const DEVIN_ACP_HOOKS = {
+  /** ACP's kind describes the action; `_meta["cognition.ai/inferenceToolName"]` names Devin's tool. */
+  toolName: (tool) => InferenceMeta.safeParse(tool._meta).data?.["cognition.ai/inferenceToolName"],
+  toolReading: DEVIN_TOOL_READING,
+  /**
+   * Devin's status line for its own client, `_meta["cognition.ai/displayMessage"]`:
+   * 3000.10.23 reports /compact's result this way ("Context compacted") beside
+   * `_cognition.ai/compaction`, and keeps it out of its store. The live
+   * compaction spec still reads it.
+   */
+  transient: (notification) => notification.update.sessionUpdate === "agent_message_chunk" && notification.update._meta?.["cognition.ai/displayMessage"] === true,
+  plans: () => new DevinPlanUpdates(),
+} satisfies AcpDecoderHooks<DevinPlanUpdates>

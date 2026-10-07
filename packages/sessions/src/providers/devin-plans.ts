@@ -1,4 +1,7 @@
+import type { SessionUpdate } from "@agentclientprotocol/sdk"
 import { z } from "zod"
+import type { AcpPlanDecoder } from "../acp-decoder.js"
+import type { LiveUpdate } from "../live-content.js"
 
 /**
  * Devin's plan mode, read from devin 3000.10.23's saved sessions and binary.
@@ -101,5 +104,16 @@ export class DevinPlanTracker {
     const card = this.open.get(path) ?? id
     this.open.set(path, card)
     return { id: card, text: text.replace(FRONT_MATTER, "") }
+  }
+}
+
+/** Devin's proposed plans from its updates, live and from its IDE journal; the live client adds the approval. */
+export class DevinPlanUpdates implements AcpPlanDecoder {
+  protected readonly tracker = new DevinPlanTracker()
+
+  update(update: SessionUpdate, sessionId: string): LiveUpdate[] {
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return []
+    const plan = this.tracker.observe(DevinPlanCallSchema.safeParse(update).data, sessionId)
+    return plan ? [{ kind: "proposed-plan", id: plan.id, text: plan.text, status: "proposed", replace: true }] : []
   }
 }

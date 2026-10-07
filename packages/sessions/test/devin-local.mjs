@@ -5,6 +5,9 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { DevinLocalProvider } from '../dist/providers/devin-local.js'
 import { SessionCatalog } from '../dist/catalog.js'
+import { AcpUpdateDecoder } from '../dist/acp-decoder.js'
+import { DEVIN_ACP_HOOKS } from '../dist/harnesses/devin.js'
+import { reduceLiveUpdates } from '../dist/live-content.js'
 
 const user = await mkdtemp(join(tmpdir(), 'mako-devin-ide-'))
 const uuid = 'ide-journal-fixture'
@@ -71,7 +74,34 @@ try {
   const legacy = join(user,'acp-events','legacy.ndjson')
   await writeFile(legacy, JSON.stringify({notification:chunk('user_message_chunk','Legacy prompt')})+'\n')
   assert.equal((await provider.read(legacy)).entries[0].text, 'Legacy prompt')
-  console.log('Devin IDE SQLite: native identity, WAL snapshot updates, tool results, bounded peek, catalog deduplication, unknown schema refusal and legacy journal preservation pass')
+
+  // The journal reads through the hooks the live client runs, so it draws what the live session did.
+  const at = (second) => ({'cognition.ai/timestamp': `2026-10-02T00:00:0${second}Z`})
+  const said = (id, text, second) => ({sessionUpdate: 'user_message_chunk', content: {type: 'text', text}, _meta: {...at(second), 'cognition.ai/clientMessageId': id}})
+  const updates = [
+    said('m1', 'Run the ', 0),
+    said('m1', 'tests', 0),
+    {sessionUpdate: 'tool_call', toolCallId: 'exec-1', title: 'Run npm test', kind: 'execute', status: 'in_progress', rawInput: {command: 'npm test'}, content: [{type: 'content', content: {type: 'resource', resource: {uri: 'tool://preview', text: 'npm test'}}}], _meta: {...at(1), 'cognition.ai/inferenceToolName': 'exec'}},
+    {sessionUpdate: 'tool_call_update', toolCallId: 'exec-1', status: 'failed', content: [{type: 'content', content: {type: 'text', text: '1 failing'}}], _meta: at(2)},
+    {sessionUpdate: 'tool_call', toolCallId: 'read-1', title: 'Read notes.md', kind: 'read', status: 'failed', _meta: {...at(3), 'cognition.ai/inferenceToolName': 'read', 'cognition.ai/canceled': true}},
+    {sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: 'Context compacted'}, _meta: {...at(3), 'cognition.ai/displayMessage': true}},
+    {sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: 'One test fails.'}, _meta: at(4)},
+    said('m2', 'Fix it', 5),
+  ]
+  const journal = join(user, 'acp-events', 'locator.ndjson')
+  await writeFile(journal, updates.map((notification) => JSON.stringify({notification})).join('\n') + '\n')
+  const read = await provider.read(journal)
+  assert.deepEqual(read.entries.map((entry) => entry.kind), ['user', 'assistant', 'user'])
+  assert.equal(read.entries[0].text, 'Run the tests', 'chunks of one client message are one prompt')
+  const [exec, canceled, reply] = read.entries[1].blocks
+  assert.deepEqual([exec.name, JSON.parse(exec.input).command, exec.output, exec.error], ['exec', 'npm test', '1 failing', true])
+  assert.equal(exec.details, undefined, "Devin's own command preview stays out")
+  assert.deepEqual([canceled.name, canceled.canceled, canceled.error], ['read', true, undefined])
+  assert.deepEqual(reply, {type: 'text', text: 'One test fails.'}, 'a status line Devin keeps out of its store stays out')
+  const live = new AcpUpdateDecoder(DEVIN_ACP_HOOKS)
+  const drawn = reduceLiveUpdates([], updates.slice(2, -1).flatMap((update) => live.update({sessionId: 'locator', update})).flatMap((item) => item.kind === 'update' ? [item.update] : []))
+  assert.deepEqual(drawn.map((block) => block.type === 'tool' ? [block.name, block.status] : [block.type, block.text]), [['exec', 'failed'], ['read', 'canceled'], ['text', 'One test fails.']], 'the reader draws what the live decoder draws')
+  console.log('Devin IDE SQLite: native identity, WAL snapshot updates, tool results, bounded peek, catalog deduplication, unknown schema refusal, legacy journal preservation, and live-decoder locator reading pass')
 } finally {
   store.close(); state.close()
   await rm(user,{recursive:true,force:true})

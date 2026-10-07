@@ -1,12 +1,15 @@
 import { z } from "zod"
-import { AcpToolCalls, acpAttachments, acpShownDetails, acpToolDetails, acpToolFields, AcpToolUpdateSchema } from "../acp-tool-details.js"
-import { DEVIN_TOOL_READING } from "../harnesses/devin.js"
-import { ProposedPlans, type AttachmentContent, type ToolDetail } from "../content.js"
-import { DevinPlanCallSchema, DevinPlanTracker } from "./devin-plans.js"
-/** Devin IDE journals: legacy ACP NDJSON and the current per-session SQLite
- * message store. Both reuse the ACP translator; native session identity comes
- * from the editor's message-store index, never the database's random filename.
- * SQLite snapshots are replaceable, not byte-tail journals. */
+import { AcpSavedTurns, acpSavedNotification, SavedAcpUpdateSchema } from "../acp-saved-turns.js"
+import { acpAttachments, acpText } from "../acp-tool-details.js"
+import { DEVIN_ACP_HOOKS } from "../harnesses/devin.js"
+/**
+ * Devin IDE journals: the per-session SQLite message store, and the ACP
+ * NDJSON the IDE wrote before it. Both keep the ACP updates Devin sent, read
+ * as a locator through the hooks the live client runs (`DEVIN_ACP_HOOKS`).
+ * Native session identity comes from the editor's message-store index, never
+ * the database's random filename. SQLite snapshots are replaceable, not
+ * byte-tail journals.
+ */
 
 import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -15,8 +18,6 @@ import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import { openNativeStore } from "../read-only-sqlite.js"
 import {
   agentTitleFrom,
-  clip,
-  EntrySink,
   titleFrom,
   type Thread,
   type ThreadEntry,
@@ -89,97 +90,6 @@ interface CachedSession {
 
 interface SessionCache {
   sessions: CachedSession[]
-}
-
-interface AcpMetadata {
-  timestamp?: string
-  clientMessageId?: string
-  inferenceToolName?: string
-}
-
-interface AcpEventBase {
-  details?: ToolDetail[]
-  locations?: ToolDetail[]
-  attachments?: AttachmentContent[]
-  at?: string
-}
-
-interface AcpUserMessage extends AcpEventBase {
-  sessionUpdate: "user_message_chunk"
-  text: string
-  clientMessageId?: string
-}
-
-interface AcpAgentMessage extends AcpEventBase {
-  sessionUpdate: "agent_message_chunk" | "agent_thought_chunk"
-  text: string
-}
-
-interface AcpToolCall extends AcpEventBase {
-  sessionUpdate: "tool_call"
-  name: string
-  input?: string
-  toolCallId?: string
-  notification: JsonRecord
-}
-
-interface AcpToolCallUpdate extends AcpEventBase {
-  sessionUpdate: "tool_call_update"
-  /** Each replaces the tool's field when the update carries it, as ACP and the live reducer have it. */
-  input?: string
-  output?: string
-  status?: string
-  exitCode?: number
-  toolCallId?: string
-  notification: JsonRecord
-}
-
-interface AcpPlanEntry {
-  content?: string
-  status?: string
-}
-
-interface AcpPlan extends AcpEventBase {
-  sessionUpdate: "plan"
-  entries: AcpPlanEntry[]
-}
-
-interface AcpCost {
-  amount: number
-  currency?: string
-}
-
-interface AcpUsage extends AcpEventBase {
-  sessionUpdate: "usage_update"
-  used?: number
-  size?: number
-  cost?: AcpCost
-}
-
-interface AcpSessionInfo extends AcpEventBase {
-  sessionUpdate: "session_info_update"
-  title?: string
-}
-
-interface AcpCurrentMode extends AcpEventBase {
-  sessionUpdate: "current_mode_update"
-}
-
-type AcpEvent =
-  | AcpUserMessage
-  | AcpAgentMessage
-  | AcpToolCall
-  | AcpToolCallUpdate
-  | AcpPlan
-  | AcpUsage
-  | AcpSessionInfo
-  | AcpCurrentMode
-
-type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
-type ToolBlock = Extract<AssistantEntry["blocks"][number], { type: "tool" }>
-
-interface TranslatorState {
-  title?: string
 }
 
 interface DevinTranslator extends LineTranslator {
@@ -337,9 +247,9 @@ export class DevinLocalProvider implements SessionProvider {
         const payload = parseJson(raw)
         if (!isJsonRecord(payload)) continue
         const content = payload.content
+        // A tool's row holds the call as it last stood, so one update carries all of it.
         if (row.kind === "tool_call" && isJsonRecord(content)) {
           if (push(JSON.stringify({ notification: { ...content, sessionUpdate: "tool_call" } })) === false) break
-          if (push(JSON.stringify({ notification: { ...content, sessionUpdate: "tool_call_update" } })) === false) break
         } else if (isJsonArray(content)) {
           let stopped = false
           for (const notification of content) {
@@ -431,229 +341,70 @@ export class DevinLocalProvider implements SessionProvider {
 
 /* -------------------------------------------------------------- events */
 
-/**
- * ACP notifications → canonical entries. Chunk streams coalesce: a run of
- * `agent_message_chunk`s is one text block, a thought run one thinking
- * block, and tool calls pick up their updates by id. User chunks group by
- * the client message id so a multi-chunk prompt stays one entry.
- */
 function journalOf(path: string): string {
   return basename(path).replace(/\.(?:ndjson|db)$/, "")
 }
 
-/** `journal` scopes plan cards; Mako runs no desktop session live, so they need not match a live id. */
+/** A saved line: `{ notification }`, as the NDJSON journal keeps it and `readMessages` passes a row on. */
+const SavedLineSchema = z.object({ notification: SavedAcpUpdateSchema.extend({ content: z.json().optional(), _meta: z.looseObject({}).optional() }) })
+const StampSchema = z.looseObject({ "cognition.ai/timestamp": z.string().optional(), "cognition.ai/clientMessageId": z.string().optional() })
+
+/**
+ * Devin marks the person's messages itself: each `user_message_chunk` of
+ * one message carries its `cognition.ai/clientMessageId`, and a message
+ * opens the next turn. `journal` scopes plan cards; Mako runs no desktop
+ * session live, so they need not match a live id.
+ */
 function translator(journal: string): DevinTranslator {
-  const sink = new EntrySink()
-  const state: TranslatorState = {}
-  const plans = new DevinPlanTracker()
-  const cards = new ProposedPlans()
-  let assistant: AssistantEntry | null = null
-  let userId: string | null = null
-  const toolsById = new Map<string, { block: ToolBlock; entry: AssistantEntry }>()
-  /** The entry each plan card sits in, which a revision rewrites. */
-  const cardOwners = new WeakMap<AssistantEntry["blocks"][number], AssistantEntry>()
-  const tools = new AcpToolCalls()
-  let started = false
-  let needsReset = false
-
-  const flushAssistant = (preserveTools = false) => {
-    if (assistant) sink.push(assistant)
-    assistant = null
-    if (!preserveTools) toolsById.clear()
-  }
-
-  const ensureAssistant = (at?: string): AssistantEntry => {
-    if (!assistant) assistant = { kind: "assistant", at, blocks: [] }
-    return assistant
-  }
-
-  const appendText = (kind: "text" | "thinking", text: string, at?: string) => {
-    const entry = ensureAssistant(at)
-    const last = entry.blocks.at(-1)
-    if (last && last.type === kind) {
-      last.text += text
-    } else {
-      entry.blocks.push({ type: kind, text })
-    }
-  }
-
-  const propose = (notification: JsonRecord, at?: string) => {
-    const plan = plans.observe(DevinPlanCallSchema.safeParse(notification).data, journal)
-    const proposed = plan && cards.propose(plan.id, plan.text)
-    if (!proposed) return
-    if (proposed.revised) {
-      const entry = cardOwners.get(proposed.card)
-      if (entry) sink.edited(entry)
-      return
-    }
-    const entry = ensureAssistant(at)
-    cardOwners.set(proposed.card, entry)
-    entry.blocks.push(proposed.card)
-  }
+  const turns = new AcpSavedTurns(DEVIN_ACP_HOOKS)
+  let title: string | undefined
+  /** The open message's client id, which its later chunks repeat. */
+  let message: string | undefined
 
   const push = (raw: string): void => {
-    const event = parseAcpEvent(raw)
-    if (!event) return
-
-    switch (event.sessionUpdate) {
-      case "user_message_chunk": {
-        if (!event.text && !event.attachments?.length) return
-        const lastEntry = sink.entries.at(-1)
-        if (
-          event.clientMessageId &&
-          event.clientMessageId === userId &&
-          lastEntry?.kind === "user"
-        ) {
-          lastEntry.text += event.text
-          if (event.attachments?.length)
-            lastEntry.attachments = [
-              ...(lastEntry.attachments ?? []),
-              ...event.attachments,
-            ]
-          sink.edited(lastEntry)
-          return
-        }
-        flushAssistant()
-        userId = event.clientMessageId ?? null
-        started = true
-        const user: ThreadEntry = {
-          kind: "user",
-          at: event.at,
-          text: event.text,
-        }
-        if (event.attachments?.length) user.attachments = event.attachments
-        sink.push(user)
-        return
-      }
-      case "agent_message_chunk":
-        if (!started) needsReset = true
-        started = true
-        appendText("text", event.text, event.at)
-        if (event.attachments?.length)
-          ensureAssistant(event.at).blocks.push(...event.attachments)
-        return
-      case "agent_thought_chunk":
-        if (!started) needsReset = true
-        started = true
-        appendText("thinking", event.text, event.at)
-        return
-      case "tool_call": {
-        if (!started) needsReset = true
-        started = true
-        const entry = ensureAssistant(event.at)
-        const block = createToolBlock(event.name, event.input)
-        block.id = event.toolCallId
-        const details = event.toolCallId ? tools.read(event.toolCallId, event).details : acpShownDetails(event)
-        if (details?.length) block.details = details
-        if (event.attachments?.length) block.attachments = event.attachments
-        entry.blocks.push(block)
-        if (event.toolCallId) toolsById.set(event.toolCallId, { block, entry })
-        propose(event.notification, event.at)
-        return
-      }
-      case "tool_call_update": {
-        const call = event.toolCallId
-          ? toolsById.get(event.toolCallId)
-          : undefined
-        if (call) {
-          const { block } = call
-          const update = event.toolCallId ? tools.read(event.toolCallId, event) : undefined
-          if (update?.details?.length) block.details = update.details
-          if (event.attachments?.length) block.attachments = event.attachments
-          if (event.input !== undefined) block.input = event.input
-          if (event.output !== undefined) block.output = clip(event.output)
-          if (update?.status === "failed") block.error = true
-          if (/cancel/i.test(update?.status ?? "")) block.canceled = true
-          sink.edited(call.entry)
-        } else if (event.toolCallId) {
-          needsReset = true
-        }
-        propose(event.notification, event.at)
-        return
-      }
-      case "plan":
-        flushAssistant()
-        sink.push({
-          kind: "assistant",
-          at: event.at,
-          blocks: [
-            {
-              type: "tool",
-              name: "Plan",
-              output: "",
-              details: [
-                {
-                  type: "plan",
-                  entries: event.entries.flatMap((entry) =>
-                    entry.content
-                      ? [
-                          {
-                            content: entry.content,
-                            status: entry.status ?? "pending",
-                          },
-                        ]
-                      : []
-                  ),
-                },
-              ],
-            },
-          ],
-        })
-        return
-      case "usage_update":
-        flushAssistant(true)
-        sink.push({
-          kind: "event",
-          at: event.at,
-          label: "Context usage",
-          detail: [
-            event.used !== undefined ? `${event.used} used` : "",
-            event.size !== undefined ? `${event.size} available` : "",
-            event.cost
-              ? `${event.cost.amount}${event.cost.currency ? ` ${event.cost.currency}` : ""} spent`
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        })
-        return
-      case "session_info_update":
-        state.title = agentTitleFrom(event.title) ?? state.title
-        return
-      case "current_mode_update":
-        flushAssistant()
-        return
+    const notification = SavedLineSchema.safeParse(parseJson(raw)).data?.notification
+    if (!notification) return
+    const stamp = StampSchema.safeParse(notification._meta).data
+    const at = stamp?.["cognition.ai/timestamp"]
+    if (notification.sessionUpdate !== "user_message_chunk") {
+      turns.close()
+      const saved = acpSavedNotification({ sessionId: journal, update: notification })
+      if (saved) for (const patch of turns.update(saved, at)) title = patch.title ?? title
+      return
     }
+    const text = acpText(notification.content)
+    const attachments = acpAttachments(notification.content)
+    const id = stamp?.["cognition.ai/clientMessageId"]
+    const run = turns.prompt
+    if (run && id !== undefined && id === message) {
+      run.text += text
+      run.attachments.push(...attachments)
+      return
+    }
+    if (!text && !attachments.length) return
+    turns.commit()
+    message = id
+    turns.prompted({ at, text, attachments })
   }
 
   return {
     push,
     unavailable: (position) => {
-      flushAssistant()
-      sink.push({ kind: "event", label: "Message unavailable", detail: "This native record exceeds the history read limit. The original remains in the IDE store.", source: { harness: "devin", record: `${journal}:messages/${position}` } })
+      turns.close()
+      turns.queue({ kind: "event", label: "Message unavailable", detail: "This native record exceeds the history read limit. The original remains in the IDE store.", source: { harness: "devin", record: `${journal}:messages/${position}` } }, undefined)
     },
-    snapshot: () => {
-      const entries = sink.snapshot()
-      return assistant ? [...entries, assistant] : entries
-    },
-    done: () => {
-      flushAssistant()
-      return sink.snapshot()
-    },
+    snapshot: () => turns.snapshot(),
+    done: () => turns.done(),
     get title() {
-      return state.title
+      return title
     },
     get needsReset() {
-      return needsReset
+      return turns.needsReset
     },
     get unchanged() {
-      return sink.unchanged
+      return turns.unchanged
     },
   }
-}
-
-function createToolBlock(name: string, input?: string): ToolBlock {
-  return { type: "tool", name, input }
 }
 
 function parseStateValueRow(row: SqliteStatementResult): StateValueRow | null {
@@ -713,130 +464,6 @@ function parseCreatedAt(value: JsonValue | undefined): string | undefined {
   return isJsonRecord(value)
     ? readString(value, "cognition.ai/createdAt")
     : undefined
-}
-
-function parseAcpEvent(raw: string): AcpEvent | null {
-  const root = parseJson(raw)
-  if (!isJsonRecord(root)) return null
-  const notification = root["notification"]
-  if (!isJsonRecord(notification)) return null
-  const sessionUpdate = readString(notification, "sessionUpdate")
-  if (!sessionUpdate) return null
-  const metadata = parseAcpMetadata(notification["_meta"])
-  const at = metadata.timestamp
-
-  switch (sessionUpdate) {
-    case "user_message_chunk":
-      return {
-        sessionUpdate,
-        at,
-        text: parseAcpContent(notification["content"]),
-        attachments: acpAttachments(notification["content"]),
-        details: acpToolDetails(notification["content"]),
-        clientMessageId: metadata.clientMessageId,
-      }
-    case "agent_message_chunk":
-    case "agent_thought_chunk":
-      return {
-        sessionUpdate,
-        at,
-        text: parseAcpContent(notification["content"]),
-        attachments: acpAttachments(notification["content"]),
-        details: acpToolDetails(notification["content"]),
-      }
-    case "tool_call": {
-      const fields = acpToolFields(AcpToolUpdateSchema.parse(notification), DEVIN_TOOL_READING)
-      return {
-        sessionUpdate,
-        at,
-        name:
-          metadata.inferenceToolName ??
-          fields.title ??
-          "tool",
-        input: fields.input,
-        attachments: fields.attachments ?? [],
-        details: fields.details,
-        locations: fields.locations,
-        toolCallId: readString(notification, "toolCallId"),
-        notification,
-      }
-    }
-    case "tool_call_update": {
-      const fields = acpToolFields(AcpToolUpdateSchema.parse(notification), DEVIN_TOOL_READING)
-      return {
-        sessionUpdate,
-        at,
-        input: fields.input,
-        output: fields.output,
-        status: fields.status,
-        exitCode: fields.exitCode,
-        attachments: fields.attachments ?? [],
-        details: fields.details,
-        locations: fields.locations,
-        toolCallId: readString(notification, "toolCallId"),
-        notification,
-      }
-    }
-    case "plan":
-      return {
-        sessionUpdate,
-        at,
-        entries: parsePlanEntries(notification["entries"]),
-      }
-    case "usage_update":
-      return {
-        sessionUpdate,
-        at,
-        used: readNumber(notification, "used"),
-        size: readNumber(notification, "size"),
-        cost: parseAcpCost(notification["cost"]),
-      }
-    case "session_info_update":
-      return { sessionUpdate, at, title: readString(notification, "title") }
-    case "current_mode_update":
-      return { sessionUpdate, at }
-    default:
-      return null
-  }
-}
-
-function parseAcpMetadata(value: JsonValue | undefined): AcpMetadata {
-  if (!isJsonRecord(value)) return {}
-  return {
-    timestamp: readString(value, "cognition.ai/timestamp"),
-    clientMessageId: readString(value, "cognition.ai/clientMessageId"),
-    inferenceToolName: readString(value, "cognition.ai/inferenceToolName"),
-  }
-}
-
-function parsePlanEntries(value: JsonValue | undefined): AcpPlanEntry[] {
-  if (!isJsonArray(value)) return []
-  const entries: AcpPlanEntry[] = []
-  for (const candidate of value) {
-    if (!isJsonRecord(candidate)) continue
-    const content = readString(candidate, "content")
-    const status = readString(candidate, "status")
-    if (content || status) entries.push({ content, status })
-  }
-  return entries
-}
-
-function parseAcpCost(value: JsonValue | undefined): AcpCost | undefined {
-  if (!isJsonRecord(value)) return undefined
-  const amount = readNumber(value, "amount")
-  if (amount === undefined) return undefined
-  return { amount, currency: readString(value, "currency") }
-}
-
-function parseAcpContent(value: JsonValue | undefined): string {
-  if (isStringValue(value)) return value
-  if (isJsonArray(value))
-    return value.map(parseAcpContent).filter(Boolean).join("\n")
-  if (!isJsonRecord(value)) return ""
-  const text = readString(value, "text")
-  if (text) return text
-  const content = parseAcpContent(value["content"])
-  return content || parseAcpContent(value["resource"])
 }
 
 function parseJson(raw: string): JsonValue | undefined {
