@@ -1,0 +1,305 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.3 app-server (v2 protocol): multi-agent v2 items as a real spawn and wait produced them on October 5, 2026, plus the v1 spawn call",
+  "native": {
+    "version": "0.159.3",
+    "origin": "written"
+  },
+  "about": "A spawn is a tool row whether Codex reports it as its v2 `started` activity or a v1 `spawnAgent` call; waits and messages to agents are rows too, and the roster names each spawn's row.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "agent-turn"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "agent-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "agent-turn",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "agent-turn",
+          "item": {
+            "type": "subAgentActivity",
+            "id": "call_spawn",
+            "kind": "started",
+            "agentThreadId": "child-1",
+            "agentPath": "/root/word_reply"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:agent-turn:call_spawn",
+            "title": "Agent word_reply",
+            "name": "spawn_agent",
+            "status": "completed",
+            "input": "{\n  \"agent\": \"/root/word_reply\"\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:agent-turn:call_spawn",
+            "status": "completed",
+            "output": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agents",
+            "item": {
+              "type": "subAgentActivity",
+              "id": "call_spawn",
+              "kind": "started",
+              "agentThreadId": "child-1",
+              "agentPath": "/root/word_reply"
+            },
+            "replay": false,
+            "toolId": "codex:agent-turn:call_spawn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "agent-turn",
+          "item": {
+            "type": "collabAgentToolCall",
+            "id": "call_wait",
+            "tool": "wait",
+            "status": "inProgress",
+            "senderThreadId": "thread-1",
+            "receiverThreadIds": [],
+            "prompt": null,
+            "model": null,
+            "agentsStates": {}
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:agent-turn:call_wait",
+            "title": "Wait for agents",
+            "name": "wait_agent",
+            "status": "pending",
+            "input": "{\n  \"receivers\": []\n}"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agents",
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "call_wait",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "thread-1",
+              "receiverThreadIds": [],
+              "prompt": null,
+              "model": null,
+              "agentsStates": {}
+            },
+            "replay": false,
+            "toolId": "codex:agent-turn:call_wait"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "agent-turn",
+          "item": {
+            "type": "subAgentActivity",
+            "id": "subagent-completed-child-1",
+            "kind": "completed",
+            "agentThreadId": "child-1",
+            "agentPath": "/root/word_reply"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agents",
+            "item": {
+              "type": "subAgentActivity",
+              "id": "subagent-completed-child-1",
+              "kind": "completed",
+              "agentThreadId": "child-1",
+              "agentPath": "/root/word_reply"
+            },
+            "replay": false,
+            "toolId": "codex:agent-turn:subagent-completed-child-1"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "agent-turn",
+          "item": {
+            "type": "collabAgentToolCall",
+            "id": "call_wait",
+            "tool": "wait",
+            "status": "completed",
+            "senderThreadId": "thread-1",
+            "receiverThreadIds": [],
+            "prompt": null,
+            "model": null,
+            "agentsStates": {
+              "child-1": {
+                "status": "completed",
+                "message": "ready"
+              }
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:agent-turn:call_wait",
+            "status": "completed",
+            "output": "completed: ready"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agents",
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "call_wait",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "thread-1",
+              "receiverThreadIds": [],
+              "prompt": null,
+              "model": null,
+              "agentsStates": {
+                "child-1": {
+                  "status": "completed",
+                  "message": "ready"
+                }
+              }
+            },
+            "replay": false,
+            "toolId": "codex:agent-turn:call_wait"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "agent-turn",
+          "item": {
+            "type": "collabAgentToolCall",
+            "id": "call_v1_spawn",
+            "tool": "spawnAgent",
+            "status": "completed",
+            "senderThreadId": "thread-1",
+            "receiverThreadIds": [
+              "child-2"
+            ],
+            "prompt": "Inspect the tests\nand report",
+            "model": "gpt-5.5",
+            "agentsStates": {}
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "codex:agent-turn:call_v1_spawn",
+            "title": "Agent: Inspect the tests",
+            "name": "spawn_agent",
+            "status": "completed",
+            "input": "{\n  \"prompt\": \"Inspect the tests\\nand report\",\n  \"model\": \"gpt-5.5\",\n  \"receivers\": [\n    \"child-2\"\n  ]\n}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "codex:agent-turn:call_v1_spawn",
+            "status": "completed",
+            "output": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "agents",
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "call_v1_spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "thread-1",
+              "receiverThreadIds": [
+                "child-2"
+              ],
+              "prompt": "Inspect the tests\nand report",
+              "model": "gpt-5.5",
+              "agentsStates": {}
+            },
+            "replay": false,
+            "toolId": "codex:agent-turn:call_v1_spawn"
+          }
+        }
+      ]
+    }
+  ]
+}
