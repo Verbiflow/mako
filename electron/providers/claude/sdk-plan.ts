@@ -1,6 +1,6 @@
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import type { LiveUpdate } from "../../contracts/live-content.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 
 const PlanInputSchema = z.object({ plan: z.string().trim().min(1) })
 type ClaudeToolCall = Pick<

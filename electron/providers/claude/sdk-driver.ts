@@ -180,6 +180,7 @@ function decode(engine: Engine, live: Live, message: SDKMessage): void {
 }
 
 function openProviderTurn(engine: Engine, live: Live): void {
+  live.capture?.prompted()
   live.decoder.startTurn()
   live.transcript.reset()
   engine.patch(live, {
@@ -611,6 +612,7 @@ export function createClaudeSdkDriver(
         live.promptReceipt = undefined
         throw error
       }
+      live.capture?.prompted()
       live.decoder.startTurn()
       live.transcript.reset()
       engine.patch(live, {

@@ -44,6 +44,7 @@ export const claudeDecoderSource: ProviderDecoderSource = {
         for (const item of out) if (item.kind === "state") Object.assign(state, item.patch)
         return out
       },
+      prompted: () => decoder.startTurn(),
     }
   },
 }

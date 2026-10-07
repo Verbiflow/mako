@@ -260,7 +260,7 @@ export class ClaudeProjection {
             if (part.type === "image" && part.source.type === "base64") {
               attachments.push({
                 type: "attachment",
-                name: "Tool image",
+                name: "image",
                 mimeType: part.source.media_type,
                 source:
                   part.source.data.length <= 8 * 1024 * 1024
