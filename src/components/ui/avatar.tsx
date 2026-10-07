@@ -25,10 +25,11 @@ const SIZES = {
   5: "size-5 rounded-[5px]",
   6: "size-6 rounded-md",
   8: "size-8 rounded-lg",
+  14: "size-14 rounded-xl",
 } as const
 
 /** Monogram glyph sizes — drawn marks scaled to the tile, not type. */
-const GLYPH = { 4: 8, 5: 9, 6: 11, 8: 13 } as const
+const GLYPH = { 4: 8, 5: 9, 6: 11, 8: 13, 14: 22 } as const
 
 export function Avatar({
   src,

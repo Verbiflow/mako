@@ -163,6 +163,9 @@ function LocalUsage() {
         {data.truncated
           ? " Some session records could not be read, so these totals may be low."
           : ""}
+        {data.incomplete?.length
+          ? ` ${listNames(data.incomplete)} recorded some of ${data.incomplete.length === 1 ? "its" : "their"} usage as incomplete, so these totals may be low.`
+          : ""}
       </p>
     </div>
   )
@@ -227,6 +230,12 @@ function Breakdown({
       </div>
     </div>
   )
+}
+
+const NAMES = new Intl.ListFormat("en", { type: "conjunction" })
+
+function listNames(names: readonly string[]): string {
+  return NAMES.format(names)
 }
 
 function meteredTokens(totals: UsageTotals): number {

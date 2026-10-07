@@ -375,11 +375,15 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
         ) : (
           <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
         )}
-        <span className={cn("min-w-0 truncate", !makoTool && "font-mono")}>{makoTool ?? permission.title}</span>
+        <span className={cn("min-w-0 truncate", !makoTool && !permission.detail && "font-mono")}>{makoTool ?? permission.title}</span>
       </p>
-      <p className="pt-0.5 pb-2 text-label text-faint">
-        {permission.kind === "authentication" ? "Continue with the provider's sign-in flow. Your prompt waits until sign-in succeeds." : "Choose how long to allow it."}
-      </p>
+      {permission.detail ? (
+        <p data-request-detail className="max-w-prose pt-0.5 pb-2 text-label text-muted-foreground">{permission.detail}</p>
+      ) : (
+        <p className="pt-0.5 pb-2 text-label text-faint">
+          {permission.kind === "authentication" ? "Continue with the provider's sign-in flow. Your prompt waits until sign-in succeeds." : "Choose how long to allow it."}
+        </p>
+      )}
       <div className="flex flex-wrap gap-1.5">
         {permission.options.map((option) => {
           const allow = option.kind?.startsWith("allow") === true

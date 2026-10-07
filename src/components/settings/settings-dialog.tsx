@@ -26,6 +26,7 @@ import { section as mcp } from "@/components/settings/sections/mcp"
 import { section as skills } from "@/components/settings/sections/skills"
 import { section as nativeAuthoring } from "@/components/settings/sections/native-authoring"
 import { section as plugins } from "@/components/settings/sections/plugins"
+import { section as account } from "@/components/settings/sections/account"
 import { section as updates } from "@/components/settings/sections/updates"
 import { section as diagnostics } from "@/components/settings/sections/diagnostics"
 import { section as about } from "@/components/settings/sections/about"
@@ -48,6 +49,7 @@ const SECTIONS: readonly SettingsSection[] = [
   skills,
   nativeAuthoring,
   plugins,
+  account,
   updates,
   diagnostics,
   about,
