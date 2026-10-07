@@ -295,40 +295,87 @@ export function readCursorSdkRunEvents(indexPath: string, runId: string): Cursor
   }
 }
 
+/** How far a call's result has been looked for: through `length` messages of checkpoint `ref`, whose last is `last`. */
+interface Looked {
+  ref: string
+  length: number
+  last: string | undefined
+}
+
 /**
- * What a run's own checkpoint kept for `callIds`, calls its stream never
- * ended (`CursorSdkProjection.finish`). Only the run's messages are searched:
- * past the checkpoint it started from, up to the latest it wrote. Empty when
- * the run wrote no checkpoint or the stores can't be read.
+ * The results a running run's checkpoints keep for calls its stream never
+ * ended (`CursorSdkProjection.settle`). Cursor saves a checkpoint after each
+ * step (verified with SDK 1.0.31: a read of a missing file had its
+ * "Error: File not found" in the run's third of seven), so a result is there
+ * long before the run ends.
+ *
+ * Only the run's messages are searched, past the checkpoint it started from.
+ * A call is looked for again only once the run's latest checkpoint has moved,
+ * and only in the messages added since, so checking at every step costs one
+ * row read until Cursor saves a new step. Empty when the run wrote no
+ * checkpoint or the stores can't be read.
  */
-export function readCursorSdkRunResults(stateRoot: string, agentId: string, runId: string, callIds: ReadonlySet<string>): Map<string, CursorToolResult> {
-  if (!callIds.size) return new Map()
-  const index = openReadOnly(cursorSdkIndexPath(stateRoot))
-  if (!index) return new Map()
-  let start: string | undefined
-  let latest: string | undefined
-  try {
-    const row = index.prepare("SELECT start_checkpoint_ref_json AS start, latest_checkpoint_ref_json AS latest FROM runs WHERE run_id = ?").get(runId)
-    start = checkpointBlobId(text(row?.["start"]))
-    latest = checkpointBlobId(text(row?.["latest"]))
-  } catch {
-    return new Map()
-  } finally {
-    index.close()
+export class CursorSdkRunCheckpoints {
+  private readonly stateRoot: string
+  private readonly agentId: string
+  private readonly runId: string
+  private readonly looked = new Map<string, Looked>()
+  private startLength: number | undefined
+
+  constructor(stateRoot: string, agentId: string, runId: string) {
+    this.stateRoot = stateRoot
+    this.agentId = agentId
+    this.runId = runId
   }
-  if (!latest || latest === start) return new Map()
-  const store = openReadOnly(cursorSdkStorePath(stateRoot, agentId))
-  if (!store) return new Map()
-  try {
-    const blobs = store.prepare("SELECT data FROM blobs WHERE id = ?")
-    const hashes = rootHashes(blobs, latest)
-    if (!hashes) return new Map()
-    const from = start ? rootHashes(blobs, start)?.length ?? 0 : 0
-    return cursorToolResults(blobs, hashes, from <= hashes.length ? from : 0, hashes.length, callIds)
-  } catch {
-    return new Map()
-  } finally {
-    store.close()
+
+  results(callIds: ReadonlySet<string>): Map<string, CursorToolResult> {
+    if (!callIds.size) return new Map()
+    const refs = this.refs()
+    if (!refs?.latest || refs.latest === refs.start) return new Map()
+    const latest = refs.latest
+    const wanted = new Set([...callIds].filter((id) => this.looked.get(id)?.ref !== latest))
+    if (!wanted.size) return new Map()
+    const store = openReadOnly(cursorSdkStorePath(this.stateRoot, this.agentId))
+    if (!store) return new Map()
+    try {
+      const blobs = store.prepare("SELECT data FROM blobs WHERE id = ?")
+      const hashes = rootHashes(blobs, latest)
+      if (!hashes) return new Map()
+      this.startLength ??= refs.start ? rootHashes(blobs, refs.start)?.length ?? 0 : 0
+      const first = this.startLength <= hashes.length ? this.startLength : 0
+      let from = hashes.length
+      for (const id of wanted) from = Math.min(from, this.resumeAt(id, hashes, first))
+      const results = cursorToolResults(blobs, hashes, from, hashes.length, wanted)
+      for (const id of wanted) {
+        if (results.has(id)) this.looked.delete(id)
+        else this.looked.set(id, { ref: latest, length: hashes.length, last: hashes.at(-1) })
+      }
+      return results
+    } catch {
+      return new Map()
+    } finally {
+      store.close()
+    }
+  }
+
+  /** Where to go on looking for `id`: past what was searched, unless a compaction rewrote the conversation since. */
+  private resumeAt(id: string, hashes: readonly string[], first: number): number {
+    const looked = this.looked.get(id)
+    if (!looked || looked.length > hashes.length || looked.length <= first) return first
+    return hashes[looked.length - 1] === looked.last ? looked.length : first
+  }
+
+  private refs(): { start: string | undefined; latest: string | undefined } | undefined {
+    const index = openReadOnly(cursorSdkIndexPath(this.stateRoot))
+    if (!index) return undefined
+    try {
+      const row = index.prepare("SELECT start_checkpoint_ref_json AS start, latest_checkpoint_ref_json AS latest FROM runs WHERE run_id = ?").get(this.runId)
+      return { start: checkpointBlobId(text(row?.["start"])), latest: checkpointBlobId(text(row?.["latest"])) }
+    } catch {
+      return undefined
+    } finally {
+      index.close()
+    }
   }
 }
 
