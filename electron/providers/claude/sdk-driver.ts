@@ -73,6 +73,8 @@ const CLAUDE_NATIVE_IDENTITY = { kind: "reported", via: "SDK initialization.acco
 /** Past Mako's own pipe release, so the SDK's stream can still report the exit first. */
 const PROCESS_EXIT_GRACE_MS = 1_500
 interface Receipt {
+  /** The steered message, recorded when Claude echoes it. */
+  text: string
   resolve(result: ProviderSteerResult): void
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
@@ -168,6 +170,7 @@ function acknowledge(live: Live, message: SDKMessage): void {
     if (!receipt) continue
     clearTimeout(receipt.timer)
     live.receipts.delete(id)
+    live.capture?.steered(receipt.text)
     receipt.resolve({ kind: "accepted" })
   }
 }
@@ -612,7 +615,7 @@ export function createClaudeSdkDriver(
         live.promptReceipt = undefined
         throw error
       }
-      live.capture?.prompted()
+      live.capture?.prompted(text)
       live.decoder.startTurn()
       live.transcript.reset()
       engine.patch(live, {
@@ -648,7 +651,7 @@ export function createClaudeSdkDriver(
             )
           )
         }, dependencies.receiptTimeoutMs ?? 120_000)
-        live.receipts.set(uuid, { resolve, reject, timer })
+        live.receipts.set(uuid, { text: input.text, resolve, reject, timer })
       })
       try {
         live.input.send({
