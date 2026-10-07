@@ -13,6 +13,7 @@ import { devinSkillSource } from "./skills.js"
 import { devinExecutable } from "./executable.js"
 import { scriptInstall } from "../update-source.js"
 import { devinPresentation } from "./presentation.js"
+import { devinUsageHistory } from "./usage-history.js"
 
 export const installDevin: ProviderModule = (host) => installHarness(host, {
   provider: "devin",
@@ -45,5 +46,5 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
     managedBy: [["external_agents", "Zed"]],
     install: [scriptInstall("https://cli.devin.ai/install.sh")],
   },
-  usageHistory: lacks("Devin's CLI database keeps no token counts"),  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: devinUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
 })

@@ -1,4 +1,4 @@
-import { DEVIN_ACP_HOOKS } from "@mako/sessions/harnesses"
+import { DEVIN_ACP_HOOKS, devinUsageReading } from "@mako/sessions/harnesses"
 import { prepareDevinMcp } from "./session-mcp.js"
 import { devinResumePolicy } from "./resume.js"
 import type { ProviderAcpSource } from "../acp-source.js"
@@ -14,7 +14,8 @@ import { devinMcpStartup } from "./mcp-startup.js"
 import { DevinPlans } from "./plans.js"
 import { DevinApprovalObserver, readDevinApprovalDecisions } from "./approval-observer.js"
 import { hostWarn } from "../../host-log.js"
-import { devinUsageUpdate } from "./usage.js"
+import { devinCheckpoint, devinFork } from "./fork.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 
 const { nativeSource, ...resume } = devinResumePolicy()
 
@@ -27,18 +28,28 @@ export const devinAcpSource: ProviderAcpSource = {
     wake: "The next message starts a new `devin` ACP agent that loads the session, replaying its history.",
     ...resume,
   },
-  fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new Devin session and resumes it, as its ACP agent has no fork." },
+  fork: {
+    kind: "native",
+    point: "checkpoint",
+    via: "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node is imported.",
+    checkpoint: devinCheckpoint,
+    open: devinFork,
+  },
   questions: { kind: "request", via: "The `ask_user_question` tool's request." },
   provider: "devin",
   approvalEvidence: { kind: "native-decisions", recovery: "retained-observer", nativeRequests: ["structured-question"], coverage: "Structured question selections from exact native tool events and the saved main branch. Tool permission choices remain submission-only." },
-  planning: { via: "mode", mode: "plan", proposal: "write_plan's rendered plan file, built by answering exit_plan_mode's permission request" },
+  planning: { via: "mode", mode: "plan", proposal: "write_plan's rendered plan file, built by answering exit_plan_mode's permission request",
+    feedback: { kind: "next-message", reason: "its plan approval is ACP's session/request_permission, whose answer is an option id, and devin 3000.10.23 reads no words with a rejection." } },
   ...DEVIN_ACP_HOOKS,
   clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
   agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", observe: input => new DevinAgents(input) },
   observeBackground: devinBackground,
   providerTurns: devinProviderTurns,
   decodeNotification: devinNotification,
-  usageUpdate: devinUsageUpdate,
+  usageUpdate: (meta) => {
+    const reading = devinUsageReading(meta)
+    return reading.of === "repeat" ? reading : { of: reading.of, observations: reading.tokens ? [{ kind: "spent", tokens: reading.tokens }] : [] }
+  },
   mcpStartup: devinMcpStartup,
   plans: () => new DevinPlans(),
   permissionTitle: devinPermissionTitle,
@@ -74,4 +85,3 @@ export const devinAcpSource: ProviderAcpSource = {
     }
   },
 }
-import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"

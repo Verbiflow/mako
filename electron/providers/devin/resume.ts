@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { open, realpath } from "node:fs/promises"
-import { homedir } from "node:os"
 import { isAbsolute, join } from "node:path"
+import { devinCliDirectory } from "@mako/sessions"
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
@@ -10,10 +10,8 @@ import type { NativeResumeEvidence } from "../../native-continuation.js"
 
 const rowSchema = z.object({ main_chain_id: z.number().nullable(), model: z.string().nullable(), working_directory: z.string() })
 
-const devinDirectory = (env: NodeJS.ProcessEnv) => join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "devin", "cli")
-
 export function devinResumePolicy(configured?: string) {
-  const directory = configured ?? devinDirectory(process.env)
+  const directory = configured ?? devinCliDirectory()
   const database = join(directory, "sessions.db")
   const nativeSource = (path: string, nativeId: string | undefined) => {
     const split = path.lastIndexOf("#")
@@ -86,7 +84,7 @@ export function devinResumePolicy(configured?: string) {
   /** `<database>#<id>` in the account's store, once Devin has saved the session's row. */
   const locateSession = ({ nativeId, env }: { nativeId: string; env: NodeJS.ProcessEnv }): string | undefined => {
     if (!/^[\w-]+$/.test(nativeId)) return undefined
-    const store = join(configured ?? devinDirectory(env), "sessions.db")
+    const store = join(configured ?? devinCliDirectory(env), "sessions.db")
     let db: DatabaseSync | undefined
     try {
       db = openNativeStore(store)

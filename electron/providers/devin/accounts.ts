@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { chmod, mkdir, readdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
 import { join } from "node:path"
+import { devinDataHome } from "@mako/sessions"
 import { z } from "zod"
 import type {
   AccountUsage,
@@ -27,11 +27,8 @@ import type { JsonValue } from "../../codex-app-json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { devinExecutable } from "./executable.js"
 
-function dataHome(env: NodeJS.ProcessEnv): string {
-  return env.XDG_DATA_HOME || join(homedir(), ".local", "share")
-}
 function credentialsPath(env: NodeJS.ProcessEnv): string {
-  return join(dataHome(env), "devin", "credentials.toml")
+  return join(devinDataHome(env), "devin", "credentials.toml")
 }
 
 /** Top-level `key = "value"` strings; Devin writes nothing nested here. */
@@ -230,7 +227,7 @@ async function accountEnv(selection: string | null, base: NodeJS.ProcessEnv): Pr
   if (contents === null || !devinCredential(contents, "windsurf_api_key"))
     throw new Error("The selected Devin account is signed out. Sign in again in Settings → Agents.")
   for (const key of AUTH_ENV) delete env[key]
-  env.XDG_DATA_HOME = await linkDataHome(join(accountRoot(selection), "data"), dataHome(base))
+  env.XDG_DATA_HOME = await linkDataHome(join(accountRoot(selection), "data"), devinDataHome(base))
   return env
 }
 
