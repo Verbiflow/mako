@@ -117,6 +117,7 @@ try {
   await catalog.scan()
   assert.equal(catalog.list()[0].title, "after", "WAL changes invalidate the catalog")
   assert.equal(userTextFrom("<recommended_plugins>list</recommended_plugins>\n\nKeep this request."), "Keep this request.")
+  assert.equal(userTextFrom("<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"), undefined, "Codex's note to its model about a stop is not a message the person sent")
   console.log("Storage integrity passed: atomic content updates, deletion ordering, startup capture, complete-record checkpoint, WAL revisions, envelope fidelity")
 } finally {
   await archive.flush()

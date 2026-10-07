@@ -96,6 +96,8 @@ type SavedLine =
       promptIndex?: number
       /** A turn Grok started itself (`_meta.hostTurn`), which a rewind does not count. */
       hostTurn: boolean
+      /** A message steered into the running turn (`_meta.interjection`), which carries no `promptIndex`. */
+      steered: boolean
     }
   | { kind: "update"; at?: string; notification: SessionNotification; tool?: { id: string; opens: boolean } }
   | {
@@ -471,6 +473,7 @@ function parseSavedLine(raw: string): SavedLine | null {
         attachments: acpAttachments(update["content"]),
         promptIndex: numberValue(chunk?.["promptIndex"]),
         hostTurn: chunk?.["hostTurn"] === true,
+        steered: steered !== undefined,
       }
     }
     case "turn_completed":
@@ -834,6 +837,9 @@ class GrokTurnCount {
 /** A run of the person's user chunks, joined until another line ends it. */
 interface UserRun {
   at?: string
+  /** `prompt-<promptIndex>`, which a message steered into its turn names. */
+  id?: string
+  steeringFor?: string
   text: string
   attachments: AttachmentContent[]
   /** Files from before `hostTurn` mark Grok's own turns only by their reminder text. */
@@ -862,6 +868,8 @@ function updatesTranslator(): GrokTranslator {
   let pending: LiveUpdate[] = []
   let pendingAt: (string | undefined)[] = []
   let run: UserRun | undefined
+  /** The id of the open turn's prompt, which a steered message names. */
+  let prompt: string | undefined
   /** The open turn is one a rewind counts. */
   let counts = false
   /** The turn already showed its failure, as Grok's retry banner does, so its end adds none. */
@@ -900,6 +908,7 @@ function updatesTranslator(): GrokTranslator {
     for (const entry of entries) sink.push(entry)
     blocks = []
     counts = false
+    prompt = undefined
   }
 
   /** Grok 1.0.46 saves a /compact the person typed as its own turn, after the compaction it ran. */
@@ -945,11 +954,18 @@ function updatesTranslator(): GrokTranslator {
           return
         }
         if (!line.text && !line.attachments.length) return
+        if (line.steered && prompt) {
+          closeRun()
+          run = { at: line.at, steeringFor: prompt, text: line.text, attachments: [...line.attachments] }
+          return
+        }
         commit()
         started = true
         counts = opening.counts
+        prompt = line.promptIndex === undefined ? undefined : `prompt-${line.promptIndex}`
         run = {
           at: line.at,
+          id: prompt,
           text: line.text,
           attachments: [...line.attachments],
           opener: line.attachments.length ? undefined : backgroundReminderLabel(line.text),
@@ -992,7 +1008,8 @@ function updatesTranslator(): GrokTranslator {
     reduce()
     const saved = sink.snapshot()
     unchanged = sink.unchanged
-    const open = run ? [runEntry(run)] : turnEntries(blocks, written)
+    // A steered run opens inside the turn, after the blocks it has so far.
+    const open = run ? [...turnEntries(blocks, written), runEntry(run)] : turnEntries(blocks, written)
     for (const entry of open) cleanEntry(entry)
     return open.length ? [...saved, ...open] : saved
   }
@@ -1018,12 +1035,22 @@ function updatesTranslator(): GrokTranslator {
 }
 
 function userUpdate(run: UserRun): LiveUpdate {
-  return run.attachments.length ? { kind: "user", text: run.text, attachments: run.attachments } : { kind: "user", text: run.text }
+  return {
+    kind: "user",
+    ...run.id && { requestId: run.id },
+    ...run.steeringFor && { steeringFor: run.steeringFor },
+    text: run.text,
+    ...run.attachments.length && { attachments: run.attachments },
+  }
 }
 
 function runEntry(run: UserRun): ThreadEntry {
   if (run.opener) return { kind: "event", at: run.at, label: run.opener, opensTurn: true }
-  return { kind: "user", at: run.at, text: run.text, ...run.attachments.length && { attachments: [...run.attachments] } }
+  return userEntry(run.at, run.id, run.steeringFor, run.text, run.attachments)
+}
+
+function userEntry(at: string | undefined, id: string | undefined, steeringFor: string | undefined, text: string, attachments: readonly AttachmentContent[] | undefined): ThreadEntry {
+  return { kind: "user", ...id && { id }, at, ...steeringFor && { steeringFor }, text, ...attachments?.length && { attachments: [...attachments] } }
 }
 
 /** A turn's blocks as saved entries: what the person said, what Grok did, and its markers. */
@@ -1044,7 +1071,7 @@ function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveBlock, s
     switch (block.type) {
       case "user":
         assistant = undefined
-        entries.push({ kind: "user", at, text: block.text, ...block.attachments?.length && { attachments: block.attachments } })
+        entries.push(userEntry(at, block.requestId, block.steeringFor, block.text, block.attachments))
         break
       case "provider-turn":
         assistant = undefined

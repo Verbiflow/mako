@@ -101,6 +101,22 @@ try {
   assert.deepEqual(loneThread?.entries.filter((entry) => entry.kind === "event").map((entry) => [entry.label, entry.detail, entry.body]),
     [["Context compacted", undefined, "Summary:\n1. The user asked for a parser."]])
 
+  // Claude Code 2.1.283 saves a message steered in while a call runs as a
+  // plain prompt after the call's result; a prompt after an answered or
+  // stopped turn opens the next one.
+  const steering = join(home, "steering.jsonl")
+  const calls = (uuid, id) => assistant(uuid, [{ type: "tool_use", id, name: "Bash", input: { command: "sleep 3" } }], { message: { stop_reason: "tool_use" } })
+  const result = (uuid, id) => record({ type: "user", uuid, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "" }] } })
+  await writeFile(steering, `${[
+    user("p1", "Run sleep 3"), calls("t1", "call-1"), result("r1", "call-1"),
+    user("p2", "Also read notes.md"), assistant("a3", [text("Friday.")], { message: { stop_reason: "end_turn" } }),
+    user("p3", "Run sleep 30"), calls("t2", "call-2"), user("i1", "[Request interrupted by user for tool use]"),
+    user("p4", "Never mind"),
+  ].join("\n")}\n`)
+  const steered = await new ClaudeProvider(home).read(steering)
+  assert.deepEqual(steered?.entries.flatMap((entry) => entry.kind === "user" ? [[entry.id, entry.steeringFor]] : []),
+    [["p1", undefined], ["p2", "p1"], ["p3", undefined], ["p4", undefined]])
+
   // A follower that reads the boundary in one batch and the summary in the next keeps one marker.
   const followed = join(home, "followed.jsonl")
   await writeFile(followed, `${[user("u1", "Start"), lines[5]].join("\n")}\n`)

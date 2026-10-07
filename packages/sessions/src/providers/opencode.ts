@@ -673,6 +673,8 @@ interface Execution {
    * delivered while it runs is read in that execution.
    */
   running: boolean
+  /** The prompt the running execution answers; OpenCode 2.0.1 saves a prompt steered into it as a plain one. */
+  prompt?: string
   /** Context tokens of the latest step: what a compaction starts from, as live reads it. */
   context?: number
 }
@@ -684,11 +686,13 @@ interface Execution {
 function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, cwd: string): void {
   const type = row.type ?? jsonText(row.data.type)
   const at = isoOf(timeCreated(row.data) ?? row.timeCreated)
+  const steers = type === "user" && execution.running ? execution.prompt : undefined
   if (type === "user") execution.running = true
   if (type === "assistant") {
     const finish = jsonText(row.data.finish)
     // A retried step continues its execution; OpenCode resumes it with a synthetic "continue".
     execution.running = finish === undefined || finish === "tool-calls" || jsonObject(row.data.retry) !== undefined
+    if (!execution.running) execution.prompt = undefined
   }
   if (type === "synthetic") {
     const notice = {
@@ -710,8 +714,9 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, cwd:
       ...(Array.isArray(row.data.parts) ? row.data.parts : []),
       ...(Array.isArray(row.data.files) ? row.data.files : []),
     ])
-    if (text?.trim() || attachments.length)
-      sink.push({ kind: "user", id: row.id, at, text: text ?? "", attachments })
+    if (!text?.trim() && !attachments.length) return
+    if (!steers) execution.prompt = row.id
+    sink.push({ kind: "user", id: row.id, at, ...steers && { steeringFor: steers }, text: text ?? "", attachments })
     return
   }
   if (type === "assistant") {

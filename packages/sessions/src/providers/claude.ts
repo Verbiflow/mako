@@ -127,6 +127,8 @@ interface ClaudeMessage {
   model?: string
   content?: ClaudeContent
   usage?: ClaudeUsage
+  /** `tool_use` while the turn waits on a call, `end_turn` once it answered. */
+  stopReason?: string
 }
 
 interface ClaudeLine {
@@ -330,6 +332,7 @@ function parseMessage(
     model: stringValue(value["model"]),
     content: parseContent(value["content"]),
     usage: parseUsage(value["usage"]),
+    stopReason: stringValue(value["stop_reason"]),
   }
 }
 
@@ -647,6 +650,12 @@ function translator(): ClaudeTranslator {
   let needsReset = false
   /** The prompt that opened the running turn; a prompt Claude folds into the turn steers it. */
   let opener: string | undefined
+  /**
+   * Claude's last reply asked for a tool, so its turn runs on: Claude Code
+   * 2.1.283 saves a message steered in then as a plain prompt after the
+   * call's result, where a prompt after an answered turn opens the next.
+   */
+  let running = false
   /** The latest boundary's marker, which the summary written after it completes. */
   let compaction: { entry: EventEntry; kept: Compaction } | null = null
   /** The latest terminal slash command's marker, which the output written after it completes. */
@@ -848,6 +857,7 @@ function translator(): ClaudeTranslator {
       if (claudeInterrupted(text)) {
         sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
         assistant = null
+        running = false
         return
       }
       const notification = taskNotificationLabel(text)
@@ -872,8 +882,12 @@ function translator(): ClaudeTranslator {
         return
       assistant = null
       started = true
-      opener = line.uuid
       conversing()
+      if (running && opener) {
+        sink.push({ kind: "user", id: line.uuid, at: line.timestamp, steeringFor: opener, text, attachments })
+        return
+      }
+      opener = line.uuid
       fallbacks.clear()
       sink.push({
         kind: "user",
@@ -889,6 +903,8 @@ function translator(): ClaudeTranslator {
     if (!started) needsReset = true
     started = true
     const message = line.message
+    if (line.isAbortedMidStream || line.apiError !== undefined) running = false
+    else if (message?.stopReason) running = message.stopReason === "tool_use"
     if (!message || !Array.isArray(message.content)) {
       if (line.isAbortedMidStream) {
         sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })

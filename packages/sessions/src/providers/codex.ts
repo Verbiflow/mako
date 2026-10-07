@@ -1122,8 +1122,8 @@ function translator(): CodexTranslator {
   const applyItem = (block: ToolBlock, item: CodexToolItem) => {
     itemized.add(block)
     if (item.input !== undefined) block.input = clip(item.input)
-    if (item.output === undefined) delete block.output
-    else block.output = clip(item.output)
+    // A completed item ended its call; one that printed nothing still finished.
+    block.output = clip(item.output ?? "")
     if (item.error) block.error = true
   }
   let started = false
@@ -1140,6 +1140,8 @@ function translator(): CodexTranslator {
    * record before could be hours old, and no duration is better than a wrong one.
    */
   let turnOpen = false
+  /** The open turn's prompt; another prompt Codex saves inside the same turn was steered into it. */
+  let prompt: string | undefined
   let lastAt: string | undefined
   const plans = new ProposedPlans()
   /** The entry each call and plan card sits in, which a later record can still change. */
@@ -1175,7 +1177,10 @@ function translator(): CodexTranslator {
     const previousAt = lastAt
     const inTurn = turnOpen
     if (event.at) lastAt = event.at
-    if (event.turn) turnOpen = event.turn === "started"
+    if (event.turn) {
+      turnOpen = event.turn === "started"
+      prompt = undefined
+    }
 
     switch (event.kind) {
       case "turn_context":
@@ -1202,10 +1207,13 @@ function translator(): CodexTranslator {
         assistant = null
         compaction = undefined
         started = true
+        const steeringFor = inTurn ? prompt : undefined
+        if (inTurn && !prompt) prompt = event.id
         sink.push({
           kind: "user",
           id: event.id,
           at: event.at,
+          ...steeringFor && { steeringFor },
           text: text ?? "",
           attachments,
         })
