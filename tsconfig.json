@@ -20,6 +20,9 @@
       "path": "./packages/git"
     },
     {
+      "path": "./packages/protocol"
+    },
+    {
       "path": "./packages/relay"
     },
     {

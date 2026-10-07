@@ -53,7 +53,7 @@
     "typecheck:all": "npm run typecheck && npm run backend:typecheck",
     "test:git": "npm run -s build --workspace @mako/git && node packages/git/test/run.mjs",
     "protocol:build": "npm run build --workspace @mako/protocol",
-    "test:protocol": "npm run -s build --workspace @mako/protocol && node --test packages/protocol/test/run.mjs",
+    "test:protocol": "npm run -s build --workspace @mako/protocol && node --test packages/protocol/test/run.mjs && tsx scripts/test-host-gateway.ts",
     "git:doctor": "npm run -s build --workspace @mako/git && node scripts/git-doctor.mjs",
     "test:commit-generation": "tsx scripts/test-utility-work.ts && tsx scripts/test-commit-generation.ts && tsx scripts/test-commit-models.ts && tsx scripts/test-utility-token-count.ts && tsx scripts/test-commit-connections.ts && tsx scripts/test-utility-model-location.ts && tsx scripts/test-utility-model-catalog.ts",
     "test:accounts": "tsx scripts/test-account-usage.ts && tsx scripts/test-account-routing.ts && tsx scripts/test-account-profiles.ts && node scripts/test-cursor-key-env.mjs && tsx scripts/test-account-removal.ts && tsx scripts/test-account-removal-sessions.ts && tsx --tsconfig tsconfig.app.json scripts/test-account-removal-ui.ts && tsx scripts/test-account-keychain.ts && tsx scripts/test-claude-credential-source.ts && esbuild scripts/test-account-limits-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-account-limits-ui.mjs --log-level=warning && node node_modules/.tmp/test-account-limits-ui.mjs && esbuild scripts/test-account-switch-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-account-switch-ui.mjs --log-level=warning && node node_modules/.tmp/test-account-switch-ui.mjs && esbuild scripts/test-sign-in-recovery-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-sign-in-recovery-ui.mjs --log-level=warning && node node_modules/.tmp/test-sign-in-recovery-ui.mjs",
@@ -61,7 +61,7 @@
     "test:cursor-child": "node scripts/patch-cursor-sdk.mjs --check && node scripts/test-cursor-sdk-patch.mjs && npm run build:electron && tsx scripts/test-cursor-child-crash.ts",
     "test:automations": "tsx scripts/test-automations.ts && tsx scripts/test-automation-watchers.mjs",
     "test:codex-protocol": "tsx scripts/test-codex-protocol.ts",
-    "test:decoders": "tsx scripts/test-native-decoders.ts && tsx --tsconfig tsconfig.app.json scripts/test-decode-pairs.ts && tsx --tsconfig tsconfig.app.json scripts/test-follow-convergence.ts && tsx scripts/test-native-records.ts && tsx scripts/test-harness-doctor.ts",
+    "test:decoders": "tsx scripts/test-fixture-privacy.ts && tsx scripts/test-native-decoders.ts && tsx --tsconfig tsconfig.app.json scripts/test-decode-pairs.ts && tsx --tsconfig tsconfig.app.json scripts/test-follow-convergence.ts && tsx scripts/test-native-records.ts && tsx scripts/test-harness-doctor.ts",
     "decode": "tsx --tsconfig tsconfig.app.json scripts/decode-native.ts",
     "audit:tools": "tsx scripts/audit-native-tools.ts",
     "harness:self-report": "tsx scripts/harness-self-report.ts",
@@ -122,7 +122,7 @@
     "test:live": "npm run test:live-prompt-delivery && tsx scripts/test-live-conversations.ts && tsx scripts/test-live-markers.ts && tsx scripts/test-replay-setup-notices.ts && tsx scripts/test-interrupted-turn.ts && npm run test:acp-registry && tsx scripts/test-draft-persistence.ts && tsx scripts/test-attachment-references.ts && tsx scripts/test-prompt-clipboard.ts && npm run test:transcript && npm run test:conversation-control",
     "verify:sessions": "npm run typecheck && npm test --workspace @mako/sessions && npm run test:live && npm run test:codex-protocol && npm run test:providers && npm run test:host && npm run test:stage && npm run test:performance && npm run lint && npm run build",
     "test:transfer-scheduling": "node --import tsx scripts/test-transfer-scheduling.ts",
-    "test:conversation-control": "node scripts/test-catalog-readiness.mjs && npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-relay-conversations.ts && npm run test:thread-store && npm run test:recovery-admission",
+    "test:conversation-control": "node scripts/test-catalog-readiness.mjs && npm run test:transfer-scheduling && tsx scripts/test-continuation-plan.ts && tsx scripts/test-thread-activity.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-failure.ts && tsx scripts/test-message-anchor.ts && tsx scripts/test-conversation-transfers.ts && tsx scripts/test-native-requests.ts && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-history.ts && tsx scripts/test-native-history-refresh.ts && tsx scripts/test-native-rewind.ts && tsx scripts/test-relay-conversations.ts && npm run test:thread-store && npm run test:recovery-admission",
     "test:thread-store": "tsx scripts/test-thread-store.ts && tsx scripts/test-thread-environment.ts && tsx scripts/test-thread-processes.ts && tsx scripts/test-container-runtime.ts && tsx scripts/test-app-capacity.ts && esbuild scripts/test-room-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-room-view.mjs --log-level=warning && node node_modules/.tmp/test-room-view.mjs && tsx scripts/test-recipe-proof.ts && tsx scripts/test-check-steps.ts && tsx scripts/test-run-output.ts && tsx scripts/test-app-probe.ts && esbuild scripts/test-app-probe-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-app-probe-view.mjs --log-level=warning && node node_modules/.tmp/test-app-probe-view.mjs && tsx scripts/test-thread-store-hosts.ts && tsx scripts/test-thread-store-read-only.ts && tsx scripts/test-thread-migration.ts && tsx scripts/test-thread-execution.ts && tsx scripts/test-thread-execution-host.ts && tsx scripts/test-thread-groups-host.ts && tsx scripts/test-thread-names.ts && npm run test:thread-worktrees && npm run test:checkout-heads",
     "test:thread-worktrees": "tsx scripts/test-thread-worktrees.ts && tsx scripts/test-worktree-start.ts && tsx scripts/test-package-links.ts && tsx scripts/test-chat-folders.ts && tsx scripts/test-workspace-moves.ts && tsx scripts/test-git-actions.ts && tsx --tsconfig tsconfig.app.json scripts/test-thread-moves.ts",
     "test:tree-watcher": "tsx scripts/test-tree-watcher.ts && tsx scripts/test-watch-backend.ts && tsx scripts/test-host-background-watch.ts && tsx scripts/test-tree-poll.ts && tsx scripts/test-tree-watcher-fallback.ts",
@@ -313,6 +313,14 @@
       {
         "from": "packages/git",
         "to": "node_modules/@mako/git",
+        "filter": [
+          "package.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "packages/protocol",
+        "to": "node_modules/@mako/protocol",
         "filter": [
           "package.json",
           "dist/**"
