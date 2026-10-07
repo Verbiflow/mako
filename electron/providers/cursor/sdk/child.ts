@@ -382,19 +382,51 @@ function forwardMessage(turn: string, message: SDKMessage): void {
   remember(turn, text)
 }
 
+/** How often a run looks for the result of a call it moved past, until the call settles or the stream ends. */
+const SETTLE_POLL_MS = 250
+
 async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
   const unended = new Set<string>()
+  // Open calls the model went on past: a call's own stream may never end it
+  // (a read of a missing file, with SDK 1.0.31), but the step's checkpoint
+  // keeps its result.
+  const passed = new Set<string>()
+  const checkpoints = new CursorSdkRunCheckpoints(open.stateRoot, open.agentId, run.id)
+  let poll: NodeJS.Timeout | undefined
+  const settle = () => {
+    poll = undefined
+    const results = checkpoints.results(passed)
+    if (results.size) {
+      for (const callId of results.keys()) {
+        unended.delete(callId)
+        passed.delete(callId)
+      }
+      const text = JSON.stringify({ event: "settled", turn, calls: settledCalls(results) } satisfies SdkEvent)
+      writeText(text)
+      remember(turn, text)
+    }
+    if (passed.size) poll = setTimeout(settle, SETTLE_POLL_MS)
+  }
   try {
     for await (const message of run.stream()) {
       if (message.type === "tool_call") {
-        if (message.status === "running") unended.add(message.call_id)
-        else unended.delete(message.call_id)
+        if (message.status !== "running") {
+          unended.delete(message.call_id)
+          passed.delete(message.call_id)
+        } else if (!unended.has(message.call_id)) {
+          for (const callId of unended) passed.add(callId)
+          unended.add(message.call_id)
+        }
+      } else if (message.type === "assistant" || message.type === "thinking") {
+        for (const callId of unended) passed.add(callId)
       }
       forwardMessage(turn, message)
+      if (passed.size && !poll) settle()
     }
   } catch (cause) {
     if (!closing) log("warn", `run stream ended early: ${cursorSdkWireError(cause).message}`)
   }
+  clearTimeout(poll)
   if (shellOutput?.turn === turn) {
     clearTimeout(shellOutput.timer)
     shellOutput = undefined
