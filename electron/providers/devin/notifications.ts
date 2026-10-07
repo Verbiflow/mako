@@ -21,7 +21,6 @@ const IGNORED = new Set([
   "_cognition.ai/browserPreview/capture",
   "_cognition.ai/browserPreview/opened",
   "_cognition.ai/revert/stepsUpdated",
-  "_cognition.ai/revert/historyRewound",
   "_cognition.ai/processMemory",
   "_cognition.ai/loadStarting",
   "_cognition.ai/loadStats",
@@ -40,6 +39,7 @@ const AgentStopped = z.object({ sessionId: z.string(), cause: z.string(), errorM
 const Output = z.object({ sessionId: z.string().nullish(), message: z.string(), level: z.string().nullish() })
 const Modal = z.object({ sessionId: z.string(), message: z.string(), detail: text, level: z.string().nullish() })
 const Billing = z.object({ sessionId: z.string(), title: text, body: text })
+const HistoryRewound = z.object({ sessionId: z.string(), firstRemovedUserMessageId: z.string() })
 
 /** Causes a turn ends on without failing: the turn's own end, a Stop, a restart of Devin's loop, or Mako closing the process. */
 const ENDED = new Set(["complete", "cancelled", "interrupted", "restart", "shutdown"])
@@ -98,6 +98,12 @@ export function devinNotification(method: string, params: JsonObject): AcpNotifi
         kind: method,
         notices: [level === "info" ? notice(event("Notice", message, detail ?? undefined)) : warning(message, detail ?? undefined)],
       }
+    }
+    // Sent only to a client that advertises `cognition.ai/revert`, after `_cognition.ai/revert/execute`.
+    case "_cognition.ai/revert/historyRewound": {
+      const parsed = HistoryRewound.safeParse(params)
+      if (!parsed.success) return { sessionId, kind: method, notices: undefined }
+      return { sessionId, kind: method, notices: [{ kind: "rewound", run: parsed.data.firstRemovedUserMessageId }] }
     }
     case "_cognition.ai/billingInformation": {
       const parsed = Billing.safeParse(params)

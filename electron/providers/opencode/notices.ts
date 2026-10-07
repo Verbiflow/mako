@@ -8,7 +8,9 @@ type Interruption = Extract<OpenCodeEvent, { type: "session.execution.interrupte
  * terminals, configuration and install state, and session bookkeeping read
  * elsewhere. A notice is read from its inbox item, a skill from the prompt or
  * tool call that loaded it, a background shell from `OpenCodeShells`. A toast
- * is TUI chrome; the one OpenCode raises for an MCP server is its status.
+ * is TUI chrome; the one OpenCode raises for an MCP server is its status. A
+ * revert staged or cleared changes no message until it commits, and the next
+ * prompt commits a staged one.
  */
 export const OPENCODE_IGNORED: ReadonlySet<string> = new Set<OpenCodeEvent["type"]>([
   "server.connected",
@@ -54,7 +56,6 @@ export const OPENCODE_IGNORED: ReadonlySet<string> = new Set<OpenCodeEvent["type
   "session.shell.ended",
   "session.revert.staged",
   "session.revert.cleared",
-  "session.revert.committed",
 ])
 
 export function openCodeIgnores(event: OpenCodeEvent): boolean {

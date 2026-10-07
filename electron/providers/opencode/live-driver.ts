@@ -184,7 +184,7 @@ export function openCodeMessageId(now = Date.now()): string {
   return `msg_${value.toString(16).padStart(12, "0")}${random}`
 }
 
-function promptFiles(attachments: readonly PromptAttachment[]): Array<{ uri: string; name?: string }> {
+export function promptFiles(attachments: readonly PromptAttachment[]): Array<{ uri: string; name?: string }> {
   return attachments.flatMap(attachment => {
     if (attachment.data && attachment.mimeType.startsWith("image/"))
       return [{ uri: `data:${attachment.mimeType};base64,${attachment.data}`, name: attachment.name }]
@@ -860,7 +860,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       live.stopNotices.clear()
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
-      live.capture?.prompted(text)
+      live.capture?.prompted({ text, run: inboxId, attachments })
       dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
       try {
         if (slash?.kind === "command") {

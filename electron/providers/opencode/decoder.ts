@@ -85,6 +85,7 @@ export const OPENCODE_DECODED = new Set<string>([
   "session.step.started",
   "session.text.ended",
   "session.step.ended",
+  "session.revert.committed",
 ])
 
 const SessionScope = z.object({ sessionID: z.string() })
@@ -165,6 +166,9 @@ export class OpenCodeDecoder {
     }
     if (TURN.has(event.type)) return [...decoded, ...this.turn(event)]
     if (SESSION_STATE.has(event.type)) return [...decoded, ...this.session(event)]
+    // OpenCode deleted the messages from `to` on, whichever client reverted.
+    if (event.type === "session.revert.committed")
+      return event.data.sessionID === this.root ? [...decoded, { kind: "rewound", run: event.data.to }] : decoded
     if (openCodeIgnores(event)) return decoded
     const scope = SessionScope.safeParse(event.data).data
     if (!scope) return [...decoded, { kind: "unknown", type: event.type, reason: "unknown", raw: z.json().parse(event) }]
