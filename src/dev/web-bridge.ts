@@ -1,3 +1,4 @@
+import { z } from "zod"
 import { PREVIEW_MEDIA_TYPE, collectPreviewMedia } from "@mako/control-runtime/contracts"
 import {
   createMakoBridge,
@@ -9,7 +10,8 @@ import {
 import { hostCallInputs } from "../../electron/contracts/host-call-inputs.ts"
 import { invokeWithRecovery } from "../../electron/runtime-retry.ts"
 import { hostCallReplay } from "../../electron/contracts/host-call-policy.ts"
-import { RuntimeDisconnectedError, HOST_CLOSED_CODE, HOST_OUTAGE_MESSAGE, HOST_RESTARTING_CODE } from "../../electron/contracts/host-connection.ts"
+import { RuntimeDisconnectedError, HOST_OUTAGE_MESSAGE } from "../../electron/contracts/host-connection.ts"
+import { CORRELATION_HEADER, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue } from "../../electron/contracts/runtime.ts"
 import { setClientStorageScope } from "../lib/client-storage-scope"
 import { createWebNotificationChannels } from "./web-notifications.ts"
 
@@ -63,23 +65,18 @@ export async function installWebBridge(): Promise<void> {
   }
   // The reply body is the host's JSON answer, typed by the channel's contract
   // in `createMakoBridge`, the same way Electron's `ipcRenderer.invoke` is.
-  const post = async (channel: string, args: unknown[], attempt: number) => {
+  const post = async (channel: string, args: unknown[], attempt: number, correlationId: string) => {
     if (!connected) throw new RuntimeDisconnectedError(false)
-    const headers = new Headers({ "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" })
+    const headers = new Headers({ "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1", [CORRELATION_HEADER]: correlationId })
     if (channel === "mako:control-preview") headers.set("accept", PREVIEW_MEDIA_TYPE)
+    const body = JSON.stringify(encodeRuntimeCall(channel, args, attempt))
     let reply: Response
     try {
       reply = await fetch("/__mako/rpc", {
         method: "POST",
         signal: AbortSignal.timeout(5 * 60_000),
         headers,
-        body: JSON.stringify({
-          channel,
-          args: args.map((value) =>
-            value === undefined ? { kind: "absent" } : { kind: "value", value }
-          ),
-          attempt: attempt > 1 ? attempt : undefined,
-        }),
+        body,
       })
     } catch {
       // The proxy could not reach the socket or the connection reset: the
@@ -98,31 +95,28 @@ export async function installWebBridge(): Promise<void> {
       return (await collectPreviewMedia(chunks())).preview
     }
     // This transport shares createMakoBridge's result contract with Electron IPC.
-    let result
-    try { result = await reply.json() }
-    catch {
+    const result = RuntimeReplySchema.safeParse(await reply.json().catch(() => undefined))
+    if (!result.success) {
       if (hostCallReplay(channel) === "read")
         throw new Error("Mako could not read the host response. The response was incomplete or invalid.")
       throw new RuntimeDisconnectedError(true)
     }
-    if (!result.ok) {
-      if (result.code === "owner-unavailable") throw new RuntimeDisconnectedError(result.unconfirmed ?? true, result.conversationId)
-      if (result.code === HOST_RESTARTING_CODE) throw new RuntimeDisconnectedError(true)
-      if (result.code === HOST_CLOSED_CODE) throw new RuntimeDisconnectedError(false)
-      throw new Error(result.error)
-    }
+    const value = runtimeReplyValue(result.data)
     if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching Mako client and host.")
-    return result.value
+    return value
   }
   /**
    * The same rule the desktop client applies: a read or an id-settled
    * mutation that the host dropped runs once more when the host is back; any
    * other mutation is told its outcome is unknown.
    */
-  const invokeHost = (channel: string, args: unknown[]) => invokeWithRecovery(
-    channel, (attempt) => post(channel, args, attempt),
-    { lost() { /* The independent event stream owns connection status. */ }, whenConnected }
-  )
+  const invokeHost = (channel: string, args: unknown[]) => {
+    const correlationId = crypto.randomUUID()
+    return invokeWithRecovery(
+      channel, (attempt) => post(channel, args, attempt, correlationId),
+      { lost() { /* The independent event stream owns connection status. */ }, whenConnected }
+    )
+  }
   const response = await fetch("/__mako/events", {
     method: "POST",
     headers: { "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" },
@@ -195,35 +189,37 @@ export async function installWebBridge(): Promise<void> {
   const notifications = createWebNotificationChannels((event) => {
     for (const listener of events) listener(event)
   })
+  const answer = async (channel: string, args: unknown[]) => {
+    if (channel === "mako:open-preview-window") {
+      const url = new URL(location.href)
+      url.searchParams.set("preview", crypto.randomUUID())
+      window.open(url.href, "_blank", "noopener")
+      return
+    }
+    if (channel === "mako:notify")
+      return notifications.notify(hostCallInputs["mako:notify"].parse(args)[0])
+    if (channel === "mako:notify-dismiss") {
+      notifications.dismiss(hostCallInputs["mako:notify-dismiss"].parse(args)[0])
+      return
+    }
+    if (channel === "mako:set-badge-count") {
+      notifications.badge(hostCallInputs["mako:set-badge-count"].parse(args)[0])
+      return
+    }
+    // A tab cannot close itself, and the host's quit-client hides the desktop
+    // windows. After a host restart this page reconnects on its own.
+    if (channel === "mako:quit-client") return
+    if (channel === "mako:notification-permission") return notifications.permission()
+    if (channel === "mako:request-notification-permission")
+      return notifications.requestPermission()
+    if (supported && !supported.has(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
+    const value = await invokeHost(channel, args)
+    if (channel === "mako:boot" && import.meta.env.MAKO_SOURCE_ROOT) return { ...z.record(z.string(), z.json()).parse(value), sourceRoot: import.meta.env.MAKO_SOURCE_ROOT }
+    return value
+  }
   window.mako = createMakoBridge({
-    async invoke(channel, ...args) {
-      if (channel === "mako:open-preview-window") {
-        const url = new URL(location.href)
-        url.searchParams.set("preview", crypto.randomUUID())
-        window.open(url.href, "_blank", "noopener")
-        return
-      }
-      if (channel === "mako:notify")
-        return notifications.notify(hostCallInputs["mako:notify"].parse(args)[0])
-      if (channel === "mako:notify-dismiss") {
-        notifications.dismiss(hostCallInputs["mako:notify-dismiss"].parse(args)[0])
-        return
-      }
-      if (channel === "mako:set-badge-count") {
-        notifications.badge(hostCallInputs["mako:set-badge-count"].parse(args)[0])
-        return
-      }
-      // A tab cannot close itself, and the host's quit-client hides the desktop
-      // windows. After a host restart this page reconnects on its own.
-      if (channel === "mako:quit-client") return
-      if (channel === "mako:notification-permission") return notifications.permission()
-      if (channel === "mako:request-notification-permission")
-        return notifications.requestPermission()
-      if (supported && !supported.has(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
-      const value = await invokeHost(channel, args)
-      if (channel === "mako:boot" && import.meta.env.MAKO_SOURCE_ROOT) return { ...value, sourceRoot: import.meta.env.MAKO_SOURCE_ROOT }
-      return value
-    },
+    // SAFETY: as with Electron's ipcRenderer.invoke, the answer is the channel handler's own result, and createMakoBridge names its type per channel.
+    invoke: async <Result>(channel: string, ...args: unknown[]) => (await answer(channel, args)) as Result,
     onEvent: (listener) => {
       events.add(listener)
       return () => {
