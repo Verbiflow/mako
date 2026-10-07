@@ -358,9 +358,11 @@ try {
   const configured = await traceProviderLaunch("claude", "fixture-config", trace => claudeSdkOptions(root, {
     conversationId: randomUUID(), accountLaunch: prepared,
     mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
+    conversationTools: { token: "t", computerUrl: "http://127.0.0.1:43123/computer", makoUrl: "http://127.0.0.1:43123/mako" },
   }, trace))
   assert.equal(configured.account.name, "isolated")
   assert.equal(configured.options.env?.FIXTURE_IDENTITY, "isolated")
+  assert.deepEqual(Object.fromEntries(Object.entries(configured.options.mcpServers ?? {}).map(([name, server]) => [name, "timeout" in server ? server.timeout : undefined])), { "mako-computer": 900_000, mako: 900_000 }, "Claude Code ends an MCP call after 60 s unless the server's entry gives it longer, and app_check waits up to ten minutes")
   console.log("Execution admission: real selection files, warm refusal, preserved approvals/Stop, shared reopen, all-six/future startup cancellation, late-owner fences, failed cleanup retention and reported-identity confirmation (mismatch refused, unverified never matched) verified")
 } finally {
   mock.restoreAll()

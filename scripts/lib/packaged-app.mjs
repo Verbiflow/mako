@@ -13,9 +13,15 @@ import { threadDebugPort } from "../thread-debug-port.mjs"
  * spawned is ever signalled.
  */
 export class PackagedApp {
-  /** @param {{ executable: string, root: string, workspace: string, onStdoutLine?: (line: string) => void }} options */
-  constructor({ executable, root, workspace, onStdoutLine }) {
+  /**
+   * `args` and `env` run a built checkout instead of a package: its Electron
+   * as `executable`, the checkout in `args` and `MAKO_PROD` in `env`.
+   * @param {{ executable: string, root: string, workspace: string, args?: string[], env?: Record<string, string>, onStdoutLine?: (line: string) => void }} options
+   */
+  constructor({ executable, root, workspace, args = [], env = {}, onStdoutLine }) {
     this.executable = executable
+    this.args = args
+    this.extraEnv = env
     this.root = root
     this.workspace = workspace
     this.onStdoutLine = onStdoutLine
@@ -94,6 +100,7 @@ export class PackagedApp {
       MAKO_STANDALONE: "1",
       MAKO_DATA_ROOT: this.profile,
       MAKO_CURSOR_SDK_ROOT: join(this.root, "cursor"),
+      ...this.extraEnv,
     }
     delete env.ELECTRON_RUN_AS_NODE
     delete env.VITE_DEV_SERVER_URL
@@ -101,6 +108,7 @@ export class PackagedApp {
     const child = spawn(
       this.executable,
       [
+        ...this.args,
         `--user-data-dir=${this.profile}`,
         `--remote-debugging-port=${debugPort}`,
         "--remote-debugging-address=127.0.0.1",

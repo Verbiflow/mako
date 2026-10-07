@@ -3,7 +3,7 @@ import { applyThreadEnvironment } from "../../thread-environment.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { resolveAccountLaunch } from "../../accounts.js"
 import type { ClaudeSdkConfiguration } from "./sdk-driver.js"
-import { acpMcpServers } from "../../mcp-runtime.js"
+import { acpMcpServers, MAKO_TOOL_TIMEOUT_MS } from "../../mcp-runtime.js"
 import { conversationServers, type ProviderStartOptions } from "../live-driver.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
 import { claudeRuntime } from "./runtime.js"
@@ -54,7 +54,7 @@ export async function claudeSdkOptions(
   }
   if (input.conversationTools)
     for (const { name, url } of conversationServers(input.conversationTools))
-      mcpServers[name] = { type: "http", url, headers: { Authorization: `Bearer ${input.conversationTools.token}` } }
+      mcpServers[name] = { type: "http", url, headers: { Authorization: `Bearer ${input.conversationTools.token}` }, timeout: MAKO_TOOL_TIMEOUT_MS }
   return { account, options: {
     cwd,
     env,

@@ -84,8 +84,12 @@ function codexDefinition(
   return null
 }
 
-/** Codex gives an MCP call 60 seconds unless told otherwise; Mako's own tools wait longer, up to app_check's ten minutes. */
-const MAKO_TOOL_TIMEOUT_SEC = 15 * 60
+/**
+ * How long a harness lets a call to Mako's own servers run: past app_check's
+ * ten-minute wait. Codex and Claude Code each end an MCP call after 60
+ * seconds unless the server's entry says otherwise.
+ */
+export const MAKO_TOOL_TIMEOUT_MS = 15 * 60_000
 
 export function codexMcpConfig(
   snapshot: McpRegistrySnapshot,
@@ -100,7 +104,7 @@ export function codexMcpConfig(
     if (projected) servers[definition.name] = projected
   }
   for (const { name, url } of makoServers)
-    servers[name] = { url, bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN", tool_timeout_sec: MAKO_TOOL_TIMEOUT_SEC }
+    servers[name] = { url, bearer_token_env_var: "MAKO_CONVERSATIONS_TOKEN", tool_timeout_sec: MAKO_TOOL_TIMEOUT_MS / 1000 }
   return Object.keys(servers).length > 0 ? { mcp_servers: servers } : {}
 }
 
