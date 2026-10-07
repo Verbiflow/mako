@@ -99,7 +99,7 @@ try {
     { type: "tool_call", call_id: "x", name: "grep", status: "running", args: { pattern: "needle" } },
     { type: "status", status: "CANCELLED" },
   ]
-  stream.forEach((message, seq) => log.run(seq + 1, event("run-2", message)))
+  stream.forEach((message, seq) => log.run(seq + 1, event("run-2", { agent_id: id, run_id: "run-2", ...message })))
 
   const provider = new CursorProvider(home, {})
   const follower = provider.createFollower(path, 0)

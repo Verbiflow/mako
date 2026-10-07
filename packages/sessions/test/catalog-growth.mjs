@@ -118,10 +118,10 @@ try {
     claudeLine({ type: "user", sessionId: "62362b25", cwd: "/Users/dev/app", timestamp: "2026-09-11T07:00:00Z", message: { role: "user", content: "Fix the reply rate on the Together AI sequence" } }) +
       claudeLine({ type: "assistant", sessionId: "62362b25", timestamp: "2026-09-11T07:00:05Z", message: { role: "assistant", model: "claude-fable-5", content: [{ type: "text", text: "On it." }] } })
   )
-  // A shell inside Claude Code sets CLAUDE_CONFIG_DIR for its own
-  // store; a provider built on a fixture home must not list that store's
-  // sessions among the fixture's. This test once scanned the developer's real
-  // sessions and asserted on one of their titles.
+  // A shell inside Claude Code sets CLAUDE_CONFIG_DIR for its own store.
+  // Mako launches Claude without it, so no provider lists that store's
+  // sessions: they could not be resumed. This test once scanned the
+  // developer's real sessions and asserted on one of their titles.
   const foreign = join(home, "foreign-config")
   await mkdir(join(foreign, "projects", "-elsewhere"), { recursive: true })
   await writeFile(
@@ -131,11 +131,17 @@ try {
   const savedConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = foreign
   const claude = new ClaudeProvider(home)
-  const followsEnv = new ClaudeProvider()
+  const ownHome = new ClaudeProvider()
+  const ownRoots = ownHome.roots()
   if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
-  assert.ok(followsEnv.roots().includes(await realpath(join(foreign, "projects"))), "the default-home provider honours the process's CLAUDE_CONFIG_DIR")
+  assert.ok(!ownRoots.includes(await realpath(join(foreign, "projects"))), "the default-home provider ignores an exported CLAUDE_CONFIG_DIR, as Claude's launch does")
   assert.deepEqual(claude.roots(), [join(home, ".claude", "projects")], "a fixture-home provider reads nothing from the process environment")
+  const declaring = join(home, "declaring")
+  await mkdir(join(declaring, ".mako"), { recursive: true })
+  await writeFile(join(declaring, ".mako", "roots.json"), JSON.stringify({ claude: [join(foreign, "projects"), "relative/projects", 7] }))
+  assert.deepEqual(new ClaudeProvider(declaring).roots(), [join(declaring, ".claude", "projects"), await realpath(join(foreign, "projects"))],
+    "a store declared in ~/.mako/roots.json is read; a relative or unreadable entry is not")
   const claudeCatalog = new SessionCatalog([claude], { cachePath: join(home, "claude-cache.json") })
   const prompted = (await claudeCatalog.scan()).find((ref) => ref.path === session)
   assert.equal(prompted?.title, "Fix the reply rate on the Together AI sequence")

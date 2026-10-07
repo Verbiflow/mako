@@ -34,7 +34,7 @@ try {
   await writeFile(join(claudeDir, `${parentId}.jsonl`), jsonl(user(parentId)))
   const claudeFork = join(claudeDir, `${forkId}.jsonl`)
   await writeFile(claudeFork, jsonl(user(forkId, { forkedFrom: { sessionId: parentId, messageUuid: `${parentId}-u1` } })))
-  const claude = new ClaudeProvider(home, undefined)
+  const claude = new ClaudeProvider(home)
   assert.equal((await discovered(claude, claudeFork)).parentNativeId, parentId, "claude: a fork names its parent")
   assert.equal((await discovered(claude, join(claudeDir, `${parentId}.jsonl`))).parentNativeId, undefined, "claude: the parent names none")
 

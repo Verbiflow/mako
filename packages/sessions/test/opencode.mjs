@@ -531,7 +531,8 @@ try {
       kind: "assistant",
       at: "1970-01-01T01:48:20.000Z",
       model: "gpt-v2",
-      usage: { input: 12, output: 4, cacheRead: 2, cacheWrite: 0 },
+      // OpenCode counts reasoning beside output; it is billed as output.
+      usage: { input: 12, output: 5, cacheRead: 2, cacheWrite: 0 },
       blocks: [
         { type: "text", text: "v2 answer" },
         { type: "attachment", name: "Attachment", mimeType: "image/png", source: { kind: "inline", data: "cHJvb2Y=" } },
@@ -548,7 +549,7 @@ try {
       kind: "assistant",
       at: "1970-01-01T00:33:20.000Z",
       model: "claude-legacy",
-      usage: { input: 100, output: 25, cacheRead: 40, cacheWrite: 10, costUsd: 0.125 },
+      usage: { input: 100, output: 30, cacheRead: 40, cacheWrite: 10, costUsd: 0.125 },
       blocks: [
         { type: "thinking", text: "legacy reasoning" },
         {
@@ -584,14 +585,14 @@ try {
       kind: "assistant",
       at: "1970-01-01T01:23:20.000Z",
       model: "gpt-current",
-      usage: { input: 200, output: 50, cacheRead: 80, cacheWrite: 20, costUsd: 0.25 },
+      usage: { input: 200, output: 60, cacheRead: 80, cacheWrite: 20, costUsd: 0.25 },
       blocks: [
         { type: "thinking", text: "current reasoning" },
         {
           type: "tool",
           name: "read",
           id: "tool_1",
-          input: '{"path":"README.md"}',
+          input: '{\n  "path": "README.md"\n}',
           details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
           output: "current tool output",
         },
@@ -793,7 +794,7 @@ try {
     type: "tool",
     name: "shell",
     id: "tool_2",
-    input: '{"command":"sleep 45"}',
+    input: '{\n  "command": "sleep 45"\n}',
     output: "Tool execution interrupted",
     canceled: true,
   }, "a call the user stopped reads as cancelled, not failed")
@@ -801,7 +802,7 @@ try {
     type: "tool",
     name: "read",
     id: "tool_1",
-    input: '{"path":"README.md"}',
+    input: '{\n  "path": "README.md"\n}',
     details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
     output: "read failed",
     error: true,
