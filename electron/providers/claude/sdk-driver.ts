@@ -608,7 +608,7 @@ export function createClaudeSdkDriver(
         live.promptReceipt = undefined
         throw error
       }
-      live.capture?.prompted(text)
+      live.capture?.prompted({ text, attachments })
       live.decoder.startTurn()
       live.transcript.reset()
       engine.patch(live, {

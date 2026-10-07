@@ -7,7 +7,7 @@ import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../
 import { claudeRateLimitWindow } from "./accounts.js"
 import { claudeMessageKind } from "./sdk-message-kinds.js"
 import { ClaudeNotices } from "./sdk-notices.js"
-import { ClaudeProjection } from "./sdk-projection.js"
+import { ClaudeProjection } from "@mako/sessions/claude-projection"
 
 /**
  * Claude Agent SDK messages as Mako's shared decoded events. Pure: it reads

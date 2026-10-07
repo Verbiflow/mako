@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/approval-response.js"
-import { claudeProposedPlan } from "./sdk-plan.js"
+import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import type { CanUseTool, OnElicitation, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk"
 import { ElicitRequestFormParamsSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
