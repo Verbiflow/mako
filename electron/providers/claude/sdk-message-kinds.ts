@@ -57,16 +57,25 @@ const KNOWN = {
 
 /**
  * Kinds Claude Code sends that the SDK's types don't declare yet, with the
- * CLI they were first seen from. Parse these before reading them.
+ * CLI they were first seen from. Parse these before reading them. A kind the
+ * SDK starts typing fails to compile here: move it to `KNOWN` and read it
+ * through the SDK's type.
  */
-const NEWER = {
+const NEWER = untyped({
   /**
    * Claude Code 2.1.283: each prompt Mako sends, by its uuid, is `queued`,
    * `started`, `completed` or `cancelled`. `queued` arrives before the turn's
-   * `init`, so the driver takes it as the earliest receipt.
+   * `init`, so the driver takes it as the earliest receipt. Still untyped in
+   * SDK 0.3.293.
    */
   command_lifecycle: "state",
-} as const
+})
+
+function untyped<const Kinds extends Record<string, "shown" | "state" | "ignored">>(
+  kinds: Kinds & { readonly [Typed in Kind<SDKMessage>]?: never }
+): Kinds {
+  return kinds
+}
 
 const CommandLifecycleSchema = z.object({
   type: z.literal("command_lifecycle"),

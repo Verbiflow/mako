@@ -103,6 +103,10 @@ export class ClaudeTranscript {
 
 /** Keep the final chain entry, including output attachments after the assistant.
  * Missing, oversized, torn or changing evidence disables native forking for this turn.
+ * Claude's own leaf (`last-prompt`) must be that entry or one before it on the
+ * chain: Claude Code 2.1.293 writes the leaf for a turn's closing
+ * `stop_hook_summary` only once the next prompt comes, but a leaf on another
+ * branch means the chain moved.
  */
 export async function readClaudeForkPoint(
   path: string,
@@ -122,6 +126,7 @@ export async function readClaudeForkPoint(
     if (offset && !start) return undefined
     let head: string | undefined
     let persistedHead: string | undefined
+    const parents = new Map<string, string | null>()
     while (start < bytesRead) {
       const end = buffer.indexOf(10, start)
       if (end < 0 || end >= bytesRead) return undefined
@@ -143,6 +148,7 @@ export async function readClaudeForkPoint(
           return undefined
         if (entry.success && !entry.data.isSidechain) {
           if (entry.data.sessionId !== sessionId) return undefined
+          parents.set(entry.data.uuid, entry.data.parentUuid)
           if (entry.data.uuid === observedId) head = observedId
           else if (head) {
             if (entry.data.parentUuid !== head) return undefined
@@ -153,7 +159,10 @@ export async function readClaudeForkPoint(
       start = end + 1
     }
     const after = await file.stat()
-    return head === persistedHead &&
+    let leaf = head
+    for (let steps = 0; leaf !== undefined && leaf !== persistedHead; steps++)
+      leaf = steps < parents.size ? parents.get(leaf) ?? undefined : undefined
+    return head !== undefined && leaf !== undefined &&
       before.size === after.size &&
       before.mtimeMs === after.mtimeMs
       ? head

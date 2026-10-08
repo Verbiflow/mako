@@ -234,7 +234,10 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (live.compaction && message.user_message_uuid &&
         message.user_message_uuid !== live.compaction.runId &&
         !message.user_message_uuids?.includes(live.compaction.runId)) continue
-      if (live.steered && message.terminal_reason === "aborted_streaming")
+      // A steer aborts the step it lands in, a reply streaming or a command
+      // running, and Claude opens a query for it after this result (Claude
+      // Code 2.1.278 and 2.1.293, `steered-shell` pairs).
+      if (live.steered && (message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"))
         continue
       if ((message.queued_turn_count ?? 0) > 0) continue
       live.steered = false

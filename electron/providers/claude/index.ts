@@ -1,5 +1,6 @@
 import { emitClaudeSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
+import { harnessLacks, implemented } from "../live-capabilities.js"
 import { claudeHooks, claudeCommands } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { claudeLiveDriver } from "./live-driver.js"
@@ -20,6 +21,15 @@ export const installClaude: ProviderModule = (host) => installHarness(host, {
   provider: "claude",
   presentation: claudePresentation,
   diagnostics: { sdk: "@anthropic-ai/claude-agent-sdk", signInLog: CLAUDE_AUTH_LOG },
+  usage: {
+    context: implemented("The main agent's last call: what it read, cached or not, and wrote."),
+    window: implemented("The answering model's `contextWindow` in each result's `modelUsage`."),
+    compaction: implemented("The compact boundary's `post_tokens`."),
+    tokens: implemented("Each result's session totals, less what the process had counted before."),
+    cost: implemented("Each result's `total_cost_usd`, less what the process had counted before."),
+    missedCalls: harnessLacks("Claude Code's results never say they left a call out."),
+    resetCredits: harnessLacks("Claude's usage report has no reset credits."),
+  },
   hooks: claudeHooks,
   commands: claudeCommands,
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
