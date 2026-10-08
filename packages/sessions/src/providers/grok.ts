@@ -1,5 +1,5 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
-import { AcpSavedTurns, acpSavedNotification, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
+import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
 import { backgroundReminderLabel, GROK_ACP_HOOKS, grokCost, grokTokens, GrokTurnUsage } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
@@ -429,10 +429,10 @@ function parseSavedLine(raw: string): SavedLine | null {
   if (notification) return { kind: "update", at, notification }
   const marker = grokUpdateMarker(sessionUpdate, update)
   if (marker) return { kind: "marker", at, marker: source ? { ...marker, source } : marker }
-  if (sessionUpdate && grokUpdateReading(sessionUpdate)) return null
-  // A kind ACP declares reached `acpSavedNotification`; one it refused is unreadable.
-  const type = `${method}/${sessionUpdate ?? "(none)"}`
-  return { kind: "unread", type, reason: method === "session/update" && ACP_UPDATE_KINDS.has(sessionUpdate ?? "") ? "unreadable" : "unknown", raw: root }
+  if (!sessionUpdate) return { kind: "unread", type: method, reason: "unreadable", raw: root }
+  if (grokUpdateReading(sessionUpdate)) return null
+  const reason = method === "session/update" ? acpSavedRefusal(sessionUpdate) : "unknown"
+  return reason ? { kind: "unread", type: `${method}/${sessionUpdate}`, reason, raw: root } : null
 }
 
 function parseLegacyCalls(value: JsonValue | undefined): LegacyAssistantCall[] {
