@@ -6,6 +6,8 @@ import type { UsageSummary, UsageTotals } from "@/lib/types"
 import { Shimmer } from "@/components/ui/shimmer"
 import { AccountLimits } from "@/components/identity/account-usage"
 import { accounts } from "@/state/accounts"
+import { descriptorFor } from "@/state/descriptors"
+import { useThreads } from "@/state/threads"
 
 export function UsageSection() {
   return (
@@ -45,6 +47,7 @@ function PlanLimits() {
 function LocalUsage() {
   const [data, setData] = useState<UsageSummary>()
   const [loading, setLoading] = useState(true)
+  const descriptors = useThreads((state) => state.descriptors)
 
   useEffect(() => {
     void loadUsage()
@@ -132,10 +135,12 @@ function LocalUsage() {
 
       <Breakdown
         title="By source"
-        rows={(data.sources ?? []).map((source) => ({
-          label: source.recordedByMako ? `${source.source} · runs in Mako` : source.source,
-          totals: source,
-        }))}
+        rows={(data.sources ?? []).map((source) => {
+          const outside = source.harness ? descriptorFor({ descriptors }, source.harness)?.usage.outsideMako : undefined
+          return outside?.state === "absent"
+            ? { label: `${source.source} · runs in Mako`, note: outside.reason, totals: source }
+            : { label: source.source, totals: source }
+        })}
         total={data.total.cost}
       />
       <Breakdown
@@ -186,7 +191,7 @@ function Breakdown({
   total,
 }: {
   title: string
-  rows: Array<{ label: string; totals: UsageTotals }>
+  rows: Array<{ label: string; totals: UsageTotals; note?: string }>
   total: number
 }) {
   if (rows.length === 0) return null
@@ -201,9 +206,9 @@ function Breakdown({
             <div
               key={row.label}
               title={
-                unavailable
-                  ? `${formatTokens(row.totals.unpricedTokens ?? 0)} tokens have no known price`
-                  : undefined
+                [row.note, unavailable ? `${formatTokens(row.totals.unpricedTokens ?? 0)} tokens have no known price` : undefined]
+                  .filter(Boolean)
+                  .join(" ") || undefined
               }
               className="flex items-center gap-2 rounded-md px-1.5 py-1"
             >

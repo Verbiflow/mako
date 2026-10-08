@@ -26,6 +26,8 @@ import {
   usageWindowShortName,
 } from "@/lib/usage-window"
 import { cn } from "@/lib/utils"
+import { descriptorFor } from "@/state/descriptors"
+import { useThreads } from "@/state/threads"
 
 /**
  * Plan limits for every account Mako can see, grouped by the harness that
@@ -583,7 +585,7 @@ function WindowLine({
   )
 }
 
-/** Balances, reset credits and a kept reading's age, then the row's actions. */
+/** Balances, reset credits (for a harness that declares them) and a kept reading's age, then the row's actions. */
 function Footer({
   usage,
   account,
@@ -600,7 +602,8 @@ function Footer({
   className?: string
 }) {
   const now = useMinuteClock()
-  const credits = usage?.status === "ok" ? usage.resetCredits : undefined
+  const spendsCredits = useThreads((state) => descriptorFor(state, account.harness)?.usage.resetCredits.state === "implemented")
+  const credits = spendsCredits && usage?.status === "ok" ? usage.resetCredits : undefined
   const notes =
     usage?.status === "ok"
       ? [
@@ -611,7 +614,7 @@ function Footer({
           readingAgeText(usage.readAt, now),
         ].filter((note) => note !== null)
       : []
-  const reset = offersReset(usage, now)
+  const reset = spendsCredits && offersReset(usage, now)
   if (notes.length === 0 && !reset && !actions) return null
   return (
     <div className={cn("flex min-h-6 items-center gap-3", className)}>

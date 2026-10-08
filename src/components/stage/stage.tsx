@@ -4,7 +4,7 @@ import { Transcript } from "@/components/transcript/transcript"
 import { ThreadViewer } from "@/components/viewer/thread-viewer"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { FileViewer, type AgentSurfaceProps } from "@/components/viewer/file-viewer"
-import { ConversationScopeContext, useConversationScope, type ConversationScope } from "@/state/conversation-scope"
+import { ConversationScopeContext, TranscriptPaneContext, useConversationScope, type ConversationScope } from "@/state/conversation-scope"
 import { usePaneScope } from "@/state/session-panes"
 import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
@@ -237,15 +237,17 @@ export function Stage() {
   )
 }
 
-const AgentSurface = memo(function AgentSurface({ session, composer }: AgentSurfaceProps) {
+const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: AgentSurfaceProps) {
   const scope = usePaneScope(session)
   return (
     <main className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <ConversationScopeContext.Provider value={scope}>
-        <ConversationSurface />
-        {!composer && (scope?.kind === "live" || scope?.kind === "history") ? (
-          <PaneComposer />
-        ) : null}
+        <TranscriptPaneContext value={paneId ?? null}>
+          <ConversationSurface />
+          {!composer && (scope?.kind === "live" || scope?.kind === "history") ? (
+            <PaneComposer />
+          ) : null}
+        </TranscriptPaneContext>
       </ConversationScopeContext.Provider>
       {composer ? (
         <>

@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { formatCost, formatTokens } from "@/lib/format"
 import { harnessLabel } from "@/lib/harness-label"
-import type { ContextBreakdown, ContextCategory, LiveSessionUsage, TokenCounts } from "@/lib/types"
+import type { Capability, ContextBreakdown, ContextCategory, HarnessUsage, LiveSessionUsage, TokenCounts } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { acp, useAcp } from "@/state/acp"
 import { descriptorFor } from "@/state/descriptors"
@@ -35,25 +35,45 @@ const FILL = {
 /** Used categories, largest first, in steps of one ink so the bar reads as one thing. */
 const INK = ["bg-foreground/75", "bg-foreground/55", "bg-foreground/40", "bg-foreground/28", "bg-foreground/20", "bg-foreground/14"]
 
+const NO_USAGE: LiveSessionUsage = {}
+
+/** What the meter can show, from what the harness declares it reports (`HarnessUsage`), never from what has arrived so far. */
+function useDeclaredUsage(harness: string | undefined): HarnessUsage | undefined {
+  return useThreads((state) => (harness ? descriptorFor(state, harness)?.usage : undefined))
+}
+
+const reports = (capability: Capability) => capability.state === "implemented"
+
+/** The fill, once a harness that reports it has: `undefined` before its first reading. */
+function fractionOf(usage: LiveSessionUsage): number | undefined {
+  return usage.used !== undefined && usage.size ? usage.used / usage.size : undefined
+}
+
 /**
- * How full the running session's context is, beside the send button: a ring
- * when the harness reports the fill, a dashed ring when it reports only the
- * tokens spent (Cursor), nothing when it reports neither. The popover itemizes
- * what the harness itemizes and says plainly what it does not report.
+ * How full the running session's context is, beside the send button, as the
+ * harness declares it reports usage: a ring for one that reports the fill
+ * (its track alone until the first reading), a dashed ring for one that
+ * reports only what it spent (Cursor), nothing for one that reports neither.
+ * The popover itemizes what the harness itemizes and says why anything it
+ * doesn't report is missing.
  */
 export function ContextMeter() {
   const scope = useConversationScope()
-  const usage = useAcp((state) => scopedLiveAcp(state, scope)?.session.usage)
+  const usage = useAcp((state) => scopedLiveAcp(state, scope)?.session.usage) ?? NO_USAGE
   const harness = useAcp((state) => scopedLiveAcp(state, scope)?.harness)
   const conversationId = useAcp((state) => scopedLiveAcp(state, scope)?.session.id)
+  const declared = useDeclaredUsage(harness)
   const [open, setOpen] = useState(false)
-  if (!usage || !harness || !conversationId) return null
-  const fraction = usage.used !== undefined && usage.size ? usage.used / usage.size : undefined
-  const spent = usage.tokens ? total(usage.tokens) : undefined
-  if (fraction === undefined && spent === undefined) return null
-  const summary = fraction !== undefined
-    ? `Context ${Math.round(fraction * 100)}% full${usage.compacted ? ", compacted since" : ""}`
-    : "Context usage unavailable"
+  if (!harness || !conversationId || !declared) return null
+  const measures = reports(declared.context)
+  if (!measures && !reports(declared.tokens) && !reports(declared.cost)) return null
+  const fraction = measures ? fractionOf(usage) : undefined
+  const stale = declared.compaction.state === "default" && usage.compacted === true
+  const summary = !measures
+    ? "Context fill not reported"
+    : fraction === undefined
+      ? "Context measured after the first reply"
+      : `Context ${Math.round(fraction * 100)}% full${stale ? ", compacted since" : ""}`
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Tooltip>
@@ -65,11 +85,7 @@ export function ContextMeter() {
               data-context-meter
               className="pressable flex size-8 shrink-0 items-center justify-center rounded-none text-faint hover:bg-fill-hover hover:text-foreground focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-ring data-[state=open]:bg-fill-hover data-[state=open]:text-foreground"
             >
-              {fraction !== undefined ? (
-                <Ring fraction={fraction} compacted={usage.compacted === true} />
-              ) : (
-                <UnmeasuredRing />
-              )}
+              {measures ? <Ring fraction={fraction} compacted={stale} /> : <UnmeasuredRing />}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -82,14 +98,15 @@ export function ContextMeter() {
   )
 }
 
-function Ring({ fraction, compacted }: { fraction: number; compacted: boolean }) {
+/** The fill against its track; the track alone before the first reading. */
+function Ring({ fraction, compacted }: { fraction: number | undefined; compacted: boolean }) {
   const radius = 6
   const circumference = 2 * Math.PI * radius
-  const shown = Math.min(1, Math.max(0.03, fraction))
+  const shown = fraction === undefined ? 0 : Math.min(1, Math.max(0.03, fraction))
   return (
-    <svg viewBox="0 0 16 16" className={cn("size-4 -rotate-90", compacted && "opacity-50")} aria-hidden>
+    <svg viewBox="0 0 16 16" className={cn("size-4 -rotate-90", compacted && "opacity-50")} aria-hidden data-context-ring>
       <circle cx="8" cy="8" r={radius} fill="none" strokeWidth="2" className="stroke-foreground/12" />
-      <circle
+      {fraction === undefined ? null : <circle
         cx="8"
         cy="8"
         r={radius}
@@ -98,12 +115,12 @@ function Ring({ fraction, compacted }: { fraction: number; compacted: boolean })
         strokeLinecap="butt"
         strokeDasharray={`${shown * circumference} ${circumference}`}
         className={cn("transition-[stroke-dasharray] duration-500 ease-out", STROKE[toneOf(fraction)])}
-      />
+      />}
     </svg>
   )
 }
 
-/** The ring's place for a harness that reports spend but no fill: dashed, so it cannot read as an empty context. */
+/** The ring's place for a harness that declares no fill: dashed, so it cannot read as an empty context. */
 function UnmeasuredRing() {
   const radius = 6
   const dash = (2 * Math.PI * radius) / 12
@@ -135,16 +152,20 @@ export function UsageDetails({
   onCompact?: () => void
 }) {
   useHarnessIdentity()
-  const itemizes = useThreads((state) => descriptorFor(state, harness)?.capabilities.contextBreakdown.state === "implemented")
+  const declared = useDeclaredUsage(harness)
+  const itemizes = declared ? reports(declared.contextBreakdown) : false
   const breakdown = useBreakdown(conversationId, usage.used, itemizes)
-  const fraction = usage.used !== undefined && usage.size ? usage.used / usage.size : undefined
+  if (!declared) return null
+  const measures = reports(declared.context)
+  const fraction = measures ? fractionOf(usage) : undefined
+  const stale = declared.compaction.state === "default" && usage.compacted === true
   return (
     <div className="flex flex-col" data-usage-details>
       <section className="flex flex-col gap-2 px-3 pt-3 pb-2.5">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-ui">Context</span>
           <span className="text-label text-faint tabular-nums">
-            {fraction !== undefined ? `${Math.round(fraction * 100)}%` : "Unavailable"}
+            {fraction !== undefined ? `${Math.round(fraction * 100)}%` : measures ? "After the first reply" : "Not reported"}
           </span>
         </div>
         {fraction !== undefined && usage.used !== undefined && usage.size ? (
@@ -152,17 +173,17 @@ export function UsageDetails({
             <ContextBar fraction={fraction} breakdown={breakdown} />
             <span className="text-label text-faint tabular-nums">
               {formatTokens(usage.used)} of {formatTokens(usage.size)} tokens
-              {usage.compacted ? " before compacting. The next reply updates this." : ""}
+              {stale ? " before compacting. The next reply updates this." : ""}
             </span>
           </>
         ) : (
-          <span className="text-label text-faint">
-            {harnessLabel(harness)} doesn't report how full the context is.
+          <span className="text-label text-faint" data-context-unmeasured>
+            {measures ? `${harnessLabel(harness)} reports how full the context is after each reply.` : absentReason(declared.context)}
           </span>
         )}
       </section>
       {breakdown ? <Categories breakdown={breakdown} /> : null}
-      {usage.tokens || usage.cost ? <Spent tokens={usage.tokens} cost={usage.cost} unrecorded={usage.unrecorded} harness={harness} /> : null}
+      {reports(declared.tokens) || reports(declared.cost) ? <Spent usage={usage} declared={declared} harness={harness} /> : null}
       <div className="border-t border-hairline p-1">
         <CompactionControl onStart={onCompact} />
       </div>
@@ -273,19 +294,17 @@ function Categories({ breakdown }: { breakdown: ContextBreakdown }) {
   )
 }
 
-function Spent({
-  tokens,
-  cost,
-  unrecorded,
-  harness,
-}: {
-  tokens?: TokenCounts
-  cost?: LiveSessionUsage["cost"]
-  unrecorded?: LiveSessionUsage["unrecorded"]
-  harness: string
-}) {
-  const shownCost = cost && cost.amount > 0 ? cost : undefined
-  const note = tokens && unrecorded?.tokens
+/** A declared-absent capability's reason, which the declaration guarantees. */
+function absentReason(capability: Capability): string | undefined {
+  return capability.state === "absent" ? capability.reason : undefined
+}
+
+/** What the session spent, in what the harness declares it reports; a field it doesn't report says why. */
+function Spent({ usage, declared, harness }: { usage: LiveSessionUsage; declared: HarnessUsage; harness: string }) {
+  const tokens = reports(declared.tokens) ? usage.tokens : undefined
+  const shownCost = reports(declared.cost) && usage.cost && usage.cost.amount > 0 ? usage.cost : undefined
+  const unrecorded = reports(declared.missedCalls) ? usage.unrecorded : undefined
+  const missed = tokens && unrecorded?.tokens
     ? `${harnessLabel(harness)} left some calls out of its usage count, so these totals may be low.`
     : shownCost && unrecorded?.cost
       ? `${harnessLabel(harness)} didn't report the cost of every call, so the cost may be low.`
@@ -309,7 +328,9 @@ function Spent({
       {shownCost ? (
         <Row label="Cost" value={shownCost.currency === "USD" ? formatCost(shownCost.amount) : `${shownCost.amount} ${shownCost.currency}`} strong />
       ) : null}
-      {note ? <span className="mt-0.5 text-label text-faint" data-unrecorded-spend>{note}</span> : null}
+      {!tokens && !shownCost ? <span className="text-label text-faint">Counted after the first reply.</span> : null}
+      {missed ? <span className="mt-0.5 text-label text-faint" data-unrecorded-spend>{missed}</span> : null}
+      {tokens && !reports(declared.cost) ? <span className="mt-0.5 text-label text-faint" data-cost-unreported>{absentReason(declared.cost)}</span> : null}
     </section>
   )
 }

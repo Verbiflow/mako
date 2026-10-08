@@ -158,7 +158,9 @@ function PreviewCard({
   const frame = preview?.frame
   const activity = preview?.activity
   const nativeWindow = preview?.window
-  if (!frame && !nativeWindow && !error) return null
+  // A failed read is news only over a picture; alone it would flash a card in
+  // every finished task the host is slow to answer for.
+  if (!frame && !nativeWindow) return null
   const surface = activity?.kind === "browser" ? "Browser" : "Computer"
   const working = activity?.status === "running"
   const label = activity

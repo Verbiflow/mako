@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType } from "react"
 import {
   AlertTriangleIcon,
-  BotIcon,
   CheckIcon,
   ExternalLinkIcon,
   MailIcon,
@@ -36,7 +35,6 @@ const LOGOS = {
   sentry: SiSentry,
   google: FaGoogle,
   atlassian: SiAtlassian,
-  "mako-backend": BotIcon,
   "local-browser": MonitorIcon,
   "computer-use": MonitorIcon,
   "apple-mail": MailIcon,
@@ -77,8 +75,8 @@ export function IntegrationsSection() {
     <div>
       <div className="flex items-start gap-4 pb-5">
         <p className="min-w-0 flex-1 text-ui leading-relaxed text-muted-foreground">
-          Bring work context into every agent. Slack runs through Mako’s
-          authenticated backend; Google uses a signed-in local browser session.
+          Bring work context into every agent. Services connect through each
+          agent’s own sign-in; Google uses a signed-in local browser session.
           Browser and computer control never leave this Mac.
         </p>
         <Action
