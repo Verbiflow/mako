@@ -37,8 +37,9 @@ export function DiagnosticsSection() {
   return (
     <div className="flex flex-col gap-1">
       <p className="pb-2 text-ui leading-relaxed text-muted-foreground">
-        Written to this machine and nowhere else. Nothing here is sent anywhere
-        — copy a report if you want to pass it on.
+        Every report is kept here in full. With error reports on in Privacy,
+        Mako also gets its message and stack, with paths, emails and secrets
+        taken out. Copy a report to pass on all of it.
       </p>
 
       {crashes.length === 0 ? (

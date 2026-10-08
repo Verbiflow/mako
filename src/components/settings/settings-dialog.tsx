@@ -28,6 +28,7 @@ import { section as nativeAuthoring } from "@/components/settings/sections/nativ
 import { section as plugins } from "@/components/settings/sections/plugins"
 import { section as account } from "@/components/settings/sections/account"
 import { section as updates } from "@/components/settings/sections/updates"
+import { section as privacy } from "@/components/settings/sections/privacy"
 import { section as diagnostics } from "@/components/settings/sections/diagnostics"
 import { section as about } from "@/components/settings/sections/about"
 import { Keys } from "@/components/ui/kit"
@@ -51,6 +52,7 @@ const SECTIONS: readonly SettingsSection[] = [
   plugins,
   account,
   updates,
+  privacy,
   diagnostics,
   about,
 ]
