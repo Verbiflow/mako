@@ -235,7 +235,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "compaction": {
         "state": "default",
-        "reason": "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Its protocol has a summarize action, but the SDK never sends one and offers no way to."
+        "reason": "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one."
       },
       "planning": {
         "state": "implemented",
@@ -249,7 +249,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "questions": {
         "state": "absent",
         "by": "harness",
-        "reason": "In local runs the SDK answers every `askQuestion` itself, declining it with \"Interactive questions are not supported in local SDK runs\", and has no way for Mako to answer instead."
+        "reason": "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself."
       },
       "modes": {
         "state": "no-op",

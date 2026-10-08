@@ -387,6 +387,7 @@ export function installMockBridge() {
   let archiveRevision = 0
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   let planBuilds: PlanBuilds = {}
+  let mockTelemetry = { usage: true, errors: true }
   window.mako = {
     boot: async () => boot,
     threadArchives: async () => ({
@@ -2407,6 +2408,11 @@ export function installMockBridge() {
     }),
     clearCrashes: async () => {},
     reportCrash: async () => {},
+    telemetry: async () => ({ ...mockTelemetry }),
+    chooseTelemetry: async (choice) => {
+      mockTelemetry = { ...mockTelemetry, ...choice }
+      return { ...mockTelemetry }
+    },
     pickFolder: async () => null,
     externalEditors: async () => [
       { id: "zed", label: "Zed", available: true },
