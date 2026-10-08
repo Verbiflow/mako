@@ -1,11 +1,11 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { AcpSavedTurns, acpSavedNotification, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { GROK_ACP_HOOKS, grokCost, grokTokens, GrokTurnUsage } from "../harnesses/grok.js"
+import { backgroundReminderLabel, GROK_ACP_HOOKS, grokCost, grokTokens, GrokTurnUsage } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
 import type { LiveBlock } from "../live-content.js"
-import { backgroundCommandLabel, PROVIDER_TURN_FALLBACK, subagentLabel } from "../provider-turn.js"
-import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_FAILED, turnFailedEvent, type TranscriptEvent } from "../events.js"
+import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
+import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, type TranscriptEvent } from "../events.js"
 /**
  * Grok sessions.
  *
@@ -98,6 +98,8 @@ type SavedLine =
       steered: boolean
     }
   | { kind: "update"; at?: string; notification: SessionNotification }
+  /** A line Mako has no meaning for: an update kind it doesn't know, or a known one it couldn't read. */
+  | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; raw: JsonObject }
   | {
       kind: "turn-end"
       at?: string
@@ -105,53 +107,13 @@ type SavedLine =
       /** What Grok said ended the turn: the error's words on an `error` or `rate_limit` stop. */
       result?: string
       usage?: TurnUsage
+      /** The notification's `_meta`, which says why Grok cancelled or ended the turn itself. */
+      meta?: JsonObject
+      source?: TranscriptEvent["source"]
     }
   /** `rewind_marker`: the conversation goes back to before its `target`-th counted turn. */
   | { kind: "rewind"; at?: string; target: number }
   | { kind: "marker"; at?: string; marker: TranscriptEvent }
-
-/**
- * Grok records the start of the turn it runs after a background command as a
- * user chunk it wrote itself, then closes it with `turn_completed` whose
- * prompt id is `task-completed-<task>` (grok 1.0.41):
- *
- *   <system-reminder>
- *   Background task "<id>" completed (exit code: 0).
- *   Description: <description> | Duration: 8.2s
- *   …
- *
- * A background subagent that finishes while Grok is idle wakes it the same
- * way (grok 1.0.44):
- *
- *   <system-reminder>
- *   While you were idle, 1 background subagent completed:
- *   - [general-purpose] "<description>" — completed successfully (32.9s, 2 tool calls)
- *   …
- */
-function backgroundReminderLabel(text: string): string | undefined {
-  const body = /^\s*<system-reminder>\s*([\s\S]*?)<\/system-reminder>\s*$/.exec(text)?.[1]
-  if (!body) return undefined
-  const subagents = /^While you were idle, (\d+) background subagents? \w+:/.exec(body)
-  if (subagents) return subagentReminderLabel(body, Number(subagents[1]))
-  const status = /^Background task "[^"]*" ([^\n(.]+)/.exec(body)?.[1]?.trim()
-  if (!status) return undefined
-  const exitCode = /exit code:\s*(-?\d+)/.exec(body)?.[1]
-  return backgroundCommandLabel({
-    description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
-    exitCode: exitCode === undefined ? undefined : Number(exitCode),
-    stopped: /kill|stop|cancel/i.test(status),
-  })
-}
-
-function subagentReminderLabel(body: string, count: number): string {
-  if (count !== 1) return `${count} subagents finished`
-  const line = /^- \[[^\]]*\] "(.*)" — (\S+)/m.exec(body)
-  const status = line?.[2] ?? ""
-  return subagentLabel({
-    description: line?.[1],
-    state: /^complete/i.test(status) ? "completed" : /cancel|stop|kill/i.test(status) ? "cancelled" : /fail|error/i.test(status) ? "failed" : undefined,
-  })
-}
 
 /**
  * Grok's own updates that are transcript facts. Saved history and the live
@@ -219,9 +181,12 @@ export function grokUpdateMarker(kind: string | undefined, update: JsonObject): 
       return { ...event("Warning", "An image was not sent to the model", notes?.join("\n")), tone: "warning" }
     }
     case "hook_annotation": {
-      const message = stringValue(update["message"])
+      const message = stringValue(update["message"])?.trim()
       if (!message) return undefined
-      return update["kind"] === "tool_outcome" ? { ...event("Hook", message), tone: "warning" } : event("Hook", message)
+      // Grok writes its pager's warning sign into a blocked prompt's note ("⚠ Prompt blocked by …").
+      const warned = message.startsWith("\u26a0")
+      const text = warned ? message.slice(1).trim() : message
+      return warned || update["kind"] === "tool_outcome" ? { ...event("Hook", text), tone: "warning" } : event("Hook", text)
     }
     case "scheduled_task_created":
       return event("Scheduled task", stringValue(update["human_schedule"]), stringValue(update["prompt"]))
@@ -417,12 +382,15 @@ function parseSavedLine(raw: string): SavedLine | null {
   const root = parseJsonObject(raw)
   if (!root) return null
   const method = stringValue(root["method"])
-  if (!method || !UPDATE_METHODS.has(method)) return null
+  if (!method || !UPDATE_METHODS.has(method)) return { kind: "unread", type: method ?? "(no method)", reason: "unknown", raw: root }
   const params = objectValue(root["params"])
   const update = objectValue(params?.["update"])
-  if (!params || !update) return null
+  if (!params || !update) return { kind: "unread", type: method, reason: "unreadable", raw: root }
   const sessionUpdate = stringValue(update["sessionUpdate"])
   const at = isoTimestamp(root, params)
+  // The id Grok gave the notification live, which a marker drawn from it cites there too.
+  const eventId = stringValue(objectValue(params["_meta"])?.["eventId"])
+  const source = eventId ? { harness: "grok", record: eventId } : undefined
 
   switch (sessionUpdate) {
     case "user_message_chunk": {
@@ -448,6 +416,8 @@ function parseSavedLine(raw: string): SavedLine | null {
         stopReason: stringValue(update["stop_reason"]),
         result: stringValue(update["agent_result"]),
         usage: parseUsage(update["usage"]),
+        meta: objectValue(params["_meta"]),
+        source,
       }
     case "rewind_marker": {
       const target = numberValue(update["target_prompt_index"])
@@ -458,7 +428,11 @@ function parseSavedLine(raw: string): SavedLine | null {
   const notification = saved && acpSavedNotification(saved)
   if (notification) return { kind: "update", at, notification }
   const marker = grokUpdateMarker(sessionUpdate, update)
-  return marker ? { kind: "marker", at, marker } : null
+  if (marker) return { kind: "marker", at, marker: source ? { ...marker, source } : marker }
+  if (sessionUpdate && grokUpdateReading(sessionUpdate)) return null
+  // A kind ACP declares reached `acpSavedNotification`; one it refused is unreadable.
+  const type = `${method}/${sessionUpdate ?? "(none)"}`
+  return { kind: "unread", type, reason: method === "session/update" && ACP_UPDATE_KINDS.has(sessionUpdate ?? "") ? "unreadable" : "unknown", raw: root }
 }
 
 function parseLegacyCalls(value: JsonValue | undefined): LegacyAssistantCall[] {
@@ -771,10 +745,52 @@ function createTranslator(path: string): () => GrokTranslator {
  * a failed request, each with Grok's words in `agent_result`. Every other
  * reason finished the turn.
  */
-export function grokTurnEnd(stopReason: string | undefined, result: string | undefined): TranscriptEvent | undefined {
+/**
+ * Why Grok ended a turn by its own rule, from the `_meta` of its
+ * `turn_completed` (`PromptCompletionKind`, xai-grok-shell 1.0.45
+ * `session/commands.rs`); the `session/prompt` response and
+ * `_x.ai/session/prompt_complete` carry the same fields. Live and saved
+ * history both read it here. `null` is an end Grok's own `hook_annotation`
+ * already explains ("Prompt blocked by …"); `undefined` is a turn Grok gives
+ * no rule for, which its stop reason describes.
+ */
+export function grokTurnCause(meta: JsonObject | undefined): TranscriptEvent | null | undefined {
+  switch (stringValue(meta?.["cancellationCategory"])) {
+    case "HookDenied":
+      return null
+    case "PermissionRejected":
+      return event(TURN_ENDED, "A permission was denied")
+    case "PermissionCancelled":
+      return event(TURN_ENDED, "The permission request was dismissed")
+    case "max_turns_reached":
+      return { ...event(TURN_ENDED, "Reached the turn limit"), tone: "warning" }
+    // Grok's quiet end of a turn whose actions changed nothing, round after round.
+    case "action_stationarity":
+      return { ...event(TURN_ENDED, "Grok stopped making progress"), tone: "warning" }
+    default:
+      return undefined
+  }
+}
+
+/** What stopped a cancelled turn, when it was not the person (`cancelTrigger`, the same `_meta`). */
+function cancelledBy(trigger: string | undefined): string | undefined {
+  switch (trigger) {
+    case "session_close":
+    case "session_delete":
+      return "The session closed"
+    case "shutdown":
+      return "Grok shut down"
+    default:
+      return undefined
+  }
+}
+
+export function grokTurnEnd(stopReason: string | undefined, result: string | undefined, meta?: JsonObject): TranscriptEvent | undefined {
+  const cause = grokTurnCause(meta)
+  if (cause !== undefined) return cause ?? undefined
   switch (stopReason) {
     case "cancelled":
-      return event(INTERRUPTED)
+      return event(INTERRUPTED, cancelledBy(stringValue(meta?.["cancelTrigger"])))
     case "interrupted":
       return turnFailedEvent(undefined, result ?? "Grok stopped before the turn finished.")
     case "rate_limit":
@@ -905,8 +921,12 @@ function updatesTranslator(): GrokTranslator {
         turns.queue({ kind: "event", ...line.marker }, line.at)
         return
       case "turn-end": {
-        const ended = failed ? undefined : grokTurnEnd(line.stopReason, line.result)
-        if (ended) turns.queue({ kind: "event", ...ended }, line.at)
+        const ended = failed ? undefined : grokTurnEnd(line.stopReason, line.result, line.meta)
+        if (ended) {
+          const marker: ThreadEntry = { kind: "event", ...ended }
+          if (line.source) marker.source = line.source
+          turns.queue(marker, line.at)
+        }
         commit(line.usage)
         failed = false
         return

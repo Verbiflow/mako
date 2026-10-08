@@ -790,8 +790,7 @@ function translator(): ClaudeTranslator {
       const projected = userContent(content)
       const text = claudeCommandPrompt(projected.text)
       if (claudeInterrupted(text)) {
-        sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
-        assistant = null
+        mark({ label: "Interrupted" }, line.timestamp, line.uuid)
         running = false
         return
       }
@@ -843,7 +842,7 @@ function translator(): ClaudeTranslator {
     const saved = savedMessage(line)
     if (!message || !Array.isArray(message.content) || !saved) {
       if (line.isAbortedMidStream) {
-        sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
+        mark({ label: "Interrupted" }, line.timestamp, line.uuid)
       }
       return
     }
@@ -904,8 +903,7 @@ function translator(): ClaudeTranslator {
       }
     }
     if (line.isAbortedMidStream) {
-      sink.push({ kind: "event", at: line.timestamp, label: "Interrupted" })
-      assistant = null
+      mark({ label: "Interrupted" }, line.timestamp, line.uuid)
       tools.clear()
     }
   }

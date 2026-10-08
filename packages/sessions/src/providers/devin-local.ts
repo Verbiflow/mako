@@ -41,6 +41,53 @@ type SqliteStatementResult = ReturnType<StatementSync["get"]>
 const StoredMessage = z.object({ position: z.number().int().nonnegative(), kind: z.string(), payload: z.string(), characters: z.number().int().nonnegative() })
 const MESSAGE_CHARACTER_LIMIT = 4_000_000
 const StoredIndex = z.object({ key: z.string(), value: z.string() })
+/** How deep a run's `childMessages` may nest: a subagent's own subagent, and a little room. */
+const MAX_NESTED_RUNS = 8
+
+/**
+ * The ACP notifications one stored message holds, as Devin 3.10.23 (schema 6)
+ * keeps them; schema 1 keeps the first two shapes. User, agent and thought
+ * messages keep a list. A tool call keeps the call as it last stood, and a
+ * plan its entries. A scripted or workflow run nests the messages it made in
+ * `childMessages`, which live draws inline, so they read where the run
+ * started. A subagent nests its own session's messages, which live keeps out
+ * of its parent's (`DevinAgents`); its `run_subagent` call is the parent's row.
+ * `unread` names a kind it can't read, which must not vanish.
+ */
+interface StoredNotifications {
+  notifications: JsonRecord[]
+  unread?: string
+}
+
+function storedNotifications(kind: string, message: JsonRecord, depth = 0): StoredNotifications {
+  const content = message.content
+  switch (kind) {
+    case "tool_call":
+      return { notifications: isJsonRecord(content) ? [{ ...content, sessionUpdate: "tool_call" }] : [] }
+    case "plan":
+      return { notifications: isJsonRecord(content) ? [{ ...content, sessionUpdate: "plan" }] : [] }
+    case "subagent":
+      return { notifications: [] }
+    case "scripted_run":
+    case "workflow_run": {
+      const notifications: JsonRecord[] = []
+      let unread: string | undefined
+      const children = message.childMessages
+      for (const child of isJsonArray(children) && depth < MAX_NESTED_RUNS ? children : []) {
+        if (!isJsonRecord(child)) continue
+        const nested = storedNotifications(readString(child, "kind") ?? "", child, depth + 1)
+        notifications.push(...nested.notifications)
+        unread ??= nested.unread
+      }
+      return unread ? { notifications, unread } : { notifications }
+    }
+    // Timestamps drawn from the notifications beside it; Devin shows nothing for one.
+    case "progress_marker":
+      return { notifications: [] }
+    default:
+      return isJsonArray(content) ? { notifications: content.filter(isJsonRecord) } : { notifications: [], unread: kind || "unnamed" }
+  }
+}
 
 
 interface StateValueRow {
@@ -95,7 +142,8 @@ interface SessionCache {
 interface DevinTranslator extends LineTranslator {
   done(): ThreadEntry[]
   readonly title?: string
-  unavailable(position: number): void
+  /** A record history leaves out: past the read limit, or of a `kind` it can't read. */
+  unavailable(position: number, kind?: string): void
 }
 
 export class DevinLocalProvider implements SessionProvider {
@@ -228,7 +276,7 @@ export class DevinLocalProvider implements SessionProvider {
     return { entries: into.done(), nextByte }
   }
 
-  private async readMessages(path: string, push: (raw: string) => void | boolean, skim = false, unavailable?: (position: number) => void): Promise<number> {
+  private async readMessages(path: string, push: (raw: string) => void | boolean, skim = false, unavailable?: DevinTranslator["unavailable"]): Promise<number> {
     const db = await openDatabase(path)
     if (!db) throw new SessionUnreadable(path)
     try {
@@ -246,17 +294,13 @@ export class DevinLocalProvider implements SessionProvider {
         }
         const payload = parseJson(raw)
         if (!isJsonRecord(payload)) continue
-        const content = payload.content
-        // A tool's row holds the call as it last stood, so one update carries all of it.
-        if (row.kind === "tool_call" && isJsonRecord(content)) {
-          if (push(JSON.stringify({ notification: { ...content, sessionUpdate: "tool_call" } })) === false) break
-        } else if (isJsonArray(content)) {
-          let stopped = false
-          for (const notification of content) {
-            if (push(JSON.stringify({ notification })) === false) { stopped = true; break }
-          }
-          if (stopped) break
+        const stored = storedNotifications(row.kind, payload)
+        let stopped = false
+        for (const notification of stored.notifications) {
+          if (push(JSON.stringify({ notification })) === false) { stopped = true; break }
         }
+        if (stopped) break
+        if (stored.unread) unavailable?.(row.position, stored.unread)
       }
       return next
     } catch (cause) {
@@ -389,9 +433,12 @@ function translator(journal: string): DevinTranslator {
 
   return {
     push,
-    unavailable: (position) => {
+    unavailable: (position, kind) => {
       turns.close()
-      turns.queue({ kind: "event", label: "Message unavailable", detail: "This native record exceeds the history read limit. The original remains in the IDE store.", source: { harness: "devin", record: `${journal}:messages/${position}` } }, undefined)
+      const detail = kind
+        ? `Mako can't read Devin's "${kind}" records yet. The original remains in the IDE store.`
+        : "This native record exceeds the history read limit. The original remains in the IDE store."
+      turns.queue({ kind: "event", label: "Message unavailable", detail, source: { harness: "devin", record: `${journal}:messages/${position}` } }, undefined)
     },
     snapshot: () => turns.snapshot(),
     done: () => turns.done(),

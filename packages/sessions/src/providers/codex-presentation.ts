@@ -246,6 +246,26 @@ export function codexExecOutput(text: string): { output: string; exitCode?: numb
   return { output: text.slice(header[0].length), exitCode: header[1] === undefined ? undefined : Number(header[1]) }
 }
 
+const CELL_HEADER = /^Script (completed|failed)\nWall time [^\n]*\nOutput:\n/
+/** A code cell's output as Codex gives it to the model: one text, or text parts. */
+export const CodexCellOutputSchema = z.union([
+  z.string().transform((text) => [text]),
+  z.array(z.object({ text: z.string() }).loose()).transform((parts) => parts.map((part) => part.text)),
+])
+
+/**
+ * What Codex gives the model when a code cell ends (codex 0.159.3): `Script
+ * completed` or `Script failed`, the wall time, what the script printed and,
+ * for a failure, `Script error:` and what it threw. The cell's calls carry
+ * their own results; only a failure is the cell's own.
+ */
+export function codexCellResult(texts: readonly string[]): { failed: boolean; output: string } | undefined {
+  const text = texts.join("\n")
+  const header = CELL_HEADER.exec(text)
+  if (!header) return undefined
+  return { failed: header[1] === "failed", output: text.slice(header[0].length).replace(/(^|\n)Script error:\n/, "$1").trim() }
+}
+
 /**
  * What Codex tells its model of a call the person stopped (`abort_message`,
  * codex-rs/core/src/tools/parallel.rs): `Wall time: 1.2 seconds\naborted by

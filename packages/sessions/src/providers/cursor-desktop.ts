@@ -21,6 +21,7 @@ import {
 import { type AttachmentContent, attachmentFromUrl } from "../content.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import { todoDetails } from "../tool-plan.js"
+import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { openNativeStore } from "../read-only-sqlite.js"
 import type { NativeFile, SessionFollower, SessionUpdate } from "./types.js"
@@ -526,7 +527,7 @@ function bubbleEntry(
             : undefined,
       error: /error|fail/i.test(tool.status ?? ""),
       canceled: /cancel/i.test(tool.status ?? ""),
-      details: /^(?:todo_write|TodoWrite)$/.test(tool.name)
+      details: CURSOR_TODO_WRITES.has(tool.name)
         ? todoDetails(input)
         : undefined,
     })

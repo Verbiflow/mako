@@ -85,6 +85,7 @@ import {
   type CursorRootExtent,
 } from "./cursor-records.js"
 import { todoDetails } from "../tool-plan.js"
+import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import { openNativeStore } from "../read-only-sqlite.js"
 import {
@@ -236,8 +237,8 @@ interface CursorSidecar {
   model?: string
 }
 
-/** Indices in `hashes` where a summary replaced everything before them, with the summary when the window kept it. */
-type Compactions = Map<number, string | undefined>
+/** Indices in `hashes` where a summary replaced everything before them: the archived window's blob, and its summary when it kept one. */
+type Compactions = Map<number, { window: string; summary?: string }>
 
 /** A root with its summarized-away windows restored ahead of the live one. */
 interface CursorConversation extends CursorRoot {
@@ -1134,7 +1135,10 @@ export class CursorProvider implements SessionProvider {
         }
         calls = []
         assistant = null
-        const marker = end.kind === "failed" ? cursorFailure(end.error ?? "") : { label: "Interrupted" }
+        const marker = {
+          ...end.kind === "failed" ? cursorFailure(end.error ?? "") : { label: "Interrupted" },
+          source: { harness: "cursor", record: `${run.runId}:${end.kind}` },
+        }
         sink.push(run.endedAt ? { kind: "event", at: run.endedAt, ...marker } : { kind: "event", ...marker })
       }
     }
@@ -1147,7 +1151,12 @@ export class CursorProvider implements SessionProvider {
     const compact = (index: number): EventEntry | null => {
       if (index === start || !compactions.has(index)) return null
       assistant = null
-      const marker: EventEntry = { kind: "event", ...compactionEvent({ summary: compactions.get(index) }) }
+      const compaction = compactions.get(index)!
+      const marker: EventEntry = {
+        kind: "event",
+        ...compactionEvent({ summary: compaction.summary }),
+        source: { harness: "cursor", record: compaction.window },
+      }
       sink.push(marker)
       return marker
     }
@@ -1164,7 +1173,7 @@ export class CursorProvider implements SessionProvider {
           if (message.summary) {
             const summary = plainText(message.content).replace(SUMMARY_PREFIX, "")
             // A root that kept no window for this summary still marks it.
-            if (!compacted) sink.push({ kind: "event", ...compactionEvent({ summary }) })
+            if (!compacted) sink.push({ kind: "event", ...compactionEvent({ summary }), source: { harness: "cursor", record: hash } })
             else if (!compacted.body) Object.assign(compacted, compactionEvent({ summary }))
             compacted = null
             continue
@@ -1249,7 +1258,7 @@ export class CursorProvider implements SessionProvider {
                   name: part.toolName,
                   input: clip(input),
                 }
-                if (part.toolName === "TodoWrite") {
+                if (CURSOR_TODO_WRITES.has(part.toolName)) {
                   const details = todoDetails(input)
                   if (details) block.details = details
                 }
@@ -1375,7 +1384,8 @@ export class CursorProvider implements SessionProvider {
         const window = parseBlobDataRow(statement.get(id))
         if (!window) continue
         hashes.push(...parseRoot(window.data).hashes)
-        compactions.set(hashes.length, windowSummary(window.data))
+        const summary = windowSummary(window.data)
+        compactions.set(hashes.length, summary === undefined ? { window: id } : { window: id, summary })
       }
       hashes.push(...root.hashes)
       return { hashes, cwd: root.cwd, compactions }

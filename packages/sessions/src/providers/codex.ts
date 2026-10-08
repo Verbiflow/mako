@@ -4,6 +4,8 @@ import {
   codexCommand,
   codexCommandOutput,
   codexAborted,
+  codexCellResult,
+  CodexCellOutputSchema,
   codexExecOutput,
   codexFailureEvent,
   codexPatchInput,
@@ -179,6 +181,8 @@ interface CodexFunctionOutputResponse extends CodexRolloutBase {
   attachments?: AttachmentContent[]
   callId?: string
   output: string
+  /** Set when the output is a code cell's result. */
+  cell?: { failed: boolean; output: string }
 }
 
 /** A tool's typed item: what Codex ran and how it ended, over the call's raw arguments and output. */
@@ -201,6 +205,7 @@ interface CodexToolItem extends CodexRolloutBase {
 interface CodexCodeCell extends CodexRolloutBase {
   kind: "code_cell"
   callId?: string
+  source?: string
 }
 
 interface CodexEventLine extends CodexRolloutBase {
@@ -216,6 +221,12 @@ interface CodexCompactedLine extends CodexRolloutBase {
   kind: "compacted"
   source: "record" | "event"
   summary?: string
+}
+
+/** The compaction's turn item, which names it as the app-server did live. */
+interface CodexCompactionItemLine extends CodexRolloutBase {
+  kind: "compaction_item"
+  id: string
 }
 
 interface CodexIgnoredRolloutLine extends CodexRolloutBase {
@@ -244,6 +255,7 @@ type CodexRolloutEvent =
   | CodexCodeCell
   | CodexEventLine
   | CodexCompactedLine
+  | CodexCompactionItemLine
   | CodexIgnoredRolloutLine
   | CodexPlanLine
 
@@ -450,7 +462,7 @@ function parseResponseItem(
       }
     }
     case "custom_tool_call":
-      if (stringValue(payload["name"]) === "exec") return { kind: "code_cell", at, callId: stringValue(payload["call_id"]) }
+      if (stringValue(payload["name"]) === "exec") return { kind: "code_cell", at, callId: stringValue(payload["call_id"]), source: stringValue(payload["input"]) }
       return {
         kind: "function_call_response",
         at,
@@ -470,14 +482,18 @@ function parseResponseItem(
     case "function_call_output":
     case "custom_tool_call_output":
     case "tool_search_output":
-    case "web_search_output":
-      return {
+    case "web_search_output": {
+      const response: CodexFunctionOutputResponse = {
         kind: "function_output_response",
         at,
         callId: stringValue(payload["call_id"]),
         output: outputText(payload["output"]),
         attachments: responseAttachments(payload["output"]),
       }
+      const texts = payload["type"] === "custom_tool_call_output" ? CodexCellOutputSchema.safeParse(payload["output"]).data : undefined
+      if (texts) response.cell = codexCellResult(texts)
+      return response
+    }
     default:
       return { kind: "ignored", at }
   }
@@ -566,22 +582,19 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
           }
         case "task_started":
           return { kind: "ignored", at, turn: "started" }
-        case "turn_aborted":
-          return {
-            kind: "event",
-            at,
-            turn: "ended",
-            event: marker("Interrupted", abortDetail(stringValue(payload["reason"]))),
-          }
+        case "turn_aborted": {
+          const turn = stringValue(payload["turn_id"])
+          const stopped = marker("Interrupted", abortDetail(stringValue(payload["reason"])))
+          if (turn) stopped.source = { harness: "codex", record: `${turn}:interrupted` }
+          return { kind: "event", at, turn: "ended", event: stopped }
+        }
         case "task_complete": {
           const error = objectValue(payload["error"])
           if (!error) return { kind: "ignored", at, turn: "ended" }
-          return {
-            kind: "event",
-            at,
-            turn: "ended",
-            event: codexFailureEvent(errorVariant(error["codex_error_info"]), stringValue(error["message"])),
-          }
+          const turn = stringValue(payload["turn_id"])
+          const failure = codexFailureEvent(errorVariant(error["codex_error_info"]), stringValue(error["message"]))
+          if (turn) failure.source = { harness: "codex", record: `${turn}:failed` }
+          return { kind: "event", at, turn: "ended", event: failure }
         }
         case "context_compacted":
           return { kind: "compacted", at, source: "event" }
@@ -621,6 +634,10 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
                 output: codexPatchText(changes),
                 error: patch.status !== "completed",
               }
+            }
+            case "ContextCompaction": {
+              const id = stringValue(item?.["id"])
+              return id ? { kind: "compaction_item", at, id } : { kind: "ignored", at }
             }
             case "Plan": {
               // Every history mode records a plan here; its id matches the app-server's.
@@ -1104,8 +1121,8 @@ function translator(): CodexTranslator {
   const blocksById = new Map<string, ToolBlock>()
   const itemsById = new Map<string, CodexToolItem>()
   const itemized = new WeakSet<ToolBlock>()
-  /** Code cells whose output hasn't come yet. */
-  const cells = new Set<string>()
+  /** Code cells whose output hasn't come yet, with their source. */
+  const cells = new Map<string, string | undefined>()
   const applyItem = (block: ToolBlock, item: CodexToolItem) => {
     itemized.add(block)
     if (item.input !== undefined) block.input = clip(item.input)
@@ -1120,6 +1137,8 @@ function translator(): CodexTranslator {
   let contextTokens: number | undefined
   /** The record that marked the latest compaction, until content follows it. */
   let compaction: CodexCompactedLine["source"] | undefined
+  /** The latest compaction's marker, which its turn item, a few records on, names. */
+  let compacted: Extract<ThreadEntry, { kind: "event" }> | undefined
   /**
    * Codex records no start for a compaction. Inside a turn it begins right
    * after the record before it — the turn's start, or the reply that filled
@@ -1152,10 +1171,12 @@ function translator(): CodexTranslator {
     if (entry) sink.edited(entry)
   }
 
-  const pushMarker = (marker: TranscriptEvent, at: string | undefined): void => {
+  const pushMarker = (marker: TranscriptEvent, at: string | undefined): ThreadEntry => {
     assistant = null
     callsById.clear()
-    sink.push(at ? { kind: "event", at, ...marker } : { kind: "event", ...marker })
+    const entry: ThreadEntry = at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
+    sink.push(entry)
+    return entry
   }
 
   const push = (raw: string): void => {
@@ -1260,7 +1281,7 @@ function translator(): CodexTranslator {
         return
       }
       case "code_cell":
-        if (event.callId) cells.add(event.callId)
+        if (event.callId) cells.set(event.callId, event.source)
         return
       case "tool_item": {
         const block = blocksById.get(event.callId)
@@ -1280,7 +1301,13 @@ function translator(): CodexTranslator {
       }
       case "function_output_response": {
         const id = event.callId ?? ""
-        if (cells.delete(id)) return
+        if (cells.has(id)) {
+          const source = cells.get(id)
+          cells.delete(id)
+          // A cell that finished shows only its calls; one that failed is its own row, where the failure happened.
+          if (event.cell?.failed) place(event.at, { type: "tool", id, name: "exec", input: source, output: clip(event.cell.output), error: true })
+          return
+        }
         const block = callsById.get(id)
         if (block) {
           const exec = block.name === "exec_command" ? codexExecOutput(event.output) : undefined
@@ -1322,7 +1349,7 @@ function translator(): CodexTranslator {
           return
         }
         compaction = event.source
-        pushMarker(
+        const entry = pushMarker(
           compactionEvent({
             tokensBefore: contextTokens,
             summary: clip(event.summary, MAX_SUMMARY),
@@ -1330,7 +1357,15 @@ function translator(): CodexTranslator {
           }),
           event.at
         )
+        compacted = entry.kind === "event" ? entry : undefined
         contextTokens = undefined
+        return
+      case "compaction_item":
+        if (compacted && !compacted.source) {
+          compacted.source = { harness: "codex", record: event.id }
+          sink.edited(compacted)
+        }
+        compacted = undefined
         return
       case "session_meta":
       case "user_message_event":

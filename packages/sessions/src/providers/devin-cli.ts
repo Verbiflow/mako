@@ -4,21 +4,12 @@ import {
   devinPromptImages,
   devinMcpCall,
 } from "./devin-presentation.js"
-import { todoDetails } from "../tool-plan.js"
-import {
-  attachmentFromUrl,
-  ProposedPlans,
-  type AttachmentContent,
-} from "../content.js"
-import { acpShownDetails, acpToolFields, AcpToolUpdateSchema, mergeAcpTool, type AcpToolFields } from "../acp-tool-details.js"
-import { DEVIN_TOOL_READING, DevinCallMetrics, devinStoredTokens } from "../harnesses/devin.js"
+import { attachmentFromUrl, type AttachmentContent } from "../content.js"
+import { acpToolFields, AcpToolUpdateSchema, mergeAcpTool, type AcpToolFields } from "../acp-tool-details.js"
+import { AcpSavedTurns, acpSavedNotification } from "../acp-saved-turns.js"
+import { DEVIN_ACP_HOOKS, DEVIN_TOOL_READING, DevinCallMetrics, devinCompactionRecord, devinStoredTokens } from "../harnesses/devin.js"
 import { tokenSum } from "../harnesses/tokens.js"
 import { devinCliDirectory } from "./devin-location.js"
-import {
-  DevinPlanCallSchema,
-  DevinPlanTracker,
-  type DevinPlanCall,
-} from "./devin-plans.js"
 /**
  * devin-cli's own sessions — the ones Zed's agent panel (or any ACP host)
  * drives.
@@ -46,16 +37,13 @@ import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import {
   clip,
-  EntrySink,
   agentTitleFrom,
   titleFrom,
-  type EntryBlock,
   type Thread,
   type ThreadEntry,
   type ThreadRef,
   type TurnUsage,
 } from "../format.js"
-import { normalizeToolOutput } from "../tool-output.js"
 import { subagentLabel } from "../provider-turn.js"
 import { compactionEvent } from "../events.js"
 import type {
@@ -67,7 +55,6 @@ import type {
 
 type SqliteFields = Record<string, SQLOutputValue>
 type StoredTimestamp = number | undefined
-type ToolBlock = Extract<EntryBlock, { type: "tool" }>
 type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject
 
 type TextSource = JsonValue | SQLOutputValue | undefined
@@ -302,9 +289,10 @@ export class DevinCliProvider implements SessionProvider {
       const row = parseSessionRow(stored)
       let title = agentTitleFrom(row.title)
       if (!title) {
-        for (const entry of translatedMainChain(db, id, mainChainId(db, id))) {
-          if (entry.kind !== "user") continue
-          title = titleFrom(entry.text)
+        for (const stored of mainChainRows(db, id, mainChainId(db, id))) {
+          const message = stored.chatMessage ? parseChatMessage(stored.chatMessage) : null
+          if (message?.role !== "user") continue
+          title = titleFrom(devinPromptImages(contentText(message.content)).text)
           if (title) break
         }
       }
@@ -477,41 +465,44 @@ function translatedMainChain(
   leafId: number
 ): ThreadEntry[] {
   const cwd = sqliteText(db.prepare("SELECT working_directory AS cwd FROM sessions WHERE id = ?").get(sessionId)?.cwd)
-  const into = translator(sessionId, acpToolCalls(db, sessionId), cwd)
+  const into = translator(sessionId, storedAcpCalls(db, sessionId), cwd)
   for (const row of mainChainRows(db, sessionId, leafId)) into.push(row)
   return into.snapshot()
 }
 
-interface AcpToolCallState {
-  call?: DevinPlanCall
-  update?: DevinPlanCall
-  /** The tool as Devin showed its client: the stored call with its final update over it, read as the live decoder reads them. */
-  shown: AcpToolFields
+/** A call as `tool_call_state` kept it: the `tool_call` Devin sent and its final `tool_call_update`. */
+interface StoredAcpCall {
+  call?: JsonObject
+  update?: JsonObject
 }
 
-function storedTool(value: SQLOutputValue | undefined): AcpToolFields {
+function storedJson(value: SQLOutputValue | undefined): JsonObject | undefined {
   const text = sqliteText(value)
-  if (!text) return {}
+  if (!text) return undefined
   try {
-    const parsed = AcpToolUpdateSchema.safeParse(JSON.parse(text))
-    return parsed.success ? acpToolFields(parsed.data, DEVIN_TOOL_READING) : {}
+    const parsed: JsonValue = JSON.parse(text)
+    return isJsonObject(parsed) ? parsed : undefined
   } catch {
-    return {}
+    return undefined
   }
 }
 
+function storedFields(value: JsonObject | undefined): AcpToolFields {
+  const parsed = AcpToolUpdateSchema.safeParse(value)
+  return parsed.success ? acpToolFields(parsed.data, DEVIN_TOOL_READING) : {}
+}
+
 /**
- * The input Devin showed its client. Its stored call can drop arguments the
+ * The input Devin sent its client. Its stored call can drop arguments the
  * model gave (an edit's strings, which its diff holds); when every field it
- * kept matches the model's, the model's arguments are what was shown.
+ * kept matches the model's, the model's arguments are what it sent.
  */
-function shownInput(stored: string | undefined, model: string | undefined): string | undefined {
-  if (stored === undefined || model === undefined) return stored ?? model
-  const kept = jsonObject(stored)
-  const given = jsonObject(model)
-  if (!kept || !given) return stored
+function sentInput(kept: JsonValue | undefined, model: JsonValue | undefined): JsonValue | undefined {
+  const given = isTextValue(model) ? jsonObject(model) ?? model : model
+  if (kept === undefined || given === undefined) return kept ?? given
+  if (!isJsonObject(kept) || !isJsonObject(given)) return kept
   const abridged = Object.entries(kept).every(([key, value]) => key in given && JSON.stringify(given[key]) === JSON.stringify(value))
-  return abridged ? model : stored
+  return abridged ? given : kept
 }
 
 function jsonObject(text: string): Record<string, JsonValue> | undefined {
@@ -522,16 +513,12 @@ function jsonObject(text: string): Record<string, JsonValue> | undefined {
   }
 }
 
-/**
- * Each tool call as Devin reported it over ACP, which is where a plan file's
- * rendered text and path live; the chat messages hold only the model's own
- * arguments. Older stores have no such table.
- */
-function acpToolCalls(
+/** Each call's ACP updates as Devin kept them. Older stores have no such table. */
+function storedAcpCalls(
   db: DatabaseSync,
   sessionId: string
-): Map<string, AcpToolCallState> {
-  const calls = new Map<string, AcpToolCallState>()
+): Map<string, StoredAcpCall> {
+  const calls = new Map<string, StoredAcpCall>()
   const table = db
     .prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_call_state'"
@@ -545,26 +532,9 @@ function acpToolCalls(
     .all(sessionId)
   for (const row of rows) {
     const id = sqliteText(row.tool_call_id)
-    if (id)
-      calls.set(id, {
-        call: planCall(row.tool_call_json),
-        update: planCall(row.tool_call_update_json),
-        shown: mergeAcpTool(storedTool(row.tool_call_json), storedTool(row.tool_call_update_json)),
-      })
+    if (id) calls.set(id, { call: storedJson(row.tool_call_json), update: storedJson(row.tool_call_update_json) })
   }
   return calls
-}
-
-function planCall(
-  value: SQLOutputValue | undefined
-): DevinPlanCall | undefined {
-  const text = sqliteText(value)
-  if (!text) return undefined
-  try {
-    return DevinPlanCallSchema.safeParse(JSON.parse(text)).data
-  } catch {
-    return undefined
-  }
 }
 
 function entryDigest(entry: ThreadEntry): string {
@@ -654,16 +624,20 @@ function viewedImage(input: string | undefined, images: JsonValue | undefined, c
 const GREP_FILE = /^-- \d+ match(?:es)? in (\/.+)$/gm
 
 /**
- * The files a search showed its client as links, which its stored update
- * dropped (devin 3000.10.23): a find's result lists one path a line, a
- * grep's heads each file's matches with its path.
+ * The files a search sent its client as `resource_link` parts, which its
+ * stored update dropped (devin 3000.10.23): a find's result lists one path a
+ * line, a grep's heads each file's matches with its path.
  */
-function devinFoundFiles(name: string | undefined, output: string): AttachmentContent[] {
+function devinFoundFiles(name: string, output: string): JsonObject[] {
   const paths =
     name === "find_file_by_name" ? output.split("\n").filter((line) => line.startsWith("/"))
     : name === "grep" ? [...output.matchAll(GREP_FILE)].map((match) => match[1] ?? "")
     : []
-  return paths.map((path) => attachmentFromUrl(basename(path), "application/octet-stream", `file://${path}`))
+  return paths.map((path) => ({ type: "content", content: { type: "resource_link", name: basename(path), uri: `file://${path}` } }))
+}
+
+function textPart(text: string): JsonObject {
+  return { type: "content", content: { type: "text", text } }
 }
 
 /** The system message Devin appends to a turn the user stopped. */
@@ -691,15 +665,44 @@ function compactionSummary(text: string): string {
   return at === -1 ? text : text.slice(at + "\nSummary:\n".length)
 }
 
+/** A todo list's call, which Devin sends its client as a plan instead. */
+const TodoWriteSchema = z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() }).loose()) }).loose()
+
+type SentUpdate = JsonObject & { sessionUpdate: string }
+
+/** A call the model made: its name and the input Devin sent with it. */
+interface MadeCall {
+  name: string
+  input: JsonValue | undefined
+}
+
+/**
+ * The main chain as the wire Devin sent its client, read through the decoder
+ * the live client runs (`AcpSavedTurns` with `DEVIN_ACP_HOOKS`): thinking and
+ * words as message chunks with the references Devin rendered, each call as
+ * the `tool_call` and final `tool_call_update` it kept, and a todo list as
+ * the plan it sent instead of the call. What a kept update dropped that the
+ * client was shown comes back from the chat's tool result. The reader adds
+ * what the store marks its own way: prompts and steering, stops, compactions,
+ * subagent completions and what each call spent.
+ */
 function translator(
   sessionId: string,
-  acp: ReadonlyMap<string, AcpToolCallState>,
+  acp: ReadonlyMap<string, StoredAcpCall>,
   cwd: string | undefined
 ): MessageTranslator {
-  const sink = new EntrySink()
-  const tools = new Map<string, ToolBlock>()
-  const plans = new DevinPlanTracker()
-  const cards = new ProposedPlans()
+  const turns = new AcpSavedTurns(DEVIN_ACP_HOOKS)
+  const send = (update: SentUpdate, at: string | undefined): void => {
+    const notification = acpSavedNotification({ sessionId, update })
+    if (notification) turns.update(notification, at)
+  }
+  const calls = new Map<string, MadeCall>()
+  /** What the open turn's model calls spent. */
+  let spent: TurnUsage | undefined
+  const commit = (): void => {
+    turns.commit(spent)
+    spent = undefined
+  }
   /** A turn ends with an assistant message that calls no tool, or a stop. */
   let running = false
   /** The prompt that opened the running turn, which a steered message names. */
@@ -715,6 +718,7 @@ function translator(
       const message = parseChatMessage(row.chatMessage)
       if (!message) return
       const at = isoOf(row.createdAt)
+      const source = { harness: "devin" as const, record: String(row.rowId) }
       const written = Date.parse(message.writtenAt ?? "")
       const before = previous
       if (Number.isFinite(written)) previous = written
@@ -722,57 +726,40 @@ function translator(
         const text = contentText(message.content)
         if (text.trim() === DEVIN_STOP_NOTICE) {
           running = false
-          sink.push({
-            kind: "event",
-            id: String(row.rowId),
-            source: { harness: "devin", record: String(row.rowId) },
-            at,
-            label: "Interrupted",
-          })
+          turns.close()
+          turns.queue({ kind: "event", source, label: "Interrupted" }, at)
+          commit()
           return
         }
         if (message.extensions?.[DEVIN_SUMMARY] !== undefined) {
-          sink.push({
+          turns.close()
+          const record = devinCompactionRecord(text)
+          turns.queue({
             kind: "event",
-            id: String(row.rowId),
-            source: { harness: "devin", record: String(row.rowId) },
-            at,
+            source: record ? { harness: "devin", record } : source,
             ...compactionEvent({ summary: clip(compactionSummary(text)) }),
-          })
+          }, at)
           return
         }
         const completion = parseSubagentCompletion(text)
         if (!completion) return
+        const state = completion.status === "completed" ? "completed" : "failed"
         // Devin runs a turn on a completion that arrives while it is idle.
         if (!running) {
-          sink.push({
-            kind: "event",
-            id: String(row.rowId),
-            at,
-            label: subagentLabel({
-              description: subagentTitles.get(completion.id),
-              state: completion.status === "completed" ? "completed" : "failed",
-            }),
-            opensTurn: true,
-          })
+          commit()
+          turns.sink.push({ kind: "event", id: source.record, at, label: subagentLabel({ description: subagentTitles.get(completion.id), state }), opensTurn: true })
           running = true
         }
-        sink.push({
-          kind: "assistant",
-          at,
-          blocks: [
-            {
-              type: "tool",
-              name: "subagent",
-              input: JSON.stringify({
-                agent_id: completion.id,
-                status: completion.status,
-              }),
-              output: clip(completion.output),
-              error: completion.status !== "completed",
-            },
-          ],
-        })
+        turns.close()
+        turns.queue({
+          kind: "tool",
+          id: `subagent:${row.rowId}`,
+          title: "subagent",
+          name: "subagent",
+          status: state,
+          input: JSON.stringify({ agent_id: completion.id, status: completion.status }),
+          output: clip(completion.output),
+        }, at)
         return
       }
       if (message.role === "user") {
@@ -789,111 +776,123 @@ function translator(
         // Devin holds a message steered into a running turn until the step
         // it arrived during ends, so it was made before the row it follows.
         const steers = running && written < before ? opener : undefined
-        if (!steers) opener = String(row.rowId)
+        if (!steers) {
+          commit()
+          opener = String(row.rowId)
+        }
         running = true
         if (text.trim() || attachments.length)
-          sink.push({
-            kind: "user",
-            id: String(row.rowId),
-            at,
-            ...steers && { steeringFor: steers },
-            text,
-            attachments,
-          })
+          turns.prompted({ at, id: String(row.rowId), ...steers && { steeringFor: steers }, text, attachments })
         return
       }
       if (message.role === "assistant") {
-        const blocks: EntryBlock[] = [...devinAttachments(message.content)]
+        turns.close()
+        for (const attachment of devinAttachments(message.content)) turns.queue({ kind: "attachment", attachment }, at)
         const thinking = contentText(message.thinking)
-        if (thinking.trim())
-          blocks.push({ type: "thinking", text: devinReferences(thinking) })
+        if (thinking.trim()) send({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: devinReferences(thinking) } }, at)
         running = (message.tool_calls?.length ?? 0) > 0
         // The model's words come before the calls they introduce.
         const text = contentText(message.content)
-        if (text.trim())
-          blocks.push({ type: "text", text: devinReferences(text) })
-        for (const call of message.tool_calls ?? []) {
+        if (text.trim()) send({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: devinReferences(text) } }, at)
+        for (const [index, call] of (message.tool_calls ?? []).entries()) {
           const name = call.name ?? call.function?.name ?? "tool"
           const rawInput = call.arguments ?? call.function?.arguments
-          // Over ACP a todo list arrives as a plan, never as the call that wrote it.
           if (name === "todo_write") {
-            blocks.push({ type: "tool", name: "Plan", output: "", details: todoDetails(toolInputText(rawInput)) })
+            const todos = TodoWriteSchema.safeParse(isTextValue(rawInput) ? jsonObject(rawInput) : rawInput).data?.todos ?? []
+            send({ sessionUpdate: "plan", entries: todos.map(({ content, status }) => ({ content, status })) }, at)
             continue
           }
-          const title =
-            name === "run_subagent" ? subagentTitle(rawInput) : undefined
-          if (call.id && title) subagentCalls.set(call.id, title)
-          const shown = call.id ? acp.get(call.id)?.shown : undefined
-          const block: ToolBlock = {
-            type: "tool",
-            id: call.id,
-            name,
-            input: shownInput(shown?.input, toolInputText(rawInput)),
-          }
-          const details = shown && acpShownDetails(shown)
-          if (details) block.details = details
-          if (shown?.attachments) block.attachments = shown.attachments
-          const mcp =
-            name === "mcp_call_tool" ? devinMcpCall(block.input) : undefined
-          if (mcp) {
-            block.name = mcp.name
-            block.input = mcp.input
-          }
-          blocks.push(block)
-          if (call.id) tools.set(call.id, block)
-          const plan = call.id
-            ? plans.observe(acp.get(call.id)?.call, sessionId)
-            : undefined
-          const proposed = plan && cards.propose(plan.id, plan.text)
-          if (proposed && !proposed.revised) blocks.push(proposed.card)
+          const id = call.id ?? `${row.rowId}:${index}`
+          const title = name === "run_subagent" ? subagentTitle(rawInput) : undefined
+          if (title) subagentCalls.set(id, title)
+          const start = toolStart(id, name, rawInput, acp.get(id)?.call)
+          calls.set(id, { name, input: start.rawInput })
+          send(start, at)
         }
         const usage = message.usage ?? row.usage
-        if (blocks.length > 0 || usage) {
-          const entry: Extract<ThreadEntry, { kind: "assistant" }> = {
-            kind: "assistant",
-            at,
-            blocks,
-          }
-          if (usage) entry.usage = usage
-          sink.push(entry)
-        }
+        if (usage) spent = addUsage(spent, usage)
         return
       }
       if (message.role === "tool") {
         running = true
-        const block = message.tool_call_id
-          ? tools.get(message.tool_call_id)
-          : undefined
-        if (message.tool_call_id)
-          plans.observe(acp.get(message.tool_call_id)?.update, sessionId)
-        if (!block) return
+        const id = message.tool_call_id
+        const call = id === undefined ? undefined : calls.get(id)
+        if (id === undefined || !call) return
+        turns.close()
         const output = contentText(message.content)
-        const title = message.tool_call_id
-          ? subagentCalls.get(message.tool_call_id)
-          : undefined
-        const agent = title
-          ? /^Background subagent started with agent_id=([^\s.]+)/.exec(
-              output
-            )?.[1]
-          : undefined
+        const title = subagentCalls.get(id)
+        const agent = title ? /^Background subagent started with agent_id=([^\s.]+)/.exec(output)?.[1] : undefined
         if (title && agent) subagentTitles.set(agent, title)
-        const shown = message.tool_call_id ? acp.get(message.tool_call_id)?.shown : undefined
-        const viewed = block.name === "read" ? viewedImage(block.input, message.images, cwd) : undefined
-        const picks = devinPicks(message.extensions?.[DEVIN_QUESTION_ANSWERS])
-        block.output = clip(normalizeToolOutput(shown ? shown.output ?? viewed ?? picks ?? devinClientResult(output, block.input) : output))
-        const failure = message.extensions?.[DEVIN_TOOL_FAILURE]
-        const exitCode = DevinTerminalOutput.safeParse(message.extensions?.[DEVIN_TERMINAL_OUTPUT]).data?.exit?.exit_code
-        if (failure !== undefined && DevinToolFailure.safeParse(failure).data?.reason === "Canceled") block.canceled = true
-        else if (failure !== undefined || (exitCode != null && exitCode !== 0)) block.error = true
+        send(toolEnd(id, call, acp.get(id), message, output, cwd), at)
         const attachments = devinAttachments(message.content)
-        if (attachments.length) block.attachments = attachments
-        const found = shown && !shown.attachments ? devinFoundFiles(block.name, output) : []
-        if (found.length) block.attachments = [...block.attachments ?? [], ...found]
+        if (attachments.length) turns.queue({ kind: "tool-update", id, attachments }, at)
       }
     },
     snapshot() {
-      return sink.snapshot()
+      commit()
+      return turns.done()
     },
+  }
+}
+
+/**
+ * The `tool_call` Devin sent: the one it kept, with the model's arguments
+ * where it abridged them, or for a store older than `tool_call_state` one
+ * made from the model's call.
+ */
+function toolStart(id: string, name: string, rawInput: JsonValue | undefined, kept: JsonObject | undefined): SentUpdate {
+  if (kept) {
+    const input = sentInput(kept.rawInput, rawInput)
+    return { ...kept, sessionUpdate: "tool_call", toolCallId: id, ...input !== undefined && { rawInput: input } }
+  }
+  const mcp = name === "mcp_call_tool" ? devinMcpCall(toolInputText(rawInput)) : undefined
+  const input = mcp ? jsonObject(mcp.input) : sentInput(undefined, rawInput)
+  const tool = mcp?.name ?? name
+  return { sessionUpdate: "tool_call", toolCallId: id, title: tool, ...input !== undefined && { rawInput: input }, _meta: { "cognition.ai/inferenceToolName": tool } }
+}
+
+/**
+ * The `tool_call_update` that ended a call: the one Devin kept, with what it
+ * dropped back from the chat's result. A failed result ends the call
+ * failed, a stopped one canceled, and a command's exit code goes where ACP's
+ * terminal extension carries it. A store older than `tool_call_state` shows
+ * the model's own result.
+ */
+function toolEnd(id: string, call: MadeCall, stored: StoredAcpCall | undefined, message: ChatMessage, output: string, cwd: string | undefined): SentUpdate {
+  const kept = stored?.update
+  const failure = message.extensions?.[DEVIN_TOOL_FAILURE]
+  const exitCode = DevinTerminalOutput.safeParse(message.extensions?.[DEVIN_TERMINAL_OUTPUT]).data?.exit?.exit_code
+  const meta: JsonObject = {}
+  if (isJsonObject(kept?._meta)) Object.assign(meta, kept._meta)
+  if (failure !== undefined && DevinToolFailure.safeParse(failure).data?.reason === "Canceled") meta["cognition.ai/canceled"] = true
+  if (exitCode != null && meta["terminal_exit"] === undefined) meta["terminal_exit"] = { exit_code: exitCode }
+  const status = failure === undefined ? jsonText(kept?.status) ?? "completed" : "failed"
+  const update: SentUpdate = { ...kept, sessionUpdate: "tool_call_update", toolCallId: id, status, _meta: meta }
+  if (!stored) {
+    if (output) update.content = [textPart(output)]
+    return update
+  }
+  const content = Array.isArray(kept?.content) ? [...kept.content] : []
+  const shown = mergeAcpTool(storedFields(stored.call), storedFields(kept))
+  if (shown.output === undefined) {
+    const input = call.input === undefined || isTextValue(call.input) ? call.input : JSON.stringify(call.input)
+    const said = (call.name === "read" ? viewedImage(input, message.images, cwd) : undefined) ??
+      devinPicks(message.extensions?.[DEVIN_QUESTION_ANSWERS]) ??
+      devinClientResult(output, input)
+    if (said) content.push(textPart(said))
+  }
+  if (!shown.attachments) content.push(...devinFoundFiles(call.name, output))
+  if (content.length) update.content = content
+  return update
+}
+
+function addUsage(total: TurnUsage | undefined, more: TurnUsage): TurnUsage {
+  if (!total) return { ...more }
+  return {
+    input: (total.input ?? 0) + (more.input ?? 0),
+    output: (total.output ?? 0) + (more.output ?? 0),
+    cacheRead: (total.cacheRead ?? 0) + (more.cacheRead ?? 0),
+    cacheWrite: (total.cacheWrite ?? 0) + (more.cacheWrite ?? 0),
   }
 }
 

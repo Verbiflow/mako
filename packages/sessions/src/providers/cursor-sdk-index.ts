@@ -7,6 +7,8 @@ import { cursorSdkIndexPath, cursorSdkStorePath } from "./cursor-sdk-paths.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { openNativeStore, refuseNativeWrite } from "../read-only-sqlite.js"
 
+export type { CursorToolResult }
+
 /**
  * The Cursor SDK keeps two things per state root: one `store.db` of blobs
  * per agent, and one `index.db` naming every agent, its workspace, its runs
@@ -259,6 +261,8 @@ function runEnd(status: string | undefined, error: string | undefined): CursorSd
 
 const RunEventSchema = z.object({ type: z.literal("sdk_message"), message: CursorSdkMessageSchema })
 const RunEventRow = z.tuple([z.string().nullable(), z.string().nullable()])
+/** The run's request, which the SDK records ahead of what the run streamed. */
+const RunRequestSchema = z.object({ message: z.object({ type: z.literal("request") }) })
 
 /**
  * Every message a run streamed, as the SDK keeps it in `run_events`: the
@@ -273,6 +277,7 @@ export function readCursorSdkRunEvents(indexPath: string, runId: string): Cursor
     const statement = database.prepare("SELECT payload_json, created_at FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' ORDER BY seq")
     // A long agent keeps hundreds of thousands of these: rows as arrays skip an object each.
     statement.setReturnArrays(true)
+    let streamed = 0
     for (const row of statement.iterate(runId)) {
       const columns = RunEventRow.safeParse(row)
       if (!columns.success) continue
@@ -281,11 +286,14 @@ export function readCursorSdkRunEvents(indexPath: string, runId: string): Cursor
       try {
         payload = JSON.parse(raw ?? "")
       } catch {
+        streamed++
         continue
       }
+      if (RunRequestSchema.safeParse(payload).success) continue
+      const index = streamed++
       const event = RunEventSchema.safeParse(payload)
       if (!event.success) continue
-      events.push(created ? { message: event.data.message, at: created } : { message: event.data.message })
+      events.push(created ? { message: event.data.message, index, at: created } : { message: event.data.message, index })
     }
     return events
   } catch {
