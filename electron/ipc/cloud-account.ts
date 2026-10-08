@@ -3,6 +3,7 @@ import { execFile } from "node:child_process"
 import { hostname } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
+import { cloudUrl } from "../build-identity.js"
 import { CloudAccounts } from "../cloud-account.js"
 import { hostLog } from "../host-log.js"
 import { electronSecretEncryption } from "../secure-storage.js"
@@ -18,19 +19,33 @@ export function stopCloudAccountIpc(): void {
   accounts = undefined
 }
 
+/** A connection token while this Mac is signed in to Mako. */
+export function cloudConnectionToken(): Promise<string | undefined> {
+  return accounts?.optionalConnectionToken() ?? Promise.resolve(undefined)
+}
+
+export async function cloudSignedIn(): Promise<boolean> {
+  return (await accounts?.ready())?.state.status === "signed-in"
+}
+
 /**
- * The Mako account, against the cloud `MAKO_CLOUD_URL` names; a build without one says so and offers nothing.
+ * The Mako account, against the cloud `cloudUrl()` names; a build without one says so and offers nothing.
  * A fixture desk signs in only to a cloud on this Mac and keeps the sign-in in memory, so its profile isn't written.
  */
-export function installCloudAccountIpc({ emit, fixture }: { emit: (event: HostEvent) => void; fixture: boolean }): void {
+export function installCloudAccountIpc({ emit, fixture, signedIn }: { emit: (event: HostEvent) => void; fixture: boolean; signedIn?: () => void }): void {
+  let status: string | undefined
   const cloud = new CloudAccounts({
-    url: process.env.MAKO_CLOUD_URL,
+    url: cloudUrl(),
     storePath: join(app.getPath("userData"), "cloud-account"),
     encryption: fixture ? memoryOnly : electronSecretEncryption(),
     openExternal: (url) => shell.openExternal(url),
     device: describeThisMac,
     fixture,
-    onChange: (account) => emit({ type: "cloud-account", account }),
+    onChange: (account) => {
+      if (status === "signing-in" && account.state.status === "signed-in") signedIn?.()
+      status = account.state.status
+      emit({ type: "cloud-account", account })
+    },
     log: (message, fields) => hostLog("cloud", message, fields),
   })
   accounts = cloud
