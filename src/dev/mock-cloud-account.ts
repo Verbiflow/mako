@@ -24,7 +24,7 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     { ...thisMac, id: "d2", name: "Studio", platform: "macOS 15.5", appVersion: "0.3.9", lastSeenAt: minutesAgo(60 * 5) },
     { ...thisMac, id: "d3", kind: "cli", name: "build-box", platform: "Linux", appVersion: null, enrolledBy: "device-code", lastSeenAt: minutesAgo(60 * 24 * 12) },
   ]
-  const start = new URLSearchParams(location.search).get("cloud")
+  const start = new URLSearchParams(globalThis.location?.search).get("cloud")
   let account: CloudAccount = {
     cloud: "127.0.0.1:8787",
     state:

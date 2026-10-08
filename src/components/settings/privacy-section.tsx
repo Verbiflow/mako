@@ -39,13 +39,13 @@ export function PrivacySection() {
       <ListCard>
         <SettingRow
           title="Usage analytics"
-          description="Which agents, models, modes and features you use, and how turns end and how long they take. Counted for this install, or for your Mako account while you're signed in."
+          description="Which agents, models, modes and features you use, and how turns end and how long they take. Counted for this computer, by a one-way hash of its ID, or for your Mako account while you're signed in."
         >
           <Toggle label="Usage analytics" on={state?.usage ?? false} disabled={disabled} onChange={() => flip("usage")} />
         </SettingRow>
         <SettingRow
           title="Error reports"
-          description="Crash messages and stack traces with file paths, emails and secrets taken out, and the kinds of agent output Mako couldn't read."
+          description="Crash messages and stack traces with file paths, emails and secrets taken out, the kinds of agent output Mako couldn't read, and how long calls to the Mako cloud take."
         >
           <Toggle label="Error reports" on={state?.errors ?? false} disabled={disabled} onChange={() => flip("errors")} />
         </SettingRow>
