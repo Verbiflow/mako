@@ -12,7 +12,7 @@ export { exclusiveTokens, inclusiveTokens, tokenCount, tokenSum, type HarnessTok
 export { CLAUDE_ATTACHMENT_TYPES, CLAUDE_HOOK_EVENTS, CLAUDE_RECORD_TYPES, CLAUDE_SYSTEM_SUBTYPES, claudeHourCacheWrites, claudeTokens, ClaudeUsage } from "./claude.js"
 export { CODEX_EVENTS, CODEX_EXTENSIONS, CODEX_RESPONSE_ITEMS, CODEX_RETIRED_RESPONSE_ITEMS, CODEX_ROLLOUT_ITEMS, CODEX_TURN_ITEMS, codexRecordReading, CodexRolloutUsage, codexTokens, CodexWireUsage, type CodexRecordReading, type CodexTokenUsage } from "./codex.js"
 export {
-  DEVIN_ACP_HOOKS, DEVIN_TOOL_READING, DevinCallMetrics, devinCompactionRecord, DevinStoredCall, devinStoredTokens, DevinUsageMeta, devinUsageReading,
+  DEVIN_ACP_HOOKS, DEVIN_AGENT_STARTS, DEVIN_QUESTION_TOOLS, DEVIN_TOOL_READING, DevinCallMetrics, devinCompactionRecord, DevinStoredCall, devinStoredTokens, DevinUsageMeta, devinUsageReading,
   type DevinUsageReading,
 } from "./devin.js"
 export {

@@ -117,6 +117,12 @@ export interface ArgumentWrapper {
 export interface ScriptWrapper {
   form: "script"
   key?: string
+  /**
+   * Each call the script makes draws as its own row, so a row of the script
+   * is the script itself, named by what it ran, never a second row for one
+   * of its calls.
+   */
+  callsShown?: true
 }
 
 /** Keeps a declaration's tool names as literal keys, so a harness SDK's own tool list can be checked against them. */

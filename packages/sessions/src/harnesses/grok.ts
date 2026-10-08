@@ -231,9 +231,6 @@ export const GROK_UPDATES = {
   retry_state: "marker",
   image_dropped: "marker",
   hook_annotation: "marker",
-  scheduled_task_created: "marker",
-  scheduled_task_fired: "marker",
-  scheduled_task_deleted: "marker",
   auto_recovery_started: "marker",
   auto_recovery_exhausted: "marker",
   auto_compact_started: "activity",
@@ -277,6 +274,12 @@ export const GROK_UPDATES = {
   feedback_request: "ignored",
   // A monitor's output lines, which reach the model in its reminders.
   monitor_event: "ignored",
+  // Grok's tasks pane, not its transcript (xai-grok-pager `handle_scheduled_task_*`, 1.0.46): the
+  // `scheduler_create` call shows the scheduling, and each firing runs as a loop subagent. `created`
+  // is re-sent on every restore and after a skipped fire, and `fired` is never saved.
+  scheduled_task_created: "ignored",
+  scheduled_task_fired: "ignored",
+  scheduled_task_deleted: "ignored",
   // `session/set_config_option` answers with the model, and `config_option_update` shows it.
   model_changed: "ignored",
 } as const satisfies Record<string, GrokUpdateReading>

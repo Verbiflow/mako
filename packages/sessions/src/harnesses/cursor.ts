@@ -45,7 +45,7 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     checked: {
       version: "SDK 1.0.31",
       on: "2026-10-06",
-      against: "@cursor/sdk 1.0.31 types and bundle (settingSources loaders, hook enum, skill and agent folders), cursor.com/docs (rules, hooks, skills, subagents), and the bundle through harness:self-report",
+      against: "@cursor/sdk 1.0.31 types and bundle (settingSources loaders, hook enum, skill and agent folders), cursor.com/docs (rules, hooks, skills, subagents), and the request context its agent sends, through harness:self-report",
     },
     instructions: {
       files: ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursorrules"],
@@ -62,9 +62,11 @@ export const CURSOR_VOCABULARY = defineVocabulary({
       ],
       control: "{ version: 1, hooks } per source; Claude settings map onto these names. permission allow|deny|ask, deny over ask over allow; exit 2 denies, other failures pass unless failClosed. In the SDK a denied shell call throws.",
     },
+    // Not `~/.cursor/skills-cursor`: the SDK syncs Cursor's builtin skills
+    // there from its service before loading, and a skill put there isn't loaded.
     skills: [
       ".cursor/skills", ".agents/skills", ".claude/skills", ".codex/skills", ".grok/skills",
-      "~/.cursor/skills", "~/.agents/skills", "~/.claude/skills", "~/.codex/skills", "~/.grok/skills", "~/.cursor/skills-cursor",
+      "~/.cursor/skills", "~/.agents/skills", "~/.claude/skills", "~/.codex/skills", "~/.grok/skills",
     ],
     commands: { absent: "The SDK loads no command folder; Cursor moved commands into skills (disable-model-invocation)." },
     agents: [".cursor/agents", ".claude/agents"],

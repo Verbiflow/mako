@@ -4,15 +4,17 @@ import type { AcpDecoderHooks } from "../acp-decoder.js"
 import type { AcpToolReading } from "../acp-tool-details.js"
 import { DevinPlanUpdates } from "../providers/devin-plans.js"
 import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
-import { defineVocabulary } from "./vocabulary.js"
+import { defineVocabulary, type NativeTool } from "./vocabulary.js"
+
+const SETTINGS_ONLY = "3000.10.23 doesn't define it for the capture's account, whose settings are empty, in any mode; sessions on a real account record it."
 
 /** Names are `_meta["cognition.ai/inferenceToolName"]` live and in the IDE journal, and the chat tool name in the CLI store. */
 export const DEVIN_VOCABULARY = defineVocabulary({
   harness: "devin",
   checked: {
     version: "3000.10.23",
-    on: "2026-10-05",
-    against: "Devin's CLI store and IDE journal through audit:tools, and the 3000.10.23 plan capture",
+    on: "2026-10-08",
+    against: "Devin's CLI store and IDE journal through audit:tools, and its 3000.10.23 tool definitions through harness:native-tools",
   },
   mcp: ["s.t"],
   tools: {
@@ -21,15 +23,21 @@ export const DEVIN_VOCABULARY = defineVocabulary({
     write_to_process: { kind: "shell-input" },
     kill_shell: { kind: "shell-stop" },
     read: { kind: "read" },
+    notebook_read: { kind: "read" },
     edit: { kind: "edit" },
+    notebook_edit: { kind: "edit" },
     write: { kind: "write" },
     grep: { kind: "search" },
-    code_search: { kind: "search", label: "Code search", keys: { query: ["search_term", "query"], path: ["search_folder_absolute_uri", "path"] } },
+    code_search: {
+      kind: "search", label: "Code search", aliases: ["find_code_context"],
+      keys: { query: ["search_term", "query"], path: ["search_folder_absolute_uri", "path"] },
+      unlisted: SETTINGS_ONLY,
+    },
     find_file_by_name: { kind: "find" },
-    web_search: { kind: "web-search" },
+    web_search: { kind: "web-search", unlisted: SETTINGS_ONLY },
     webfetch: { kind: "web-fetch" },
     run_subagent: { kind: "agent" },
-    subagent: { kind: "agent-wait", label: "Agent status" },
+    subagent: { kind: "agent-wait", label: "Agent status", unlisted: SETTINGS_ONLY },
     read_subagent: { kind: "agent-wait" },
     todo_write: { kind: "todo" },
     write_plan: { kind: "plan" },
@@ -39,6 +47,7 @@ export const DEVIN_VOCABULARY = defineVocabulary({
     mcp_list_tools: { kind: "tool-search" },
     mcp_list_servers: { kind: "tool-search", label: "MCP servers" },
     mcp_call_tool: { kind: "mcp" },
+    mcp_read_resource: { kind: "read", label: "MCP resource", keys: { path: ["resource_uri"] } },
     request_scope: { kind: "other", label: "Request access" },
   },
   concepts: {
@@ -72,10 +81,19 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       { name: "Cloud handoff", via: "/handoff, /cloud-attach" },
       { name: "Step revert and fork", via: "cognition.ai/revert/*" },
       { name: "Editable approvals", via: "cognition.ai/editableCommand, command/revise" },
-      { name: "Credits and ACUs", via: "usage_update _meta totalCreditCost and totalAcuCost, for an account billed in credits or ACUs rather than quota; never seen sent, so unread" },
+      { name: "Credits and ACUs", via: "usage_update _meta totalCreditCost and totalAcuCost on the reading that ends a turn, for an account billed in credits or ACUs rather than quota; 0 on every quota account recorded, so unread" },
     ],
   },
 })
+
+const devinToolsOf = (kind: NativeTool["kind"]): ReadonlySet<string> => new Set(Object.entries(DEVIN_VOCABULARY.tools)
+  .flatMap(([name, tool]: [string, NativeTool]) => (tool.kind === kind ? [name, ...tool.aliases ?? []] : [])))
+
+/** The names of the tool that starts or resumes a subagent; its `rawInput.resume` names the child it resumes. */
+export const DEVIN_AGENT_STARTS = devinToolsOf("agent")
+
+/** The names of the tool that asks the person questions, whose `_meta` carries them and the answers. */
+export const DEVIN_QUESTION_TOOLS = devinToolsOf("question")
 
 /**
  * A live `usage_update._meta` (3000.10.23): one call's
@@ -83,7 +101,9 @@ export const DEVIN_VOCABULARY = defineVocabulary({
  * supplied, `outputTokens` and, once the cache is warm, `cachedReadTokens`
  * and `cachedWriteTokens`. A main-agent call is reported twice, the second
  * time with `cognition.ai/subagent_context.parentAgentId` set to `root`; a
- * subagent's call comes once, naming its parent there.
+ * subagent's call comes once, naming its parent there. A turn ends with one
+ * more reading that restates its last call beside the turn's totals
+ * (`cognition.ai/responseDimensions`, `totalCreditCost`).
  */
 export const DevinUsageMeta = z.object({
   "cognition.ai/inputTokens": tokenCount,
@@ -97,6 +117,8 @@ export const DevinUsageMeta = z.object({
 export type DevinUsageReading = { of: "repeat" } | { of: "agent" | "subagent"; tokens?: HarnessTokens }
 
 const ROOT_AGENT = "root"
+/** Present only on the reading that ends a turn, which restates the turn's last call. */
+const TURN_TOTALS = "cognition.ai/responseDimensions"
 
 export function devinUsageReading(meta: z.input<typeof DevinUsageMeta> | undefined): DevinUsageReading {
   const read = DevinUsageMeta.safeParse(meta ?? {}).data
@@ -105,6 +127,7 @@ export function devinUsageReading(meta: z.input<typeof DevinUsageMeta> | undefin
   const tagged = meta !== undefined && Object.hasOwn(meta, "cognition.ai/subagent_context")
   const parent = read["cognition.ai/subagent_context"]?.parentAgentId
   if (tagged && (parent === undefined || parent === ROOT_AGENT)) return { of: "repeat" }
+  if (meta !== undefined && Object.hasOwn(meta, TURN_TOTALS)) return { of: "repeat" }
   const of = parent === undefined ? "agent" : "subagent"
   const input = read["cognition.ai/inputTokens"]
   const output = read["cognition.ai/outputTokens"]
