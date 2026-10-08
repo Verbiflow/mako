@@ -183,7 +183,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
 
   return (
     <ConversationTimeline
-      source={{ liveId: sessionId }}
+      source={{ liveId: sessionId, historyFrom: historyWindow ? { blocks: historyWindow.blockStart, base: history?.start ?? 0 } : undefined }}
       identity={identity}
       entrance={!continued}
       hasEarlier={Boolean(historyWindow?.before || history?.hasEarlier)}

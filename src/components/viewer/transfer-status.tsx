@@ -84,6 +84,7 @@ export function TransferStatus({ history = false }: { history?: boolean }) {
       details={
         state.kind === "accepted" ? (
           <p>
+            {state.nativeForkDeclined ? `${provider} couldn't fork this session itself. ${state.nativeForkDeclined} ` : ""}
             {state.carried === "native"
               ? `Imported the conversation into a ${provider} session, so it resumes as its own history.`
               : state.manifest.fromBlock > 0

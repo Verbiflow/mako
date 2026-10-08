@@ -48,6 +48,7 @@ const View = lazy(() =>
 
 /** One pane's chat: its Session while unfocused, and whether it has the composer. */
 export interface AgentSurfaceProps {
+  paneId?: string
   session?: PaneSession
   composer: boolean
 }
@@ -270,7 +271,7 @@ const FilePane = memo(function FilePane({
             !agent && "hidden"
           )}
         >
-          <AgentSurface session={pane.session} composer={composer} />
+          <AgentSurface paneId={pane.id} session={pane.session} composer={composer} />
         </div>
       ) : null}
       {!agent && document ? <DocumentView document={document} /> : null}

@@ -22,6 +22,7 @@ import { pendingThreadInput, threadToMessages } from "@/lib/foreign-thread"
 import { ShieldQuestionIcon } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
+import { releasedExchanges } from "@/state/transcript-residency"
 
 /**
  * A conversation from another harness, opened as a conversation.
@@ -310,7 +311,7 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
   )
   const [buildExchanges] = useState(() => createExchangeBuilder())
   const exchanges = useMemo(
-    () => buildExchanges(thread),
+    () => releasedExchanges(buildExchanges(thread), thread.releasedTurns),
     [buildExchanges, thread]
   )
 
@@ -325,7 +326,7 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
   const worktree = useStartedWorktree(useThreadGroups((state) => rowThread(ref, state.threadOf)), ref.cwd)
   return (
     <ConversationTimeline
-      source={{ threadPath: thread.ref.path }}
+      source={{ threadPath: thread.ref.path, historyFrom: { blocks: 0, base: thread.pageStart } }}
       opening={worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined}
       identity={thread.ref.path}
       exchanges={exchanges}
