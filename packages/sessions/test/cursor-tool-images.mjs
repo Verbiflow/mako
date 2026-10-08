@@ -26,6 +26,10 @@ try {
         ],
       }]},
       {role: 'assistant', content: [{type: 'tool-call', toolCallId: 'toolu_plan', toolName: 'CreatePlan', args: {name: 'Fix', overview: 'Fix it', plan: '# Fix\n\n1. Patch.'}}]},
+      ...['TodoWrite', 'todo_write', 'updateTodos'].map(toolName => ({
+        role: 'assistant',
+        content: [{type: 'tool-call', toolCallId: `todos-${toolName}`, toolName, args: {todos: [{id: '1', content: 'Patch the reader', status: 'in_progress'}]}}],
+      })),
     ]
     const rootFields = []
     for (const [index, message] of messages.entries()) {
@@ -52,6 +56,11 @@ try {
   const plans = thread.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : []).filter(block => block.type === 'proposed-plan')
   assert.deepEqual(plans, [{type: 'proposed-plan', id: 'toolu_plan', text: '# Fix\n\n1. Patch.', status: 'proposed'}])
   console.log('PASS Cursor saved CreatePlan reads as the live plan card')
+  const todos = thread.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : []).filter(block => block.type === 'tool' && block.id?.startsWith('todos-'))
+  assert.deepEqual(todos.map(block => [block.name, block.details?.map(detail => detail.type)]), [
+    ['TodoWrite', ['plan']], ['todo_write', ['plan']], ['updateTodos', ['plan']],
+  ])
+  console.log('PASS Cursor saved todo writes carry the plan under every name the vocabulary declares')
 } finally {
   await rm(home, {recursive: true, force: true})
 }

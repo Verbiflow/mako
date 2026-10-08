@@ -180,20 +180,16 @@ try {
   const devinThread = await new DevinCliProvider(root).read(`${devinPath}#devin-notice`)
   assert.deepEqual(outline(devinThread.entries), [
     "user:Start the checks in a background subagent",
-    "assistant:tool",
-    "assistant:tool",
-    "assistant:text",
+    "assistant:tool,tool,text",
     'event:opens:Subagent "Run the checks" completed',
-    "assistant:tool",
-    "assistant:text",
+    "assistant:tool,text",
     "user:Start another",
     "assistant:tool",
     "event:Interrupted",
     'event:opens:Subagent "Break things" failed',
-    "assistant:tool",
-    "assistant:text",
+    "assistant:tool,text",
   ])
-  assert.equal(devinThread.entries[4].id, "6", "the opener keeps the native row's identity")
+  assert.equal(devinThread.entries[2].id, "6", "the opener keeps the native row's identity")
   console.log("PASS Devin completion notifications open the turns Devin started itself; one read mid-turn opens none")
 } finally {
   await rm(root, { recursive: true, force: true })

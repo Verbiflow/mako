@@ -66,6 +66,35 @@ try {
   const bounded = await provider.read(file.path)
   assert.ok(bounded.entries.some(entry=>entry.kind==='event'&&entry.label==='Message unavailable'))
   assert.ok(!JSON.stringify(bounded).includes('x'.repeat(1000)), 'oversized native rows do not enter the canonical history')
+  // Schema 6, in the shapes Devin 3.10.23 writes: a plan's entries, runs that nest their messages, derived markers, and a kind Mako doesn't read.
+  const uuid6 = 'ide-schema-6'
+  const store6 = new DatabaseSync(join(root, `${uuid6}.db`))
+  store6.exec('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE messages(position INTEGER PRIMARY KEY,kind TEXT NOT NULL,payload TEXT NOT NULL)')
+  store6.prepare('INSERT INTO meta VALUES(?,?)').run('schema_version', '6')
+  const stored = (position, message) => store6.prepare('INSERT INTO messages VALUES(?,?,?)').run(position, message.kind, JSON.stringify(message))
+  const readCall = {toolCallId: 'sub-read', title: 'Read notes.md', kind: 'read', status: 'completed', rawInput: {path: '/fixture/notes.md'}, content: [{type: 'content', content: {type: 'text', text: 'Ships Friday'}}], _meta: {'cognition.ai/timestamp': '2026-10-02T00:00:02Z'}}
+  stored(0, {kind: 'user_message', content: [chunk('user_message_chunk', 'Plan the release')]})
+  stored(1, {kind: 'plan', status: 'current', content: {entries: [{content: 'Read the notes', status: 'completed', priority: 'medium'}, {content: 'Write the summary', status: 'pending', priority: 'medium'}]}})
+  stored(2, {kind: 'subagent', agentId: 'agent-1', title: 'Check the notes', task: 'Read notes.md', profile: '', depth: 0, isBackground: false, status: 'completed',
+    childMessages: [{kind: 'agent_message', content: [chunk('agent_message_chunk', "The subagent's own words")]}]})
+  stored(6, {kind: 'scripted_run', scriptedRunId: 'run-1', childMessages: [{kind: 'tool_call', content: readCall}, {kind: 'info', title: 'Note', body: 'Nested'}]})
+  stored(3, {kind: 'progress_marker', marker: {kind: 'finished', eventId: 'evt-1', timestampMs: 1_759_363_200_000}})
+  stored(4, {kind: 'agent_message', content: [chunk('agent_message_chunk', 'It ships Friday.')]})
+  stored(5, {kind: 'info', title: 'Heads up', body: 'Something Devin noted'})
+  store6.close()
+  state.prepare('INSERT INTO ItemTable VALUES(?,?)').run('windsurf.acp.messageStore.session.acp/devin-cli/schema-6', JSON.stringify({uuid: uuid6, lastUpdated: 1_759_363_200_000}))
+  const six = await provider.read(join(root, `${uuid6}.db`))
+  const drawn6 = six.entries.flatMap((entry) => entry.kind === 'assistant'
+    ? entry.blocks.map((block) => block.type === 'tool' ? [block.name, block.details?.[0]?.type ?? block.output] : [block.type, block.text])
+    : [[entry.kind, entry.kind === 'event' ? entry.detail : entry.text]])
+  assert.deepEqual(drawn6, [
+    ['user', 'Plan the release'],
+    ['Plan', 'plan'],
+    ['text', 'It ships Friday.'],
+    ['event', `Mako can't read Devin's "info" records yet. The original remains in the IDE store.`],
+    ['Read notes.md', 'Ships Friday'],
+    ['event', `Mako can't read Devin's "info" records yet. The original remains in the IDE store.`],
+  ], "a plan reads as its entries, a scripted run's calls where it ran, a subagent's own words stay out as live keeps them, and a kind Mako can't read leaves a marker")
   // Unknown schemas fail visibly, instead of claiming an empty conversation.
   store.prepare("UPDATE meta SET value='99' WHERE key='schema_version'").run()
   await assert.rejects(provider.read(file.path), /could not be read just now/)
@@ -101,7 +130,7 @@ try {
   const live = new AcpUpdateDecoder(DEVIN_ACP_HOOKS)
   const drawn = reduceLiveUpdates([], updates.slice(2, -1).flatMap((update) => live.update({sessionId: 'locator', update})).flatMap((item) => item.kind === 'update' ? [item.update] : []))
   assert.deepEqual(drawn.map((block) => block.type === 'tool' ? [block.name, block.status] : [block.type, block.text]), [['exec', 'failed'], ['read', 'canceled'], ['text', 'One test fails.']], 'the reader draws what the live decoder draws')
-  console.log('Devin IDE SQLite: native identity, WAL snapshot updates, tool results, bounded peek, catalog deduplication, unknown schema refusal, legacy journal preservation, and live-decoder locator reading pass')
+  console.log('Devin IDE SQLite: native identity, WAL snapshot updates, tool results, schema 6 plans, runs and unread kinds, bounded peek, catalog deduplication, unknown schema refusal, legacy journal preservation, and live-decoder locator reading pass')
 } finally {
   store.close(); state.close()
   await rm(user,{recursive:true,force:true})

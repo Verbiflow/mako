@@ -84,6 +84,8 @@ try {
   assert.deepEqual(transcript(fresh), whole, "a fresh read agrees with the followed one")
   assert.deepEqual(fresh.filter((entry) => entry.kind === "event").map((entry) => entry.body), ["summary 1", "summary 2"],
     "each marker opens on the summary its window was replaced by")
+  assert.deepEqual(fresh.filter((entry) => entry.kind === "event").map((entry) => entry.source), [windowOne, windowTwo].map((record) => ({ harness: "cursor", record })),
+    "each marker cites the window blob it archived")
 
   // A run stopped after the latest summary is still marked where it ended.
   const fourth = [said("fourth"), answer("partial")].map(hash)
@@ -98,7 +100,7 @@ try {
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-0"), id)
   index.exec("DELETE FROM runs")
   assert.deepEqual(transcript((await new CursorProvider(home, {}).read(path)).entries), ["user:first", "assistant:one"])
-  console.log("Cursor compaction: summarized windows read ahead of the live one, live and in history, with a marker at each summary")
+  console.log("Cursor compaction: summarized windows read ahead of the live one, live and in history, with a marker at each summary citing its window")
 
   // The summary the model was handed (`providerOptions.cursor.isSummary`)
   // gives a window that kept no text its body, and still marks a compaction

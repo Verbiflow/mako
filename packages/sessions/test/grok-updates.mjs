@@ -335,8 +335,10 @@ try {
         kind: "event",
         at: "2026-01-01T00:00:10.000Z",
         label: "Interrupted",
+        source: { harness: "grok", record: "event-12" },
       },
-    ]
+    ],
+    "a turn end cites the notification's eventId, as the live marker does"
   )
 
   const legacy = await provider.read(legacyPath)
@@ -392,6 +394,44 @@ try {
   )
   const compactedFollower = provider.createFollower(compactedPath, 0)
   assert.deepEqual(apply([], await compactedFollower.next()), compacted.entries, "following converges with a full read")
+
+  // Grok 1.0.46 saves why it ended a turn in the `_meta` of `turn_completed`
+  // (`cancellationCategory`, `cancelTrigger`), as live sends it.
+  const endedDir = join(home, ".grok", "sessions", "%2Fwork", "ended-session")
+  const endedPath = join(endedDir, "updates.jsonl")
+  await mkdir(endedDir, { recursive: true })
+  await writeFile(join(endedDir, "summary.json"), JSON.stringify({ info: { id: "ended-session", cwd: "/work" }, session_summary: "Ended" }))
+  const said = (text, timestamp) => jsonl({ timestamp, method: "session/update", params: { sessionId: "ended-session", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } } } })
+  const ended = (stop, meta, timestamp) => jsonl({ timestamp, method: "_x.ai/session/update", params: { sessionId: "ended-session", update: { sessionUpdate: "turn_completed", prompt_id: `p${timestamp}`, stop_reason: stop }, _meta: { eventId: `e${timestamp}`, ...meta } } })
+  await writeFile(
+    endedPath,
+    said("Deploy it", 1_790_300_000) +
+      jsonl({ timestamp: 1_790_300_001, method: "_x.ai/session/update", params: { sessionId: "ended-session", update: { sessionUpdate: "hook_annotation", message: "\u26a0 Prompt blocked by deploy-guard: Deploys need a ticket number", kind: "note" } } }) +
+      ended("cancelled", { cancellationCategory: "HookDenied", cancellationContext: { hookName: "deploy-guard", reason: "Deploys need a ticket number" } }, 1_790_300_002) +
+      said("Delete the cache", 1_790_300_010) +
+      ended("cancelled", { cancellationCategory: "PermissionRejected" }, 1_790_300_011) +
+      said("Keep going", 1_790_300_020) +
+      ended("cancelled", { cancellationCategory: "max_turns_reached" }, 1_790_300_021) +
+      said("Tidy up", 1_790_300_030) +
+      ended("end_turn", { cancellationCategory: "action_stationarity" }, 1_790_300_031) +
+      said("Run the suite", 1_790_300_040) +
+      ended("cancelled", { cancellationCategory: "MidTurnAbort", cancelTrigger: "session_close" }, 1_790_300_041) +
+      said("Run it again", 1_790_300_050) +
+      ended("cancelled", { cancellationCategory: "MidTurnAbort", cancelTrigger: "esc" }, 1_790_300_051)
+  )
+  const endings = await provider.read(endedPath)
+  assert.deepEqual(
+    endings.entries.filter((entry) => entry.kind === "event").map(({ label, detail, tone }) => [label, detail, tone]),
+    [
+      ["Hook", "Prompt blocked by deploy-guard: Deploys need a ticket number", "warning"],
+      ["Turn ended", "A permission was denied", undefined],
+      ["Turn ended", "Reached the turn limit", "warning"],
+      ["Turn ended", "Grok stopped making progress", "warning"],
+      ["Interrupted", "The session closed", undefined],
+      ["Interrupted", undefined, undefined],
+    ],
+    "a turn Grok ended by its own rule says which rule, a blocked prompt is explained once by its hook, and only a person's stop reads as Interrupted alone"
+  )
   console.log("Grok updates tests clean: authority, envelopes, chunks, tools, plans, usage, fallback, and convergence verified.")
 } finally {
   rmSync(home, { recursive: true, force: true })

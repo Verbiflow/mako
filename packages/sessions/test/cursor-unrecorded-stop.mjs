@@ -115,7 +115,7 @@ try {
   assert.equal(early[0].text, "second, stopped early", "the prompt reads like any other, without Mako's control note")
   assert.deepEqual(early[1].blocks.map((block) => block.type === "tool" ? `tool:${block.name}:${block.canceled ? "canceled" : "open"}` : `${block.type}:${block.text}`),
     ["thinking:planning", "text:One, two", "tool:grep:canceled"], "the stream folds in order and the unanswered call reads canceled")
-  assert.deepEqual(early[2], { kind: "event", at: "2026-09-25T00:00:04.000Z", label: "Interrupted" })
+  assert.deepEqual(early[2], { kind: "event", at: "2026-09-25T00:00:04.000Z", label: "Interrupted", source: { harness: "cursor", record: "run-2:cancelled" } })
 
   // Auto moves to another model for the next turns, rewriting the preamble; a
   // recorded stop between them must keep its place.

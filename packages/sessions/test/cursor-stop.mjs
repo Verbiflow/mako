@@ -62,7 +62,7 @@ try {
   index.prepare("UPDATE runs SET status = 'CANCELLED', cancelled_at = '2026-09-25T00:00:05.000Z' WHERE run_id = 'run-2'").run()
   const stopped = await follower.next()
   assert.equal(stopped.replaceFrom, 0, "a stop landing inside kept entries refolds the whole conversation")
-  const marker = { kind: "event", at: "2026-09-25T00:00:05.000Z", label: "Interrupted" }
+  const marker = { kind: "event", at: "2026-09-25T00:00:05.000Z", label: "Interrupted", source: { harness: "cursor", record: "run-2:cancelled" } }
   assert.deepEqual(stopped.entries.at(-1), marker)
 
   run.run("run-3", id, 3, "FINISHED", checkpoint("root-2"), checkpoint("root-3"), null)
@@ -83,7 +83,7 @@ try {
   const legacy = await new CursorProvider(home, {}).read(path)
   assert.equal(legacy.entries.length, 6)
   assert.equal(legacy.entries.some((entry) => entry.kind === "event"), false)
-  console.log("Cursor stops: a CANCELLED run is marked where its checkpoint ended, live and in history, and nowhere else")
+  console.log("Cursor stops: a CANCELLED run is marked where its checkpoint ended, live and in history, and nowhere else, citing the run")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

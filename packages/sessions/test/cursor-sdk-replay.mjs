@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { CursorSdkRunCheckpoints, readCursorSdkRunEvents } from "../dist/providers/cursor-sdk-index.js"
 
 // A Cursor SDK run reopens as the live window drew it: its `run_events`
 // messages go through the live projection. A run is found in the
@@ -71,7 +72,8 @@ try {
   run.run("run-1", id, 1, null, checkpoint("root-0"), "2026-10-01T00:00:01.000Z", "2026-10-01T00:00:02.000Z")
   run.run("run-2", id, 2, checkpoint("root-0"), checkpoint("root-1"), "2026-10-01T00:00:05.000Z", "2026-10-01T00:00:08.000Z")
   const log = index.prepare("INSERT INTO run_events VALUES (?, ?, 'run_stream_event', ?, ?)")
-  const events = (runId, at, stream) => stream.forEach((message, seq) =>
+  // The SDK records the run's request first, which the live stream never carries.
+  const events = (runId, at, stream) => [{ type: "request" }, ...stream].forEach((message, seq) =>
     log.run(runId, seq + 1, JSON.stringify({ schemaVersion: 1, type: "sdk_message", agentId: id, runId, message: { agent_id: id, run_id: runId, ...message } }), at))
   events("run-1", "2026-10-01T00:00:01.500Z", [
     { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "one" }] } },
@@ -83,6 +85,9 @@ try {
     { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "two" }] } },
   ])
   index.close()
+  assert.deepEqual(readCursorSdkRunEvents(join(sdkRoot, "index.db"), "run-2").map((event) => [event.message.type, event.index]),
+    [["thinking", 0], ["tool_call", 1], ["user", 2], ["assistant", 3]],
+    "a saved message is placed among what the run streamed as live numbers it, the request aside")
 
   const transcript = (entries) => entries.map((entry) => {
     if (entry.kind === "user") return `user:${entry.text}${entry.steeringFor ? " (steered)" : ""}`
@@ -105,7 +110,32 @@ try {
 
   const recent = await new CursorProvider(home, {}).recent(path, 1)
   assert.deepEqual(transcript(recent), whole.slice(3), "a recent window that would start at the steer starts at its run's prompt")
-  console.log("Cursor SDK replay: runs reopen through the live projection, placed across a compaction, with checkpointed results and steers drawn once")
+
+  // A running run's checkpoints, read as Cursor saves each step: the result
+  // of a read the stream never ended is found once a step keeps it, and a
+  // compaction mid-run that rewrites the conversation doesn't hide it.
+  const third = [said("third"), { role: "assistant", content: [{ type: "tool-call", toolName: "Read", toolCallId: "read-2", args: { path: "gone.md" } }] }].map(hash)
+  const [failed] = [{ role: "tool", content: [{ type: "tool-result", toolCallId: "read-2", result: "Error: File not found" }], providerOptions: { cursor: { highLevelToolCallResult: { isError: true } } } }].map(hash)
+  const afterTwo = scaffold(2).map(hash)
+  const live = new DatabaseSync(path)
+  for (const key of [...third, failed, ...afterTwo]) live.prepare("INSERT OR REPLACE INTO blobs VALUES (?, ?)").run(key, Buffer.from(JSON.stringify(messages[key])))
+  const conversation = [...afterOne, ...second]
+  live.prepare("INSERT INTO blobs VALUES (?, ?)").run("root-2a", root([...conversation, ...third], [windowOne]))
+  live.prepare("INSERT INTO blobs VALUES (?, ?)").run("root-2b", root([...afterTwo, third[0], third[1], failed], [windowOne]))
+  live.close()
+  const runs = new DatabaseSync(join(sdkRoot, "index.db"))
+  runs.prepare("INSERT INTO runs VALUES ('run-3', ?, 3, 'RUNNING', 'composer-2.5', NULL, ?, ?, '2026-10-01T00:00:10.000Z', '2026-10-01T00:00:10.000Z', '2026-10-01T00:00:10.000Z', NULL)")
+    .run(id, checkpoint("root-1"), checkpoint("root-1"))
+  const moveTo = (rootId) => runs.prepare("UPDATE runs SET latest_checkpoint_ref_json = ? WHERE run_id = 'run-3'").run(checkpoint(rootId))
+  const checkpoints = new CursorSdkRunCheckpoints(sdkRoot, id, "run-3")
+  assert.equal(checkpoints.results(new Set(["read-2"])).size, 0, "a run still at the checkpoint it started from has nothing to settle")
+  moveTo("root-2a")
+  assert.equal(checkpoints.results(new Set(["read-2", "read-1"])).size, 0, "a step that hasn't kept the result settles nothing, and an earlier run's result isn't this run's")
+  moveTo("root-2b")
+  assert.deepEqual(Object.fromEntries(checkpoints.results(new Set(["read-2"]))), { "read-2": { output: "Error: File not found", failed: true } },
+    "the result is found once a step keeps it, though a compaction rewrote the conversation before it")
+  runs.close()
+  console.log("Cursor SDK replay: runs reopen through the live projection, placed across a compaction, with checkpointed results and steers drawn once; a running run's results are found as Cursor saves each step")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

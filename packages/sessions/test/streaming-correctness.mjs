@@ -574,6 +574,7 @@ async function claudeInterruptedMarkerSurvives() {
     }) +
       line({
         type: "assistant",
+        uuid: "aborted-reply",
         sessionId: "interrupted",
         isAbortedMidStream: true,
         message: {
@@ -583,11 +584,10 @@ async function claudeInterruptedMarkerSurvives() {
       })
   )
   const thread = await new ClaudeProvider(home).read(path)
-  assert.equal(
-    thread?.entries.some(
-      (entry) => entry.kind === "event" && entry.label === "Interrupted"
-    ),
-    true
+  assert.deepEqual(
+    thread?.entries.flatMap((entry) => entry.kind === "event" ? [[entry.label, entry.source?.record]] : []),
+    [["Interrupted", "aborted-reply"]],
+    "the stop cites the record Claude aborted"
   )
 }
 

@@ -54,6 +54,18 @@ assert.deepEqual(markers(thread), [
   { label: "Review mode ended", body: "No issues found." },
 ])
 assert.equal(thread.entries.filter((entry) => entry.kind === "assistant").length, 2, "the compaction splits the turn around it")
+assert.deepEqual(thread.entries.flatMap((entry) => entry.kind === "event" ? [entry.source?.record] : []),
+  ["c1", "t2:failed", "t3:failed", "t4:failed", undefined, undefined],
+  "a compaction cites its turn item, which follows it, and a failed turn its turn, as live markers do")
+
+const aborted = join(sessions, "rollout-aborted.jsonl")
+await writeFile(aborted,
+  line("session_meta", { id: "aborted", cwd: home, history_mode: "paginated" }) +
+  user("Start the migration") +
+  line("event_msg", { type: "turn_aborted", turn_id: "t9", reason: "interrupted" })
+)
+assert.deepEqual((await new CodexProvider(home).read(aborted)).entries.flatMap((entry) => entry.kind === "event" ? [[entry.label, entry.source?.record]] : []),
+  [["Interrupted", "t9:interrupted"]], "a stopped turn cites the turn Codex aborted")
 
 // Legacy rollouts record one compaction twice, with the local summary.
 const legacy = join(sessions, "rollout-legacy.jsonl")
@@ -136,4 +148,4 @@ assert.deepEqual(readPromptAttachments(appendPromptAttachments("Inspect these", 
 assert.throws(() => appendPromptAttachments("", [{ ...reference, path: "relative/path" }]))
 assert.throws(() => appendPromptAttachments("", Array.from({ length: 129 }, () => reference)))
 await rm(home, { recursive: true, force: true })
-console.log("Codex history markers: compactions, failed turns, review boundaries and plans read as Mako events.")
+console.log("Codex history markers: compactions, failed turns, stops, review boundaries and plans read as Mako events, citing Codex's own ids.")

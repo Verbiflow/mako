@@ -351,7 +351,7 @@ try {
   const failedTool = compacted.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).find((block) => block.type === "tool")
   assert.equal(failedTool?.error, true, "a failed tool result reads as failed")
   const markers = compacted.entries.filter((entry) => entry.kind === "event")
-  assert.deepEqual(markers, [{ kind: "event", id: "1014", source: { harness: "devin", record: "1014" }, at: new Date(14_000).toISOString(), label: "Context compacted", body: "## 1. Request and Intent\n\nMake the build faster." }],
+  assert.deepEqual(markers, [{ kind: "event", source: { harness: "devin", record: "history_19c6" }, at: new Date(14_000).toISOString(), label: "Context compacted", body: "## 1. Request and Intent\n\nMake the build faster." }],
     "the compaction reads as a marker carrying its summary; a mode change is not shown")
   assert.ok(!compacted.entries.some((entry) => entry.kind === "user" && /continuing work/.test(entry.text)))
   console.log("Devin compaction summaries read as markers and failed tool results as failed")
