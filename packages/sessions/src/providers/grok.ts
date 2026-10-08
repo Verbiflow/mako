@@ -239,6 +239,7 @@ interface LegacyToolResultLine {
 }
 
 type LegacyGrokLine =
+  | { type: "unread"; kind: string; raw: JsonObject }
   | LegacyUserLine
   | LegacyReasoningLine
   | LegacyAssistantLine
@@ -473,7 +474,7 @@ function parseLegacyLine(raw: string): LegacyGrokLine | null {
         output: normalizeToolOutput(acpText(root["content"])),
       }
     default:
-      return null
+      return { type: "unread", kind: stringValue(root["type"]) ?? "(no type)", raw: root }
   }
 }
 
@@ -955,6 +956,7 @@ function updatesTranslator(): GrokTranslator {
       commit()
       return turns.done()
     },
+    unread: () => turns.sink.unreadRecords,
     get needsReset() {
       return turns.needsReset
     },
@@ -1035,6 +1037,9 @@ function legacyTranslator(): GrokTranslator {
         }
         return
       }
+      case "unread":
+        sink.unread(line.kind, "unknown", line.raw)
+        return
     }
   }
 
@@ -1052,6 +1057,7 @@ function legacyTranslator(): GrokTranslator {
     push,
     snapshot,
     done,
+    unread: () => sink.unreadRecords,
     get needsReset() {
       return needsReset
     },

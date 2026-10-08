@@ -256,7 +256,33 @@ full set of rules.
   your own.
 - UI extensions are trusted local code. They run inside Mako's renderer with
   full access to its state, so only load files you wrote or read.
-- Crash reports stay on disk until you choose to copy one.
+- Crash reports are kept on disk. With error reports on, each is also sent
+  once, scrubbed, as described under [Telemetry](#telemetry).
+
+## Telemetry
+
+Mako sends anonymous usage analytics and error reports to the Mako cloud, so
+we can see which harnesses, models and features people use and fix what
+breaks. Both are on by default. Turn either off in Settings > Privacy; what
+was waiting to be sent is dropped and nothing more goes. `DO_NOT_TRACK=1` or
+`MAKO_TELEMETRY=off` in Mako's environment turns both off, and then nothing,
+not even an install ID, is written.
+
+- **Usage analytics:** a random install ID, the app version and OS, which
+  harnesses are installed, and for each turn its harness, model, reasoning
+  setting, mode, outcome, duration and token counts. Plus a few feature
+  counts: forks, rewinds, harness switches, automations and cloud sign-in.
+- **Error reports:** crash reports and the kinds of harness records Mako
+  couldn't read. Paths, emails, URLs, secrets and quoted text are scrubbed on
+  your Mac and again by the cloud.
+- **Never sent:** prompts, replies, file contents, file and folder names,
+  Thread titles, repository and branch names, and session IDs.
+
+While you're signed in to the Mako cloud, events count for your account;
+otherwise only the install ID ties them together. Events wait up to 30
+seconds and go in one request, sooner once 50 are waiting. The code is in
+`electron/telemetry.ts`, and the full list of events is in
+`electron/contracts/telemetry.ts`.
 
 ## Development
 
