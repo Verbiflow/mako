@@ -2,7 +2,7 @@ import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs"
 import { z } from "zod"
 import { objectValue, stringValue, type JsonObject } from "../../codex-app-json.js"
 
-/** An `exec_command` call and the output Codex gave the model, as its rollout keeps them. */
+/** An `exec_command` call or a code cell (`exec`), and the output Codex gave the model, as its rollout keeps them. */
 export type RolloutCall = {
   call: JsonObject
   output: JsonObject
@@ -12,17 +12,19 @@ const CALL_ID = /"call_id":"([^"\\]+)"/
 /** Calls still waiting for their output; a turn's running commands, never more than a few. */
 const MAX_PENDING = 256
 const Record = z.object({ type: z.literal("response_item"), payload: z.record(z.string(), z.json()) })
-const Call = z.object({ type: z.literal("function_call"), call_id: z.string() })
-const Output = z.object({ type: z.literal("function_call_output"), call_id: z.string() })
+const Call = z.object({ type: z.enum(["function_call", "custom_tool_call"]), call_id: z.string() })
+const Output = z.object({ type: z.enum(["function_call_output", "custom_tool_call_output"]), call_id: z.string() })
 
 /**
  * The commands a thread's rollout keeps, read forward from where the last
  * read stopped. Codex 0.159.3 sends no item for a command its sandbox
  * refused (a write outside the workspace, or any command when Mako itself
  * runs inside a macOS sandbox), though the rollout keeps the call and its
- * output; the decoder draws the ones the wire never named
- * (`CodexDecoder.rolloutCalls`). The file only grows, so each read costs
- * what was appended, and only command records are parsed.
+ * output. It sends none for a code cell either, only for the calls the cell
+ * made, so a cell's own failure reaches Mako only here. The decoder draws
+ * what the wire never named (`CodexDecoder.rolloutCalls`). The file only
+ * grows, so each read costs what was appended, and only command and cell
+ * records are parsed.
  */
 export class CodexRolloutCalls {
   private readonly path: string
@@ -42,7 +44,7 @@ export class CodexRolloutCalls {
     }
   }
 
-  /** Each `exec_command` call whose output was appended since the last read. */
+  /** Each `exec_command` call and code cell whose output was appended since the last read. */
   read(): RolloutCall[] {
     const settled: RolloutCall[] = []
     let fd: number | undefined
@@ -71,7 +73,9 @@ export class CodexRolloutCalls {
 
   private line(line: string, settled: RolloutCall[]): void {
     if (!line.includes(`"type":"response_item"`)) return
-    if (line.includes(`"type":"function_call"`) && line.includes(`"name":"exec_command"`)) {
+    const command = line.includes(`"type":"function_call"`) && line.includes(`"name":"exec_command"`)
+    const cell = line.includes(`"type":"custom_tool_call"`) && line.includes(`"name":"exec"`)
+    if (command || cell) {
       const payload = parsed(line)
       const id = Call.safeParse(payload).data?.call_id
       if (!payload || id === undefined) return
@@ -79,7 +83,7 @@ export class CodexRolloutCalls {
       this.pending.set(id, payload)
       return
     }
-    if (!line.includes(`"type":"function_call_output"`)) return
+    if (!line.includes(`"type":"function_call_output"`) && !line.includes(`"type":"custom_tool_call_output"`)) return
     const id = CALL_ID.exec(line)?.[1]
     const call = id === undefined ? undefined : this.pending.get(id)
     if (id === undefined || !call) return

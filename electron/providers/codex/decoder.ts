@@ -3,6 +3,8 @@ import {
   codexCommand,
   codexCommandOutput,
   codexErrorClass,
+  codexCellResult,
+  CodexCellOutputSchema,
   codexExecOutput,
   codexFailureEvent,
   codexPatchInput,
@@ -218,6 +220,15 @@ const RolloutExecSchema = z.object({
   }),
   output: z.object({ output: z.string() }),
 })
+const RolloutCellSchema = z.object({
+  call: z.object({
+    type: z.literal("custom_tool_call"),
+    call_id: z.string(),
+    input: z.string().catch(""),
+    internal_chat_message_metadata_passthrough: z.object({ turn_id: z.string() }).nullish().catch(undefined),
+  }),
+  output: z.object({ output: CodexCellOutputSchema }),
+})
 const PatchKindSchema = z.object({
   type: z.enum(["add", "delete", "update"]),
   move_path: z.string().nullish(),
@@ -312,6 +323,10 @@ export class CodexDecoder {
     const turnId = this.currentTurnId
     if (!turnId) return out
     for (const entry of calls) {
+      if (entry.call["type"] === "custom_tool_call") {
+        this.failedCell(out, turnId, entry)
+        continue
+      }
       const read = RolloutExecSchema.safeParse(entry)
       if (!read.success) {
         out.push(decoded.unknown(CODEX_ROLLOUT_CALLS, entry, "unreadable"))
@@ -334,6 +349,23 @@ export class CodexDecoder {
         })
     }
     return out
+  }
+
+  /** A code cell that failed, as its own row after the calls it made; a cell that finished shows only those. */
+  private failedCell(out: CodexDecoded[], turnId: string, entry: RolloutCall): void {
+    const read = RolloutCellSchema.safeParse(entry)
+    const result = read.success ? codexCellResult(read.data.output.output) : undefined
+    if (!read.success || !result) {
+      out.push(decoded.unknown(CODEX_ROLLOUT_CALLS, entry, "unreadable"))
+      return
+    }
+    const { call } = read.data
+    if (!result.failed || (call.internal_chat_message_metadata_passthrough?.turn_id ?? turnId) !== turnId) return
+    const tracker = this.tracker(turnId, call.call_id)
+    if (tracker.started) return
+    tracker.started = true
+    out.push(decoded.update({ kind: "tool", id: tracker.acpId, title: "exec", name: "exec", status: "pending", input: boundedText(call.input, MAX_TOOL_OUTPUT) }))
+    finishTool(out, tracker, "failed", boundedText(result.output, MAX_TOOL_OUTPUT))
   }
 
   /** A resumed thread's items, as the transcript it already had. */
