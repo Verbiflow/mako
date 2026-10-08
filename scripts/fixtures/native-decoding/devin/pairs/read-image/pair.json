@@ -4,6 +4,11 @@
     "version": "3000.10.23"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
-  "store": ".local/share/devin/cli/sessions.db#harvest-snowstorm",
-  "known": []
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#harvest-snowstorm",
+      "known": []
+    }
+  ]
 }

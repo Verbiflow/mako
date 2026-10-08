@@ -4,17 +4,22 @@
     "version": "1.0.31"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
-  "store": ".mako/cursor-sdk/agents/agent-ab569bc4f8d983ab4313d995c07e645727b29f66a5ec8cb9aebe4789cb093ba5/store.db",
-  "known": [
+  "stores": [
     {
-      "side": "-",
-      "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
-      "reason": "Cursor's SDK takes a prompt image as its data and MIME type only (SDKImage, 1.0.31), and the agent's store keeps it that way, without the file name Mako showed, so the reader names it image"
-    },
-    {
-      "side": "+",
-      "line": "user: What colour is the attached image? Don't run commands. [image image/png]",
-      "reason": "Cursor's SDK takes a prompt image as its data and MIME type only (SDKImage, 1.0.31), and the agent's store keeps it that way, without the file name Mako showed, so the reader names it image"
+      "reader": "cursor",
+      "path": ".mako/cursor-sdk/agents/agent-ab569bc4f8d983ab4313d995c07e645727b29f66a5ec8cb9aebe4789cb093ba5/store.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
+          "reason": "Cursor's SDK takes a prompt image as its data and MIME type only (SDKImage, 1.0.31), and the agent's store keeps it that way, without the file name Mako showed, so the reader names it image"
+        },
+        {
+          "side": "+",
+          "line": "user: What colour is the attached image? Don't run commands. [image image/png]",
+          "reason": "Cursor's SDK takes a prompt image as its data and MIME type only (SDKImage, 1.0.31), and the agent's store keeps it that way, without the file name Mako showed, so the reader names it image"
+        }
+      ]
     }
   ]
 }

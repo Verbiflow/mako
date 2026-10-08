@@ -4,6 +4,11 @@
     "version": "1.0.31"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
-  "store": ".mako/cursor-sdk/agents/agent-50283551b9ae6e2c0c6a3b38f003f414020fcdb18f688587469a541d6e73ccf9/store.db",
-  "known": []
+  "stores": [
+    {
+      "reader": "cursor",
+      "path": ".mako/cursor-sdk/agents/agent-50283551b9ae6e2c0c6a3b38f003f414020fcdb18f688587469a541d6e73ccf9/store.db",
+      "known": []
+    }
+  ]
 }

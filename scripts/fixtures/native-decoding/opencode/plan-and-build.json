@@ -73,7 +73,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_0001",
+              "item": "synthetic"
+            }
           }
         }
       ]
@@ -108,7 +113,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_0002",
+              "item": "user"
+            }
           }
         }
       ]
@@ -131,7 +141,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "started"
+            }
           }
         }
       ]
@@ -188,7 +201,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_0001"
+            }
           }
         }
       ]
@@ -215,7 +232,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_0002"
+            }
           }
         }
       ]
@@ -773,7 +794,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "succeeded"
+            }
           }
         }
       ]
@@ -835,7 +859,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_0004",
+              "item": "synthetic"
+            }
           }
         }
       ]
@@ -870,7 +899,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_0005",
+              "item": "user"
+            }
           }
         }
       ]
@@ -893,7 +927,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "started"
+            }
           }
         }
       ]
@@ -920,7 +957,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_0004"
+            }
           }
         }
       ]
@@ -947,7 +988,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_0005"
+            }
           }
         }
       ]
@@ -1159,7 +1204,25 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "request"
+            "type": "request",
+            "request": {
+              "type": "permission",
+              "permission": {
+                "id": "per_0001",
+                "sessionID": "ses_0001",
+                "action": "edit",
+                "resources": [
+                  "../../../../../../work/hello.txt"
+                ],
+                "save": [
+                  "*"
+                ],
+                "source": {
+                  "type": "tool",
+                  "id": "call_0001"
+                }
+              }
+            }
           }
         }
       ]
@@ -1182,7 +1245,17 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "request"
+            "type": "request",
+            "request": {
+              "type": "resolved",
+              "sessionID": "ses_0001",
+              "id": "per_0001",
+              "answer": {
+                "kind": "choice",
+                "optionId": "once"
+              },
+              "at": 1790853825348
+            }
           }
         }
       ]
@@ -1518,7 +1591,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "succeeded"
+            }
           }
         }
       ]

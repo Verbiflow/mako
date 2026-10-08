@@ -4,6 +4,19 @@
     "version": "3000.10.23"
   },
   "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
-  "store": ".local/share/devin/cli/sessions.db#torch-sunstone",
-  "known": []
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#crimson-laugh",
+      "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/0cc57462-3f89-49e2-9447-db9c681ebbd3.db",
+      "known": []
+    }
+  ],
+  "replay": {
+    "known": []
+  }
 }

@@ -4,6 +4,11 @@
     "version": "1.0.31"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
-  "store": ".mako/cursor-sdk/agents/agent-f56dd910bc3e390ebdd7d716236e3e4272cafa82a4ab60fcfd68e70ce557db4a/store.db",
-  "known": []
+  "stores": [
+    {
+      "reader": "cursor",
+      "path": ".mako/cursor-sdk/agents/agent-f56dd910bc3e390ebdd7d716236e3e4272cafa82a4ab60fcfd68e70ce557db4a/store.db",
+      "known": []
+    }
+  ]
 }

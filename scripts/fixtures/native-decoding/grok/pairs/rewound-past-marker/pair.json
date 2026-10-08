@@ -1,0 +1,25 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Say hello. / Say hello again. / /rewind / Without running anything, say done. Two turns failing with a server error, each leaving a marker both sides cite, a rewind to before the second, then a turn that replaces it: the first marker stays, citing the same record, and the second goes.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1195d-7f5b-7950-9dd9-7ca2e98c0437/updates.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: Say hello again.",
+          "reason": "The rewind took this turn and its failure marker back out: Grok 1.0.46 appends a `rewind_marker` to updates.jsonl and sends the client nothing, so the store drops the turn where Grok's own replay does while the live drawing, which never hears of the rewind, keeps it. Mako declares no rewind for Grok."
+        },
+        {
+          "side": "-",
+          "line": "note: Turn failed — Server error",
+          "reason": "The rewind took this turn and its failure marker back out: Grok 1.0.46 appends a `rewind_marker` to updates.jsonl and sends the client nothing, so the store drops the turn where Grok's own replay does while the live drawing, which never hears of the rewind, keeps it. Mako declares no rewind for Grok."
+        }
+      ]
+    }
+  ]
+}

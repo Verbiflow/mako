@@ -4,6 +4,11 @@
     "version": "1.0.46"
   },
   "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
-  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-7b7b-7e42-9572-56a6c4896f41/updates.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-7b7b-7e42-9572-56a6c4896f41/updates.jsonl",
+      "known": []
+    }
+  ]
 }

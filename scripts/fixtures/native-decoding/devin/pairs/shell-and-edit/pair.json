@@ -4,6 +4,61 @@
     "version": "3000.10.23"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
-  "store": ".local/share/devin/cli/sessions.db#incredible-stay",
-  "known": []
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#remarkable-bistro",
+      "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/e3cfa62e-d304-4a46-9fe3-c49d41eb32b0.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\",\"new_string\":\"The release ships on Monday.\",\"old_string\":\"The release ships on Friday.\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        }
+      ]
+    }
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+        "reason": ""
+      },
+      {
+        "side": "+",
+        "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+        "reason": ""
+      },
+      {
+        "side": "-",
+        "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\",\"new_string\":\"The release ships on Monday.\",\"old_string\":\"The release ships on Friday.\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+        "reason": ""
+      },
+      {
+        "side": "+",
+        "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+        "reason": ""
+      }
+    ]
+  }
 }

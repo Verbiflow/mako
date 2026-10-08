@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
-  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-30-28-01a11469-9f3c-7302-9ddf-667deeac660e.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-30-28-01a11469-9f3c-7302-9ddf-667deeac660e.jsonl",
+      "known": []
+    }
+  ]
 }

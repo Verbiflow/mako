@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked. A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
-  "store": ".codex/sessions/2026/10/07/rollout-2026-10-07T05-18-16-01a1164c-d5e4-7cd0-b8c5-a95683e6a250.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/07/rollout-2026-10-07T05-18-16-01a1164c-d5e4-7cd0-b8c5-a95683e6a250.jsonl",
+      "known": []
+    }
+  ]
 }

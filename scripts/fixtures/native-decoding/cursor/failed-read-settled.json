@@ -1,0 +1,1479 @@
+{
+  "harness": "cursor",
+  "source": "Cursor through @cursor/sdk 1.0.31 in Mako's SDK child, from the failed-read decode pair recorded 2026-10-07",
+  "native": {
+    "version": "1.0.31",
+    "origin": "captured"
+  },
+  "about": "A read of a missing file: the SDK ends the call with only a generic error, and the child settles it from the checkpoint Cursor saved before the next step, with the error the model was told.",
+  "session": {
+    "settings": {
+      "model": "composer-2.5"
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 0,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "status",
+          "status": "RUNNING"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "Reading missing.md to"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:thinking:0",
+            "text": "Reading missing.md to"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 1,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "thinking",
+          "text": "Reading missing.md to"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " report its contents."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:thinking:0",
+            "text": " report its contents."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 2,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "thinking",
+          "text": " report its contents."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 3,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "thinking",
+          "text": "",
+          "thinking_duration_ms": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 4,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "tool_call",
+          "call_id": "tool_ac6aefeb-8680-4ee8-94a8-df4066b601e",
+          "name": "read",
+          "status": "running",
+          "args": {
+            "path": "/tmp/mako-pair/project/missing.md"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "tool_ac6aefeb-8680-4ee8-94a8-df4066b601e",
+            "title": "Read missing.md",
+            "name": "read",
+            "status": "running",
+            "input": "{\n  \"path\": \"/tmp/mako-pair/project/missing.md\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 5,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "tool_call",
+          "call_id": "tool_ac6aefeb-8680-4ee8-94a8-df4066b601e",
+          "name": "read",
+          "status": "completed",
+          "args": {
+            "path": "/tmp/mako-pair/project/missing.md"
+          },
+          "result": {
+            "status": "error",
+            "error": {
+              "message": "error"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "tool_ac6aefeb-8680-4ee8-94a8-df4066b601e",
+            "status": "failed",
+            "output": "{\n  \"message\": \"error\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "settled",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "calls": [
+          {
+            "callId": "tool_ac6aefeb-8680-4ee8-94a8-df4066b601e",
+            "output": "Error: File not found",
+            "failed": true
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "tool_ac6aefeb-8680-4ee8-94a8-df4066b601e",
+            "status": "failed",
+            "output": "Error: File not found"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "The file was not found"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:thinking:1",
+            "text": "The file was not found"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 6,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "thinking",
+          "text": "The file was not found"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " at project/missing.md."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:thinking:1",
+            "text": " at project/missing.md."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 7,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "thinking",
+          "text": " at project/missing.md."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 8,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "thinking",
+          "text": "",
+          "thinking_duration_ms": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "I"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "I"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 9,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "I"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " read"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " read"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 10,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " read"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " `missing.md`"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " `missing.md`"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 11,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " `missing.md`"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " at the project root"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " at the project root"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 12,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " at the project root"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ":\n\n"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": ":\n\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 13,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ":\n\n"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "`/tmp/mako-pair"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "`/tmp/mako-pair"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 14,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "`/tmp/mako-pair"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 15,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 16,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 17,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 18,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 19,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 20,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 21,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 22,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ""
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 23,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "/project"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "/project"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 24,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "/project"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "/missing.md`\n\n"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "/missing.md`\n\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 25,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "/missing.md`\n\n"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "That path does not"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "That path does not"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 26,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "That path does not"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " exist ("
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " exist ("
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 27,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " exist ("
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "file not found),"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "file not found),"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 28,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "file not found),"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " so there"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " so there"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 29,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " so there"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " is nothing to summarize"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " is nothing to summarize"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 30,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " is nothing to summarize"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 31,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "."
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " Per your instruction"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " Per your instruction"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 32,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " Per your instruction"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": ", I did not"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": ", I did not"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 33,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": ", I did not"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " search elsewhere for another"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " search elsewhere for another"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 34,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " search elsewhere for another"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": " `"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": " `"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 35,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " `"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "text-delta",
+          "text": "missing.md`."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "95c1aee2-066e-4ab6-9502-4383a09953e8:text:2",
+            "text": "missing.md`."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 36,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "missing.md`."
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "delta": {
+          "type": "turn-ended"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 37,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "usage",
+          "usage": {
+            "inputTokens": 15764,
+            "outputTokens": 264,
+            "cacheReadTokens": 6848,
+            "cacheWriteTokens": 0
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 8916,
+                "cacheRead": 6848,
+                "cacheWrite": 0,
+                "output": 264
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "seq": 38,
+        "message": {
+          "agent_id": "67ecf0ec-c89c-4351-abe2-bf228892e37a",
+          "run_id": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "type": "status",
+          "status": "FINISHED"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "95c1aee2-066e-4ab6-9502-4383a09953e8",
+        "result": {
+          "runId": "run-1c69010b-0093-4a94-91d8-66cf04423469",
+          "status": "finished",
+          "model": {
+            "id": "composer-2.5"
+          },
+          "durationMs": 5239,
+          "usage": {
+            "inputTokens": 15764,
+            "outputTokens": 264,
+            "cacheReadTokens": 6848,
+            "cacheWriteTokens": 0
+          }
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

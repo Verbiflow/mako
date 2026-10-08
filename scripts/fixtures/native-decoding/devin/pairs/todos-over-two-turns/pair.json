@@ -4,6 +4,61 @@
     "version": "3000.10.23"
   },
   "about": "Use your todo list to plan the release in two items: QA sign-off, in progress, then shipping the release, pending. Don't run commands or change files. / QA signed off. Update the todo list: QA sign-off completed, shipping in progress. Don't run commands or change files. A todo list in the first turn, updated in the second.",
-  "store": ".local/share/devin/cli/sessions.db#developing-pigeon",
-  "known": []
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#lead-planet",
+      "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/b5451513-3429-4d85-97a5-d56d8449b935.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}],\"type\":\"plan\"}]",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #1 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}]} -> ",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #2 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}],\"type\":\"plan\"}]",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #2 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}]} -> ",
+          "reason": ""
+        }
+      ]
+    }
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "tool #1 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}],\"type\":\"plan\"}]",
+        "reason": ""
+      },
+      {
+        "side": "+",
+        "line": "tool #1 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}]} -> ",
+        "reason": ""
+      },
+      {
+        "side": "-",
+        "line": "tool #2 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}],\"type\":\"plan\"}]",
+        "reason": ""
+      },
+      {
+        "side": "+",
+        "line": "tool #2 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}]} -> ",
+        "reason": ""
+      }
+    ]
+  }
 }

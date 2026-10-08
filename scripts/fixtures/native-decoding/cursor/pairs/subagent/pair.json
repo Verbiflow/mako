@@ -1,0 +1,14 @@
+{
+  "harness": "cursor",
+  "native": {
+    "version": "1.0.31"
+  },
+  "about": "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports. A subagent that reads two files and reports back, whose own calls are its progress while it runs, then the answer from its report.",
+  "stores": [
+    {
+      "reader": "cursor",
+      "path": ".mako/cursor-sdk/agents/agent-78f036a43bfa0718c803902ac84a0de6b2cf307589c765f53afe8f604fc02bf4/store.db",
+      "known": []
+    }
+  ]
+}

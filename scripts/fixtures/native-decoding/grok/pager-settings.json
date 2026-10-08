@@ -1,0 +1,45 @@
+{
+  "harness": "grok",
+  "source": "Written from xai-org/grok-build 1.0.45 (`PagerSettingsUpdate` in xai-grok-pager `acp_handler/settings.rs`, `AnnouncementsRefreshed` in xai-grok-announcements); a signed-in grok 1.0.46 sends both when a session opens, which a sealed recording cannot",
+  "native": {
+    "version": "1.0.46",
+    "origin": "written"
+  },
+  "about": "Grok’s pager settings and xAI’s product banners, both refreshed with Grok’s remote settings. Neither is about the conversation, so Mako declares both silent.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "_x.ai/settings/update",
+        "params": {
+          "show_resolved_model": false,
+          "sharing_enabled": true,
+          "voice_mode_enabled": false,
+          "dock_enabled": true,
+          "tips": [
+            "Press Tab to switch between plan and build"
+          ]
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/announcements/update",
+        "params": {
+          "gen": 3,
+          "announcements": [
+            {
+              "id": "release-notes",
+              "title": "What's new",
+              "message": "A faster model is available",
+              "severity": "info",
+              "dismissible": true
+            }
+          ]
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

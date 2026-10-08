@@ -4,6 +4,11 @@
     "version": "1.0.46"
   },
   "about": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line. An answer that cites a file and a line of it, which Devin 3000.10.23's model marks up for its client to link.",
-  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1149a-4cf6-7f13-87ad-ae820cfdc1ef/updates.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1149a-4cf6-7f13-87ad-ae820cfdc1ef/updates.jsonl",
+      "known": []
+    }
+  ]
 }

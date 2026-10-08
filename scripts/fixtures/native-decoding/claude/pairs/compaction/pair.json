@@ -4,6 +4,11 @@
     "version": "2.1.283"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / Without reading anything, which day did notes.md name? A turn, a manual compaction, then a turn that leans on the summary.",
-  "store": ".claude/projects/-tmp-mako-pair-project/78a7cfd6-b133-442e-a801-b8c9be62a2a6.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "claude",
+      "path": ".claude/projects/-tmp-mako-pair-project/78a7cfd6-b133-442e-a801-b8c9be62a2a6.jsonl",
+      "known": []
+    }
+  ]
 }

@@ -4,6 +4,11 @@
     "version": "1.0.31"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
-  "store": ".mako/cursor-sdk/agents/agent-4c396c0b3e06133b2ce3a69152815d1bc23c9945eeba2651701e0d2ef1b28bec/store.db",
-  "known": []
+  "stores": [
+    {
+      "reader": "cursor",
+      "path": ".mako/cursor-sdk/agents/agent-4c396c0b3e06133b2ce3a69152815d1bc23c9945eeba2651701e0d2ef1b28bec/store.db",
+      "known": []
+    }
+  ]
 }

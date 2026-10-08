@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
-  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-05-11-01a11452-7717-7f33-a37b-2d5a8256d110.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-05-11-01a11452-7717-7f33-a37b-2d5a8256d110.jsonl",
+      "known": []
+    }
+  ]
 }

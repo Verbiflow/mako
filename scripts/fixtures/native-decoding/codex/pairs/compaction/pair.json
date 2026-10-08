@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / Without reading anything, which day did notes.md name? A turn, a manual compaction, then a turn that leans on the summary.",
-  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T21-03-02-01a11487-6dc1-7320-947b-eb753b62f177.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/06/rollout-2026-10-06T21-03-02-01a11487-6dc1-7320-947b-eb753b62f177.jsonl",
+      "known": []
+    }
+  ]
 }

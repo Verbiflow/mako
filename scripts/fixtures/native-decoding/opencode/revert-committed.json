@@ -73,7 +73,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_11542a76d001Pf0lK7TMp2woyg",
+              "item": "user"
+            }
           }
         }
       ]
@@ -96,7 +101,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "started"
+            }
           }
         }
       ]
@@ -153,7 +161,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_11542a76d001Pf0lK7TMp2woyg"
+            }
           }
         }
       ]
@@ -698,7 +710,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "succeeded"
+            }
           }
         }
       ]
@@ -732,7 +747,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_11542a7ac001Uhsz47hBaXL8E2",
+              "item": "user"
+            }
           }
         }
       ]
@@ -755,7 +775,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "started"
+            }
           }
         }
       ]
@@ -782,7 +805,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_11542a7ac001Uhsz47hBaXL8E2"
+            }
           }
         }
       ]
@@ -991,7 +1018,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "succeeded"
+            }
           }
         }
       ]
@@ -1073,7 +1103,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_11542a7cd001m54fBCBZmE3Mpp",
+              "item": "user"
+            }
           }
         }
       ]
@@ -1096,7 +1131,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "started"
+            }
           }
         }
       ]
@@ -1153,7 +1191,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_11542a7cd001m54fBCBZmE3Mpp"
+            }
           }
         }
       ]
@@ -1362,7 +1404,10 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "succeeded"
+            }
           }
         }
       ]

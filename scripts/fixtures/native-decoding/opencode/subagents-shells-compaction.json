@@ -31,7 +31,8 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "catalog"
+            "type": "catalog",
+            "changed": "models"
           }
         }
       ]
@@ -62,7 +63,8 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "catalog"
+            "type": "catalog",
+            "changed": "commands"
           }
         }
       ]
@@ -81,7 +83,8 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "catalog"
+            "type": "catalog",
+            "changed": "skills"
           }
         }
       ]
@@ -102,7 +105,8 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "mcp"
+            "type": "mcp",
+            "server": "docs"
           }
         }
       ]
@@ -655,7 +659,8 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "child-settled",
+            "sessionID": "ses_child"
           }
         }
       ]
@@ -767,7 +772,7 @@
             "tokensBefore": 54200,
             "summary": "Summary of the work so far."
           },
-          "source": "evt_0025"
+          "source": "msg_0023"
         },
         {
           "kind": "state",
@@ -840,7 +845,15 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "compaction-failed",
+              "error": {
+                "type": "provider",
+                "message": "Context window exceeded"
+              },
+              "source": "msg_0026"
+            }
           }
         }
       ]
@@ -864,7 +877,11 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "cancelled",
+              "inbox": "msg_0003"
+            }
           }
         }
       ]
@@ -888,7 +905,12 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "turn"
+            "type": "turn",
+            "turn": {
+              "type": "interrupted",
+              "reason": "user",
+              "source": "evt_0029"
+            }
           }
         }
       ]
@@ -916,7 +938,21 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "request"
+            "type": "request",
+            "request": {
+              "type": "form",
+              "form": {
+                "id": "frm_0001",
+                "sessionID": "ses_root",
+                "title": "Pick a colour",
+                "fields": [
+                  {
+                    "key": "colour",
+                    "type": "string"
+                  }
+                ]
+              }
+            }
           }
         }
       ]
@@ -938,7 +974,21 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "request"
+            "type": "request",
+            "request": {
+              "type": "resolved",
+              "sessionID": "ses_root",
+              "id": "frm_0001",
+              "answer": {
+                "kind": "answers",
+                "answers": {
+                  "colour": [
+                    "blue"
+                  ]
+                }
+              },
+              "at": 1
+            }
           }
         }
       ]
@@ -957,7 +1007,17 @@
         {
           "kind": "effect",
           "effect": {
-            "type": "request"
+            "type": "request",
+            "request": {
+              "type": "resolved",
+              "sessionID": "ses_root",
+              "id": "frm_0002",
+              "answer": {
+                "kind": "choice",
+                "optionId": null
+              },
+              "at": 1
+            }
           }
         }
       ]

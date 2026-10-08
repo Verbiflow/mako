@@ -4,17 +4,22 @@
     "version": "3000.10.23"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
-  "store": ".local/share/devin/cli/sessions.db#ripe-success",
-  "known": [
+  "stores": [
     {
-      "side": "-",
-      "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
-      "reason": "Devin saves a prompt image as its own devin-pasted-images/<time>-…-pasted.png and its transcript names that file, not the one Mako showed"
-    },
-    {
-      "side": "+",
-      "line": "user: What colour is the attached image? Don't run commands. [1791359246086587000-66579-0-pasted.png image/png]",
-      "reason": "Devin saves a prompt image as its own devin-pasted-images/<time>-…-pasted.png and its transcript names that file, not the one Mako showed"
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#ripe-success",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
+          "reason": "Devin saves a prompt image as its own devin-pasted-images/<time>-…-pasted.png and its transcript names that file, not the one Mako showed"
+        },
+        {
+          "side": "+",
+          "line": "user: What colour is the attached image? Don't run commands. [1791359246086587000-66579-0-pasted.png image/png]",
+          "reason": "Devin saves a prompt image as its own devin-pasted-images/<time>-…-pasted.png and its transcript names that file, not the one Mako showed"
+        }
+      ]
     }
   ]
 }

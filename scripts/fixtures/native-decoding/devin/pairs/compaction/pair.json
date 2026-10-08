@@ -4,6 +4,11 @@
     "version": "3000.10.23"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / Without reading anything, which day did notes.md name? A turn, a manual compaction, then a turn that leans on the summary.",
-  "store": ".local/share/devin/cli/sessions.db#abyssinian-longship",
-  "known": []
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#abyssinian-longship",
+      "known": []
+    }
+  ]
 }

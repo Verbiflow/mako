@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
-  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-59-00-01a11483-bdaf-7c70-9118-56fec696e164.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-59-00-01a11483-bdaf-7c70-9118-56fec696e164.jsonl",
+      "known": []
+    }
+  ]
 }

@@ -4,6 +4,11 @@
     "version": "1.0.31"
   },
   "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
-  "store": ".mako/cursor-sdk/agents/agent-fab392cb24ca9c2358fa42c496634e9fca986fd8bfd39b735077b820601e8a7c/store.db",
-  "known": []
+  "stores": [
+    {
+      "reader": "cursor",
+      "path": ".mako/cursor-sdk/agents/agent-fab392cb24ca9c2358fa42c496634e9fca986fd8bfd39b735077b820601e8a7c/store.db",
+      "known": []
+    }
+  ]
 }

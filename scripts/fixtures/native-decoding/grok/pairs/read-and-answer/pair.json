@@ -4,6 +4,11 @@
     "version": "1.0.46"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
-  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-6642-7d50-b1a7-675d922c77cf/updates.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-6642-7d50-b1a7-675d922c77cf/updates.jsonl",
+      "known": []
+    }
+  ]
 }

@@ -4,6 +4,92 @@
     "version": "3000.10.23"
   },
   "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
-  "store": ".local/share/devin/cli/sessions.db#adorable-waitress",
-  "known": []
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#yellow-vibraphone",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> Exited with code 0",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> ",
+          "reason": ""
+        }
+      ]
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/bef31d3e-391f-4237-8d12-ecf670b4b9b2.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> Exited with code 0",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "steered: Also read notes.md and tell me the release day.",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> ",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "user: Also read notes.md and tell me the release day.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        }
+      ]
+    }
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> Exited with code 0",
+        "reason": ""
+      },
+      {
+        "side": "-",
+        "line": "steered: Also read notes.md and tell me the release day.",
+        "reason": ""
+      },
+      {
+        "side": "+",
+        "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> ",
+        "reason": ""
+      },
+      {
+        "side": "+",
+        "line": "user: Also read notes.md and tell me the release day.",
+        "reason": ""
+      },
+      {
+        "side": "-",
+        "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+        "reason": ""
+      },
+      {
+        "side": "+",
+        "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+        "reason": ""
+      }
+    ]
+  }
 }

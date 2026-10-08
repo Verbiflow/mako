@@ -1,0 +1,212 @@
+{
+  "harness": "grok",
+  "source": "grok 1.0.46 `agent stdio`: the cited-lines and stopped-shell pair captures (scripts/fixtures/native-decoding/grok/pairs), 2026-10-07",
+  "native": {
+    "version": "1.0.46",
+    "origin": "captured"
+  },
+  "about": "What Grok tells its own pager: the steps of opening a session, the session roster, the prompt queue and the turn-end signal it keeps for older pagers. Mako reads each of these another way, so each is declared silent.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "auth",
+          "sessionId": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "resolve_workspace",
+          "sessionId": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "folder_trust",
+          "sessionId": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "plugin_registry",
+          "sessionId": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "mcp_merge",
+          "sessionId": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "persistence_init",
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "spawn_session_actor",
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "agent_build",
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "git_discovery",
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "finalize_response",
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "tool_overrides",
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/setup",
+        "params": {
+          "method": "session/new",
+          "phase": "response_ready",
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/sessions/changed",
+        "params": {
+          "upserted": [
+            {
+              "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef",
+              "title": null,
+              "cwd": "/tmp/mako-pair/project",
+              "isWorktree": false,
+              "modelId": "grok-4.6",
+              "yolo": false,
+              "activity": "working",
+              "resident": true,
+              "lastChangeUnixMs": 1791347019118,
+              "origin": {
+                "kind": "local"
+              }
+            }
+          ],
+          "removed": []
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/queue/changed",
+        "params": {
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef",
+          "entries": [
+            {
+              "id": "7989ffcc-6fd3-417e-ac01-942bbb88fa2a",
+              "version": 0,
+              "kind": "prompt",
+              "text": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line.",
+              "position": 0
+            }
+          ]
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/prompt_complete",
+        "params": {
+          "sessionId": "01a1149a-4cf6-7f13-87ad-ae820cfdc1ef",
+          "promptId": "7989ffcc-6fd3-417e-ac01-942bbb88fa2a",
+          "stopReason": "end_turn",
+          "agentResult": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session/prompt_complete",
+        "params": {
+          "sessionId": "01a11492-336e-7112-a2d2-c9be546e91a0",
+          "promptId": "2bc3f5ef-343b-4e83-b251-6e72faf4a1f4",
+          "stopReason": "cancelled",
+          "agentResult": null,
+          "cancellationCategory": "MidTurnAbort"
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

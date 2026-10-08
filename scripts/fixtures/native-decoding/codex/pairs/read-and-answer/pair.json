@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
-  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T19-45-42-01a11440-a2c6-7551-b732-a700e80dab6b.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/06/rollout-2026-10-06T19-45-42-01a11440-a2c6-7551-b732-a700e80dab6b.jsonl",
+      "known": []
+    }
+  ]
 }

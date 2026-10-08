@@ -4,6 +4,11 @@
     "version": "2.1.283"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
-  "store": ".claude/projects/-tmp-mako-pair-project/51128a44-44de-4d38-9143-769f56aa6959.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "claude",
+      "path": ".claude/projects/-tmp-mako-pair-project/51128a44-44de-4d38-9143-769f56aa6959.jsonl",
+      "known": []
+    }
+  ]
 }

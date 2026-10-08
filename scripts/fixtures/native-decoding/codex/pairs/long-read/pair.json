@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
-  "store": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-30-29-01a11469-a127-74c0-ad5b-b47dc142a932.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-30-29-01a11469-a127-74c0-ad5b-b47dc142a932.jsonl",
+      "known": []
+    }
+  ]
 }

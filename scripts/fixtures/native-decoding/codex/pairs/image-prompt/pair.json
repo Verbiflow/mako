@@ -4,6 +4,11 @@
     "version": "0.159.3"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
-  "store": ".codex/sessions/2026/10/07/rollout-2026-10-07T00-46-02-01a11553-968b-7813-a195-7483455c0c34.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/07/rollout-2026-10-07T00-46-02-01a11553-968b-7813-a195-7483455c0c34.jsonl",
+      "known": []
+    }
+  ]
 }

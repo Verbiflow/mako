@@ -4,6 +4,11 @@
     "version": "1.0.46"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
-  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-7e21-71e1-a0d4-52d579016f2b/updates.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-7e21-71e1-a0d4-52d579016f2b/updates.jsonl",
+      "known": []
+    }
+  ]
 }

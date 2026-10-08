@@ -4,6 +4,11 @@
     "version": "1.0.46"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
-  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-6d0b-7970-9a34-736cf3f95b0a/updates.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-6d0b-7970-9a34-736cf3f95b0a/updates.jsonl",
+      "known": []
+    }
+  ]
 }

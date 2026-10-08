@@ -1,0 +1,203 @@
+{
+  "harness": "grok",
+  "source": "Written from xai-org/grok-build 1.0.45 (`PromptCompletionKind` and `cancellation_meta` in xai-grok-shell `session/commands.rs`, `emit_turn_completed` in `session/acp_session_impl/turn_end.rs`), with the `_meta` key paths of the saved `turn_completed` lines in a grok 1.0.46 store",
+  "native": {
+    "version": "1.0.46",
+    "origin": "written"
+  },
+  "about": "Why Grok ended a turn itself. `turn_completed` carries `cancellationCategory` and `cancelTrigger` in its `_meta`: a blocked prompt is already explained by the hook's own annotation, so its end adds nothing; a denied or dismissed permission, the turn limit and a turn that stopped making progress each draw a Turn ended marker; a turn Mako stopped or whose session closed draws nothing live, where the footer says it.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000001",
+          "update": {
+            "sessionUpdate": "hook_annotation",
+            "message": "⚠ Prompt blocked by deploy-guard: Deploys need a ticket number",
+            "kind": "note"
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000001-4",
+            "agentTimestampMs": 1791360000000
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Hook",
+            "detail": "Prompt blocked by deploy-guard: Deploys need a ticket number",
+            "tone": "warning"
+          },
+          "source": "01a11600-0000-7000-8000-000000000001-4"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000001",
+          "update": {
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "6f1d3a52-0000-4000-8000-000000000001",
+            "stop_reason": "cancelled",
+            "elapsed_ms": 41
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000001-5",
+            "agentTimestampMs": 1791360000041,
+            "cancellationCategory": "HookDenied",
+            "cancellationContext": {
+              "hookName": "deploy-guard",
+              "reason": "Deploys need a ticket number"
+            }
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000001",
+          "update": {
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "6f1d3a52-0000-4000-8000-000000000002",
+            "stop_reason": "cancelled",
+            "elapsed_ms": 5120
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000001-12",
+            "agentTimestampMs": 1791360010000,
+            "cancellationCategory": "PermissionRejected"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Turn ended",
+            "detail": "A permission was denied"
+          },
+          "source": "01a11600-0000-7000-8000-000000000001-12"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000001",
+          "update": {
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "6f1d3a52-0000-4000-8000-000000000003",
+            "stop_reason": "cancelled",
+            "elapsed_ms": 9100
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000001-20",
+            "agentTimestampMs": 1791360020000,
+            "cancellationCategory": "PermissionCancelled"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Turn ended",
+            "detail": "The permission request was dismissed"
+          },
+          "source": "01a11600-0000-7000-8000-000000000001-20"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000001",
+          "update": {
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "6f1d3a52-0000-4000-8000-000000000004",
+            "stop_reason": "cancelled",
+            "elapsed_ms": 61000
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000001-48",
+            "agentTimestampMs": 1791360090000,
+            "cancellationCategory": "max_turns_reached"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Turn ended",
+            "detail": "Reached the turn limit",
+            "tone": "warning"
+          },
+          "source": "01a11600-0000-7000-8000-000000000001-48"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000001",
+          "update": {
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "6f1d3a52-0000-4000-8000-000000000005",
+            "stop_reason": "end_turn",
+            "elapsed_ms": 30400
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000001-71",
+            "agentTimestampMs": 1791360130000,
+            "cancellationCategory": "action_stationarity"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Turn ended",
+            "detail": "Grok stopped making progress",
+            "tone": "warning"
+          },
+          "source": "01a11600-0000-7000-8000-000000000001-71"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000001",
+          "update": {
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "6f1d3a52-0000-4000-8000-000000000006",
+            "stop_reason": "cancelled",
+            "elapsed_ms": 2200
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000001-80",
+            "agentTimestampMs": 1791360140000,
+            "cancelTrigger": "session_close",
+            "cancellationCategory": "MidTurnAbort"
+          }
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

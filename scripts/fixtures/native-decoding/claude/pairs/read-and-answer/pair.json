@@ -4,6 +4,11 @@
     "version": "2.1.283"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
-  "store": ".claude/projects/-tmp-mako-pair-project/0af2e3f1-58a3-4f5b-9e89-0e7423b34d38.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "claude",
+      "path": ".claude/projects/-tmp-mako-pair-project/0af2e3f1-58a3-4f5b-9e89-0e7423b34d38.jsonl",
+      "known": []
+    }
+  ]
 }

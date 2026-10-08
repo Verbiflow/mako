@@ -4,6 +4,11 @@
     "version": "1.0.46"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
-  "store": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-7564-74c0-8bd3-66a178a189af/updates.jsonl",
-  "known": []
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-7564-74c0-8bd3-66a178a189af/updates.jsonl",
+      "known": []
+    }
+  ]
 }

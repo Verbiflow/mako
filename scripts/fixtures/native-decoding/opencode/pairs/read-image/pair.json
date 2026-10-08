@@ -4,6 +4,11 @@
     "version": "2.0.1"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
-  "store": ".local/share/opencode/opencode.db#v2:ses_eebacf997ffeAhlAiwbUdF8AdJ",
-  "known": []
+  "stores": [
+    {
+      "reader": "opencode",
+      "path": ".local/share/opencode/opencode.db#v2:ses_eebacf997ffeAhlAiwbUdF8AdJ",
+      "known": []
+    }
+  ]
 }
