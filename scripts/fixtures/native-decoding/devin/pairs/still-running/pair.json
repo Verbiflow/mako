@@ -1,0 +1,30 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.10.23"
+  },
+  "about": "Read notes.md and tell me the release day. Don't run commands. / Without reading anything again, which day was it? Two turns from another client of the harness, whose record of the session is read while the session is still open there.",
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#better-galaxy",
+      "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/065c0ea0-5051-4e77-99bb-ca384e5efb72.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: Read notes.md and tell me the release day. Don't run commands.",
+          "reason": "Devin.app's journal holds only the session updates Devin sends (`handleClientRequest` -> `_ingestSessionUpdate`); the prompt row the app draws is its own optimistic `user_message_chunk`, never stored. Devin 3000.10.23 sends no prompt back, even with Devin.app's `cognition.ai/messageGrouping` and a `cognition.ai/clientMessageId` on each prompt, so until the app reopens the session its journal has no prompts. Devin's CLI store keeps them, and the catalog shows that record where both hold the session (`clientCopy`)."
+        },
+        {
+          "side": "-",
+          "line": "user: Without reading anything again, which day was it?",
+          "reason": "Devin.app's journal holds only the session updates Devin sends (`handleClientRequest` -> `_ingestSessionUpdate`); the prompt row the app draws is its own optimistic `user_message_chunk`, never stored. Devin 3000.10.23 sends no prompt back, even with Devin.app's `cognition.ai/messageGrouping` and a `cognition.ai/clientMessageId` on each prompt, so until the app reopens the session its journal has no prompts. Devin's CLI store keeps them, and the catalog shows that record where both hold the session (`clientCopy`)."
+        }
+      ]
+    }
+  ]
+}

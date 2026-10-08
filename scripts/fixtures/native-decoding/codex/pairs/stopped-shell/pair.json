@@ -7,8 +7,18 @@
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/06/rollout-2026-10-06T20-05-11-01a11452-78c6-7ca0-b96f-d1c50db2ccbd.jsonl",
+      "path": ".codex/sessions/2026/10/08/rollout-2026-10-08T05-34-03-01a11b81-a320-7a22-bee9-d07ae6a06109.jsonl",
       "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell exec_command {\"command\":\"sleep 30\"} canceled -> ",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "tool #1 shell exec_command {\"command\":\"sleep 30\"} error canceled -> Exited with code -1",
+          "reason": ""
+        },
         {
           "side": "+",
           "line": "note: Interrupted",

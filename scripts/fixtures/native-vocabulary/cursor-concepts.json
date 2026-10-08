@@ -1,12 +1,12 @@
 {
   "harness": "cursor",
   "version": "1.0.31",
-  "on": "2026-10-06",
+  "on": "2026-10-08",
   "searched": "23 SDK modules",
   "probed": 25,
   "missing": [],
   "skills": {
-    "via": "the SDK's skill-root table",
+    "via": "its own listing",
     "listed": [
       ".cursor/skills",
       ".agents/skills",
@@ -17,8 +17,15 @@
       "~/.agents/skills",
       "~/.claude/skills",
       "~/.codex/skills",
-      "~/.grok/skills",
-      "~/.cursor/skills-cursor"
+      "~/.grok/skills"
+    ],
+    "missing": []
+  },
+  "mcpConfig": {
+    "via": "its own listing",
+    "listed": [
+      "~/.cursor/mcp.json",
+      ".cursor/mcp.json"
     ],
     "missing": []
   }

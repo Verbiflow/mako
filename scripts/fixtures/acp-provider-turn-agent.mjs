@@ -84,7 +84,8 @@ new AgentSideConnection((connection) => {
       await grokUpdate({ sessionUpdate: "compaction_checkpoint", checkpoint_id: "c1" })
       await grokUpdate({ sessionUpdate: "auto_compact_completed", tokens_before: 403803, tokens_after: 21289, elapsed_ms: 94952, summary_preview: null })
       await grokUpdate({ sessionUpdate: "session_summary_generated", session_summary: "Compacted fixture" })
-      await grokUpdate({ sessionUpdate: "scheduled_task_fired" })
+      // A loop's firing, on the method grok 1.0.46 sends it on: state for Grok's tasks pane, not the transcript.
+      await connection.extNotification("_x.ai/scheduled_task_fired", { sessionId, update: { sessionUpdate: "scheduled_task_fired", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: "2026-10-08T13:00:00Z", subagent_id: "loop-1" } })
       await update({ sessionUpdate: "session_info_update", title: "Renamed by the agent" })
     },
     // Updates the ACP SDK refuses: Grok's own kinds on ACP's method (one

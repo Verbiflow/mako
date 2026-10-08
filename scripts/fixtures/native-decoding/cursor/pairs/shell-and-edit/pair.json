@@ -7,7 +7,7 @@
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-50283551b9ae6e2c0c6a3b38f003f414020fcdb18f688587469a541d6e73ccf9/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-2ec4b2449897520940c6c6ab9c4e689fd4f0cbd423ca615943fa7e005ecfc71b/store.db",
       "known": []
     }
   ]

@@ -7,7 +7,7 @@
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11491-6fcf-77b3-ba31-1904ed8c1367/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11b83-8632-7910-9666-a248de611d5c/updates.jsonl",
       "known": []
     }
   ]

@@ -1,7 +1,7 @@
 {
   "harness": "grok",
   "version": "1.0.46",
-  "on": "2026-10-06",
+  "on": "2026-10-08",
   "source": "the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode",
   "configurations": [
     {

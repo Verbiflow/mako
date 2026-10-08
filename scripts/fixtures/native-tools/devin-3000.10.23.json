@@ -1,0 +1,1490 @@
+{
+  "harness": "devin",
+  "version": "3000.10.23",
+  "on": "2026-10-08",
+  "source": "the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode; not smart, which Devin offers only to an account whose settings allow it",
+  "configurations": [
+    {
+      "name": "accept-edits",
+      "tools": {
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 1050,
+            "sha": "190430c3d581"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "edit": {
+          "form": "function",
+          "description": {
+            "chars": 1062,
+            "sha": "0d99da8a44e1"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "exec": {
+          "form": "function",
+          "description": {
+            "chars": 2883,
+            "sha": "51d6b8541448"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "shell_flavor": {
+              "type": "enum",
+              "required": false
+            },
+            "env": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "find_file_by_name": {
+          "form": "function",
+          "description": {
+            "chars": 354,
+            "sha": "97d4b9f4d211"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "get_output": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "514cadcab1ce"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "incremental": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 899,
+            "sha": "c1e7dc931eac"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "glob_pattern": {
+              "type": "string",
+              "required": false
+            },
+            "output_mode": {
+              "type": "enum",
+              "required": false
+            },
+            "case_insensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_results": {
+              "type": "integer",
+              "required": false
+            },
+            "context_lines": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "kill_shell": {
+          "form": "function",
+          "description": {
+            "chars": 206,
+            "sha": "9aa7e7004323"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "mcp_call_tool": {
+          "form": "function",
+          "description": {
+            "chars": 178,
+            "sha": "5aea4ab2522b"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": true
+            },
+            "tool_name": {
+              "type": "string",
+              "required": true
+            },
+            "arguments": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "mcp_list_servers": {
+          "form": "function",
+          "description": {
+            "chars": 140,
+            "sha": "29ae276cb64c"
+          },
+          "parameters": {}
+        },
+        "mcp_list_tools": {
+          "form": "function",
+          "description": {
+            "chars": 135,
+            "sha": "e3653bc3aedc"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "mcp_read_resource": {
+          "form": "function",
+          "description": {
+            "chars": 184,
+            "sha": "8985e252d47d"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": true
+            },
+            "resource_uri": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "notebook_edit": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "70e048df8533"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_number": {
+              "type": "integer",
+              "required": true
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "notebook_read": {
+          "form": "function",
+          "description": {
+            "chars": 78,
+            "sha": "d8495fbe983b"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 411,
+            "sha": "127262084ab2"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "read_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 341,
+            "sha": "f0b8ff249ec5"
+          },
+          "parameters": {
+            "agent_id": {
+              "type": "string",
+              "required": true
+            },
+            "block": {
+              "type": "boolean",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "request_scope": {
+          "form": "function",
+          "description": {
+            "chars": 294,
+            "sha": "97b3a2015e29"
+          },
+          "parameters": {
+            "scope": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "run_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 2861,
+            "sha": "51ffcfd4d0cb"
+          },
+          "parameters": {
+            "title": {
+              "type": "string",
+              "required": true
+            },
+            "task": {
+              "type": "string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "is_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "resume": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "skill": {
+          "form": "function",
+          "description": {
+            "chars": 370,
+            "sha": "bcecd374447f"
+          },
+          "parameters": {
+            "command": {
+              "type": "enum",
+              "required": false
+            },
+            "skill": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "source": {
+              "type": "enum",
+              "required": false
+            },
+            "keywords": {
+              "type": "array",
+              "required": false
+            },
+            "keywords_mode": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 1308,
+            "sha": "ee14d4e22b4a"
+          },
+          "parameters": {
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "fd72da543b80"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 501,
+            "sha": "feef7e2348e6"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write_to_process": {
+          "form": "function",
+          "description": {
+            "chars": 868,
+            "sha": "dc66ff86c2d7"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            },
+            "text_input": {
+              "type": "string",
+              "required": false
+            },
+            "bytes_input": {
+              "type": "string",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ask",
+      "tools": {
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 1050,
+            "sha": "190430c3d581"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "find_file_by_name": {
+          "form": "function",
+          "description": {
+            "chars": 354,
+            "sha": "97d4b9f4d211"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "get_output": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "514cadcab1ce"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "incremental": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 899,
+            "sha": "c1e7dc931eac"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "glob_pattern": {
+              "type": "string",
+              "required": false
+            },
+            "output_mode": {
+              "type": "enum",
+              "required": false
+            },
+            "case_insensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_results": {
+              "type": "integer",
+              "required": false
+            },
+            "context_lines": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "notebook_read": {
+          "form": "function",
+          "description": {
+            "chars": 78,
+            "sha": "d8495fbe983b"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 411,
+            "sha": "127262084ab2"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 1308,
+            "sha": "ee14d4e22b4a"
+          },
+          "parameters": {
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "fd72da543b80"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "plan",
+      "tools": {
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 1050,
+            "sha": "190430c3d581"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "edit": {
+          "form": "function",
+          "description": {
+            "chars": 1062,
+            "sha": "0d99da8a44e1"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "exec": {
+          "form": "function",
+          "description": {
+            "chars": 2883,
+            "sha": "51d6b8541448"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "shell_flavor": {
+              "type": "enum",
+              "required": false
+            },
+            "env": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "exit_plan_mode": {
+          "form": "function",
+          "description": {
+            "chars": 679,
+            "sha": "640a79f8f034"
+          },
+          "parameters": {
+            "plan": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "find_file_by_name": {
+          "form": "function",
+          "description": {
+            "chars": 354,
+            "sha": "97d4b9f4d211"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "get_output": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "514cadcab1ce"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "incremental": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 899,
+            "sha": "c1e7dc931eac"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "glob_pattern": {
+              "type": "string",
+              "required": false
+            },
+            "output_mode": {
+              "type": "enum",
+              "required": false
+            },
+            "case_insensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_results": {
+              "type": "integer",
+              "required": false
+            },
+            "context_lines": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "kill_shell": {
+          "form": "function",
+          "description": {
+            "chars": 206,
+            "sha": "9aa7e7004323"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "mcp_call_tool": {
+          "form": "function",
+          "description": {
+            "chars": 178,
+            "sha": "5aea4ab2522b"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": true
+            },
+            "tool_name": {
+              "type": "string",
+              "required": true
+            },
+            "arguments": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "mcp_list_servers": {
+          "form": "function",
+          "description": {
+            "chars": 140,
+            "sha": "29ae276cb64c"
+          },
+          "parameters": {}
+        },
+        "mcp_list_tools": {
+          "form": "function",
+          "description": {
+            "chars": 135,
+            "sha": "e3653bc3aedc"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "mcp_read_resource": {
+          "form": "function",
+          "description": {
+            "chars": 184,
+            "sha": "8985e252d47d"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": true
+            },
+            "resource_uri": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "notebook_edit": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "70e048df8533"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_number": {
+              "type": "integer",
+              "required": true
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "notebook_read": {
+          "form": "function",
+          "description": {
+            "chars": 78,
+            "sha": "d8495fbe983b"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 411,
+            "sha": "127262084ab2"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "request_scope": {
+          "form": "function",
+          "description": {
+            "chars": 294,
+            "sha": "97b3a2015e29"
+          },
+          "parameters": {
+            "scope": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 1308,
+            "sha": "ee14d4e22b4a"
+          },
+          "parameters": {
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "fd72da543b80"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 501,
+            "sha": "feef7e2348e6"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write_plan": {
+          "form": "function",
+          "description": {
+            "chars": 273,
+            "sha": "becfc3f89896"
+          },
+          "parameters": {
+            "title": {
+              "type": "string",
+              "required": true
+            },
+            "summary": {
+              "type": "string",
+              "required": true
+            },
+            "plan": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write_to_process": {
+          "form": "function",
+          "description": {
+            "chars": 868,
+            "sha": "dc66ff86c2d7"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            },
+            "text_input": {
+              "type": "string",
+              "required": false
+            },
+            "bytes_input": {
+              "type": "string",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bypass",
+      "tools": {
+        "ask_user_question": {
+          "form": "function",
+          "description": {
+            "chars": 1050,
+            "sha": "190430c3d581"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            },
+            "answers": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "edit": {
+          "form": "function",
+          "description": {
+            "chars": 1062,
+            "sha": "0d99da8a44e1"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "old_string": {
+              "type": "string",
+              "required": true
+            },
+            "new_string": {
+              "type": "string",
+              "required": true
+            },
+            "replace_all": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "exec": {
+          "form": "function",
+          "description": {
+            "chars": 2883,
+            "sha": "51d6b8541448"
+          },
+          "parameters": {
+            "command": {
+              "type": "string",
+              "required": true
+            },
+            "shell_id": {
+              "type": "string",
+              "required": false
+            },
+            "workdir": {
+              "type": "string",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "tty": {
+              "type": "boolean",
+              "required": false
+            },
+            "shell_flavor": {
+              "type": "enum",
+              "required": false
+            },
+            "env": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "find_file_by_name": {
+          "form": "function",
+          "description": {
+            "chars": 354,
+            "sha": "97d4b9f4d211"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "get_output": {
+          "form": "function",
+          "description": {
+            "chars": 926,
+            "sha": "514cadcab1ce"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            },
+            "incremental": {
+              "type": "boolean",
+              "required": false
+            }
+          }
+        },
+        "grep": {
+          "form": "function",
+          "description": {
+            "chars": 899,
+            "sha": "c1e7dc931eac"
+          },
+          "parameters": {
+            "pattern": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "glob_pattern": {
+              "type": "string",
+              "required": false
+            },
+            "output_mode": {
+              "type": "enum",
+              "required": false
+            },
+            "case_insensitive": {
+              "type": "boolean",
+              "required": false
+            },
+            "max_results": {
+              "type": "integer",
+              "required": false
+            },
+            "context_lines": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "kill_shell": {
+          "form": "function",
+          "description": {
+            "chars": 206,
+            "sha": "9aa7e7004323"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "mcp_call_tool": {
+          "form": "function",
+          "description": {
+            "chars": 178,
+            "sha": "5aea4ab2522b"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": true
+            },
+            "tool_name": {
+              "type": "string",
+              "required": true
+            },
+            "arguments": {
+              "type": "object",
+              "required": false
+            }
+          }
+        },
+        "mcp_list_servers": {
+          "form": "function",
+          "description": {
+            "chars": 140,
+            "sha": "29ae276cb64c"
+          },
+          "parameters": {}
+        },
+        "mcp_list_tools": {
+          "form": "function",
+          "description": {
+            "chars": 135,
+            "sha": "e3653bc3aedc"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "mcp_read_resource": {
+          "form": "function",
+          "description": {
+            "chars": 184,
+            "sha": "8985e252d47d"
+          },
+          "parameters": {
+            "server_name": {
+              "type": "string",
+              "required": true
+            },
+            "resource_uri": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "notebook_edit": {
+          "form": "function",
+          "description": {
+            "chars": 82,
+            "sha": "70e048df8533"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            },
+            "cell_number": {
+              "type": "integer",
+              "required": true
+            },
+            "new_source": {
+              "type": "string",
+              "required": true
+            },
+            "cell_type": {
+              "type": "enum",
+              "required": false
+            },
+            "edit_mode": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "notebook_read": {
+          "form": "function",
+          "description": {
+            "chars": 78,
+            "sha": "d8495fbe983b"
+          },
+          "parameters": {
+            "notebook_path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "read": {
+          "form": "function",
+          "description": {
+            "chars": 411,
+            "sha": "127262084ab2"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer",
+              "required": false
+            },
+            "limit": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "read_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 341,
+            "sha": "f0b8ff249ec5"
+          },
+          "parameters": {
+            "agent_id": {
+              "type": "string",
+              "required": true
+            },
+            "block": {
+              "type": "boolean",
+              "required": false
+            },
+            "timeout": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "request_scope": {
+          "form": "function",
+          "description": {
+            "chars": 294,
+            "sha": "97b3a2015e29"
+          },
+          "parameters": {
+            "scope": {
+              "type": "string",
+              "required": true
+            },
+            "path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "run_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 2861,
+            "sha": "51ffcfd4d0cb"
+          },
+          "parameters": {
+            "title": {
+              "type": "string",
+              "required": true
+            },
+            "task": {
+              "type": "string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "is_background": {
+              "type": "boolean",
+              "required": false
+            },
+            "resume": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "skill": {
+          "form": "function",
+          "description": {
+            "chars": 370,
+            "sha": "bcecd374447f"
+          },
+          "parameters": {
+            "command": {
+              "type": "enum",
+              "required": false
+            },
+            "skill": {
+              "type": "string",
+              "required": false
+            },
+            "path": {
+              "type": "string",
+              "required": false
+            },
+            "source": {
+              "type": "enum",
+              "required": false
+            },
+            "keywords": {
+              "type": "array",
+              "required": false
+            },
+            "keywords_mode": {
+              "type": "enum",
+              "required": false
+            }
+          }
+        },
+        "todo_write": {
+          "form": "function",
+          "description": {
+            "chars": 1308,
+            "sha": "ee14d4e22b4a"
+          },
+          "parameters": {
+            "todos": {
+              "type": "array",
+              "required": true
+            }
+          }
+        },
+        "webfetch": {
+          "form": "function",
+          "description": {
+            "chars": 60,
+            "sha": "fd72da543b80"
+          },
+          "parameters": {
+            "url": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write": {
+          "form": "function",
+          "description": {
+            "chars": 501,
+            "sha": "feef7e2348e6"
+          },
+          "parameters": {
+            "file_path": {
+              "type": "string",
+              "required": true
+            },
+            "content": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "write_to_process": {
+          "form": "function",
+          "description": {
+            "chars": 868,
+            "sha": "dc66ff86c2d7"
+          },
+          "parameters": {
+            "shell_id": {
+              "type": "string",
+              "required": true
+            },
+            "text_input": {
+              "type": "string",
+              "required": false
+            },
+            "bytes_input": {
+              "type": "string",
+              "required": false
+            }
+          }
+        }
+      }
+    }
+  ]
+}

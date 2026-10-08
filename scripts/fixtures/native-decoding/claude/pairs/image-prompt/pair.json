@@ -7,7 +7,7 @@
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/120aec64-e300-4b62-bbab-920d0d965391.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/7c49e52a-1802-466b-bf45-3748f11483c0.jsonl",
       "known": [
         {
           "side": "-",

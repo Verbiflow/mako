@@ -1,0 +1,146 @@
+{
+  "harness": "grok",
+  "source": "Written from xai-org/grok-build 1.0.46 (`acp_model_meta` in xai-grok-shell `agent/config.rs`, `ModelState::get_context_window` and `handle_models_update` in xai-grok-pager), with the reply shapes of a grok 1.0.46 session opened against the scripted model",
+  "native": {
+    "version": "1.0.46",
+    "origin": "written"
+  },
+  "about": "Where Grok names its window: in the model list of the reply that opens a session, never in a usage report. The window is the current model's `totalContextTokens`, or a `contextWindow` chosen from the windows it offers. A call then measures the fill against it. A new list from a catalog refresh keeps the session's own model, since its `currentModelId` is the default for new sessions, and a resumed session reads its window again from the load reply.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "response": "session/new",
+        "result": {
+          "sessionId": "grok-session-1",
+          "models": {
+            "currentModelId": "grok-4.6",
+            "availableModels": [
+              {
+                "modelId": "grok-4.6",
+                "name": "Grok 4.6",
+                "_meta": {
+                  "totalContextTokens": 256000
+                }
+              },
+              {
+                "modelId": "grok-4.7",
+                "name": "Grok 4.7",
+                "_meta": {
+                  "totalContextTokens": 500000,
+                  "contextWindows": [
+                    500000,
+                    2000000
+                  ],
+                  "contextWindow": 2000000
+                }
+              }
+            ]
+          },
+          "configOptions": []
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "grok-session-1",
+          "update": {
+            "sessionUpdate": "response_completed",
+            "usage": {
+              "input_tokens": 51200,
+              "output_tokens": 400,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 51600,
+              "size": 256000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/models/update",
+        "params": {
+          "currentModelId": "grok-4.7",
+          "availableModels": [
+            {
+              "modelId": "grok-4.6",
+              "name": "Grok 4.6",
+              "_meta": {
+                "totalContextTokens": 512000
+              }
+            },
+            {
+              "modelId": "grok-4.7",
+              "name": "Grok 4.7",
+              "_meta": {
+                "totalContextTokens": 500000
+              }
+            }
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 51600,
+              "size": 512000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "response": "session/load",
+        "result": {
+          "models": {
+            "currentModelId": "grok-4.7",
+            "availableModels": [
+              {
+                "modelId": "grok-4.7",
+                "name": "Grok 4.7",
+                "_meta": {
+                  "totalContextTokens": 500000,
+                  "contextWindows": [
+                    500000,
+                    2000000
+                  ],
+                  "contextWindow": 2000000
+                }
+              }
+            ]
+          },
+          "configOptions": []
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 51600,
+              "size": 2000000
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
