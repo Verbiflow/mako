@@ -643,29 +643,22 @@ async function startAcp(
       authenticate: async (methodId) => {
         await trace.step("human-sign-in", () => connection.authenticate({ methodId }))
       },
-      open: async () => resume
-        ? parseLoadedAcpSession(
-            await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
-                loadSessionRequest(
-                  resume,
-                  workingDir,
-                  harness,
-                  options.tuning,
-                  live.mcpServers
-                )
-              ))),
-            resume
-          )
-        : parseNewAcpSession(
-            await trace.step("session-open", () => watch.step("session/new", connection.newSession(
-                newSessionRequest(
-                  workingDir,
-                  harness,
-                  options.tuning,
-                  live.mcpServers
-                )
-              )))
-          ),
+      open: async () => {
+        if (!resume) return parseNewAcpSession(
+          await trace.step("session-open", () => watch.step("session/new", connection.newSession(
+            newSessionRequest(workingDir, harness, options.tuning, live.mcpServers)
+          )))
+        )
+        capture?.opening()
+        const loaded = parseLoadedAcpSession(
+          await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
+            loadSessionRequest(resume, workingDir, harness, options.tuning, live.mcpServers)
+          ))),
+          resume
+        )
+        capture?.opened()
+        return loaded
+      },
     })
     live.sessionId = session.sessionId
     open(session.sessionId)

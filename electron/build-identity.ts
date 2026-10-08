@@ -10,6 +10,8 @@ import { BuildIdentitySchema, type BuildIdentity } from "./contracts/app-lifecyc
  */
 const metadataSchema = z.object({
   makoBuild: BuildIdentitySchema.optional(),
+  /** The Mako cloud `MAKO_CLOUD_URL` named when the bundle was packaged. */
+  makoCloud: z.url({ protocol: /^https$/ }).optional().catch(undefined),
   makoLocalSigningIdentity: z
     .string()
     .regex(/^[a-fA-F0-9]{40}$/)
@@ -28,6 +30,11 @@ export function buildMetadata(): BuildMetadata {
 
 export function buildIdentity(): BuildIdentity | null {
   return buildMetadata().makoBuild ?? null
+}
+
+/** `MAKO_CLOUD_URL`, else the cloud the bundle was packaged with; a checkout has none of its own. */
+export function cloudUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.MAKO_CLOUD_URL || buildMetadata().makoCloud
 }
 
 /**

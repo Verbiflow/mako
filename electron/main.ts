@@ -291,6 +291,8 @@ import { LiveHistoryReadSchema, type LiveHistoryRead } from "./contracts/live-hi
 import { installSessionIpc } from "./ipc/session.js"
 import { installWorkspaceIpc, stopWorkspaceIpc } from "./ipc/workspace.js"
 import { installCloudAccountIpc, stopCloudAccountIpc } from "./ipc/cloud-account.js"
+import { installTelemetry } from "./ipc/telemetry.js"
+import type { HostTelemetry } from "./host-telemetry.js"
 import type {
   LivePermissionResponse,
   PromptAttachment,
@@ -688,6 +690,7 @@ const controlPreviews = new ControlPreviews(
 let controlService: Awaited<ReturnType<typeof startControlService>> | null =
   null
 let liveConversations: LiveConversations
+let hostTelemetry: HostTelemetry | undefined
 const liveHistory = new LiveHistoryReader(pageThread, threadBlock)
 installHistoryPresentation(value => liveHistory.present(value))
 let threadArchives: ThreadArchives
@@ -1527,7 +1530,7 @@ function bindIpc() {
       void listConnections().then((connections) => emit({ type: "provider-connections", connections }))
     })
   }
-  installCloudAccountIpc({ emit, fixture: fixtureDesk })
+  installCloudAccountIpc({ emit, fixture: fixtureDesk, signedIn: () => hostTelemetry?.feature("cloud.signed-in") })
   /* Harness accounts: several logins per CLI, Orca-style isolated homes. */
   handle("mako:accounts", () => accountCatalog())
   handle("mako:account-login-start", (_e, harness: AccountHarness, renew?: string) => startAccountLogin(harness, renew))
@@ -1852,6 +1855,8 @@ function bindIpc() {
         return continueOwned(resolved)
       }
       trace("accepted")
+      if (fresh || options.resume)
+        hostTelemetry?.threadCreated({ harness, origin: fresh ? "new" : "resume", worktree: Boolean(worktree), ...(options.purpose && { purpose: options.purpose }) })
       if (worktree)
         void threadWorktrees?.attach(options.conversationId).catch((error) =>
           hostWarn("threads", "a worktree could not be recorded against its Thread; the next list attaches it", { conversation: options.conversationId, error: error instanceof Error ? error.message : String(error) }))
@@ -1894,9 +1899,11 @@ function bindIpc() {
   handle("mako:live-turn-diff", (_event, id: string, requestId: string, path: string) =>
     liveConversations.turnDiff(id, requestId, path)
   )
-  handle("mako:live-rewind", (_event, id: string, input: RewindInput) =>
-    liveConversations.rewind(id, input)
-  )
+  handle("mako:live-rewind", async (_event, id: string, input: RewindInput) => {
+    const rewound = await liveConversations.rewind(id, input)
+    hostTelemetry?.feature("turn.rewound", liveConversations.session(id)?.harness)
+    return rewound
+  })
   handle("mako:live-rewind-recover", () => liveConversations.recoverRewinds())
   handle("mako:live-action", (_event, id: string, input: LiveActionInput) =>
     liveConversations.act(id, input)
@@ -1912,9 +1919,11 @@ function bindIpc() {
     (_event, id: string, actionId: string) =>
       liveConversations.acknowledgeAction(id, actionId)
   )
-  handle("mako:live-fork", async (_event, id: string, input: ForkInput) =>
-    input.worktree ? (await forkIntoWorktree(id, input)).fork : liveConversations.fork(id, input)
-  )
+  handle("mako:live-fork", async (_event, id: string, input: ForkInput) => {
+    const fork = input.worktree ? (await forkIntoWorktree(id, input)).fork : await liveConversations.fork(id, input)
+    hostTelemetry?.feature("thread.forked", liveConversations.session(id)?.harness)
+    return fork
+  })
   handle("mako:live-capture", (_event, id: string, path: string) =>
     liveConversations.capture(id, path)
   )
@@ -1927,7 +1936,9 @@ function bindIpc() {
         liveConversations.session(id)?.cwd,
         parsed.tuning
       )
-      return liveConversations.transfer(id, { ...parsed, tuning })
+      const transferred = await liveConversations.transfer(id, { ...parsed, tuning })
+      hostTelemetry?.feature("harness.switched", parsed.provider)
+      return transferred
     }
   )
   handle(
@@ -2279,7 +2290,18 @@ app.whenReady().then(async () => {
     file: join(app.getPath("userData"), "plan-builds.json"),
     announce: (builds) => emit({ type: "plan-builds", builds }),
   })
+  const telemetry = await installTelemetry({
+    fixture: fixtureDesk,
+    attended: () => (webHost?.clients().length ?? 0) > 0 || [...rendererWindows].some((window) => !window.isDestroyed() && window.isVisible()),
+    inventory: async () => ({
+      harnesses: (await harnessProfiles()).filter((profile) => profile.available).map((profile) => profile.id),
+      runtimes: runtimeUpdates.snapshot(),
+      threads: listThreads().length,
+    }),
+  })
+  hostTelemetry = telemetry
   liveConversations = new LiveConversations({
+    turns: telemetry.turns,
     memory: sessionMemory ?? undefined,
     threads: threadStore ?? undefined,
     mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
@@ -2615,6 +2637,7 @@ app.whenReady().then(async () => {
     )
     if (!profile)
       throw new Error("No provider is available for this automation")
+    hostTelemetry?.feature("automation.ran", profile.id)
     await startFresh(
       profile.id,
       cwd,
@@ -2632,6 +2655,7 @@ app.whenReady().then(async () => {
   app.on("second-instance", () => {
     void reopenWindow()
   })
+  void telemetry.started(performance.now())
 })
 
 app.on("window-all-closed", () => {
@@ -2685,7 +2709,7 @@ const quitLifecycle = backgroundLifecycle({
       runtimeUpdates.stop()
       void stopRelayWorker()
       stopThreads()
-      await Promise.all([callsDrained, providersDrained])
+      await Promise.all([callsDrained, providersDrained, hostTelemetry?.close()])
       await liveConversations?.stop()
       stopAcp()
       stopCodexApps()

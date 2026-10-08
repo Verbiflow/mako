@@ -374,6 +374,13 @@ export class CloudAccounts {
 
   // Connection tokens.
 
+  /** A connection token while this Mac is signed in, for a request that is fine without one; never throws. */
+  async optionalConnectionToken(): Promise<string | undefined> {
+    await this.#ready
+    if (this.#state.status !== "signed-in") return undefined
+    return this.#connectionToken().catch(() => undefined)
+  }
+
   /** One refresh at a time; every caller waiting on it gets the same token. */
   #connectionToken(): Promise<string> {
     if (this.#token && this.#token.renewAt > Date.now()) return Promise.resolve(this.#token.token)

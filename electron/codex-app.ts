@@ -4,6 +4,7 @@ import { CODEX_NATIVE_IDENTITY } from "./providers/codex/live-driver.js"
 import { applyThreadEnvironment } from "./thread-environment.js"
 import { app } from "electron"
 import { join } from "node:path"
+import { z } from "zod"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./providers/codex/permission-observer.js"
 import type { ApprovalSubmission } from "./contracts/approval-response.js"
 import { preparePrompt, type PromptDispatch } from "./providers/prompt-dispatch.js"
@@ -596,7 +597,12 @@ async function openThread(
     if (!resume)
       return trace.step("session-open", () => watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning })))
     // An archived native thread is never unarchived to make recovery pass.
-    return trace.step("session-resume", () => watch.step("thread/resume", rpcRequest(live, "thread/resume", { threadId: resume, cwd: live.cwd, ...tuning })))
+    live.capture?.opening()
+    return trace.step("session-resume", () => watch.step("thread/resume", rpcRequest(live, "thread/resume", { threadId: resume, cwd: live.cwd, ...tuning }))).then((response) => {
+      live.capture?.record({ replay: z.json().parse(JSON.parse(JSON.stringify(response))) })
+      live.capture?.opened()
+      return response
+    })
   }
   const [response] = await Promise.all([open(), identityObservation])
   return response

@@ -5,16 +5,14 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path"
 
 /**
- * Crash reporting, on this machine only.
+ * Crash reporting: a failure leaves a trace you can find, read, and hand over.
  *
- * Nothing here leaves the computer. That is a deliberate limit rather than an
- * unfinished one: an agent's window is full of the user's source, their prompts
- * and their tool output, so a crash report is not something to post anywhere by
- * default. What this gives instead is the thing that was actually missing — a
- * failure that leaves a trace you can find, read, and hand over on purpose.
- *
- * The seam for a remote sink is `write`: point it at a transport and every
- * report goes there too. Nothing else needs to change.
+ * Every report is written here, on this machine, in full. While the person
+ * allows error reports, the host also sends each one's kind, error name,
+ * message and stack, scrubbed of paths, emails, secrets and long quoted text,
+ * with the trail's notes (`host-telemetry.ts`). An agent's window is full of
+ * the user's source, prompts and tool output, which is why the trail holds
+ * channel names only and a stack keeps the paths of the app's own files alone.
  */
 
 export type CrashKind =
@@ -118,7 +116,7 @@ function normalizeCause(cause: unknown): CrashDescription {
 /** Sortable across processes, without collisions between host and client. */
 function nextId() {
   // Hosts and desktop clients write into the same report directory.
-  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`
+  return `${crashIdAt(Date.now())}-${randomUUID()}`
 }
 
 export function record(kind: CrashKind, cause: unknown, source?: string): CrashReport {
@@ -316,6 +314,31 @@ export function listCrashes(): CrashReport[] {
   } catch {
     return []
   }
+}
+
+/** Reports newer than `id`, oldest first; only those files are read. */
+export function crashesAfter(id: string): CrashReport[] {
+  try {
+    const dir = crashesDir()
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".json") && name.slice(0, -".json".length) > id)
+      .sort()
+      .map((name) => {
+        try {
+          return parseCrashReport(readFileSync(join(dir, name), "utf8"))
+        } catch {
+          return null
+        }
+      })
+      .filter((report): report is CrashReport => report !== null)
+  } catch {
+    return []
+  }
+}
+
+/** The ID a report written at `at` would sort after, for a watermark that starts now. */
+export function crashIdAt(at: number): string {
+  return new Date(at).toISOString().replace(/[:.]/g, "-")
 }
 
 export function clearCrashes() {

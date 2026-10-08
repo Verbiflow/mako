@@ -78,7 +78,7 @@ import type {
   NativeActivity,
   NativeActivityObservation,
 } from "./shared.js"
-import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart } from "@mako/sessions/live-content"
+import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart, drawnWhileOpening } from "@mako/sessions/live-content"
 import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "./contracts/live-conversations.js"
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, STOPPED_CALL_NOTE, TurnSteps } from "./interrupted-turn.js"
 import { controlNote } from "./control-launch.js"
@@ -2054,9 +2054,8 @@ export class LiveConversations {
     } else if (event.type === "live-permission") {
       this.approvals.observe(resident, event.request)
     } else {
-      // A setup notice said while opening is about this launch, not replayed history.
       const updates = (event.type === "live-update" ? [event.update] : event.updates)
-        .filter((update) => !replaying || (update.kind === "event" && update.setup === true))
+        .filter((update) => !replaying || drawnWhileOpening(update))
       const dispatching = resident.snapshot.requests.some(
         (request) => request.status === "dispatching"
       )
@@ -3912,6 +3911,7 @@ export class LiveConversations {
     resident.usedAt = this.dependencies.now?.() ?? Date.now()
     this.scheduleSweep()
     this.syncMemory(previous.session, snapshot.session)
+    if (previous.requests !== snapshot.requests) this.dependencies.turns?.(previous, snapshot)
     if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
       this.registerThread(snapshot, undefined)
     this.dependencies.emit({

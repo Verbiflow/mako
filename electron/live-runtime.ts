@@ -120,6 +120,8 @@ export interface Dependencies {
   emit(event: HostEvent): void
   /** A plan approval was answered with its approve choice and the agent confirmed it; see `PlanBuild`. */
   planBuilt?(planId: string, build: PlanBuild): void
+  /** A commit changed the conversation's requests; called on the write path, so it must be cheap and never throw. */
+  turns?(previous: LiveSnapshot, next: LiveSnapshot): void
   /**
    * The per-user ledger of settings, access mode and live holds per native
    * session. Written from every flush that changes what a connected session

@@ -18,7 +18,10 @@ import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
  * prompt, with what it drew for it, the harness's id for the turn when Mako
  * names it and each attachment's name and type, or `{ "at", "prompted": true }` where the harness opened a
  * turn the wire does not mark, so a replay knows where each turn began, and `{ "at", "steered": true, "text" }` where the harness
- * took a message Mako steered into the running turn. It holds
+ * took a message Mako steered into the running turn. A launch that resumes
+ * the session writes `{ "at", "opening": true }` before it loads and
+ * `{ "at", "opened": true }` once it has, so a replay knows which messages
+ * were history the harness sent back while it opened. It holds
  * conversation content and stays on this machine; bearer tokens and `token=`
  * values are scrubbed. A capture stops at `MAX_BYTES`.
  */
@@ -42,6 +45,9 @@ export interface NativeCapture {
   prompted(prompt?: CapturedPrompt): void
   /** The harness took `text`, which Mako steered into the running turn. */
   steered(text: string): void
+  /** This launch resumes the session: what follows until `opened` is history the harness replays. */
+  opening(): void
+  opened(): void
   /** Resolves once every recorded line is on disk. */
   flush(): Promise<void>
 }
@@ -106,6 +112,8 @@ export function nativeCapture(
       line(body)
     },
     steered: (text) => line({ steered: true, text }),
+    opening: () => line({ opening: true }),
+    opened: () => line({ opened: true }),
     flush: () => queue,
   }
 }
