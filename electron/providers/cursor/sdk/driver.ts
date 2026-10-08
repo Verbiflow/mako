@@ -260,6 +260,10 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
       if (!claimTurn(engine, live, event.turn) || !live.decoder.open) return
       deliver(engine, live, live.decoder.decode(event))
       return
+    case "settled":
+      if (!claimTurn(engine, live, event.turn) || !live.decoder.open) return
+      deliver(engine, live, live.decoder.settle(event.calls))
+      return
     case "result":
       if (!claimTurn(engine, live, event.turn)) return
       finishTurn(engine, live, event.result)
@@ -391,12 +395,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   return {
     provider: "cursor",
     launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
-    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Its protocol has a summarize action, but the SDK never sends one and offers no way to." },
+    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one." },
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
     planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation",
       feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },
     nativeAgents: { kind: "observed", via: "`task` tool calls and the subagent runs they start." },
-    questions: { kind: "unavailable", reason: "In local runs the SDK answers every `askQuestion` itself, declining it with \"Interactive questions are not supported in local SDK runs\", and has no way for Mako to answer instead." },
+    questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
     contextBreakdown: { kind: "unavailable", reason: "The SDK reports a run's token usage, not what fills the context." },
     modeSwitching: { kind: "single", reason: "The SDK runs one mode, agent; Plan is a setting chosen with each message." },
     fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own." },

@@ -29,8 +29,9 @@ import {
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 import { unpackedPath } from "../../../asar-unpacked.js"
 // Narrow entries: the package root loads every harness's reader into each Cursor child.
-import { CURSOR_SDK_IMPORT_METADATA_KEY, readCursorSdkRunResults } from "@mako/sessions/cursor-sdk-index"
+import { CURSOR_SDK_IMPORT_METADATA_KEY, CursorSdkRunCheckpoints, type CursorToolResult } from "@mako/sessions/cursor-sdk-index"
 import { z } from "zod"
+import { isJsonObject, isString } from "../../../codex-app-json.js"
 import {
   copyLegacyStore,
   CursorImportError,
@@ -41,7 +42,7 @@ import {
 } from "./import.js"
 import { readLegacyStoreSnapshot } from "../legacy-store.js"
 import { lostCursorRun, recordCursorRun, settleCursorRun } from "./run-records.js"
-import type { CursorSdkModelSelection } from "@mako/sessions/cursor-sdk-content"
+import { cursorCallErrored, type CursorSdkModelSelection } from "@mako/sessions/cursor-sdk-content"
 import {
   CURSOR_SDK_EXIT,
   CURSOR_SDK_HEADLESS,
@@ -55,8 +56,9 @@ import {
   type SdkImportSource,
   type SdkMcpServer,
   type SdkRequest,
+  type SdkEvent,
   type SdkResult,
-  type SdkRunResult,
+  type SdkSettledCalls,
 } from "./wire.js"
 
 const PackageSchema = z.object({ name: z.string(), version: z.string() })
@@ -382,14 +384,17 @@ function forwardMessage(turn: string, message: SDKMessage): void {
   remember(turn, text)
 }
 
+/** A tool result's `status` alone; the rest of a result can be large and isn't read here. */
+const ResultStatusSchema = z.object({ status: z.string().optional().catch(undefined) }).catch({})
+
 /** How often a run looks for the result of a call it moved past, until the call settles or the stream ends. */
 const SETTLE_POLL_MS = 250
 
 async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
   const unended = new Set<string>()
-  // Open calls the model went on past: a call's own stream may never end it
-  // (a read of a missing file, with SDK 1.0.31), but the step's checkpoint
-  // keeps its result.
+  // Calls whose result only the checkpoint keeps: open calls the model went
+  // on past, which the stream may never end, and calls it ended as an error
+  // that can say only "error" (a read of a missing file, with SDK 1.0.31).
   const passed = new Set<string>()
   const checkpoints = new CursorSdkRunCheckpoints(open.stateRoot, open.agentId, run.id)
   let poll: NodeJS.Timeout | undefined
@@ -401,7 +406,8 @@ async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
         unended.delete(callId)
         passed.delete(callId)
       }
-      const text = JSON.stringify({ event: "settled", turn, calls: settledCalls(results) } satisfies SdkEvent)
+      const calls = [...results].map(([callId, result]) => ({ callId, ...result }))
+      const text = JSON.stringify({ event: "settled", turn, calls } satisfies SdkEvent)
       writeText(text)
       remember(turn, text)
     }
@@ -412,7 +418,8 @@ async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
       if (message.type === "tool_call") {
         if (message.status !== "running") {
           unended.delete(message.call_id)
-          passed.delete(message.call_id)
+          if (cursorCallErrored(message.status, ResultStatusSchema.parse(message.result).status)) passed.add(message.call_id)
+          else passed.delete(message.call_id)
         } else if (!unended.has(message.call_id)) {
           for (const callId of unended) passed.add(callId)
           unended.add(message.call_id)
@@ -452,7 +459,7 @@ async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
       model: result.model,
       durationMs: result.durationMs,
       usage: result.usage,
-      settled: settledCalls(checkpoints.results(unended)),
+      settled: settledCalls(checkpoints.results(new Set([...unended, ...passed]))),
     },
   })
 }
@@ -474,6 +481,41 @@ const ShellChunkSchema = z.object({
   case: z.enum(["stdout", "stderr"]),
   value: z.object({ data: z.string() }),
 })
+
+/**
+ * SDK 1.0.31's `tool-call-delta`: one update from the subagent a `task` call
+ * (`callId`) runs. Its calls' starts and ends are forwarded; its text,
+ * thinking, steps and token counts are not.
+ */
+const SubagentDeltaSchema = z.object({
+  callId: z.string(),
+  taskUpdate: z.object({
+    type: z.enum(["tool-call-started", "tool-call-completed"]),
+    callId: z.string(),
+    toolCall: z.looseObject({
+      name: z.string().optional(),
+      type: z.string().optional(),
+      args: JsonValueSchema.optional(),
+      result: z.looseObject({ status: z.string().optional() }).optional(),
+    }),
+  }),
+})
+
+/** Enough of a call's arguments to title it (a command, a path, a pattern), not a file's contents. */
+function clippedArgs(value: JsonValue): JsonValue {
+  if (isString(value)) return value.length > 512 ? `${value.slice(0, 512)}…` : value
+  if (Array.isArray(value)) return value.slice(0, 16).map(clippedArgs)
+  if (isJsonObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clippedArgs(item)]))
+  return value
+}
+
+function subagentCall(parsed: z.infer<typeof SubagentDeltaSchema>): Extract<SdkChildLine, { event: "delta" }>["delta"] {
+  const { type, callId, toolCall } = parsed.taskUpdate
+  // The SDK's own rule for a call's name (its `tool_call` message's `name`).
+  const name = toolCall.name ?? toolCall.type ?? "unknown"
+  const status = type === "tool-call-started" ? "running" : cursorCallErrored("completed", toolCall.result?.status) ? "error" : "completed"
+  return { type: "subagent-call", task: parsed.callId, callId, name, status, ...toolCall.args !== undefined && { args: clippedArgs(toolCall.args) } }
+}
 
 let shellOutput: { turn: string; text: string; timer: NodeJS.Timeout } | undefined
 
@@ -552,12 +594,15 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
         if (chunk.success) bufferShellOutput(params.turn, chunk.data.value.data)
         return
       }
+      case "tool-call-delta": {
+        const parsed = SubagentDeltaSchema.safeParse(update).data
+        if (parsed) write({ event: "delta", turn: params.turn, delta: subagentCall(parsed) })
+        return
+      }
       // Tool calls, steps, usage and the compaction summary (a `task`
-      // message) arrive whole on the run's message stream. A subagent's own
-      // progress rides `tool-call-delta` and is not shown until its call completes.
+      // message) arrive whole on the run's message stream.
       case "summary":
       case "tool-call-started":
-      case "tool-call-delta":
       case "tool-call-completed":
       case "partial-tool-call":
       case "token-delta":

@@ -7,6 +7,7 @@ import { inclusiveTokens } from "@mako/sessions/harnesses"
 import { SessionUsage } from "../../../session-usage.js"
 import {
   compactionSummary,
+  cursorSdkMessageRecord,
   CursorSdkProjection,
   type CursorSdkDelta,
   type CursorSdkMessage,
@@ -14,7 +15,11 @@ import {
   type CursorTurnOutcome,
 } from "@mako/sessions/cursor-sdk-content"
 import { CursorAgents } from "./agents.js"
-import type { SdkEvent, SdkRunResult } from "./wire.js"
+import type { SdkEvent, SdkSettledCalls } from "./wire.js"
+
+function settledResults(calls: SdkSettledCalls): Map<string, { output: string; failed: boolean }> {
+  return new Map(calls.map(({ callId, ...result }) => [callId, result]))
+}
 
 /** The selected model's options, with the values `selection` sets as their current ones. */
 export function cursorConfigOptions(
@@ -80,16 +85,22 @@ export class CursorDecoder {
   decode(event: Extract<SdkEvent, { event: "message" | "delta" }>): Decoded<CursorEffect>[] {
     if (!this.projection) return []
     return event.event === "message"
-      ? this.message(event.message, event.seq === undefined ? undefined : `${event.turn}:${event.seq}`)
+      ? this.message(event.message, event.seq === undefined ? undefined : cursorSdkMessageRecord(event.message, event.seq))
       : this.delta(event.delta)
   }
 
+  /** Ends calls the run moved past, with what a checkpoint saved since kept for them. */
+  settle(calls: SdkSettledCalls): Decoded<CursorEffect>[] {
+    if (!this.projection) return []
+    return this.projection.settle(settledResults(calls)).map((update) => ({ kind: "update", update }))
+  }
+
   /** Ends the turn's projection, closing any tool row the run left open with what its checkpoint kept (`settled`), else `note`. */
-  finish(outcome: CursorTurnOutcome, note: string, settled?: SdkRunResult["settled"]): Decoded<CursorEffect>[] {
+  finish(outcome: CursorTurnOutcome, note: string, settled?: SdkSettledCalls): Decoded<CursorEffect>[] {
     const decoded = this.releaseCompaction()
     const projection = this.projection
     this.projection = null
-    const results = new Map(settled?.map(({ callId, ...result }) => [callId, result]))
+    const results = settledResults(settled ?? [])
     if (projection) decoded.push(...projection.finish(outcome, note, () => results).map((update) => ({ kind: "update" as const, update })))
     return decoded
   }
@@ -141,6 +152,11 @@ export class CursorDecoder {
           decoded.push({ kind: "activity", activity: null })
         }
         break
+      case "subagent-call": {
+        const agent = this.agents.progress(delta)
+        if (agent) decoded.push({ kind: "effect", effect: { type: "agent", agent } })
+        break
+      }
       case "unhandled":
         decoded.push({ kind: "unknown", type: delta.kind, reason: "unknown", raw: { type: "unhandled", kind: delta.kind } })
         break

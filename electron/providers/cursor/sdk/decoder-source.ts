@@ -19,7 +19,9 @@ const DECODED = new Set([
   "delta/shell-output",
   "delta/summary-started",
   "delta/summary-completed",
+  "delta/subagent-call",
   "delta/unhandled",
+  "settled",
   "result",
 ])
 /** Known and deliberately shown as nothing: the prompt's echo, bookkeeping, and the child's own logs. */
@@ -76,6 +78,7 @@ export const cursorDecoderSource: ProviderDecoderSource = {
         }
         if (event.event === "result")
           return decoder.finish(event.result.status, cursorUnfinishedToolNote(event.result.status, event.result.error?.message), event.result.settled)
+        if (event.event === "settled") return decoder.settle(event.calls)
         const decoded = decoder.decode(event)
         for (const item of decoded) if (item.kind === "state" && item.patch.settings) state = { settings: item.patch.settings }
         return decoded

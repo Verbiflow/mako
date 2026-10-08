@@ -1,6 +1,8 @@
 import { z } from "zod"
-import type { NativeAgentObservation } from "../../../contracts/native-agents.js"
-import type { CursorSdkMessage } from "@mako/sessions/cursor-sdk-content"
+import { isActiveNativeAgent, type NativeAgentObservation } from "../../../contracts/native-agents.js"
+import { toolTitle, type CursorSdkDelta, type CursorSdkMessage } from "@mako/sessions/cursor-sdk-content"
+
+type SubagentCall = Extract<CursorSdkDelta, { type: "subagent-call" }>
 
 const taskArgs = z.object({
   agentId: z.string().min(1).max(512),
@@ -20,6 +22,31 @@ const taskResult = z.object({
 export class CursorAgents {
   private readonly agents = new Map<string, NativeAgentObservation>()
   private readonly calls = new Map<string, string>()
+  /** Each running subagent's calls that have ended, so one the SDK ends twice counts once. */
+  private readonly ended = new Map<string, Set<string>>()
+
+  /**
+   * A call the subagent of a running `task` made: the call it is in now, as
+   * its row in the transcript is titled, and how many it has finished.
+   */
+  progress(call: SubagentCall): NativeAgentObservation | undefined {
+    const nativeId = this.calls.get(call.task)
+    const previous = nativeId === undefined ? undefined : this.agents.get(nativeId)
+    if (!nativeId || !previous || previous.toolId !== call.task || !isActiveNativeAgent(previous)) return undefined
+    let usage = previous.usage
+    if (call.status !== "running") {
+      const ended = this.ended.get(call.task) ?? new Set<string>()
+      if (ended.has(call.callId)) return undefined
+      ended.add(call.callId)
+      this.ended.set(call.task, ended)
+      usage = { ...usage, toolUses: ended.size }
+    }
+    const activity = call.status === "running" ? toolTitle(call.name, call.args).slice(0, 8192) : undefined
+    const state: NativeAgentObservation["state"] = activity ? { kind: "working", activity } : previous.state
+    const agent: NativeAgentObservation = { ...previous, state, ...usage && { usage } }
+    this.agents.set(nativeId, agent)
+    return agent
+  }
 
   project(message: CursorSdkMessage): NativeAgentObservation | undefined {
     if (message.type !== "tool_call" || message.name !== "task") return undefined
@@ -61,11 +88,17 @@ export class CursorAgents {
       role: args.success ? args.data.subagentType?.kind.slice(0, 256) : previous?.role,
       state,
     }
+    // A resumed subagent is a new invocation, which counts its own calls.
+    if (previous?.toolId !== message.call_id) delete agent.usage
     this.calls.set(message.call_id, nativeId)
     this.agents.set(nativeId, agent)
+    if (!isActiveNativeAgent(agent)) this.ended.delete(message.call_id)
     if (this.calls.size > 1024) {
       const oldest = this.calls.keys().next().value
-      if (oldest) this.calls.delete(oldest)
+      if (oldest) {
+        this.calls.delete(oldest)
+        this.ended.delete(oldest)
+      }
     }
     if (this.agents.size > 1024) {
       const oldest = this.agents.keys().next().value
