@@ -105,6 +105,8 @@ export interface GitHubStatus {
   installed: boolean
   authenticated: boolean
   login?: string
+  /** GitHub's numeric ID for `login`, which outlives a renamed login; a Mako account compares its own with it. */
+  userId?: string
   /** `owner/name`, when this folder has a GitHub remote. */
   repo?: string
   defaultBranch?: string

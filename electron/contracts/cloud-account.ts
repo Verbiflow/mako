@@ -19,11 +19,18 @@ export const CloudDeviceSchema = z.object({
 })
 export type CloudDevice = z.infer<typeof CloudDeviceSchema>
 
+/**
+ * `signedInWith` is how the person last signed in, and `githubId` GitHub's numeric ID for them when a GitHub identity
+ * is linked. Both are missing from accounts kept before the cloud sent them, and a method this build doesn't know
+ * reads as none, so neither ever signs the Mac out.
+ */
 export const CloudPersonSchema = z.object({
   id: z.string(),
   name: z.string(),
   email: z.string(),
   image: z.string().nullable(),
+  signedInWith: z.enum(["github", "google", "local"]).nullish().catch(null),
+  githubId: z.string().regex(/^\d{1,20}$/).nullish().catch(null),
   entitlements: z.array(z.string()),
 })
 export type CloudPerson = z.infer<typeof CloudPersonSchema>
