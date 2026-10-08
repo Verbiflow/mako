@@ -1008,5 +1008,46 @@ try {
 } finally {
   await rm(transcriptRoot, { recursive: true, force: true })
 }
+// A steer that lands while a command runs aborts it: Claude ends that query
+// with `aborted_tools` and opens another for the steer. Replayed from the
+// recorded wire, the turn runs until the steer's query ends.
+{
+  const capture = (await readFile(join(import.meta.dirname, "fixtures/native-decoding/claude/pairs/steered-shell@2.1.293/capture.jsonl"), "utf8"))
+    .trim().split("\n").map((line) => JSON.parse(line))
+  const messages = new Messages()
+  const replayEvents: LiveDriverEvent[] = []
+  const replayDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  } })
+  await replayDriver.start("/disposable", { conversationId: "steer-replay", emit: (event) => replayEvents.push(event) })
+  const session = () => replayEvents.findLast((event) => event.type === "live-session")?.session
+  const steering = replayDriver.steering
+  assert.ok(steering.kind === "supported")
+  await replayDriver.prompt("steer-replay", "Run sleep 3", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  await input?.next()
+  let recorded: string | undefined
+  let steer: string | undefined
+  const afterResults: (string | undefined)[] = []
+  for (const line of capture) {
+    if (!line.message) continue
+    if (line.message.type === "command_lifecycle" && !recorded) {
+      recorded = line.message.command_uuid
+      const receipt = steering.steer("steer-replay", { id: "steer", expectedRunId: session()?.nativeRunId ?? "", text: "Also read notes.md", attachments: [] })
+      steer = (await input?.next())?.value?.uuid
+      assert.ok(steer)
+      messages.send({ ...line.message, command_uuid: steer })
+      assert.deepEqual(await receipt, { kind: "accepted" })
+      continue
+    }
+    messages.send(recorded && steer ? JSON.parse(JSON.stringify(line.message).replaceAll(recorded, steer)) : line.message)
+    if (line.message.type !== "result") continue
+    await delay(10)
+    afterResults.push(session()?.status)
+  }
+  assert.deepEqual(afterResults, ["running", "ready"], "the steer's own query ends the turn, not the query it aborted")
+  assert.equal(session()?.lastStop, "completed")
+  messages.close()
+}
+console.log("PASS: A steer that aborts a running command keeps the turn running until Claude answers it")
 await flushHostLog()
 await rm(authLogRoot, { recursive: true, force: true })

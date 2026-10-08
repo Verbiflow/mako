@@ -48,8 +48,6 @@ const inputs = [
   "packages/sessions/dist",
   "packages/git/package.json",
   "packages/git/dist",
-  "packages/relay/package.json",
-  "packages/relay/dist",
   "packages/control/package.json",
   "packages/control/dist",
   "packages/control/LICENSE",

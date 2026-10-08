@@ -244,7 +244,7 @@ async function waitFor(read, label, timeout = 90_000) {
 
 async function startPackage(shims) {
   await rm(join(profile, "DevToolsActivePort"), { force: true })
-  const env = { ...process.env, MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp", MAKO_BACKEND_TOKEN: "", MAKO_STANDALONE: "1", MAKO_DATA_ROOT: profile, MAKO_CURSOR_SDK_ROOT: join(root, "cursor") }
+  const env = { ...process.env, MAKO_STANDALONE: "1", MAKO_DATA_ROOT: profile, MAKO_CURSOR_SDK_ROOT: join(root, "cursor") }
   for (const key of Object.keys(env))
     if ((/^(MAKO_THREAD_|MAKO_CONTROL_|CLAUDE_|ELECTRON_)/.test(key) && key !== "CLAUDE_CONFIG_DIR") || ["VITE_DEV_SERVER_URL", "MAKO_WEB_SOCKET", "MAKO_HOST_ONLY", "MAKO_WEB_ONLY"].includes(key)) delete env[key]
   env.PATH = `${shims}:${env.PATH}`

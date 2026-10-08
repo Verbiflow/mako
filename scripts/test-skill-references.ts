@@ -48,13 +48,14 @@ async function writeSkill(
 }
 
 /** The providers as the host labels them, from the harness definitions. */
-function providers(readsUniversalRoot: boolean): SkillProviderStatus[] {
+function providers(readsUniversalRoot: boolean, readsWorkspace = true): SkillProviderStatus[] {
   return ["claude", "cursor"].map((id) => ({
     id,
     label: harnessDescriptors.find((descriptor) => descriptor.provider === id)?.displayName ?? id,
     account: "default",
     available: true,
     readsUniversalRoot,
+    readsWorkspace,
   }))
 }
 
@@ -127,6 +128,11 @@ try {
   assert.equal(userCopy.hash, grilling.hash, "the record's hash is the listed copy's")
   const grillingForClaude = skillDelivery(grilling, "claude", snapshot.providers)
   assert.deepEqual(grillingForClaude, { kind: "native", path: projectCopy.provenance }, "a provider's own project copy is the one it loads, so it is the one named")
+  assert.deepEqual(skillDelivery(grilling, "claude", providers(false, false)), { kind: "native", path: userCopy.provenance },
+    "in a folder whose project skills it won't load, the provider is named its own user copy")
+  const projectOnly = { ...grilling, origins: [projectCopy] }
+  assert.deepEqual(skillDelivery(projectOnly, "claude", providers(false, false)), { kind: "handover", path: projectCopy.provenance, from: "claude", source: "Claude Code's skills" },
+    "a project skill the provider won't load in this folder is handed over")
   const grillingForCursor = skillDelivery(grilling, "cursor", snapshot.providers)
   assert.deepEqual(grillingForCursor, { kind: "handover", path: projectCopy.provenance, from: "claude", source: "Claude Code's skills" }, "a handover reads the project copy too")
 

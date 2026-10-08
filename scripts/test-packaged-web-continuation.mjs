@@ -23,7 +23,7 @@ const conversation = randomUUID()
 const client = randomUUID()
 const marker = `SHARED_${randomUUID()}`
 const call = (channel, ...args) => invokeRuntime(location.socket, client, channel, args)
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_CURSOR_SDK_ROOT: join(root, "cursor"), MAKO_HOST_ONLY: "1", MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: location.socket, MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp", MAKO_BACKEND_TOKEN: "" }
+const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_CURSOR_SDK_ROOT: join(root, "cursor"), MAKO_HOST_ONLY: "1", MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: location.socket }
 for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "MAKO_PROFILE", "MAKO_STANDALONE"]) delete env[key]
 let host
 let browser

@@ -1,6 +1,9 @@
 import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { once } from "node:events"
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { createServer, type ServerResponse } from "node:http"
+import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
@@ -32,11 +35,10 @@ import { codexBinary } from "./harness-binaries.ts"
  * tool names, agent names and protocol capabilities, never a prompt, a path,
  * a skill or a credential.
  *
- * Claude, Codex, OpenCode, Grok and Devin also: the harness's own listing of
- * its skills or MCP servers, run with a throwaway home and project holding
- * one probe in each folder and file its concepts declare it reads. Cursor's
- * SDK lists nothing without an agent, so its skill folders are read from the
- * root table in the SDK's own bundle.
+ * Every harness also: its own listing of its skills, its MCP servers or
+ * both, run with a throwaway home and project holding one
+ * probe in each folder and file its concepts declare it reads. Cursor's comes
+ * from the request context its SDK agent sends a stand-in service.
  */
 
 const run = promisify(execFile)
@@ -246,20 +248,88 @@ const openCodeListing = (path: string): Listing => async (executable, { project,
   }
 }
 
-/**
- * The skill folders Cursor's SDK reads, from the root table in the bundle
- * Mako runs: each entry is read in the project and the home, a builtin one in
- * the home only. A table that moved or changed shape reads as no folders, so
- * every declared one shows as missing.
- */
-async function cursorSkillTable(): Promise<string> {
-  const places: string[] = []
-  for (const file of (await cursorSdk()).files) {
-    for (const [, dir, subdir, , builtin] of (await readFile(file, "utf8")).matchAll(/\{configDir:"([^"]+)",subdir:"([^"]+)",thirdParty:!([01]),builtin:!([01])\}/g))
-      // Minified: `!1` is false, `!0` true.
-      places.push(...builtin === "1" ? [`${dir}/${subdir}`, `~/${dir}/${subdir}`] : [`~/${dir}/${subdir}`])
+/** A protobuf length-delimited field. */
+function protoField(no: number, bytes: Buffer): Buffer {
+  const length: number[] = []
+  for (let left = bytes.length; ; left >>>= 7) {
+    if (left < 128) { length.push(left); break }
+    length.push((left & 127) | 128)
   }
-  return places.join("\n")
+  return Buffer.concat([Buffer.from([(no << 3) | 2]), Buffer.from(length), bytes])
+}
+
+/** A Connect stream frame: flags, then the length, then the message. */
+function connectFrame(flags: number, body: Buffer): Buffer {
+  const head = Buffer.alloc(5)
+  head[0] = flags
+  head.writeUInt32BE(body.length, 1)
+  return Buffer.concat([head, body])
+}
+
+/**
+ * Cursor's SDK sends what its local agent loaded, each skill and MCP server
+ * by name, when its service asks for the request context. The listing runs
+ * the agent Mako runs (`cursor-request-context-child.ts`) in the sandbox
+ * against a stand-in service on a local port (`CURSOR_BACKEND_URL`, which
+ * every SDK client honours): it takes any key, asks once for the context and
+ * refuses the rest, so no account or model is used and nothing leaves the
+ * machine. The answer comes back hex-encoded in a `BidiAppend`.
+ */
+async function cursorRequestContext(executable: string, { project, env, home }: Sandbox): Promise<string> {
+  // AgentServerMessage.exec_server_message (2): ExecServerMessage { id (1): 1, exec_id (15): "probe", request_context_args (10): {} }.
+  const ask = protoField(2, Buffer.concat([Buffer.from([0x08, 0x01]), protoField(15, Buffer.from("probe")), protoField(10, Buffer.alloc(0))]))
+  let answered: (text: string) => void = () => undefined
+  const answer = new Promise<string>((resolve) => { answered = resolve })
+  const streams = new Set<ServerResponse>()
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on("data", (chunk: Buffer) => chunks.push(chunk))
+    request.on("end", () => {
+      const json = (status: number, body: JsonObject) => {
+        response.writeHead(status, { "content-type": "application/json" })
+        response.end(JSON.stringify(body))
+      }
+      switch (request.url) {
+        case "/auth/exchange_user_api_key":
+          return json(200, { accessToken: "mako-self-report" })
+        case "/v1/models":
+          return json(200, { items: [{ id: "composer-2.5", displayName: "Composer" }] })
+        case "/agent.v1.AgentService/RunSSE":
+          streams.add(response)
+          response.writeHead(200, { "content-type": "application/connect+proto" })
+          response.write(connectFrame(0, ask))
+          return
+        case "/aiserver.v1.BidiService/BidiAppend": {
+          const body = Buffer.concat(chunks).toString("latin1")
+          const decoded = (body.match(/(?:[0-9a-f]{2}){16,}/g) ?? []).map((hex) => Buffer.from(hex, "hex").toString("latin1")).join("\n")
+          if (decoded.includes("mako-probe-")) answered(decoded)
+          response.writeHead(200, { "content-type": "application/proto" })
+          return response.end()
+        }
+        default:
+          return json(401, { code: "unauthenticated", message: "Mako's self-report answers only the request context" })
+      }
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  // SAFETY: a server listening on a TCP port reports its address as an AddressInfo.
+  const { port } = server.address() as AddressInfo
+  const child = spawn(executable, ["--import", "tsx", join(import.meta.dirname, "cursor-request-context-child.ts")], {
+    cwd: process.cwd(),
+    env: { ...env, CURSOR_API_KEY: "", CURSOR_BACKEND_URL: `http://127.0.0.1:${port}`, MAKO_PROBE_PROJECT: project, MAKO_PROBE_STATE: join(home, ".mako-cursor-state") },
+    stdio: ["ignore", "ignore", "ignore"],
+  })
+  try {
+    return await Promise.race([
+      answer,
+      once(child, "exit").then(() => { throw new Error("Cursor's agent exited before sending its request context") }),
+      sleep(60_000).then(() => { throw new Error("Cursor's agent sent no request context within 60s") }),
+    ])
+  } finally {
+    child.kill()
+    for (const stream of streams) stream.destroy()
+    server.close()
+  }
 }
 
 /**
@@ -268,15 +338,11 @@ async function cursorSkillTable(): Promise<string> {
  */
 const listings = new Map<string, Listings>([
   ["claude", { executable: async () => resolveExecutable("claude", process.env), mcpConfig: cliListing(["mcp", "list"]) }],
+  ["cursor", { executable: async () => process.execPath, skills: cursorRequestContext, mcpConfig: cursorRequestContext }],
   ["codex", { executable: () => resolveCodexExecutable(), skills: codexSkillList }],
   ["opencode", { executable: async () => resolveExecutable("opencode", process.env), skills: openCodeListing("/api/skill"), mcpConfig: openCodeListing("/api/mcp"), mcpFormat: "opencode" }],
   ["grok", { executable: async () => resolveExecutable("grok", process.env), skills: grokSkillListing, mcpConfig: cliListing(["mcp", "doctor"]) }],
   ["devin", { executable: async () => devinExecutable(), skills: cliListing(["skills", "list"]), mcpConfig: cliListing(["mcp", "list"]) }],
-])
-
-/** The harnesses whose folders come from a table in their code rather than a listing. */
-const tables = new Map<string, { skills: () => Promise<string>; via: string }>([
-  ["cursor", { skills: cursorSkillTable, via: "the SDK's skill-root table" }],
 ])
 
 function sandboxed(sandbox: Sandbox, path: string): string {
@@ -328,7 +394,7 @@ async function listed(kind: "skills" | "mcpConfig", places: readonly string[], l
 }
 
 interface Places {
-  /** What answered: the harness's own listing, or a table in the code it runs. */
+  /** What answered: the harness's own listing. */
   via: string
   listed: string[]
   missing: string[]
@@ -341,11 +407,6 @@ interface ListedPlaces {
 
 async function listedPlaces(concepts: HarnessConcepts): Promise<ListedPlaces> {
   const places: ListedPlaces = {}
-  const table = tables.get(harness!)
-  if (table) {
-    const read = (await table.skills()).split("\n")
-    places.skills = { via: table.via, listed: concepts.skills.filter((place) => read.includes(place)), missing: concepts.skills.filter((place) => !read.includes(place)) }
-  }
   const harnessListings = listings.get(harness!)
   if (!harnessListings) return places
   const executable = await harnessListings.executable()

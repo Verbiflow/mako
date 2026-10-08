@@ -64,8 +64,25 @@ try {
     undefined
   )
   assert.equal(await readClaudeForkPoint(path, randomUUID(), answer), undefined)
+  // A later turn as Claude Code 2.1.293 has it when its result arrives: the
+  // closing summary is written, the leaf still names the previous turn's end.
+  const previous = randomUUID()
+  const prompt = randomUUID()
+  const closing = randomUUID()
+  const later = [
+    entry(previous, null, "system"),
+    { type: "last-prompt", sessionId, leafUuid: previous },
+    entry(prompt, previous, "user"),
+    entry(answer, prompt),
+    entry(closing, answer, "system"),
+  ]
+  await save(later)
+  assert.equal(await readClaudeForkPoint(path, sessionId, answer), closing, "a leaf Claude hasn't moved up yet is on the chain")
+  const branch = randomUUID()
+  await save([entry(branch, null, "system"), ...later, { type: "last-prompt", sessionId, leafUuid: branch }])
+  assert.equal(await readClaudeForkPoint(path, sessionId, answer), undefined, "a leaf on another branch means the chain moved")
   console.log(
-    "PASS: Claude fork keeps tool carriers and output attachments, bounds native tails, and refuses torn or ambiguous chains"
+    "PASS: Claude fork keeps tool carriers and output attachments, bounds native tails, accepts a leaf that lags its chain, and refuses torn or ambiguous chains"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

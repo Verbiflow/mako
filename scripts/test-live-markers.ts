@@ -19,6 +19,7 @@ import {
 } from "@mako/sessions/claude-projection"
 import { ClaudeNotices } from "../electron/providers/claude/sdk-notices.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import { sessionDelta } from "../electron/contracts/live-conversations.ts"
 
 type AssistantReply = SDKAssistantMessage["message"]
 type StreamEvent = SDKPartialAssistantMessage["event"]
@@ -50,6 +51,17 @@ const clock = mock.method(Date, "now", () => 0)
 const at = (ms: number) => clock.mock.mockImplementation(() => ms)
 try {
   const engine = createLiveEngine<EngineLive>()
+
+  const restating = session()
+  const options = () => [{ id: "model", label: "Model", kind: "select" as const, current: "a", values: [{ value: "a", label: "A" }, { value: "b", label: "B" }] }]
+  engine.patch(restating.live, { configOptions: options() })
+  const held = restating.live.state
+  engine.patch(restating.live, { status: "ready", configOptions: options() })
+  assert.equal(restating.live.state.configOptions, held.configOptions, "an option list restated unchanged keeps the value the window holds")
+  assert.deepEqual(sessionDelta(held, restating.live.state), { sessionChanges: { status: "ready" } })
+  engine.patch(restating.live, { configOptions: [{ ...options()[0]!, current: "b" }] })
+  assert.notEqual(restating.live.state.configOptions, held.configOptions, "a changed option list replaces it")
+  console.log("PASS: a session field restated unchanged is not sent to the window again")
 
   const claude = session()
   at(1_000)

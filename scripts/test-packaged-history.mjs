@@ -47,7 +47,7 @@ for (const [index, provider] of providers.entries()) {
     expectedBlocks: source.blocks.length - (source.baseCoveredBlocks ?? 0), expectedEntries: source.base?.entries.length ?? 0 })
 }
 const env = { ...process.env, MAKO_STANDALONE: '1', MAKO_DATA_ROOT: profile,
-  MAKO_BACKEND_URL: 'http://127.0.0.1:9/api/mcp', MAKO_BACKEND_TOKEN: '', MAKO_CURSOR_SDK_ROOT: join(root, 'cursor') }
+  MAKO_CURSOR_SDK_ROOT: join(root, 'cursor') }
 for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'MAKO_WEB_SOCKET', 'MAKO_HOST_ONLY', 'MAKO_WEB_ONLY']) delete env[key]
 const child = spawn(join(app, 'Contents/MacOS/Mako'), [`--user-data-dir=${profile}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1'],
   { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })

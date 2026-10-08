@@ -106,8 +106,13 @@ export interface Step {
  */
 export type Need = "todos" | "search" | "codeMode" | "ask" | "plan" | "subagent"
 
-/** What a scenario does to a running session besides prompting it, which each recorder drives or says why it can't. */
-export type Control = "steer" | "rewind" | "compact" | "resume"
+/**
+ * What a scenario does to a running session besides prompting it, which each
+ * recorder drives or says why it can't. `still-running` drives the session as
+ * another client of the harness does and keeps that client's record of it as
+ * it stands while the session is still open there.
+ */
+export type Control = "steer" | "rewind" | "compact" | "resume" | "still-running"
 
 export interface Scenario {
   name: string
@@ -423,6 +428,25 @@ export const SCENARIOS: Scenario[] = [
       { prompt: "/compact", compact: true, steps: [{ text: COMPACT_SUMMARY }] },
       {
         prompt: "Without reading anything, which day did notes.md name?",
+        steps: [{ text: "Friday." }],
+      },
+    ],
+  },
+  {
+    name: "still-running",
+    about: "Two turns from another client of the harness, whose record of the session is read while the session is still open there.",
+    files: { "notes.md": NOTES },
+    controls: ["still-running"],
+    turns: [
+      {
+        prompt: "Read notes.md and tell me the release day. Don't run commands.",
+        steps: [
+          { call: (tools, project) => tools.read(join(project, "notes.md")) },
+          { text: "The release ships on Friday." },
+        ],
+      },
+      {
+        prompt: "Without reading anything again, which day was it?",
         steps: [{ text: "Friday." }],
       },
     ],

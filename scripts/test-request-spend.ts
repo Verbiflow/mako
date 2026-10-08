@@ -105,7 +105,7 @@ try {
 
   const summary = await usageSummary(usageHarnesses(providerHost), join(root, "no-sessions"), join(root, "home"), conversations)
   const cursor = summary.sources?.find((source) => source.source === "Cursor")
-  assert.equal(cursor?.recordedByMako, true)
+  assert.equal(cursor?.harness, "cursor", "so Settings › Usage reads what Cursor declares about sessions outside Mako")
   assert.equal(cursor?.messages, 1)
   assert.equal(cursor?.input, 60)
   assert.equal(cursor?.cacheRead, 40)

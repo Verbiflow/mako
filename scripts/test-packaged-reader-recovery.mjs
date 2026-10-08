@@ -16,7 +16,7 @@ await mkdir(join(home,'.mako'),{recursive:true})
 await writeFile(join(home,'.mako/syncd-login-optout'),'')
 const record=text=>JSON.stringify({timestamp:new Date().toISOString(),type:'response_item',payload:{type:'message',role:'user',content:[{type:'input_text',text}]}})+'\n'
 await writeFile(native,JSON.stringify({type:'session_meta',payload:{id:randomUUID(),cwd:root}})+'\n'+JSON.stringify({type:'turn_context',payload:{model:'gpt-6-astra'}})+'\n'+Array.from({length:140},(_,i)=>record(`Reader recovery fixture ${i}`)).join(''))
-const env={...process.env,HOME:home,MAKO_STANDALONE:'1',MAKO_DATA_ROOT:profile,MAKO_BACKEND_URL:'http://127.0.0.1:9/api/mcp',MAKO_BACKEND_TOKEN:'',MAKO_RELAY:'0'}
+const env={...process.env,HOME:home,MAKO_STANDALONE:'1',MAKO_DATA_ROOT:profile}
 for(const key of ['ELECTRON_RUN_AS_NODE','VITE_DEV_SERVER_URL','MAKO_WEB_SOCKET','MAKO_HOST_ONLY','MAKO_WEB_ONLY','MAKO_CURSOR_SDK_ROOT','CLAUDE_CONFIG_DIR','XDG_DATA_HOME','OPENCODE_DB'])delete env[key]
 const child=spawn(join(app,'Contents/MacOS/Mako'),[`--user-data-dir=${profile}`,'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1'],{cwd:root,env,detached:true,stdio:['ignore','pipe','pipe']})
 let logs='',socket,sequence=0

@@ -27,8 +27,7 @@ const report = { app, build: metadata.makoBuild, root, results: [], status: "run
 const call = (channel, ...args) => invokeRuntime(socket, client, channel, args)
 const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_HOST_ONLY: "1",
   MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: socket,
-  MAKO_CURSOR_SDK_ROOT: join(root, "cursor"), MAKO_RELAY: "0",
-  MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp", MAKO_BACKEND_TOKEN: "" }
+  MAKO_CURSOR_SDK_ROOT: join(root, "cursor") }
 for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "MAKO_PROFILE", "MAKO_STANDALONE", "MAKO_PROD"])
   delete env[key]
 await mkdir(directory, { recursive: true })

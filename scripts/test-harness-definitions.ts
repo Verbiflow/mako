@@ -10,9 +10,11 @@ import {
   type HarnessFamily,
 } from "../electron/providers/harness-definition.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import { capabilityText, liveCapabilities, LIVE_CAPABILITY_KEYS } from "../electron/providers/live-capabilities.ts"
+import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "../electron/providers/live-capabilities.ts"
+import { HARNESS_USAGE_KEYS } from "../electron/contracts/harness-usage.ts"
 import type { ProviderRegistry, ProviderCapability } from "../electron/providers/registry.ts"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
+import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
 
 /**
  * A harness is one definition that names every capability family. These
@@ -96,6 +98,7 @@ const definition: HarnessDefinition = {
   provider: "example",
   presentation: { mark: { viewBox: "0 0 24 24", paths: [{ d: "M0 0h24v24H0z" }], tint: "currentColor" } },
   diagnostics: {},
+  usage: { ...providerHost.harnesses.get("codex")!.usage, resetCredits: harnessLacks("test") },
   hooks: lacks("test"),
   commands: lacks("test"),
   toolEditing: lacks("test"),
@@ -188,8 +191,16 @@ for (const harness of harnesses) {
     assert.ok(capability, `${harness.provider} declares ${key}`)
     assert.ok((capability.state === "implemented" ? capability.via : capability.reason).trim(), `${harness.provider} explains ${key}`)
   }
+  for (const key of HARNESS_USAGE_KEYS)
+    assert.ok(capabilityText(harness.usage[key]).trim(), `${harness.provider} says what it reports for usage ${key}, or why it reports none`)
+  assert.deepEqual(harness.usage.contextBreakdown, harness.capabilities.contextBreakdown, `${harness.provider}'s context breakdown is its live driver's`)
+  assert.equal(harness.usage.outsideMako.state === "implemented", !harness.absent.usageHistory, `${harness.provider}'s spend outside Mako is its usage history`)
 }
+
+// The new-harness checklist is generated from the code, and every installed harness passes its checked steps.
+assert.equal(readFileSync(CHECKLIST_PATH, "utf8"), renderHarnessChecklist(), "docs/adding-a-harness.md is behind the code; run npm run harness:checklist")
+for (const { provider } of harnesses) assert.deepEqual(missingSteps(provider), [], `${provider} misses steps of docs/adding-a-harness.md`)
 
 console.log(`${"".padEnd(10)}${familyNames.join(" ")}`)
 for (const line of matrix) console.log(line)
-console.log("PASS: every harness names each capability family, and has a live driver and a saved-history reader")
+console.log("PASS: every harness names each capability family, has a live driver and a saved-history reader, and passes the generated checklist")

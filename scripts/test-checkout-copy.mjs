@@ -31,7 +31,7 @@ async function check() {
     const archive = "node_modules/electron/dist/Electron.app/Contents/Resources/default_app.asar"
     assert.equal((await files.lstat(join(checkout, archive))).isFile(), true)
     assert.deepEqual(await files.readFile(join(checkout, archive)), await files.readFile(join(source, archive)))
-    for (const omitted of ["packages/backend/.env.local", "packages/backend/.next", "packages/backend/.eve", "packages/backend/.output"]) await assert.rejects(files.lstat(join(checkout, omitted)), { code: "ENOENT" })
+    for (const omitted of ["packages/site/.env.local", "packages/site/.next", "packages/site/.eve", "packages/site/.output"]) await assert.rejects(files.lstat(join(checkout, omitted)), { code: "ENOENT" })
     console.log("Electron checkout copy preserves exact ASAR bytes and excludes nested environment files and build caches")
   } catch (error) {
     console.error(JSON.stringify({ message: error.message, code: error.code, syscall: error.syscall, path: error.path, dest: error.dest }, null, 2))
@@ -57,11 +57,11 @@ if (process.versions.electron) {
     const resources = join(source, "node_modules/electron/dist/Electron.app/Contents/Resources")
     await mkdir(resources, { recursive: true })
     await createPackage(payload, join(resources, "default_app.asar"))
-    await mkdir(join(source, "packages/backend"), { recursive: true })
-    await writeFile(join(source, "packages/backend/.env.local"), "fixture=not-for-build")
+    await mkdir(join(source, "packages/site"), { recursive: true })
+    await writeFile(join(source, "packages/site/.env.local"), "fixture=not-for-build")
     for (const directory of [".next", ".eve", ".output"]) {
-      await mkdir(join(source, "packages/backend", directory))
-      await writeFile(join(source, "packages/backend", directory, "cache"), "generated")
+      await mkdir(join(source, "packages/site", directory))
+      await writeFile(join(source, "packages/site", directory, "cache"), "generated")
     }
   }
   await mkdir(join(root, "profile"))

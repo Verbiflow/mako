@@ -7,7 +7,7 @@ import { syncThreadStatus } from "../src/state/acp-live"
 import { selectAcpPresence } from "../src/state/acp-presence"
 import { notificationsStore } from "../src/state/notifications"
 import { threadsStore } from "../src/state/thread-store"
-import { fixtureCapabilities } from "../src/dev/harness-fixtures"
+import { fixtureCapabilities, fixtureUsage } from "../src/dev/harness-fixtures"
 import { promptDelivery, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
 import { holdForSignIn, releaseSignIn, signInPause } from "../electron/contracts/sign-in-hold"
 import { continueTurnPrompt } from "../electron/contracts/turn-continuation"
@@ -106,7 +106,7 @@ assert.match(review, /can’t tell whether your last message reached Claude Code
 
 // A turn cut short by a sign-out waits on the person: one ask, never a
 // failure, and the row needs input until Resume.
-threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, capabilities: fixtureCapabilities("claude") }] })
+threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, capabilities: fixtureCapabilities("claude"), usage: fixtureUsage("claude") }] })
 const signedOut: LiveAcpConversation = {
   kind: "live", key: "paused", draftKey: "paused", harness: "claude", cwd: "/repo", threadPath: "/sessions/paused.jsonl",
   session: { ...session, id: "paused", error: "Not logged in" }, requests: held, permission: null, sending: false, canceling: false,

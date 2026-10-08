@@ -95,8 +95,6 @@ export class PackagedApp {
     // session, ports and data folder; none of them may reach the package.
     const env = {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MAKO_"))),
-      MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp",
-      MAKO_BACKEND_TOKEN: "",
       MAKO_STANDALONE: "1",
       MAKO_DATA_ROOT: this.profile,
       MAKO_CURSOR_SDK_ROOT: join(this.root, "cursor"),

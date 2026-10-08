@@ -28,10 +28,7 @@ async function stopsOn(signal) {
     MAKO_DATA_ROOT: dataRoot,
     MAKO_WEB_SOCKET: location.socket,
     MAKO_WEB_ONLY: "1",
-    MAKO_RELAY: "0",
     MAKO_PROFILE: `signals-${signal.toLowerCase()}`,
-    MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp",
-    MAKO_BACKEND_TOKEN: "",
   }
   for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR"]) delete env[key]
   const host = spawn(executable, [resolve(".")], { env, stdio: "ignore" })

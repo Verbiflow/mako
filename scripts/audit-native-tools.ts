@@ -1,13 +1,7 @@
 import { parseArgs } from "node:util"
 import { z } from "zod"
-import type { SessionProvider } from "../packages/sessions/src/providers/types.ts"
-import { CodexProvider } from "../packages/sessions/src/providers/codex.ts"
-import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
-import { CursorProvider } from "../packages/sessions/src/providers/cursor.ts"
-import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
-import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
-import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
-import { identifyTool, isDeclaredTool } from "../packages/sessions/src/tool-identity.ts"
+import { SAVED_HISTORY_READERS } from "../packages/sessions/src/readers.ts"
+import { identifyTool, isDeclaredTool, isDrawnByMako } from "../packages/sessions/src/tool-identity.ts"
 
 /**
  * How every harness's tool calls resolve, read from this machine's own native
@@ -18,7 +12,8 @@ import { identifyTool, isDeclaredTool } from "../packages/sessions/src/tool-iden
  * Prints names, kinds, labels and argument keys only, never argument values
  * or output, so the report is safe to paste. A name marked `undeclared` is
  * one its harness's vocabulary (packages/sessions/src/harnesses/) doesn't
- * declare, whatever the shared fallback made of it; `no target` counts calls
+ * declare and Mako didn't draw itself, whatever the shared fallback made of
+ * it; `no target` counts calls
  * whose collapsed row would show only the label.
  */
 
@@ -31,10 +26,7 @@ const options = parseArgs({
 }).values
 const limit = Number(options.sessions)
 
-const providers: SessionProvider[] = [
-  new CodexProvider(), new ClaudeProvider(), new CursorProvider(),
-  new GrokProvider(), new OpenCodeProvider(), new DevinCliProvider(),
-]
+const providers = SAVED_HISTORY_READERS.map((reader) => reader())
 
 interface ToolTally {
   count: number
@@ -65,7 +57,7 @@ for (const provider of providers) {
         if (block.type !== "tool") continue
         const identity = identifyTool({ harness: provider.harness, name: block.name, input: block.input })
         const row = identity.via ? `${block.name} → ${identity.server ? `${identity.server}/` : ""}${identity.tool}` : block.name
-        const tally = tools.get(row) ?? { count: 0, kind: identity.kind, label: identity.label, untargeted: 0, undeclared: !isDeclaredTool(provider.harness, block.name), keys: new Map() }
+        const tally = tools.get(row) ?? { count: 0, kind: identity.kind, label: identity.label, untargeted: 0, undeclared: !isDrawnByMako(block.name) && !isDeclaredTool(provider.harness, block.name), keys: new Map() }
         tally.count += 1
         if (!identity.target) tally.untargeted += 1
         for (const key of argumentKeys(identity.input ?? block.input)) tally.keys.set(key, (tally.keys.get(key) ?? 0) + 1)

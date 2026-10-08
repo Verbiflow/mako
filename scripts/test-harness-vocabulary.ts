@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { VOCABULARIES, type NativeTool } from "@mako/sessions/harnesses"
-import { hasVocabulary, identifyTool, isDeclaredTool, nativeToolNames } from "@mako/sessions/tool-identity"
+import { hasVocabulary, identifyTool, isDeclaredTool, isDrawnByMako, nativeToolNames } from "@mako/sessions/tool-identity"
 import { HARNESS_TOOL_SAMPLES } from "../src/dev/harness-tool-samples.ts"
 
 // One spelling names one tool within a harness, and every declaration says what it was checked against.
@@ -28,7 +28,7 @@ console.log(`harness vocabulary: Claude ${ClaudeInit.version}'s ${ClaudeInit.too
 
 // Every recorded sample is a name its own harness declares, not one the shared fallback happened to know.
 const undeclared = HARNESS_TOOL_SAMPLES.flatMap(({ source, undeclared }) =>
-  !undeclared && source.harness && source.name && hasVocabulary(source.harness) && !isDeclaredTool(source.harness, source.name) ? [`${source.harness}/${source.name}`] : [])
+  !undeclared && source.harness && source.name && hasVocabulary(source.harness) && !isDrawnByMako(source.name) && !isDeclaredTool(source.harness, source.name) ? [`${source.harness}/${source.name}`] : [])
 assert.deepEqual(undeclared, [], "samples whose harness doesn't declare them")
 console.log(`harness vocabulary: ${HARNESS_TOOL_SAMPLES.length} samples are declared by their harness`)
 

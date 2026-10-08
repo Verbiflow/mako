@@ -226,6 +226,7 @@ async function check() {
   assert.deepEqual(lost?.record.params.update.discardedNativeField, { evidence: 43 }, "SDK-discarded values retain original raw params")
   const invalid = retained.find(record => record.kind === "session/update/tool_call/invalid")
   assert.equal(invalid?.record.params.update.toolCallId, "no-title", "malformed known updates retain the original field values")
+  assert.ok(!retained.some(record => record.kind.includes("scheduled_task")), "a loop's firing on its own method is known, not unknown")
   assert.doesNotMatch(logged, /Error handling notification/, "the SDK never sees, or prints, an update it would refuse")
   console.log("PASS: session/update the ACP SDK would refuse reaches the provider's decoder or the unknown-event log, and a replayed marker is drawn once")
   await grok.close()

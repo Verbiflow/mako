@@ -36,15 +36,11 @@ try {
     "Provider CLI discovery contributes its servers"
   )
   assert.ok(
-    snapshot.servers.some((server) => server.name === "mako-backend" && server.managed),
-    "Mako's managed servers merge with provider discovery"
-  )
-  assert.ok(
     !snapshot.servers.some((server) => ["mako-control", "mako-local-tools"].includes(server.name)),
     "Local control is attached per task with a scoped endpoint, never as an unscoped registry server"
   )
   console.log(
-    "MCP startup: provider discovery merges with managed servers; local control stays task-scoped"
+    "MCP startup: provider discovery lists its servers; local control stays task-scoped"
   )
 } finally {
   listing.mock.restore()

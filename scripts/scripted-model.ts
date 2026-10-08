@@ -29,7 +29,7 @@ export interface ScriptedReply {
 
 type Wire = "chat" | "messages" | "responses"
 
-const ModelRequest = z.object({ stream: z.boolean().optional(), tools: z.array(z.json()).optional(), tool_choice: z.json().optional(), input: z.json().optional() }).loose()
+const ModelRequest = z.object({ model: z.string().optional(), stream: z.boolean().optional(), tools: z.array(z.json()).optional(), tool_choice: z.json().optional(), input: z.json().optional() }).loose()
 /**
  * A Responses request on the WebSocket; `generate: false` only warms the
  * connection. One that continues `previous_response_id` keeps the tools of
@@ -37,6 +37,7 @@ const ModelRequest = z.object({ stream: z.boolean().optional(), tools: z.array(z
  */
 const SocketRequest = z.object({
   type: z.literal("response.create"),
+  model: z.string().optional(),
   tools: z.array(z.json()).optional(),
   tool_choice: z.json().optional(),
   input: z.json().optional(),
@@ -103,6 +104,8 @@ export interface ScriptedModelOptions {
   aside?: string
   /** A side request that carries the conversation's tools without forcing one, told apart by what it asks. */
   side?: (heard: string) => boolean
+  /** What the provider adds to each Chat Completions and Responses reply's `usage`: xAI prices it (`cost_in_usd_ticks`). */
+  usage?: JsonObject
 }
 
 export async function scriptedModel(options: ScriptedModelOptions) {
@@ -138,9 +141,10 @@ export async function scriptedModel(options: ScriptedModelOptions) {
         return void json(response, JSON.stringify(failure(wire, reply.fail.message)))
       }
       const streams = wire === "chat" ? body.stream !== false : body.stream === true
-      if (!streams) return void json(response, JSON.stringify(WHOLE[wire](reply)))
+      const as: Serving = { model: body.model, usage: options.usage }
+      if (!streams) return void json(response, JSON.stringify(served(WHOLE[wire](reply), as)))
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
-      for (const event of STREAMED[wire](reply)) {
+      for (const event of STREAMED[wire](reply).map((event) => served(event, as))) {
         const named = wire === "chat" ? "" : `event: ${z.object({ type: z.string() }).parse(event).type}\n`
         response.write(`${named}data: ${JSON.stringify(event)}\n\n`)
       }
@@ -176,7 +180,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       }
       const reply = compacting(body.input, answer(`WS ${path}`, { tools, tool_choice: body.tool_choice }, text))
       if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
-      for (const event of responsesStreamed(reply)) send(JSON.stringify(event))
+      for (const event of responsesStreamed(reply)) send(JSON.stringify(served(event, { model: body.model, usage: options.usage })))
     })
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -265,6 +269,7 @@ function safeJson(text: string): JsonValue | undefined {
   }
 }
 
+/** The model a reply names when its request names none; a request that names one is answered by it, as a provider answers. */
 const MODEL = "scripted"
 const USAGE = { input: 1200, output: 40 }
 
@@ -399,6 +404,27 @@ const RESPONSE_USAGE = {
   input_tokens: USAGE.input, input_tokens_details: { cached_tokens: 0 },
   output_tokens: USAGE.output, output_tokens_details: { reasoning_tokens: 0 },
   total_tokens: USAGE.input + USAGE.output,
+}
+
+const JsonRecord = z.record(z.string(), z.json())
+
+/** What a provider puts on each reply beyond the script: the model asked for, and what it adds to usage. */
+interface Serving {
+  model?: string
+  usage?: JsonObject
+}
+
+/** A reply, a chunk or an event carrying a reply (`message`, `response`), as the provider serves it. */
+function served(value: JsonObject, as: Serving): JsonObject {
+  const next: JsonObject = { ...value }
+  if (as.model && next["model"] !== undefined) next["model"] = as.model
+  const usage = JsonRecord.safeParse(next["usage"]).data
+  if (as.usage && usage) next["usage"] = { ...usage, ...as.usage }
+  for (const key of ["message", "response"]) {
+    const inner = JsonRecord.safeParse(next[key]).data
+    if (inner) next[key] = served(inner, as)
+  }
+  return next
 }
 
 function responseObject(id: string, status: string, output: JsonObject[]): JsonObject {

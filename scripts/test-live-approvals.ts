@@ -224,7 +224,21 @@ try {
         endGate.resolve()
         await assert.rejects(pendingEnd, /owner changed|did not confirm submission/)
       }
-      console.log(`PASS ${provider}: durable intent, duplicate/conflicting answers, native-ID reuse, storage failure, lost reply, reopen and retired-owner fence`)
+      // Grok asks to trust the folder as its session opens, before any turn; the first turn starts while it waits.
+      id = randomUUID()
+      state = { ...state, id, status: "ready", nativeRunId: undefined }
+      await owner.start(provider, root, { conversationId: id })
+      for (let i = 0; i < 100 && owner.snapshot(id)?.session.connection !== "connected"; i++) await delay(5)
+      const between = ask()
+      assert.ok(between)
+      state = { ...state, status: "running", nativeRunId: "first-turn" }
+      owner.observe({ type: "live-session", session: state })
+      answer = async () => {}
+      submission = { kind: "submitted", source: "callback" }
+      const answeredBefore = calls
+      await owner.permission(id, between, response)
+      assert.equal(calls, answeredBefore + 1, "an approval raised between turns is still answerable once the next turn starts")
+      console.log(`PASS ${provider}: durable intent, duplicate/conflicting answers, native-ID reuse, storage failure, lost reply, reopen, retired-owner fence and an approval raised between turns`)
     } finally { owner.stop() }
   }
 } finally { rmSync(root, { recursive: true, force: true }) }

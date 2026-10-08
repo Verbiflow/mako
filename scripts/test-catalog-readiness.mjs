@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { setImmediate as tick } from "node:timers/promises"
 import { build } from "esbuild"
 
@@ -122,7 +122,8 @@ const mocks = {
     export const defaultCatalogIdentity = async () => ({});
     export const connectDaemon = () => s.connect();
     export const daemonMemoryUnsafe = () => false;
-    export const renderTranscript = () => ''; export const renderTranscriptBundle = () => ({});`,
+    export const renderTranscript = () => ''; export const renderTranscriptBundle = () => ({});
+    export { VIEWER_PAGE } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/format.js", import.meta.url)))};`,
   "./daemon-login.js": `export const daemonLoginEnabled = async () => globalThis.__catalogReadinessTest.daemonEnabled;
     export const daemonLoginOwner = () => false; export const daemonLoginProcess = async () => null;
     export const daemonScript = () => ''; export const refreshDaemonLoginJob = async () => {};
@@ -131,7 +132,6 @@ const mocks = {
   "./lineage.js": `export const loadLineage = () => globalThis.__catalogReadinessTest.lineage.promise; export const annotate = ref => ref;`,
   "./providers/index.js": `export const providerHost = { processProbes: { list: () => [] } };`,
   "./provider-activity-engine.js": `export class ProviderActivityEngine { onChange() {} start() {} stop() {} }`,
-  "./host-log.js": `export const hostLog = () => {}; export const hostWarn = () => {};`,
   "./host-git.js": `export class WorkspaceGit {}`,
   "./host-workspace.js": `export class WorkspaceFiles {}; export function readConversationFile() { throw new Error("Catalog readiness must not read preview files") }`,
 }
@@ -155,6 +155,7 @@ try {
           b.onLoad({ filter: /.*/, namespace: "fake" }, (args) => ({
             contents: mocks[args.path],
             loader: "js",
+            resolveDir: fileURLToPath(new URL("..", import.meta.url)),
           }))
         },
       },

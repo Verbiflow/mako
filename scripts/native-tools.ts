@@ -12,9 +12,7 @@ import { z } from "zod"
 export const NATIVE_TOOLS_DIR = join(import.meta.dirname, "fixtures", "native-tools")
 
 /** Harnesses with no recorded definitions, and why. */
-export const NO_SOURCE = new Map([
-  ["devin", "Its requests are protobuf to the Windsurf API, and it sends none to its model until GetUserStatus and GetCliModelConfigs are answered, so a capture would have to answer them in Windsurf's own messages."],
-])
+export const NO_SOURCE = new Map<string, string>()
 
 const Parameter = z.object({ type: z.string(), required: z.boolean() })
 export type Parameter = z.infer<typeof Parameter>

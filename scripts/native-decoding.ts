@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../electron/codex-app-json.ts"
 import type { Decoded } from "../electron/contracts/native-decoding.ts"
-import type { DecoderEffect, ProviderDecoderSource } from "../electron/providers/decoder-source.ts"
+import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "../electron/providers/decoder-source.ts"
 import { providerHost } from "../electron/providers/index.ts"
 
 /**
@@ -182,6 +182,24 @@ export interface Prompt {
 export interface PromptFile {
   name: string
   mimeType: string
+}
+
+/**
+ * Each message of a recording with what `decoder` makes of it, told where Mako
+ * opened a turn and where a resumed session was opening, as the host tells its driver.
+ */
+export function* replayed(decoder: RecordedDecoder, recording: Recording): Generator<{ message: JsonValue; decoded: Decoded<DecoderEffect>[] }> {
+  const prompts = recording.prompts ?? []
+  const openings = recording.openings ?? []
+  let next = 0
+  for (const [index, message] of recording.messages.entries()) {
+    for (; prompts[next]?.at === index; next++) if (!prompts[next]!.steered) decoder.prompted?.()
+    for (const opening of openings) {
+      if (opening.at === index) decoder.opening?.()
+      if (opening.opened === index) decoder.opened?.()
+    }
+    yield { message, decoded: decoder.decode(message) }
+  }
 }
 
 /** Messages from a capture, a fixture, or a file of one native message per line. */

@@ -115,6 +115,7 @@ try {
         account: "default",
         available: true,
         readsUniversalRoot: false,
+        readsWorkspace: true,
       },
     ],
   }

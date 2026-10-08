@@ -37,8 +37,8 @@ const snapshot: SkillRegistrySnapshot = {
   cwd: "/repo",
   generatedAt: 0,
   providers: [
-    { id: "claude", label: "Claude Code", account: "default", available: true, readsUniversalRoot: false },
-    { id: "cursor", label: "Cursor", account: "default", available: false, readsUniversalRoot: false },
+    { id: "claude", label: "Claude Code", account: "default", available: true, readsUniversalRoot: false, readsWorkspace: true },
+    { id: "cursor", label: "Cursor", account: "default", available: false, readsUniversalRoot: false, readsWorkspace: true },
   ],
   skills: [
     skill("wait-what", [["agents", "user"]], { manual: true }),

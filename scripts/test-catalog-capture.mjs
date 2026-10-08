@@ -15,7 +15,7 @@ if (!process.versions.electron) {
   await mkdir(store, { recursive: true })
   await copyFile(source, join(store, 'rollout-fixture.jsonl'))
   await writeFile(join(root, 'package.json'), JSON.stringify({ main: fileURLToPath(import.meta.url) }))
-  const env = { ...process.env, HOME: join(root, 'home'), MAKO_CATALOG_CAPTURE_ROOT: root, MAKO_RELAY: '0' }
+  const env = { ...process.env, HOME: join(root, 'home'), MAKO_CATALOG_CAPTURE_ROOT: root }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve('node_modules/.bin/electron'), [root], { env, stdio: 'inherit' })
   const timeout = setTimeout(() => child.kill('SIGTERM'), 120_000)

@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { AccountLimits } from "../src/components/identity/account-usage"
 import { IdentityRow } from "../src/components/identity/identity-row"
 import { accountGroups, accountsStore } from "../src/state/accounts"
+import { threadsStore } from "../src/state/threads"
+import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 import {
   balanceText,
   planText,
@@ -61,6 +63,8 @@ assert.equal(readingAgeText(now - 3 * hour, now), "Read 3h ago")
 assert.equal(planText("pro"), "Pro")
 assert.equal(planText("X Premium+"), "X Premium+")
 
+// Reset credits show only on a harness that declares it spends them (Codex), whatever a reading carries.
+threadsStore.set({ descriptors: fixtureHarnesses })
 accountsStore.set({
   loadedAt: now,
   providers: [
@@ -84,6 +88,7 @@ accountsStore.set({
         { usedPercent: 42, windowMinutes: 300, resetsAt: Date.now() + 2 * hour },
         { usedPercent: 81, windowMinutes: 10_080, resetsAt: Date.now() + 3 * day, scope: "Opus" },
       ],
+      resetCredits: { available: 5, expiresAt: null },
     },
     "claude:work": { status: "stale-token", detail: "Usage returns after this account’s next Claude Code run" },
     "codex:personal": {
@@ -133,6 +138,7 @@ assert.match(menu, /\$3,730 of \$5,000 promotional credit left/)
 assert.match(menu, /No usage limits reported for this plan/)
 assert.match(menu, />Max</)
 assert.match(menu, />2 resets available · Read 40m ago</, "the menu names the credits; their expiry is in the tooltip")
+assert.doesNotMatch(menu, /5 resets available/, "Claude Code declares no reset credits, so a reading's are not shown")
 assert.match(menu, /title="2 resets available · first expires/)
 assert.match(menu, />Reads after its next run</, "another login is one line in the menu")
 const page = renderToStaticMarkup(<AccountLimits density="page" />)

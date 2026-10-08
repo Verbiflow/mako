@@ -12,9 +12,12 @@ import { query } from "@anthropic-ai/claude-agent-sdk"
 import { resolveExecutable } from "../electron/executable.ts"
 import { ProviderLaunchTrace } from "../electron/provider-launch.ts"
 import { providerHost } from "../electron/providers/index.ts"
+import { acpClientCapabilities, type ProviderAcpSource } from "../electron/providers/acp-source.ts"
 import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
 import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
 import { codexCollaborationMode, codexInteractiveConfig } from "../electron/providers/codex/settings.ts"
+import { devinAcpSource } from "../electron/providers/devin/acp.ts"
+import { devinExecutable } from "../electron/providers/devin/executable.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { openCodeAgentForMode, openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
 import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
@@ -47,9 +50,9 @@ import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type 
  *
  * Cursor's model sits behind its own service, so its tools come from the
  * tool-call schema its SDK reports them in: the arguments Mako receives, not
- * the definitions its model sees. Devin's requests are protobuf to the
- * Windsurf API, and it sends none to its model until its account and model
- * configuration calls are answered, so it has no source here yet.
+ * the definitions its model sees. Devin's model request is protobuf to the
+ * Windsurf API, whose URL it takes from `WINDSURF_API_SERVER_URL`; a stand-in
+ * answers its account calls empty and reads the tools out of the request.
  */
 
 const run = promisify(execFile)
@@ -352,9 +355,12 @@ async function codexDefinitions(): Promise<Captures> {
   return { version, source: "the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan", configurations }
 }
 
-/** The ACP session's prompt, with Mako's launch arguments for the mode. */
+const JsonFields = z.record(z.string(), z.json())
+
+/** The ACP session's prompt, with Mako's launch arguments for the mode and the client capabilities Mako tells its source. */
 async function acpCapture(input: {
   harness: string
+  source: Pick<ProviderAcpSource, "clientCapabilities">
   command: string
   args: string[]
   env: NodeJS.ProcessEnv
@@ -372,7 +378,7 @@ async function acpCapture(input: {
     if (method === "session/update" && Update.safeParse(params).data?.update.sessionUpdate === "agent_message_chunk") reached?.()
   })
   try {
-    await peer.call("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
+    await peer.call("initialize", { protocolVersion: 1, clientCapabilities: JsonFields.parse(acpClientCapabilities(input.source)) })
     const session = z.object({ sessionId: z.string() }).parse(await peer.call("session/new", { cwd: input.cwd, mcpServers: [] }))
     if (input.mode) await peer.call("session/set_mode", { sessionId: session.sessionId, modeId: input.mode })
     void peer.call("session/prompt", { sessionId: session.sessionId, prompt: [{ type: "text", text: "hi" }] }).catch(() => {})
@@ -407,7 +413,7 @@ async function grokDefinitions(): Promise<Captures> {
         const launch = await grokAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access })
         if (!launch) throw new Error("Grok's ACP source declined to launch")
         launch.configureEnvironment?.(env)
-        const tools = await acpCapture({ harness: "Grok", command: launch.command, args: launch.args, env, cwd: sandbox.project, mode: native, endpoint })
+        const tools = await acpCapture({ harness: "Grok", source: grokAcpSource, command: launch.command, args: launch.args, env, cwd: sandbox.project, mode: native, endpoint })
         return { name: mode.id, tools: definedTools("chat", tools, sandbox.scrub) }
       } finally {
         await endpoint.close()
@@ -415,6 +421,146 @@ async function grokDefinitions(): Promise<Captures> {
     }))
   }
   return { version, source: "the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode", configurations }
+}
+
+type ProtoField = { no: number; wire: "varint"; value: number } | { no: number; wire: "bytes"; bytes: Buffer }
+
+/** A protobuf message's varint and length-delimited fields in order; fixed-width ones are skipped. */
+function protoFields(bytes: Buffer): ProtoField[] {
+  const fields: ProtoField[] = []
+  let at = 0
+  const varint = () => {
+    let value = 0
+    for (let shift = 0; ; shift += 7) {
+      const byte = bytes[at++]
+      if (byte === undefined) throw new Error("A protobuf varint ran past its message")
+      value += (byte & 127) * 2 ** shift
+      if (byte < 128) return value
+    }
+  }
+  while (at < bytes.length) {
+    const tag = varint()
+    const wire = tag & 7
+    const no = Math.floor(tag / 8)
+    if (wire === 0) fields.push({ no, wire: "varint", value: varint() })
+    else if (wire === 2) {
+      const length = varint()
+      fields.push({ no, wire: "bytes", bytes: bytes.subarray(at, at + length) })
+      at += length
+    } else if (wire === 1 || wire === 5) at += wire === 1 ? 8 : 4
+    else throw new Error(`Protobuf wire type ${wire} isn't read here`)
+  }
+  return fields
+}
+
+/**
+ * The tools of a Windsurf `GetChatMessageRequest` (field 10, each an
+ * `exa.chat_pb.ChatToolDefinition`: name 1, description 2,
+ * json_schema_string 3, is_custom_tool 9), restated as chat-completions tools.
+ * The field numbers are the ones Devin.app's bundled protobuf types give.
+ */
+function windsurfTools(frame: Buffer): unknown[] {
+  if (frame.length < 5) throw new Error("Devin's model request has no Connect frame")
+  if (frame[0]! & 1) throw new Error("Devin compressed its model request, which this capture doesn't read")
+  const message = frame.subarray(5, 5 + frame.readUInt32BE(1))
+  return protoFields(message).flatMap((tool) => {
+    if (tool.no !== 10 || tool.wire !== "bytes") return []
+    const fields = protoFields(tool.bytes)
+    const text = (wanted: number) => {
+      const found = fields.find(({ no }) => no === wanted)
+      return found?.wire === "bytes" ? found.bytes.toString("utf8") : undefined
+    }
+    if (fields.some((field) => field.no === 9 && field.wire === "varint" && field.value !== 0))
+      throw new Error(`Devin defines ${text(1)} as a custom-grammar tool, which this capture doesn't read`)
+    const schema = text(3)
+    return [{ type: "function", function: { name: text(1) ?? "", description: text(2), parameters: schema ? JSON.parse(schema) : undefined } }]
+  })
+}
+
+/**
+ * A stand-in for the Windsurf API Devin signs in to. The account, team and
+ * model configuration calls get empty replies, which Devin 3000.10.23 starts
+ * on; its model request (`GetChatMessage`) is kept and refused like the rest,
+ * so Devin stops with `auth_required` and no model is called.
+ */
+async function windsurfEndpoint(): Promise<ModelEndpoint> {
+  const answered = new Set(["GetCliTeamSettings", "GetUserStatus", "GetCliModelConfigs"])
+  const requests: { path: string; tools: unknown[] }[] = []
+  const listeners = new Set<() => void>()
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on("data", (chunk: Buffer) => chunks.push(chunk))
+    request.on("end", () => {
+      const path = request.url ?? "/"
+      const method = path.split("/").pop() ?? ""
+      if (answered.has(method)) {
+        response.writeHead(200, { "content-type": "application/proto" })
+        return void response.end()
+      }
+      const body = Buffer.concat(chunks)
+      if (keepDir) void mkdir(keepDir, { recursive: true }).then(() => writeFile(join(keepDir, `${String(++kept).padStart(3, "0")}-${method}.bin`), body))
+      requests.push({ path, tools: method === "GetChatMessage" ? windsurfTools(body) : [] })
+      for (const listener of listeners) listener()
+      response.writeHead(401, { "content-type": "application/json" })
+      response.end(JSON.stringify({ code: "unauthenticated", message: REFUSAL }))
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  // SAFETY: a server listening on a TCP port reports its address as an AddressInfo.
+  const { port } = server.address() as AddressInfo
+  return {
+    url: `http://127.0.0.1:${port}`,
+    tools: () => new Promise<ToolRequest>((resolve, reject) => {
+      const check = () => {
+        const request = requests.find(({ tools }) => tools.length > 1)
+        if (request) { done(); resolve({ tools: request.tools, body: {} }) }
+      }
+      const timer = setTimeout(() => {
+        done()
+        reject(new Error(`no model request with tools within ${CAPTURE_MS / 1000}s; ${requests.length} other requests: ${requests.map(({ path }) => path).join("; ")}`))
+      }, CAPTURE_MS)
+      const done = () => { clearTimeout(timer); listeners.delete(check) }
+      listeners.add(check)
+      check()
+    }),
+    close: () => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }),
+  }
+}
+
+async function devinDefinitions(): Promise<Captures> {
+  const driver = providerHost.liveDrivers.get("devin")!
+  const executable = devinExecutable()
+  if (!executable) throw new Error("Devin is not installed")
+  const version = /\d+(?:\.\d+)+/.exec((await run(executable, ["--version"])).stdout)?.[0]
+  if (!version) throw new Error("Devin reported no version")
+  const configurations: Configuration[] = []
+  const withheld: string[] = []
+  for (const mode of driver.modes ?? []) {
+    const configuration = await sandboxed("devin", async (sandbox): Promise<Configuration | undefined> => {
+      const endpoint = await windsurfEndpoint()
+      // The sandbox's data home holds no credentials.toml, so Devin signs in with this key, to the stand-in only.
+      const env: NodeJS.ProcessEnv = {
+        ...sandbox.env, WINDSURF_API_KEY: CAPTURE_KEY,
+        WINDSURF_API_SERVER_URL: endpoint.url, DEVIN_API_URL: endpoint.url, WINDSURF_WEBSITE_URL: endpoint.url, DEVIN_WEBAPP_URL: endpoint.url,
+      }
+      try {
+        const launch = await devinAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: devinAcpSource.access?.default })
+        if (!launch) throw new Error("Devin's ACP source declined to launch")
+        launch.configureEnvironment(env)
+        const tools = await acpCapture({ harness: "Devin", source: devinAcpSource, command: launch.command, args: launch.args, env, cwd: sandbox.project, mode: mode.id, endpoint })
+        return { name: mode.id, tools: definedTools("chat", tools, sandbox.scrub) }
+      } catch (error) {
+        if (!String(error).includes(`Mode '${mode.id}' is not available`)) throw error
+        withheld.push(mode.id)
+        return undefined
+      } finally {
+        await endpoint.close()
+      }
+    })
+    if (configuration) configurations.push(configuration)
+  }
+  const unoffered = withheld.length ? `; not ${withheld.join(", ")}, which Devin offers only to an account whose settings allow it` : ""
+  return { version, source: `the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode${unoffered}`, configurations }
 }
 
 /** The model families OpenCode gives different tools: Anthropic's Messages API and OpenAI's Responses API. */
@@ -517,6 +663,7 @@ const CAPTURES = new Map([
   ["claude", claudeDefinitions],
   ["codex", codexDefinitions],
   ["cursor", cursorDefinitions],
+  ["devin", devinDefinitions],
   ["grok", grokDefinitions],
   ["opencode", openCodeDefinitions],
 ])

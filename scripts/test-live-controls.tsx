@@ -1,7 +1,7 @@
 import { mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { ProposedPlanCard } from "../src/components/transcript/proposed-plan"
 import { CompactionControl } from "../src/components/composer/compaction-control"
-import { fixtureCapabilities } from "../src/dev/harness-fixtures"
+import { fixtureCapabilities, fixtureUsage } from "../src/dev/harness-fixtures"
 import { harnessLacks } from "../electron/contracts/harness-capabilities"
 import { Exchange } from "../src/components/transcript/exchange"
 import { Prose } from "../src/components/transcript/markdown"
@@ -16,6 +16,7 @@ import type { ThreadFolder } from "../src/lib/thread-folders"
 import { AttachmentStrip, InlineAttachment } from "../src/components/composer/attachments"
 import { MentionMenu } from "../src/components/composer/mention-menu"
 import type { Attachment } from "../src/lib/attachments"
+import type { LiveSessionUsage } from "../src/lib/types"
 import { projectDraftKey } from "../src/state/drafts"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
 import { draftPlanReply } from "../src/state/plans"
@@ -187,7 +188,7 @@ assert.match(singleModeMarkup, /aria-label="Access: Full access"/)
 assert.doesNotMatch(singleModeMarkup, /<button[^>]*aria-label="Access:/)
 const originalAccessDescriptors = threadsStore.get().descriptors
 threadsStore.set({
-  descriptors: [{ provider: "cursor", displayName: "Cursor", resumable: true, live: true, capabilities: fixtureCapabilities("cursor"), modes: conversation.session.modes }],
+  descriptors: [{ provider: "cursor", displayName: "Cursor", resumable: true, live: true, capabilities: fixtureCapabilities("cursor"), usage: fixtureUsage("cursor"), modes: conversation.session.modes }],
   composerHarness: "cursor",
 })
 const nextSessionMarkup = renderToStaticMarkup(<NextSessionModePicker />)
@@ -202,6 +203,7 @@ threadsStore.set({
     resumable: true,
     live: true,
     capabilities: fixtureCapabilities("grok"),
+    usage: fixtureUsage("grok"),
     modes: [
       { id: "plan", name: "Plan", access: "plan", enforcement: "provider" },
       { id: "access:ask", name: "Ask before acting", access: "ask", enforcement: "launch" },
@@ -588,7 +590,7 @@ assert.deepEqual(recoverableRequests(conversation).map(request => request.id), [
 conversation.requests.splice(-2, 2)
 publish()
 const savedDescriptors = threadsStore.get().descriptors
-threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, capabilities: fixtureCapabilities("claude") }] })
+threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Claude Code", resumable: true, live: true, capabilities: fixtureCapabilities("claude"), usage: fixtureUsage("claude") }] })
 const savedSession = conversation.session
 const savedActions = control.actions
 const compactionRequest = conversation.requests.find((request) => request.id === "failed")!
@@ -609,13 +611,13 @@ assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Compaction comp
 control.actions = []
 publish()
 threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true,
-  capabilities: { ...fixtureCapabilities("claude"), compaction: harnessLacks("Fixture cannot compact") } }] })
+  capabilities: { ...fixtureCapabilities("claude"), compaction: harnessLacks("Fixture cannot compact") }, usage: fixtureUsage("claude") }] })
 assert.match(renderToStaticMarkup(<RetainedRequests />), /Review message/)
 assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Fixture cannot compact|Start new thread with saved message/)
 assert.doesNotMatch(renderToStaticMarkup(<CompactionControl />), /<button/)
 // A harness that compacts on its own says so, and offers no Compact of its own.
 threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true,
-  capabilities: { ...fixtureCapabilities("claude"), compaction: fixtureCapabilities("cursor").compaction } }] })
+  capabilities: { ...fixtureCapabilities("claude"), compaction: fixtureCapabilities("cursor").compaction }, usage: fixtureUsage("claude") }] })
 const automatic = renderToStaticMarkup(<CompactionControl />)
 assert.equal(fixtureCapabilities("cursor").compaction.state, "default")
 assert.match(automatic, /summarizes the conversation on its server/)
@@ -712,8 +714,10 @@ assert.doesNotMatch(filteredCommands, /compact/)
 conversation.session = { ...conversation.session, commands: undefined }
 publish()
 
-// The provider's own context reading says what the window holds, in the
-// provider's numbers only — nothing is shown until it reports.
+// The meter shows what the harness declares it reports (`HarnessUsage`), each
+// field filled in by the provider's own reading and never by guessing.
+const meterDescriptors = threadsStore.get().descriptors
+threadsStore.set({ descriptors: fixtureHarnesses })
 conversation.session = {
   ...conversation.session,
   usage: {
@@ -724,9 +728,9 @@ conversation.session = {
   },
 }
 publish()
-const readingMarkup = renderToStaticMarkup(
-  <UsageDetails usage={conversation.session.usage!} harness="claude" conversationId={conversation.session.id} />
-)
+const details = (usage: LiveSessionUsage, harness: string) =>
+  renderToStaticMarkup(<UsageDetails usage={usage} harness={harness} conversationId={conversation.session.id} />)
+const readingMarkup = details(conversation.session.usage!, "claude")
 assert.match(readingMarkup, /164k of 200k tokens/)
 assert.match(readingMarkup, />82%</)
 assert.match(readingMarkup, /Cache read.*410k/)
@@ -735,40 +739,45 @@ assert.match(readingMarkup, /Total.*459k/)
 assert.match(readingMarkup, /\$0\.42/)
 const meterMarkup = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
 assert.match(meterMarkup, /aria-label="Context 82% full"/)
-// Compacted since the reading: the number is kept and said to be stale until the next reply.
-const staleMarkup = renderToStaticMarkup(
-  <UsageDetails usage={{ ...conversation.session.usage!, compacted: true }} harness="claude" conversationId={conversation.session.id} />
-)
-assert.match(staleMarkup, /before compacting\. The next reply updates this\./)
-// A harness that reports spend but no fill (Cursor) shows the tokens and says what is missing.
-const spendOnly = renderToStaticMarkup(
-  <UsageDetails usage={{ tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } }} harness="cursor" conversationId={conversation.session.id} />
-)
-assert.match(spendOnly, />Unavailable</)
-assert.match(spendOnly, /Cursor doesn&#x27;t report how full the context is\./)
+// After compaction: a harness that says what is left (Claude) has its next reading; one that
+// doesn't (Devin) keeps the number, said to be stale until the next reply.
+assert.doesNotMatch(details({ ...conversation.session.usage!, compacted: true }, "claude"), /before compacting/)
+assert.match(details({ ...conversation.session.usage!, compacted: true }, "devin"), /before compacting\. The next reply updates this\./)
+// Before the first reply, a harness that measures says when it will, never that it can't.
+const pending = details({}, "claude")
+assert.match(pending, />After the first reply</)
+assert.match(pending, /Claude Code reports how full the context is after each reply\./)
+assert.match(pending, /Counted after the first reply\./)
+// A harness that declares no fill (Cursor) says why, in its own declaration's words, and why it shows no cost.
+const spendOnly = details({ tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } }, "cursor")
+assert.match(spendOnly, />Not reported</)
+assert.match(spendOnly, /data-context-unmeasured[^>]*>Cursor&#x27;s SDK reports what each turn spent, never how full the context is\./)
+assert.match(spendOnly, /data-cost-unreported[^>]*>Cursor&#x27;s SDK reports tokens only and prices none of them\./)
 assert.doesNotMatch(spendOnly, /Cache write/)
-assert.doesNotMatch(readingMarkup, /data-unrecorded-spend/, "complete spend carries no note")
+assert.doesNotMatch(readingMarkup, /data-unrecorded-spend|data-cost-unreported/, "complete, priced spend carries no note")
 // A harness that says its count left spend out (Grok): the totals are said to be floors, the cost alone when only it is.
 const spendTotals = { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }, cost: { amount: 0.03, currency: "USD" } }
-const undercounted = renderToStaticMarkup(
-  <UsageDetails usage={{ ...spendTotals, unrecorded: { tokens: 1, cost: 1 } }} harness="grok" conversationId={conversation.session.id} />
-)
-assert.match(undercounted, /data-unrecorded-spend[^>]*>Grok left some calls out of its usage count, so these totals may be low\./)
-const partialCost = renderToStaticMarkup(
-  <UsageDetails usage={{ ...spendTotals, unrecorded: { tokens: 0, cost: 2 } }} harness="grok" conversationId={conversation.session.id} />
-)
-assert.match(partialCost, /Grok didn&#x27;t report the cost of every call, so the cost may be low\./)
-const noCostShown = renderToStaticMarkup(
-  <UsageDetails usage={{ tokens: spendTotals.tokens, unrecorded: { tokens: 0, cost: 1 } }} harness="grok" conversationId={conversation.session.id} />
-)
-assert.doesNotMatch(noCostShown, /data-unrecorded-spend/, "a cost left out says nothing when no cost is shown")
+assert.match(details({ ...spendTotals, unrecorded: { tokens: 1, cost: 1 } }, "grok"), /data-unrecorded-spend[^>]*>Grok left some calls out of its usage count, so these totals may be low\./)
+assert.match(details({ ...spendTotals, unrecorded: { tokens: 0, cost: 2 } }, "grok"), /Grok didn&#x27;t report the cost of every call, so the cost may be low\./)
+assert.doesNotMatch(details({ tokens: spendTotals.tokens, unrecorded: { tokens: 0, cost: 1 } }, "grok"), /data-unrecorded-spend/, "a cost left out says nothing when no cost is shown")
+// What a harness declares it doesn't report never shows, whatever arrives: Codex prices nothing and never says it missed calls.
+const undeclared = details({ ...spendTotals, unrecorded: { tokens: 1, cost: 1 } }, "codex")
+assert.doesNotMatch(undeclared, /\$0\.03|data-unrecorded-spend/)
+assert.match(undeclared, /Codex reports tokens only and prices none of them\./)
 const readingUsage = conversation.session.usage
-conversation.session = { ...conversation.session, usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
+conversation.harness = "cursor"
+conversation.session = { ...conversation.session, harness: "cursor", usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
 publish()
 const spendOnlyMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
-assert.match(spendOnlyMeter, /aria-label="Context usage unavailable"/)
+assert.match(spendOnlyMeter, /aria-label="Context fill not reported"/)
 assert.match(spendOnlyMeter, /data-unmeasured-ring/)
-assert.doesNotMatch(spendOnlyMeter, />Tokens /)
+conversation.harness = "claude"
+conversation.session = { ...conversation.session, harness: "claude", usage: undefined }
+publish()
+const pendingMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
+assert.match(pendingMeter, /aria-label="Context measured after the first reply"/, "a harness that measures shows its meter before the first reading")
+assert.match(pendingMeter, /data-context-ring/)
 conversation.session = { ...conversation.session, usage: readingUsage }
+threadsStore.set({ descriptors: meterDescriptors })
 publish()
 console.log("Activity feedback: contextual recovery, distinct main states, tuned inline project/thread orbs, idle cleanup, and explicit external-running labels verified")

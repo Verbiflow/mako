@@ -172,6 +172,14 @@ try {
     "PASS: changed branch and external Git lock reject before mutation"
   )
 
+  const ending = store.capture(cwd)
+  await store.assertAvailable(cwd)
+  const [ended, begun] = await Promise.all([ending, store.capture(cwd)])
+  assert.notEqual(ended.id, begun.id)
+  console.log(
+    "PASS: a turn starts while another conversation's checkpoint of the workspace is still being written, and its checkpoint waits for that one"
+  )
+
   symlinkSync("tracked", join(cwd, "link"))
   const linked = await store.capture(cwd)
   rmSync(join(cwd, "link"))
@@ -235,8 +243,15 @@ try {
   await assert.rejects(store.beginRun(overlappingB, cwd), /Another agent/)
   await assert.rejects(store.endRun(overlappingA), /Another agent/)
   await assert.rejects(store.endRun(overlappingB), /Another agent/)
+  const finishing = randomUUID(),
+    following = randomUUID()
+  await store.beginRun(finishing, cwd)
+  const closing = store.endRun(finishing)
+  await store.beginRun(following, cwd)
+  await closing
+  await store.endRun(following)
   console.log(
-    "PASS: active writers block rewind and overlapping runs cannot claim coordinated checkpoints"
+    "PASS: active writers block rewind and overlapping runs cannot claim coordinated checkpoints; a turn that begins while another's closing checkpoint is written overlaps nothing"
   )
 
   git("update-index", "--assume-unchanged", "tracked")

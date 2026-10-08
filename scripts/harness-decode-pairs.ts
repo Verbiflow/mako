@@ -156,10 +156,19 @@ async function grokRewind(call: AcpCall, sessionId: string, target: number): Pro
   if (!GrokRewound.safeParse(reply).success) throw new Error(`Grok did not rewind to turn ${target}: ${JSON.stringify(reply)?.slice(0, 300)}`)
 }
 
+/** Why a recorder other than Devin's drives no `still-running`. */
+const NO_OTHER_CLIENT = "Mako reads no other client's record of this harness's sessions; Devin.app's journal is the only one"
+
+/** What xAI charges for one scripted reply, in its ticks (10^10 to the dollar). */
+const GROK_REPLY_TICKS = 40_000_000
+/** The model Grok opens a session on without a catalog, listed with a window. */
+const GROK_PAIR_MODEL = "grok-4.6"
+const GROK_PAIR_WINDOW = 256_000
+
 /** Grok over ACP, as Mako's ACP source launches it. */
 const grok: Recorder = {
   model: { kind: "scripted", tools: GROK_TOOLS },
-  controls: { steer: "driven", rewind: "driven", compact: "driven", resume: "driven" },
+  controls: { steer: "driven", rewind: "driven", compact: "driven", resume: "driven", "still-running": { absent: NO_OTHER_CLIENT } },
   keeps: (file) => /\/sessions\/[^/]+\/[^/]+\/(updates\.jsonl|summary\.json)$/.test(file),
   takesBuild: true,
   async record(sandbox, scenario, build) {
@@ -168,11 +177,13 @@ const grok: Recorder = {
     const model = await scriptedModel({
       answers: new Map([
         ["/v1/api-key", JSON.stringify({ redacted_api_key: "xai-...pair", user_id: "pair", name: "pair", acls: ["api-key:model:*", "api-key:endpoint:*"], api_key_blocked: false, api_key_disabled: false, team_blocked: false })],
-        ["/v1/models", JSON.stringify({ object: "list", data: [] })],
+        // One model with its window, as xAI's catalog lists it; Grok names the window in the reply that opens each session.
+        ["/v1/models", JSON.stringify({ object: "list", data: [{ id: GROK_PAIR_MODEL, object: "model", name: "Grok", context_window: GROK_PAIR_WINDOW }] })],
       ]),
       reply: steps.reply,
       // Grok 1.0.44 asks for its dashboard line after each turn on the conversation's own request, tools and all.
       side: (heard) => heard.lastIndexOf(GROK_DASHBOARD_ASK) > heard.lastIndexOf(`"role":"assistant"`),
+      usage: { cost_in_usd_ticks: GROK_REPLY_TICKS },
     })
     const env: NodeJS.ProcessEnv = {
       ...sandbox.env, ...scenario.env, GROK_HOME: join(sandbox.home, ".grok"), XAI_API_KEY: "mako-decode-pair",
@@ -229,6 +240,7 @@ const claude: Recorder = {
     rewind: { absent: "Claude Code 2.1.283's SDK rewinds files only (`rewindFiles`); its conversation rewind is the TUI's /rewind" },
     compact: "driven",
     resume: "driven",
+    "still-running": { absent: NO_OTHER_CLIENT },
   },
   keeps: (file) => /\/projects\/[^/]+\/.+\.jsonl$/.test(file),
   takesBuild: true,
@@ -401,6 +413,7 @@ const codex: Recorder = {
     rewind: { absent: "Codex 0.159.3's app-server has no rollback; its generated protocol names none" },
     compact: "driven",
     resume: "driven",
+    "still-running": { absent: NO_OTHER_CLIENT },
   },
   keeps: (file) => /\/sessions\/\d{4}\/\d\d\/\d\d\/rollout-[^/]+\.jsonl$/.test(file),
   takesBuild: true,
@@ -552,6 +565,7 @@ const opencode: Recorder = {
     rewind: "driven",
     compact: "driven",
     resume: "driven",
+    "still-running": { absent: NO_OTHER_CLIENT },
   },
   keeps: (file) => /\/opencode\/opencode(?:-next)?\.db$/.test(file),
   takesBuild: true,
@@ -686,7 +700,7 @@ const opencode: Recorder = {
       await launched.close()
       const file = (await storeReader("opencode", sandbox.home).discover()).find((candidate) => candidate.path.endsWith(encodeURIComponent(session.id)))
       if (!file) throw new Error("OpenCode wrote no session to its store")
-      return { version, recording: { harness: "opencode", session: { root: session.id, cwd: sandbox.project, launchAccess, contextSize: null }, native: { version, origin: "captured" }, messages, prompts, openings }, store: file.path }
+      return { version, recording: { harness: "opencode", session: { root: session.id, cwd: sandbox.project, launchAccess, contextSize: chosen.limit.context || null }, native: { version, origin: "captured" }, messages, prompts, openings }, store: file.path }
     } finally {
       await launched.close()
       await model.close()
@@ -750,6 +764,8 @@ const devin: Recorder = {
     rewind: "driven",
     compact: "driven",
     resume: "driven",
+    // Driven as Devin.app drives it, its journal kept as the app leaves it with the session still open.
+    "still-running": "driven",
   },
   keeps: (file) => file.endsWith("/devin/cli/sessions.db") || /\/Devin\/User\/(acp-messages\/[^/]+\.db|globalStorage\/state\.vscdb)$/.test(file),
   storeFolder: (store) => store.includes(`/${DEVIN_APP_USER}/`) ? store.slice(0, store.indexOf(`/${DEVIN_APP_USER}/`) + DEVIN_APP_USER.length + 1) : dirname(store),
@@ -765,11 +781,17 @@ const devin: Recorder = {
     if (!launch) throw new Error("Devin's ACP source declined to launch")
     launch.configureEnvironment(env)
     const version = await versionOf(launch.command)
+    const stillRunning = scenario.controls?.includes("still-running")
     const { loads, ...wire } = await acpSession({
       command: launch.command, args: launch.args, env, cwd: sandbox.project,
       mode: devinAcpSource.access?.native?.edits, source: devinAcpSource, rewind: devinRewind,
-      meta: scenario.turns.some((turn) => turn.rewind !== undefined) ? { "cognition.ai/revert": true } : undefined,
-    }, [...scenario.turns, DEVIN_APP_REOPENS])
+      meta: {
+        ...scenario.turns.some((turn) => turn.rewind !== undefined) && { "cognition.ai/revert": true },
+        // Devin.app 3.10.23 advertises it, and sends each prompt with a `clientMessageId`; Devin 3000.10.23 still sends no prompt back.
+        ...stillRunning && { "cognition.ai/messageGrouping": true },
+      },
+      promptMeta: stillRunning ? () => ({ "cognition.ai/clientMessageId": randomUUID() }) : undefined,
+    }, stillRunning ? scenario.turns : [...scenario.turns, DEVIN_APP_REOPENS])
     devinPromptRuns(wire)
     const [file] = await storeReader("devin", sandbox.home).discover()
     if (!file) throw new Error("Devin wrote no session to its store")
@@ -782,10 +804,12 @@ const devin: Recorder = {
 const DEVIN_APP = "/Applications/Devin.app"
 
 /**
- * Every Devin pair ends as Devin.app opening the session again: a new agent
+ * A Devin pair ends as Devin.app opening the session again: a new agent
  * loads it, and Devin.app's journal is rewritten from what Devin replays,
- * which is the only way the person's messages reach it from a client that,
- * like Mako, doesn't ask Devin to echo them (`cognition.ai/clientMessageId`).
+ * which is the only way the person's messages reach it: Devin 3000.10.23
+ * sends no prompt back, even to Devin.app, which sends each with a
+ * `cognition.ai/clientMessageId`, and the app's journal holds only what Devin
+ * sends. A `still-running` pair keeps the journal of the session still open.
  */
 const DEVIN_APP_REOPENS: Turn = { prompt: "(reopened in Devin.app)", resume: true, steps: [] }
 
@@ -889,6 +913,7 @@ const cursor: Recorder = {
     rewind: { absent: "Cursor SDK 1.0.31 has no rewind; Mako forks by writing the conversation into a new agent" },
     compact: { absent: "Cursor summarizes on its server when the context fills; it accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one" },
     resume: "driven",
+    "still-running": { absent: NO_OTHER_CLIENT },
   },
   // The agent's root is named in the SDK's `index.db`, not in its own store.
   keeps: (file) => /\/\.mako\/cursor-sdk\/(index\.db|agents\/agent-[0-9a-f]+\/store\.db)$/.test(file),
@@ -1073,8 +1098,8 @@ type AcpWire = Pick<Recording, "messages" | "prompts" | "openings"> & { loads: J
 
 /**
  * Prompts over ACP in one session, every message the agent sends recorded as
- * Mako's ACP client records it: `{ method, params }`, or `{ request, params }`
- * for one it waits on. Permission is granted once, as a person allowing the
+ * Mako's ACP client records it: `{ method, params }`, `{ request, params }`
+ * for one it waits on, or `{ response, result }` for the reply that opened the session. Permission is granted once, as a person allowing the
  * call would. A steer goes as the source declares Mako steers; a rewind, which
  * Mako doesn't drive, as `rewind` does it. A resume stops the agent and loads
  * the session in a new one, as Mako does after an idle process closed.
@@ -1085,6 +1110,8 @@ async function acpSession(
     rewind?: (call: AcpCall, sessionId: string, target: number) => Promise<void>
     /** Client capabilities beyond Mako's, which a scenario needs and Mako doesn't advertise. */
     meta?: JsonObject
+    /** Each prompt's `_meta`, for a scenario sending prompts as another client does; Mako sends none. */
+    promptMeta?: () => JsonObject
   },
   turns: readonly Turn[],
 ): Promise<AcpWire> {
@@ -1163,7 +1190,9 @@ async function acpSession(
       return input.source.readsUnadvertised?.image ? { ...advertised, image: true } : advertised
     }
     let reads = await initialize()
-    const session = AcpNewSession.parse(await peer.call("session/new", { cwd: input.cwd, mcpServers: [] }))
+    const created = await peer.call("session/new", { cwd: input.cwd, mcpServers: [] })
+    messages.push({ response: "session/new", result: z.record(z.string(), z.json()).parse(created) })
+    const session = AcpNewSession.parse(created)
     if (input.mode) await peer.call("session/set_mode", { sessionId: session.sessionId, modeId: input.mode })
     const own = input.mode ?? session.modes?.currentModeId
     let mode = own
@@ -1187,14 +1216,17 @@ async function acpSession(
       reads = await initialize()
       const opening: Opening = { at: messages.length }
       openings.push(opening)
-      const loaded = AcpLoadedSession.parse(await peer.call("session/load", { sessionId: session.sessionId, cwd: input.cwd, mcpServers: [] }))
+      const reply = await peer.call("session/load", { sessionId: session.sessionId, cwd: input.cwd, mcpServers: [] })
+      messages.push({ response: "session/load", result: z.record(z.string(), z.json()).parse(reply) })
+      const loaded = AcpLoadedSession.parse(reply)
       opening.opened = messages.length
       loads.push(loaded)
       if (mode && loaded.modes?.currentModeId && loaded.modes.currentModeId !== mode)
         await peer.call("session/set_mode", { sessionId: session.sessionId, modeId: mode })
     }
     const prompt = (text: string, attachments: readonly PromptAttachment[] = []) => {
-      const reply = peer.call("session/prompt", { sessionId: session.sessionId, prompt: z.array(z.json()).parse(acpPromptBlocks(text, attachments, reads)) })
+      const meta = input.promptMeta?.()
+      const reply = peer.call("session/prompt", { sessionId: session.sessionId, prompt: z.array(z.json()).parse(acpPromptBlocks(text, attachments, reads)), ...meta && { _meta: meta } })
       inFlight.add(reply)
       void reply.finally(() => inFlight.delete(reply)).catch(() => undefined)
       return reply
@@ -1399,7 +1431,7 @@ const nativeArg = nativeAt >= 0 ? args[nativeAt + 1] : undefined
 if (nativeAt >= 0 && !nativeArg) throw new Error("--native needs the build to run")
 // Each harness runs from its sandbox's project, where a relative path names nothing.
 const native = nativeArg && resolve(nativeArg)
-const named = args.filter((arg, index) => arg !== "--write" && index !== nativeAt && index !== nativeAt + 1)
+const named = args.filter((arg, index) => arg !== "--write" && (nativeAt < 0 || (index !== nativeAt && index !== nativeAt + 1)))
 const harnesses = named.filter((arg) => RECORDERS.has(arg))
 const scenarios = named.filter((arg) => !RECORDERS.has(arg))
 if (native && harnesses.length !== 1) throw new Error("--native runs one harness's build; name that harness")

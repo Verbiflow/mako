@@ -21,7 +21,7 @@ import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.t
 import { providerHost } from "../electron/providers/index.ts"
 import { usageHarnesses, usageSummary } from "../electron/usage.ts"
 import { UsageLedger } from "../electron/usage-ledger.ts"
-import { decoderFor, readRecording } from "./native-decoding.ts"
+import { decoderFor, readRecording, replayed } from "./native-decoding.ts"
 import { ownStore, PairSchema, storeReader } from "./decode-compare.ts"
 
 // ── The maps ────────────────────────────────────────────────────────────────
@@ -94,14 +94,17 @@ interface Tokens { input: number; output: number; cacheRead: number; cacheWrite:
 type Reader = "live" | "saved" | "scanned"
 
 /**
- * A pair whose readers cannot agree, with the reader that stands apart and
+ * A scenario whose readers cannot agree, with the reader that stands apart and
  * why. `stored` stands for the saved reader and the scanner together: the
- * store itself lacks what the live wire said.
+ * store itself lacks what the live wire said. A pair recorded on another
+ * build (`compaction@2.1.278`) is its scenario's.
  */
 interface Apart { apart: Reader | "stored"; because: string }
 const APART = new Map<string, Apart>([
   ["claude/compaction", { apart: "stored", because: "Claude Code saves no record of the call that wrote the compaction summary" }],
+  ["claude/resumed", { apart: "stored", because: "the resumed session compacts first, and Claude Code saves no record of the call that wrote the summary" }],
   ["devin/compaction", { apart: "scanned", because: "Devin reports no usage for the `compactor` call that wrote the summary, and keeps its row off the conversation; only the store holds what it spent" }],
+  ["devin/resumed", { apart: "scanned", because: "the resumed session compacts first, and Devin reports no usage for the `compactor` call that wrote the summary; only the store holds what it spent" }],
   ["devin/rewound-turn", { apart: "saved", because: "a rewound turn leaves the conversation, but what it spent stays spent" }],
   ["grok/rewound-turn", { apart: "saved", because: "a rewound turn leaves the conversation, but what it spent stays spent" }],
   ["grok/stopped-shell", { apart: "stored", because: "Grok saves no spend for a turn it was stopped in, though it reports it live" }],
@@ -130,8 +133,8 @@ async function readers(harness: string, folder: string): Promise<Record<Reader, 
   const recording = await readRecording(join(folder, "capture.jsonl"))
   const decoder = decoderFor(harness).open(recording.session)
   let live = ZERO
-  for (const message of recording.messages)
-    for (const item of decoder.decode(message))
+  for (const { decoded } of replayed(decoder, recording))
+    for (const item of decoded)
       if (item.kind === "state" && item.patch.usage?.tokens) live = item.patch.usage.tokens
   const home = join(folder, "home")
   const thread = await storeReader(harness, home).read(join(home, ownStore(pair)))
@@ -149,7 +152,7 @@ for (const harness of HARNESSES) {
     const name = `${harness}/${scenario}`
     const read = await readers(harness, join(PAIRS, harness, "pairs", scenario))
     pairs += 1
-    const known = APART.get(name)
+    const known = APART.get(`${harness}/${scenario.split("@")[0]}`)
     const together: Reader[] = known?.apart === "stored" ? ["saved", "scanned"] : (["live", "saved", "scanned"] as const).filter((reader) => reader !== known?.apart)
     const disagree = together.some((reader) => !same(read[reader], read[together[0]!]))
     const apart = known && (known.apart === "stored" ? !same(read.live, read.saved) : !same(read[known.apart], read[together[0]!]))

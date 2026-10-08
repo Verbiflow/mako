@@ -131,7 +131,7 @@ export async function resumeImported(h, emitter, label, exchanges) {
   const requestId = await h.completed(id, "What codename did I give in my first message? Reply with only the codename. Do not use any tools.")
   const ms = Date.now() - began
   if (!h.reply(id, requestId).includes(codename)) throw new Error(`The imported ${label} history did not load: ${JSON.stringify(h.reply(id, requestId).slice(0, 80))}`)
-  return { id, ms }
+  return { id, ms, path: emitted.path, codename }
 }
 
 async function wake(h, probe) {

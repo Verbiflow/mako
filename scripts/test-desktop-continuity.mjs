@@ -18,7 +18,7 @@ if (!process.versions.electron) {
     await symlink(resolve(name), join(root, name), "dir")
   const server = await createServer({ cacheDir: join(root, "cache"), define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" }, plugins: [manualDevUpdates()], server: { host: "127.0.0.1", port: 0 } })
   await server.listen()
-  const env = { ...process.env, MAKO_CONTINUITY_ROOT: root, VITE_DEV_SERVER_URL: server.resolvedUrls.local[0], MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp", MAKO_BACKEND_TOKEN: "" }
+  const env = { ...process.env, MAKO_CONTINUITY_ROOT: root, VITE_DEV_SERVER_URL: server.resolvedUrls.local[0] }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.MAKO_WEB_SOCKET
   delete env.MAKO_PROD

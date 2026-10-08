@@ -20,6 +20,7 @@ import {
 } from "@mako/sessions/live-content"
 import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "../electron/contracts/live-conversations"
 import { LiveJournal } from "../electron/live-journal"
+import type { ModelOption } from "@mako/sessions/settings"
 import { auditSnapshot } from "./performance-audit-fixtures"
 
 const opened: LiveBlock[] = reduceLiveUpdates([], [
@@ -173,6 +174,33 @@ for (const [report, batches] of Object.entries(reports)) {
   assert.deepEqual(sessionDelta(held, held), {})
   const renamed = sharedSession(held, { ...reported, commands: commands.slice(1) })
   assert.notEqual(renamed.commands, held.commands, "A changed list travels")
+}
+
+// Choosing a mode moves one value in a harness's option list; the list stays home.
+{
+  const values = Array.from({ length: 400 }, (_, index) => ({ value: `model-${index}`, label: `Model ${index}`, description: "x".repeat(300) }))
+  const configOptions: ModelOption[] = [
+    { id: "mode", label: "Mode", kind: "select", current: "accept-edits", values: [{ value: "accept-edits", label: "Accept edits" }, { value: "bypass", label: "Bypass" }] },
+    { id: "model", label: "Model", kind: "select", current: "model-1", values },
+    { id: "fast", label: "Fast", kind: "boolean", current: false },
+  ]
+  const held = { ...auditSnapshot(1).session, status: "ready" as const, configOptions }
+  // SAFETY: a JSON round trip of a session keeps its shape, as a report from a child process does.
+  const moved = JSON.parse(JSON.stringify({ ...held, configOptions: [{ ...configOptions[0]!, current: "bypass" }, configOptions[1]!, { id: "fast", label: "Fast", kind: "boolean" }] })) as typeof held
+  const delta = sessionDelta(held, sharedSession(held, moved))
+  assert.deepEqual(delta, { configCurrents: { mode: "bypass", fast: null } }, "Only the values that moved travel")
+  assert.ok(JSON.stringify(delta).length < 100, "The list's choices are not resent")
+  // SAFETY: the delta is JSON by construction; the round trip is the web host's transport.
+  const received = JSON.parse(JSON.stringify(delta)) as typeof delta
+  assert.ok(changesSession(received))
+  assert.deepEqual(sessionAfter(held, received), JSON.parse(JSON.stringify(moved)), "The receiver applies them to the list it holds")
+  const relisted = { ...held, configOptions: [configOptions[0]!, { ...configOptions[1]!, values: values.slice(1) }, configOptions[2]!] }
+  assert.deepEqual(sessionDelta(held, relisted), { sessionChanges: { configOptions: relisted.configOptions } }, "A list whose choices changed travels whole")
+  const first = { ...held, configOptions: [] }
+  assert.deepEqual(sessionDelta(first, held), { sessionChanges: { configOptions } }, "The first list travels whole")
+  // SAFETY: reversing an option's own entries keeps its keys and values, only their order.
+  const reordered = { ...held, configOptions: configOptions.map((option) => Object.fromEntries(Object.entries(option).reverse())) as ModelOption[] }
+  assert.equal(sharedSession(reordered, held).configOptions, reordered.configOptions, "A list restored with its keys in another order is the same list")
 }
 
 // Storage appends what a call gained and reopens to the same blocks.

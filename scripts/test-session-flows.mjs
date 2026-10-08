@@ -8,6 +8,7 @@
 //   npm run test:session-flows -- --record <dir>     leave sessions idle, mid-question and mid-plan in <dir>
 //   npm run test:session-flows -- --continue <dir>   reopen and continue those sessions with this build
 //   npm run test:session-flows -- --bench            what a growing conversation costs each harness; see session-flows-bench.mjs
+//   npm run test:session-flows -- --stand-in         only a seventh harness with a scripted agent (fixtures/stand-in-harness.mjs); spends nothing
 //
 // `--record` before a change and `--continue` after it is the "install the
 // new build, then follow up in an old conversation" case. Uses normal
@@ -67,6 +68,7 @@ function options() {
     harnesses: args.filter((arg, index) => !arg.startsWith("--") && !valued.has(index)),
     flows: value("--flows")?.split(","),
     all: args.includes("--all"),
+    standIn: args.includes("--stand-in"),
     mode: args.includes("--record") ? "record" : args.includes("--continue") ? "continue" : args.includes("--bench") ? "bench" : "run",
   }
 }
@@ -84,9 +86,16 @@ async function main(app) {
   const { bindCodexApp, stopCodexApps } = await load("dist-electron/codex-app.js")
   const { bindAcp } = await load("dist-electron/acp.js")
   const { nativePathForSession } = await load("dist-electron/threads.js")
-  const { defaultCatalog } = await load("packages/sessions/dist/index.js")
+  const { defaultCatalog, readableHarnesses, SAVED_HISTORY_READERS } = await load("packages/sessions/dist/index.js")
+  const readers = [...SAVED_HISTORY_READERS]
+  if (chosen.standIn) {
+    const { installStandIn } = await import(join(repo, "scripts/fixtures/stand-in-harness.mjs"))
+    const standIn = await installStandIn({ load, providerHost, store: join(root, "stand-in") })
+    chosen.harnesses = [standIn.provider]
+    readers.push(standIn.reader)
+  }
   // The app pages through its catalog daemon; this host must not start or reach the user's.
-  const catalog = defaultCatalog({ archivePath: join(root, "archive") })
+  const catalog = defaultCatalog({ archivePath: join(root, "archive"), readers })
   const { SessionMemory } = await load("dist-electron/session-memory.js")
   const { openThreadStore } = await load("dist-electron/thread-store.js")
   const { WorkspaceSnapshots } = await load("dist-electron/workspace-snapshots.js")
@@ -114,7 +123,11 @@ async function main(app) {
     entry.fields ??= {}
     for (const [field, value] of Object.entries(event.batch)) if (value !== undefined) entry.fields[field] = (entry.fields[field] ?? 0) + JSON.stringify(value).length
     for (const field of Object.keys(event.batch)) if (event.batch[field] !== undefined) (entry.counts ??= {})[field] = (entry.counts[field] ?? 0) + 1
-    for (const [field, value] of Object.entries(event.batch.session ?? event.batch.sessionChanges ?? {})) if (value !== undefined) entry.fields[`session.${field}`] = (entry.fields[`session.${field}`] ?? 0) + JSON.stringify(value).length
+    for (const [field, value] of Object.entries(event.batch.session ?? event.batch.sessionChanges ?? {})) {
+      if (value === undefined) continue
+      entry.fields[`session.${field}`] = (entry.fields[`session.${field}`] ?? 0) + JSON.stringify(value).length
+      entry.counts[`session.${field}`] = (entry.counts[`session.${field}`] ?? 0) + 1
+    }
     for (const update of event.batch.updates) {
       entry.updates++
       if (update.kind === "text" || update.kind === "thinking") { entry.text += update.text?.length ?? 0; continue }
@@ -152,7 +165,7 @@ async function main(app) {
   bindCodexApp((event) => owner?.observe(event))
   host.open()
 
-  const tools = { identifyTool, nativeToolNames, emitters: providerHost.sessionEmitters, harnesses: providerHost.harnesses, skills: providerHost.skillSources }
+  const tools = { identifyTool, nativeToolNames, emitters: providerHost.sessionEmitters, harnesses: providerHost.harnesses, skills: providerHost.skillSources, readable: readableHarnesses(readers), history: (path) => catalog.page(path) }
   const bench = chosen.mode === "bench" ? benchFlows(historyProbe({ root, profile: join(root, "profile"), emitters: providerHost.sessionEmitters, fed })) : []
   const results = []
   const report = async () => {
@@ -308,7 +321,9 @@ class Harness {
   async allow(id, snapshot) {
     for (const permission of snapshot?.permissions ?? []) {
       if (permission.questions?.length || permission.implementsPlan || this.answered?.has(permission.id)) continue
-      const option = permission.options.find((entry) => /allow/i.test(`${entry.kind} ${entry.optionId}`)) ?? permission.options[0]
+      // An always-allow saves a rule or a folder's trust in the person's own config, so a flow allows once or declines.
+      const option = permission.options.find((entry) => entry.kind === "allow_once") ??
+        permission.options.find((entry) => entry.kind?.startsWith("reject")) ?? permission.options.find((entry) => entry.kind !== "allow_always")
       if (!option) continue
       ;(this.answered ??= new Set()).add(permission.id)
       await this.owner.permission(id, permission.id, { kind: "choice", optionId: option.optionId })
@@ -351,6 +366,18 @@ class Harness {
 }
 
 /** A turn running a tool, steered to put a nonce in its reply, through to its end. */
+/**
+ * How a fork went: the harness forked its session, or it declined this one
+ * (`NativeFork.declines`) or forks by import, and the conversation was
+ * carried into a new native session. A transcript fallback fails.
+ */
+function forkWay(forked) {
+  const state = forked.control?.transfers.at(-1)?.state
+  if (forked.control?.ancestry?.nativeFork && !state?.nativeForkDeclined) return "native fork"
+  if (state?.carried !== "native") throw new Error(`The fork went as a transcript: ${state?.fallback ?? "no session import"}`)
+  return state.nativeForkDeclined ? `native fork declined, imported: ${state.nativeForkDeclined}` : "imported session"
+}
+
 async function steeredTurn(h, label) {
   const { id } = await h.conversation(label)
   const nonce = `steer-${randomUUID().slice(0, 8)}`
@@ -494,8 +521,9 @@ const FLOWS = [
       h.open.add(forkId)
       const requestId = await h.completed(forkId, "What word did I ask you to put in your final reply? Reply with only that word. Do not use any tools.")
       if (!h.reply(forkId, requestId).includes(steered.nonce)) throw new Error("The fork lost the message sent into the turn it forked after")
-      if (!h.snapshot(forkId).control?.ancestry?.nativeFork) throw new Error("The fork after a steered turn was not native")
-      return { native: "native fork" }
+      const way = forkWay(h.snapshot(forkId))
+      if (way === "imported session") throw new Error("The fork after a steered turn was not native")
+      return { native: way }
     },
   },
   {
@@ -550,18 +578,18 @@ const FLOWS = [
       if (h.snapshot(h.main.id).session.nativeId !== h.main.nativeId) throw new Error("Forking moved the original conversation")
       const parentMode = h.snapshot(h.main.id).session.currentMode
       if (parentMode && forked.session.currentMode !== parentMode) throw new Error(`The fork opened in ${forked.session.currentMode}, not the parent's ${parentMode}`)
-      if (forked.control?.ancestry?.nativeFork) return { native: "native fork" }
-      const state = forked.control?.transfers.at(-1)?.state
-      if (state?.carried !== "native") throw new Error(`The fork went as a transcript: ${state?.fallback ?? "no session import"}`)
-      return { native: "imported session" }
+      return { native: forkWay(forked) }
     },
   },
   {
     // A fork can go natively and skip the import a move from another harness depends on.
     name: "import",
-    declared: (driver, tools) => tools.emitters.get(driver.provider) ? true : "no session import",
+    declared: (driver, tools) => !tools.emitters.get(driver.provider) ? "no session import"
+      : tools.readable.includes(driver.provider) ? true : "Mako reads none of its saved sessions, so none can be opened",
     async run(h) {
-      const { ms } = await resumeImported(h, h.tools.emitters.get(h.provider), "import", 2)
+      const { ms, path, codename } = await resumeImported(h, h.tools.emitters.get(h.provider), "import", 2)
+      const page = await h.tools.history(path)
+      if (!page?.entries.some((entry) => entry.kind === "user" && entry.text.includes(codename))) throw new Error("Mako's catalog did not read the imported session back")
       return { ms }
     },
   },
@@ -604,25 +632,29 @@ const FLOWS = [
     },
   },
   {
-    // Where a harness reads `.agents/skills`, Mako sends a skill there by name instead of inlining it.
+    // Where a harness reads `.agents/skills`, Mako sends a skill there by name
+    // instead of inlining it; in a folder whose project skills it won't load,
+    // Mako hands the skill over, and the harness must indeed not have it.
     name: "universal-skill",
     declared: (driver, tools) => tools.skills.get(driver.provider)?.readsUniversalRoot ? true : "its skill source doesn't claim .agents/skills",
     async run(h) {
       const name = `mako-flow-${randomUUID().slice(0, 8)}`
       const code = `code-${randomUUID().slice(0, 8)}`
-      const { id } = await h.conversation("universal-skill", {}, async (cwd) => {
+      const { id, cwd } = await h.conversation("universal-skill", {}, async (cwd) => {
         const dir = join(cwd, ".agents", "skills", name)
         await mkdir(join(cwd, ".git"), { recursive: true })
         await mkdir(dir, { recursive: true })
         await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Says the code ${code}.\n---\nReply with the code ${code}.\n`)
       })
-      const requestId = await h.completed(id, `Is a skill named ${name} available to you? If it is, reply with only the code its description gives. Do not read any files or run commands.`)
+      const loads = h.tools.skills.get(h.provider)?.readsWorkspace?.(cwd) ?? true
+      const requestId = await h.completed(id, `Is a skill named ${name} available to you? If it is, reply with only the code its description gives; if it isn't, reply with only NONE. Do not read any files or run commands.`)
       const tools = h.snapshot(id).blocks.filter((block) => block.type === "tool").map((block) => block.name ?? block.title)
       const reads = tools.filter((tool) => !/skill/i.test(tool))
       if (reads.length) throw new Error(`The harness looked for the skill itself instead of having it: ${reads.join(", ")}`)
       const reply = h.reply(id, requestId)
-      if (!reply.includes(code)) throw new Error(`The harness doesn't have the skill from .agents/skills: ${JSON.stringify(reply.slice(0, 200))}`)
-      return { skillTools: tools }
+      if (loads && !reply.includes(code)) throw new Error(`The harness doesn't have the skill from .agents/skills: ${JSON.stringify(reply.slice(0, 200))}`)
+      if (!loads && reply.includes(code)) throw new Error("The harness loaded a project skill Mako says it skips in this folder, so Mako hands over what it already has")
+      return { skillTools: tools, loadsProjectSkills: loads }
     },
   },
   {

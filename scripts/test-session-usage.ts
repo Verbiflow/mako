@@ -11,6 +11,8 @@ import { ClaudeDecoder } from "../electron/providers/claude/decoder.ts"
 import { parseNotification } from "../electron/codex-app-parse.ts"
 import { grokModelWindow, grokUsage } from "../electron/providers/grok/usage.ts"
 import { grokNotification } from "../electron/providers/grok/notifications.ts"
+import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { AcpModelWindow } from "../electron/acp-usage.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { claudeContextBreakdown } from "../electron/providers/claude/context-breakdown.ts"
 
@@ -77,8 +79,19 @@ assert.deepEqual(inclusiveTokens({ input: 21_221, cacheRead: 0, cacheWrite: 21_2
   assert.deepEqual(grokUsage("auto_compact_completed", { tokens_after: 41_000 }), [{ kind: "compacted", after: 41_000 }])
   const models = { currentModelId: "grok-4.7", availableModels: [{ modelId: "grok-4.6", _meta: { totalContextTokens: 128_000 } }, { modelId: "grok-4.7", _meta: { totalContextTokens: 256_000 } }] }
   assert.equal(grokModelWindow(models), 256_000)
+  // A window chosen for the model counts only when the model offers it, as Grok's own client reads it.
+  const chosen = (contextWindow: number) => ({ currentModelId: "grok-4.7", availableModels: [{ modelId: "grok-4.7", _meta: { totalContextTokens: 256_000, contextWindows: [256_000, 1_000_000], contextWindow } }] })
+  assert.equal(grokModelWindow(chosen(1_000_000)), 1_000_000)
+  assert.equal(grokModelWindow(chosen(512_000)), 256_000)
   // The model list names no session: it is the process's, and Mako runs one session per process.
-  assert.deepEqual(grokNotification("_x.ai/models/update", models), { kind: "_x.ai/models/update", connectionWide: true, notices: [], usage: [{ kind: "window", size: 256_000 }] })
+  assert.deepEqual(grokNotification("_x.ai/models/update", models), { kind: "_x.ai/models/update", connectionWide: true, notices: [], models })
+  // The session's list is in the reply that opens it. A new list keeps the session's own model (its
+  // `currentModelId` is the default for new sessions); a switch moves the window with the model.
+  const listing = new AcpModelWindow(grokAcpSource)
+  assert.deepEqual(listing.opened({ sessionId: "s", models: { ...models, currentModelId: "grok-4.6" } }), [{ kind: "window", size: 128_000 }])
+  assert.deepEqual(listing.relisted({ ...models, availableModels: [{ modelId: "grok-4.6", _meta: { totalContextTokens: 200_000 } }, ...models.availableModels.slice(1)] }), [{ kind: "window", size: 200_000 }])
+  assert.deepEqual(listing.switched("grok-4.7"), [{ kind: "window", size: 256_000 }])
+  assert.deepEqual(new AcpModelWindow(devinAcpSource).opened({ sessionId: "s", models }), [], "an agent whose source reads no window from its list gets none")
   const turn = grokNotification("_x.ai/session_notification", { sessionId: "s", update: { sessionUpdate: "turn_completed", prompt_id: "p", stop_reason: "end_turn", usage: { inputTokens: 10, outputTokens: 2 } } })
   assert.deepEqual(turn?.notices, [])
   assert.deepEqual(turn?.usage, [{ kind: "spent", tokens: { input: 10, cacheRead: 0, cacheWrite: 0, output: 2 } }])

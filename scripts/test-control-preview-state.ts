@@ -90,6 +90,21 @@ try {
   mock.timers.tick(60_000)
   await flush()
   assert.equal(calls.length, idleCalls, "Idle previews make zero polling calls")
+  receiveControlActivity({
+    conversationId: "finished",
+    kind: "computer",
+    operation: "observe",
+    target: "finished",
+    status: "observed",
+    updatedAt: Date.now() - 60_000,
+  })
+  cleanups.push(watchControlPreview("finished"))
+  await flush()
+  const finishedReads = () => calls.filter((call) => call.id === "finished" && call.watching).length
+  const afterFirstRead = finishedReads()
+  mock.timers.tick(10_000)
+  await flush()
+  assert.equal(finishedReads(), afterFirstRead, "A finished task the host has no preview for stops polling")
   const preview = previews.get("one")!
   preview.activity = { ...preview.activity, updatedAt: Date.now() }
   receiveControlActivity(preview.activity)

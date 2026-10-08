@@ -327,7 +327,6 @@ assert.deepEqual(openCodeCatalog.models.map((model) => model.id), [
 
 const childEnv = await accountEnv("opencode", {
   PATH: "/fixture/bin",
-  MAKO_BACKEND_TOKEN: "backend-secret",
   MAKO_CUA_SOCKET: "/fixture/cua.sock",
   MAKO_DATA_ROOT: "/fixture/Application Support/mako",
   MAKO_WEB_SOCKET: "/fixture/mako-host/host.sock",
@@ -336,7 +335,6 @@ const childEnv = await accountEnv("opencode", {
   MAKO_PROFILE: "dev",
 })
 assert.equal(childEnv.PATH, "/fixture/bin")
-assert.equal(childEnv.MAKO_BACKEND_TOKEN, undefined)
 assert.equal(childEnv.MAKO_CUA_SOCKET, undefined)
 // The host's own launch variables stay with the host: an agent that runs
 // `npm run dev` from a provider process must start or attach to the dev
@@ -349,7 +347,7 @@ for (const key of ["MAKO_DATA_ROOT", "MAKO_WEB_SOCKET", "MAKO_HOST_ONLY", "MAKO_
 const cursorEnv = await accountEnv("cursor", {
   PATH: "/fixture/bin",
   CURSOR_API_KEY: "provider-owned-fixture",
-  MAKO_BACKEND_TOKEN: "backend-secret",
+  MAKO_CUA_SOCKET: "/fixture/cua.sock",
 })
 assert.deepEqual(cursorEnv, {
   PATH: "/fixture/bin",

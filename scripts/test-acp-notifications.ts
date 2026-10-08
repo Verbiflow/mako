@@ -88,11 +88,18 @@ assert.deepEqual(notices({ sessionUpdate: "hook_annotation", message: "Formatted
 assert.deepEqual(notices({ sessionUpdate: "hook_annotation", message: "Blocked: writes outside the repo", kind: "tool_outcome" }), [
   { kind: "event", event: { label: "Hook", detail: "Blocked: writes outside the repo", tone: "warning" } },
 ])
-assert.deepEqual(notices({ sessionUpdate: "scheduled_task_created", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: null }), [
-  { kind: "event", event: { label: "Scheduled task", detail: "every hour", body: "Check the deploy" } },
-])
-assert.deepEqual(notices({ sessionUpdate: "scheduled_task_deleted", task_id: "t1", reason: "expired" }), [{ kind: "event", event: { label: "Scheduled task removed", detail: "Expired" } }])
-assert.deepEqual(notices({ sessionUpdate: "scheduled_task_deleted", task_id: "t1", reason: "shutdown" }), [], "a shutdown only clears the chip; the task re-arms on resume")
+// Grok sends its tasks pane each on a method of its own; created is re-sent on every restore and fired is never saved.
+const scheduled: JsonObject[] = [
+  { sessionUpdate: "scheduled_task_created", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: "2026-10-08T12:00:00Z" },
+  { sessionUpdate: "scheduled_task_fired", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: "2026-10-08T13:00:00Z", subagent_id: "loop-1" },
+  { sessionUpdate: "scheduled_task_deleted", task_id: "t1", reason: "expired" },
+]
+for (const update of scheduled) {
+  const method = `_x.ai/${String(update["sessionUpdate"])}`
+  assert.deepEqual(grokNotification(method, { sessionId: "grok-session", update })?.notices, [], `${method} is Grok's tasks pane, known and silent`)
+  assert.deepEqual(notices(update), [], `${String(update["sessionUpdate"])} draws nothing on the session channel either`)
+}
+assert.deepEqual(grokNotification("_x.ai/monitor_event", { sessionId: "grok-session", update: { sessionUpdate: "monitor_event", task_id: "m1", description: "tail", event_text: "ok" } })?.notices, [])
 assert.deepEqual(notices({ sessionUpdate: "auto_recovery_exhausted" }), [
   { kind: "event", event: { label: "Warning", detail: "Grok could not recover the turn", tone: "warning" } },
 ])
@@ -128,7 +135,8 @@ try {
     { sessionUpdate: "model_auto_switched", previous_model_id: "grok-4.7", new_model_id: "grok-4.6", reason: "Capacity" },
     { sessionUpdate: "image_dropped", notes: ["Image exceeds 20 MB"] },
     { sessionUpdate: "hook_annotation", message: "Formatted 2 files" },
-    { sessionUpdate: "scheduled_task_fired", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: null },
+    { sessionUpdate: "scheduled_task_created", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: "2026-10-08T12:00:00Z" },
+    { sessionUpdate: "scheduled_task_deleted", task_id: "t1", reason: "completed" },
     { sessionUpdate: "auto_recovery_started", reason: "Stream stalled" },
     { sessionUpdate: "auto_recovery_exhausted" },
     { sessionUpdate: "hook_execution", hook: "PreToolUse" },
@@ -144,7 +152,7 @@ try {
     .map((marker) => JSON.parse(JSON.stringify(marker)))
   const liveMarkers = saved.flatMap((update) => (notices(update) ?? []).flatMap((notice: NativeNotice): TranscriptEvent[] =>
     notice.kind === "event" ? [notice.event] : notice.kind === "compacted" ? [compactionEvent(notice.compaction)] : []))
-  assert.equal(liveMarkers.length, 9)
+  assert.equal(liveMarkers.length, 8)
   assert.deepEqual(savedMarkers, liveMarkers, "a Grok marker reads the same live and saved")
   console.log("PASS: Grok's saved transcript shows the markers its live connection showed")
 } finally {
@@ -167,14 +175,13 @@ assert.deepEqual(devinNotices("_cognition.ai/compaction", { status: "failed" }),
   { kind: "event", event: { label: "Compaction failed", tone: "warning" } },
 ])
 assert.deepEqual(devin("_cognition.ai/compaction", { status: "paused" }), { sessionId: "devin-session", kind: "_cognition.ai/compaction/paused", notices: undefined })
-// Devin sends no event ids; the summary names its compaction, so a replay repeats the id.
-const summarized = devin("_cognition.ai/compaction", { status: "completed", summary: "## Request and intent\nFaster builds." })
-assert.match(summarized?.id ?? "", /^compaction:[0-9a-f]{16}$/)
-assert.equal(devin("_cognition.ai/compaction", { status: "completed", summary: "## Request and intent\nFaster builds." })?.id, summarized?.id)
-assert.notEqual(devin("_cognition.ai/compaction", { status: "completed", summary: "## Request and intent\nSlower builds." })?.id, summarized?.id)
+// Devin sends no event ids; the summary names the history file its compaction saved.
+const saved = "Full conversation history saved at /home/.local/share/devin/cli/summaries/history_e5e41ea1070d4cae.md.\nSummary:\nFaster builds."
+assert.equal(devin("_cognition.ai/compaction", { status: "completed", summary: saved })?.id, "history_e5e41ea1070d4cae")
+assert.equal(devin("_cognition.ai/compaction", { status: "completed", summary: "## Request and intent\nFaster builds." })?.id, undefined)
 assert.equal(devin("_cognition.ai/compaction", { status: "completed" })?.id, undefined)
-assert.equal(devin("_cognition.ai/compaction", { status: "started", summary: "same" })?.id, undefined)
-console.log("PASS: Devin compaction reads as compacting, then a marker carrying its summary, named by that summary")
+assert.equal(devin("_cognition.ai/compaction", { status: "started", summary: saved })?.id, undefined)
+console.log("PASS: Devin compaction reads as compacting, then a marker carrying its summary, citing the history file it names")
 
 assert.deepEqual(devinNotices("_cognition.ai/connection_retry", { attempt: 2, maxAttempts: 5, isStreamRetry: true }), [
   { kind: "activity", activity: { kind: "retrying", attempt: 2, maxAttempts: 5, reason: "Stream interrupted" } },

@@ -21,7 +21,7 @@ const server = await createServer({cacheDir:join(root,"vite"),plugins:[manualDev
 await server.listen()
 const url = server.resolvedUrls.local[0]
 const executable = createRequire(import.meta.url)("electron")
-const env = {...process.env, MAKO_DATA_ROOT:dataRoot, VITE_DEV_SERVER_URL:url, MAKO_BACKEND_URL:"http://127.0.0.1:9/api/mcp", MAKO_BACKEND_TOKEN:""}
+const env = {...process.env, MAKO_DATA_ROOT:dataRoot, VITE_DEV_SERVER_URL:url}
 for (const key of ["ELECTRON_RUN_AS_NODE","MAKO_PROFILE","MAKO_PROD","MAKO_STANDALONE"]) delete env[key]
 const processes = []
 const connectId=randomUUID()

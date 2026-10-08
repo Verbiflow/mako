@@ -49,8 +49,8 @@ const server = await createServer({
 await server.listen()
 const url = server.resolvedUrls.local[0]
 const origin = new URL(url).origin
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_PROFILE: profile, MAKO_FIXTURE_DESK: "1", MAKO_HOST_ONLY: "1", MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: location.socket, MAKO_BACKEND_URL: "http://127.0.0.1:9/api/mcp", MAKO_BACKEND_TOKEN: "" }
-for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL", "MAKO_RELAY"]) delete env[key]
+const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_PROFILE: profile, MAKO_FIXTURE_DESK: "1", MAKO_HOST_ONLY: "1", MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: location.socket }
+for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL"]) delete env[key]
 // --app=<Mako.app> runs the same checks against a packaged bundle's own main process.
 const app = process.argv.find((arg) => arg.startsWith("--app="))?.slice("--app=".length)
 const [command, args] = app ? [join(app, "Contents", "MacOS", "Mako"), ["--background"]] : [createRequire(import.meta.url)("electron"), [root, "--background"]]

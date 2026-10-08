@@ -20,7 +20,7 @@ if (process.versions.electron) {
   const url = process.argv[2]
   assert.ok(
     url,
-    "Pass the dev URL of a host started with a temporary MAKO_DATA_ROOT, e.g. `MAKO_DATA_ROOT=$(mktemp -d) PORT=5199 MAKO_BACKEND_URL=http://127.0.0.1:9/api/mcp MAKO_BACKEND_TOKEN= node electron/start.mjs --web`. A MAKO_PROFILE host shares the user's model connections; this check requires none."
+    "Pass the dev URL of a host started with a temporary MAKO_DATA_ROOT, e.g. `MAKO_DATA_ROOT=$(mktemp -d) PORT=5199 node electron/start.mjs --web`. A MAKO_PROFILE host shares the user's model connections; this check requires none."
   )
   assert.ok(["127.0.0.1", "localhost"].includes(new URL(url).hostname))
   const root = await mkdtemp(join(tmpdir(), "mako-commit-ui-"))
