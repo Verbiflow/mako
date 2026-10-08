@@ -218,6 +218,12 @@ export function acpShownDetails(fields: AcpToolFields): ToolDetail[] | undefined
 export class AcpToolCalls {
   private readonly running = new Map<string, Pick<AcpToolFields, "details" | "locations" | "exitCode">>()
   private readonly stopped = new Set<string>()
+  private readonly answered = new Set<string>()
+
+  /** Call `id` already showed a result or ended, so a later update has nothing to add to what it showed. */
+  hasAnswered(id: string): boolean {
+    return this.answered.has(id)
+  }
 
   /**
    * Call `id` as `update` leaves it: `details` the whole list when the update
@@ -232,6 +238,7 @@ export class AcpToolCalls {
         ? "failed"
         : update.status
     if (status !== undefined && /cancel/i.test(status)) this.stopped.add(id)
+    if (update.output !== undefined || status === "completed" || status === "failed" || this.stopped.has(id)) this.answered.add(id)
     if (status === "completed" || status === "failed" || this.stopped.has(id)) this.running.delete(id)
     else this.running.set(id, { details: merged.details, locations: merged.locations, exitCode: merged.exitCode })
     const details = update.details === undefined && update.locations === undefined ? undefined : acpShownDetails(merged)

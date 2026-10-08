@@ -115,7 +115,7 @@ export const ThreadRefSchema = z.object({
 })
 export const UnreadRecordSchema = z.object({
   kind: z.string(),
-  reason: z.enum(["unknown", "unreadable"]),
+  reason: z.enum(["unknown", "unreadable", "undrawn"]),
   count: z.number().int().positive(),
   sample: z.json().optional(),
 })

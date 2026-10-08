@@ -1,4 +1,4 @@
-import type { SessionNotification } from "@agentclientprotocol/sdk"
+import type { SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk"
 import { z } from "zod"
 import { AcpUpdateDecoder, type AcpDecoderHooks, type AcpSessionPatch } from "./acp-decoder.js"
 import { AcpContentBlockSchema } from "./acp-tool-details.js"
@@ -22,18 +22,44 @@ const SavedUpdateSchema = z.discriminatedUnion("sessionUpdate", [
   z.looseObject({ sessionUpdate: z.literal("session_info_update"), title: z.string().nullish() }),
 ])
 
-const SCREENED = new Set<string>(SavedUpdateSchema.options.map((option) => option.shape.sessionUpdate.value))
-/** ACP's updates for the host rather than the transcript: usage, the command list, the mode and the config options. */
-const HOST_UPDATES = new Set(["usage_update", "available_commands_update", "current_mode_update", "config_option_update"])
+/**
+ * How saved history takes each `session/update` kind the ACP SDK declares;
+ * a kind an SDK upgrade adds fails to compile here until it is placed.
+ *
+ * - `read`: by the shared decoder, through `SavedUpdateSchema`.
+ * - `reader`: the person's chunks, which each store marks its own way.
+ * - `host`: usage, the command list, the mode and the config options.
+ * - `undrawn`: ACP's unstable plans by id, which the live decoder doesn't
+ *   draw either and no harness Mako runs sends.
+ */
+export const ACP_SAVED_UPDATES = {
+  agent_message_chunk: "read",
+  agent_thought_chunk: "read",
+  tool_call: "read",
+  tool_call_update: "read",
+  plan: "read",
+  session_info_update: "read",
+  user_message_chunk: "reader",
+  usage_update: "host",
+  available_commands_update: "host",
+  current_mode_update: "host",
+  config_option_update: "host",
+  plan_update: "undrawn",
+  plan_removed: "undrawn",
+} as const satisfies Record<SessionUpdate["sessionUpdate"], "read" | "reader" | "host" | "undrawn">
+
+const SAVED_READINGS: ReadonlyMap<string, (typeof ACP_SAVED_UPDATES)[keyof typeof ACP_SAVED_UPDATES]> = new Map(Object.entries(ACP_SAVED_UPDATES))
 
 /**
  * Why `acpSavedNotification` refused a saved update of this kind: one the
- * screen reads but this one failed it, or one ACP's saved readers don't know.
- * Nothing for the host's own kinds and the person's chunks, which each reader reads itself.
+ * screen reads but this one failed it, one ACP declares and history doesn't
+ * draw, or one ACP doesn't declare. Nothing for the kinds the host and each
+ * reader read themselves.
  */
 export function acpSavedRefusal(kind: string): UnreadRecord["reason"] | undefined {
-  if (HOST_UPDATES.has(kind) || kind === "user_message_chunk") return undefined
-  return SCREENED.has(kind) ? "unreadable" : "unknown"
+  const reading = SAVED_READINGS.get(kind)
+  if (reading === "host" || reading === "reader") return undefined
+  return reading === "read" ? "unreadable" : reading ?? "unknown"
 }
 
 export const SavedAcpUpdateSchema = z.looseObject({ sessionUpdate: z.string() })

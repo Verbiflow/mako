@@ -62,6 +62,13 @@ export interface AcpDecoderHooks<Plans extends AcpPlanDecoder = AcpPlanDecoder> 
    */
   replayedUser?(update: AcpUserChunk): LiveUpdate | null | undefined
   /**
+   * An update the agent sends in another shape than it did live, on
+   * `session/load` or in a store that saved that replay, restated as the one
+   * it sent live; `null` for one that adds nothing once restated. `calls`
+   * says which calls already showed a result.
+   */
+  restated?(update: SessionUpdate, calls: Pick<AcpToolCalls, "hasAnswered">): SessionUpdate | null | undefined
+  /**
    * The agent's plan handover: proposed plans from its updates, and on the
    * live side the request whose approval builds one. Opened once per
    * session, since a harness may number a plan's revisions.
@@ -105,6 +112,7 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
       update = raw.content.type === "text"
         ? { kind: "user", text: raw.content.text }
         : { kind: "user", text: "", attachments: [acpAttachment(raw.content)] }
+      if (raw.messageId) update.messageId = raw.messageId
       break
     case "agent_message_chunk":
       update = raw.content.type === "text"
@@ -202,7 +210,9 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
   /** A `session/update`. An unknown kind is `session/update/<kind>`, with the notification kept. */
   update(notification: SessionNotification): AcpDecoded[] {
     if (this.hooks?.transient?.(notification)) return []
-    const { update } = notification
+    const restated = this.hooks?.restated?.(notification.update, this.tools)
+    if (restated === null) return []
+    const update = restated ?? notification.update
     if (update.sessionUpdate === "user_message_chunk") {
       const read = this.hooks?.replayedUser?.(update)
       if (read === null) return []

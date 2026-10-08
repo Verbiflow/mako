@@ -35,6 +35,8 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     steeringFor: z.string().optional(),
     provider: z.string().optional(),
     requestId: z.string().optional(),
+    /** The harness's id for the message; a chunk right after one with the same id continues it. */
+    messageId: z.string().optional(),
     contextFiles: z.array(z.string()).optional(),
     text: z.string(),
     attachments: z.array(AttachmentContentSchema).optional(),
@@ -123,6 +125,7 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
     steeringFor: z.string().optional(),
     provider: z.string().optional(),
     requestId: z.string().optional(),
+    messageId: z.string().optional(),
     contextFiles: z.array(z.string()).optional(),
     text: z.string(),
     attachments: z.array(AttachmentContentSchema).optional(),
@@ -588,6 +591,13 @@ function reduce(
     delivering?.delivery.updates.push(update)
     switch (update.kind) {
       case "user": {
+        const previous = next.at(-1)
+        if (update.messageId && previous?.type === "user" && previous.messageId === update.messageId) {
+          const joined = { ...previous, text: previous.text + update.text }
+          if (update.attachments?.length) joined.attachments = [...previous.attachments ?? [], ...update.attachments]
+          replace(next.length - 1, joined)
+          break
+        }
         if (!update.steeringFor) {
           tools.clear()
           named.clear()
@@ -601,6 +611,7 @@ function reduce(
           text: update.text,
           attachments: update.attachments,
         }
+        if (update.messageId) user.messageId = update.messageId
         if (update.steeringFor) user.steeringFor = update.steeringFor
         replace(-1, user)
         break

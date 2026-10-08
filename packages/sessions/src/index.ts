@@ -27,6 +27,7 @@ export {
   type ThreadPageOptions,
   type ThreadRef,
   type TurnUsage,
+  type UnreadRecord,
 } from "./format.js"
 export { normalizeToolOutput } from "./tool-output.js"
 export {
@@ -177,6 +178,17 @@ export type { AttachmentContent } from "./content.js"
 export { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
 
 export { attachmentFiles } from "./attachment-files.js"
+
+export {
+  captureRecords,
+  restoreRecords,
+  encodeSegment,
+  decodeSegment,
+  segmentId,
+  type RecordSegment,
+  type RecordsCursor,
+  type SessionRecords,
+} from "./harness-records.js"
 
 export * from "./settings.js"
 export * from "./events.js"

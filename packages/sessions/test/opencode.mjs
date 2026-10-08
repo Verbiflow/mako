@@ -883,6 +883,46 @@ try {
   }
   console.log("OpenCode markers: retried steps, completed, failed and running compactions, failed turns in both stores")
 
+  // A record history doesn't know keeps its kind on the Thread, and records
+  // it deliberately leaves out don't count.
+  {
+    const row = (id, type, seq, data) =>
+      insertCurrent.run(id, "ses_unread", type, seq, 16_000 + seq, 16_000 + seq, json({ ...data, time: { created: 16_000 + seq } }))
+    insertCurrentSession.run("ses_unread", "current-project", null, "/projects/current-root/pkg", "Unread", null, 16_000, 16_000, null)
+    row("u_user", "user", 0, { text: "go", files: [], agents: [] })
+    row("u_system", "system", 1, { text: "instructions" })
+    row("u_model", "model-switched", 2, { model: { id: "m", providerID: "p" } })
+    row("u_future", "handoff", 3, { to: "review" })
+    row("u_reply", "assistant", 4, {
+      content: [{ type: "text", id: "t1", text: "done" }, { type: "citation", id: "c1", url: "https://example.com" }, { type: "text", id: "t2" }],
+      finish: "stop",
+    })
+    const read = await provider.read(`${currentPath}#ses_unread`)
+    assert.deepEqual(read.entries.filter((entry) => entry.kind === "assistant").map((entry) => entry.blocks), [[{ type: "text", text: "done" }]])
+    assert.deepEqual(read.unread?.map(({ kind, reason, count }) => ({ kind, reason, count })), [
+      { kind: "session_message handoff", reason: "unknown", count: 1 },
+      { kind: "assistant citation", reason: "unknown", count: 1 },
+      { kind: "assistant text", reason: "unreadable", count: 1 },
+    ])
+    assert.equal((await provider.read(`${currentPath}#ses_markers`)).unread, undefined, "system rows are left out, not unread")
+
+    insertLegacySession.run("ses_legacy_unread", "legacy-project", null, "/projects/legacy-root/app", "Legacy unread", 17_000, 17_000, null)
+    insertMessage.run("msg_unread_user", "ses_legacy_unread", 17_000, 17_000, json({ role: "user", time: { created: 17_000 } }))
+    insertPart.run("prt_unread_text", "msg_unread_user", "ses_legacy_unread", 17_000, 17_000, json({ type: "text", text: "hi" }))
+    insertPart.run("prt_unread_future", "msg_unread_user", "ses_legacy_unread", 17_001, 17_001, json({ type: "mention", target: "@x" }))
+    insertMessage.run("msg_unread_reply", "ses_legacy_unread", 17_002, 17_002, json({ role: "assistant", time: { created: 17_002 } }))
+    insertPart.run("prt_unread_start", "msg_unread_reply", "ses_legacy_unread", 17_002, 17_002, json({ type: "step-start" }))
+    insertPart.run("prt_unread_answer", "msg_unread_reply", "ses_legacy_unread", 17_003, 17_003, json({ type: "text", text: "hello" }))
+    insertMessage.run("msg_unread_role", "ses_legacy_unread", 17_004, 17_004, json({ role: "observer", time: { created: 17_004 } }))
+    const legacyRead = await provider.read(`${legacyPath}#ses_legacy_unread`)
+    assert.deepEqual(legacyRead.entries.map((entry) => entry.kind), ["user", "assistant"])
+    assert.deepEqual(legacyRead.unread?.map(({ kind, reason, count }) => ({ kind, reason, count })), [
+      { kind: "part mention", reason: "unknown", count: 1 },
+      { kind: "message observer", reason: "unknown", count: 1 },
+    ])
+  }
+  console.log("OpenCode records history doesn't know keep their kind in both stores")
+
   // The Plan agent has no plan tool: the reply of a Plan step that ends the
   // turn is the plan, under the id its live step reported.
   {

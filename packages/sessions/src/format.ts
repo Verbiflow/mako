@@ -207,16 +207,20 @@ export interface Thread {
 
 /**
  * Native records of one kind a history reader couldn't draw: a kind it
- * doesn't know, or a known kind whose shape it couldn't read. The first is
+ * doesn't know, a known kind whose shape it couldn't read, or a kind the
+ * harness declares as content the reader doesn't draw yet. The first is
  * kept as it was, so the kind can be read and decided on, not guessed at.
  */
 export interface UnreadRecord {
   kind: string
-  reason: "unknown" | "unreadable"
+  reason: "unknown" | "unreadable" | "undrawn"
   count: number
   /** The first such record, as the store holds it, or its first `UNREAD_SAMPLE` characters as JSON. */
   sample?: z.infer<ReturnType<typeof z.json>>
 }
+
+/** A native record as its reader parsed it, or the raw text of a row. */
+export type NativeRecordSample = string | number | boolean | null | NativeRecordSample[] | { [key: string]: NativeRecordSample | undefined }
 
 /** Enough of a record to decide on its kind, without one large record weighing on every page. */
 export const UNREAD_SAMPLE = 16 * 1024
@@ -563,6 +567,16 @@ export class EntrySink {
     this.unsettle(length)
   }
 
+  /** Where the next entry pushed sits, counting the entries the ceiling set aside. */
+  get position(): number {
+    return this.droppedEntries + this.list.length
+  }
+
+  /** Drops every entry from `position` on; those the ceiling already set aside stay counted. */
+  rewind(position: number): void {
+    this.truncate(Math.max(0, position - this.droppedEntries))
+  }
+
   snapshot(): ThreadEntry[] {
     const last = this.list.length - 1
     for (let index = this.weights.length; index <= last; index++) {
@@ -603,8 +617,8 @@ export class EntrySink {
     return this.snapshot()
   }
 
-  /** A native record this sink's reader couldn't draw, counted by kind; the first of each is kept. */
-  unread(kind: string, reason: UnreadRecord["reason"], sample?: UnreadRecord["sample"]): void {
+  /** A native record this sink's reader couldn't draw, counted by kind; a JSON copy of the first of each is kept. */
+  unread(kind: string, reason: UnreadRecord["reason"], sample?: NativeRecordSample): void {
     const key = `${reason}\0${kind}`
     const known = this.unreadKinds.get(key)
     if (known) {
@@ -612,10 +626,8 @@ export class EntrySink {
       return
     }
     const record: UnreadRecord = { kind, reason, count: 1 }
-    if (sample !== undefined) {
-      const text = JSON.stringify(sample)
-      record.sample = text.length > UNREAD_SAMPLE ? `${text.slice(0, UNREAD_SAMPLE)}… (${text.length} characters)` : sample
-    }
+    const text = sample === undefined ? undefined : JSON.stringify(sample)
+    if (text !== undefined) record.sample = text.length > UNREAD_SAMPLE ? `${text.slice(0, UNREAD_SAMPLE)}… (${text.length} characters)` : JSON.parse(text)
     this.unreadKinds.set(key, record)
   }
 
