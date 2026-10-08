@@ -66,6 +66,8 @@ jobs:
           fi
 
       - name: Build Apple silicon app
+        env:
+          MAKO_CLOUD_URL: ${{ vars.MAKO_CLOUD_URL }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version

@@ -59,6 +59,10 @@ bundle identifier, mounts the DMG to verify the Applications shortcut, inspects
 the updater ZIP, writes checksums, and only then creates the GitHub Release.
 Release notes and the installer both disclose that the build is unsigned.
 
+The release build takes the Mako cloud's https origin from the repository
+variable `MAKO_CLOUD_URL` and bakes it into the app. Without it, the app can't
+sign in to the cloud and sends no telemetry, and packaging warns.
+
 The GitHub `release` environment is restricted to `v*` tags and requires approval
 from the repository owner. Public pull requests and unapproved jobs cannot
 publish releases or access any future signing credentials.
