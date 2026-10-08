@@ -83,3 +83,6 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     ],
   },
 })
+
+/** Every name Cursor records for writing its todo list, whose arguments hold the list. */
+export const CURSOR_TODO_WRITES: ReadonlySet<string> = new Set(["updateTodos", ...CURSOR_VOCABULARY.tools.updateTodos.aliases ?? []])

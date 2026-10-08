@@ -12,12 +12,12 @@ export { exclusiveTokens, inclusiveTokens, tokenCount, tokenSum, type HarnessTok
 export { CLAUDE_HOOK_EVENTS, claudeHourCacheWrites, claudeTokens, ClaudeUsage } from "./claude.js"
 export { CodexRolloutUsage, codexTokens, CodexWireUsage, type CodexTokenUsage } from "./codex.js"
 export {
-  DEVIN_ACP_HOOKS, DEVIN_TOOL_READING, DevinCallMetrics, DevinStoredCall, devinStoredTokens, DevinUsageMeta, devinUsageReading,
+  DEVIN_ACP_HOOKS, DEVIN_TOOL_READING, DevinCallMetrics, devinCompactionRecord, DevinStoredCall, devinStoredTokens, DevinUsageMeta, devinUsageReading,
   type DevinUsageReading,
 } from "./devin.js"
 export {
   GROK_ACP_HOOKS, GROK_TICKS_PER_USD, GrokCallUsage, grokCallTokens, grokCommandFailed, grokCost, grokPlanId, grokProposedPlan,
-  GrokSpend, GrokToolMeta, grokTokens, grokToolName, GrokTurnUsage, grokUnrecorded,
+  GrokSpend, GrokToolMeta, grokTokens, grokToolName, GrokTurnUsage, grokUnrecorded, GROK_UPDATES, grokUpdateReading,
 } from "./grok.js"
 export { OpenCodeSavedTokens, openCodeTokens, OpenCodeTokens } from "./opencode.js"
 export { planFeedbackMessage, planFeedbackOf } from "./plan-feedback.js"

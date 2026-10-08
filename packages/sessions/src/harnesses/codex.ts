@@ -19,7 +19,8 @@ export const CODEX_VOCABULARY = defineVocabulary({
   },
   mcp: ["s.t", "s: t"],
   tools: {
-    exec: { kind: "code", wraps: { form: "script" } },
+    // A code cell's calls arrive as their own items and draw as their own rows; a row of the cell itself is one that failed.
+    exec: { kind: "code" },
     exec_command: { kind: "shell", aliases: ["shell", "local_shell"] },
     write_stdin: { kind: "shell-input" },
     wait: { kind: "shell-output", label: "Command output" },

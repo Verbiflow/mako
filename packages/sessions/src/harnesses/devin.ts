@@ -169,11 +169,23 @@ export const DEVIN_TOOL_READING: AcpToolReading = {
 const PlanFileInputSchema = z.object({ file_path: z.string() })
 
 const InferenceMeta = z.object({ "cognition.ai/inferenceToolName": z.string().trim().min(1).max(512) })
+/** An MCP call (3000.10.23): `mcp_call_tool`, its tool named `mcp__<server>__<tool>`, its `rawInput` the tool's own arguments. */
+const McpCallMeta = z.object({
+  "cognition.ai/inferenceToolName": z.literal("mcp_call_tool"),
+  "cognition.ai/toolName": z.string().regex(/^mcp__.+?__.+$/),
+})
 
-/** What Devin's updates mean beyond ACP's own fields, read the same live and from its IDE journal. */
+/** What Devin's updates mean beyond ACP's own fields, read the same live and from its stores. */
 export const DEVIN_ACP_HOOKS = {
-  /** ACP's kind describes the action; `_meta["cognition.ai/inferenceToolName"]` names Devin's tool. */
-  toolName: (tool) => InferenceMeta.safeParse(tool._meta).data?.["cognition.ai/inferenceToolName"],
+  /**
+   * ACP's kind describes the action; `_meta["cognition.ai/inferenceToolName"]`
+   * names Devin's tool, and an MCP call is named `server.tool`.
+   */
+  toolName: (tool) => {
+    const mcp = McpCallMeta.safeParse(tool._meta).data?.["cognition.ai/toolName"]
+    if (mcp) return mcp.replace(/^mcp__(.+?)__/, "$1.")
+    return InferenceMeta.safeParse(tool._meta).data?.["cognition.ai/inferenceToolName"]
+  },
   toolReading: DEVIN_TOOL_READING,
   /**
    * Devin's status line for its own client, `_meta["cognition.ai/displayMessage"]`:
@@ -184,3 +196,12 @@ export const DEVIN_ACP_HOOKS = {
   transient: (notification) => notification.update.sessionUpdate === "agent_message_chunk" && notification.update._meta?.["cognition.ai/displayMessage"] === true,
   plans: () => new DevinPlanUpdates(),
 } satisfies AcpDecoderHooks<DevinPlanUpdates>
+
+/**
+ * The file Devin saves a compaction's full history to, which its summary
+ * names live and saved alike: the compaction's identity, since Devin gives
+ * the notification none.
+ */
+export function devinCompactionRecord(summary: string): string | undefined {
+  return /\/summaries\/(history_[0-9a-f]+)\.md\b/.exec(summary)?.[1]
+}

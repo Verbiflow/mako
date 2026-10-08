@@ -1,6 +1,7 @@
 import { z } from "zod"
-import type { AcpDecoderHooks } from "../acp-decoder.js"
+import type { AcpDecoderHooks, AcpUserChunk } from "../acp-decoder.js"
 import type { LiveUpdate } from "../live-content.js"
+import { backgroundCommandLabel, PROVIDER_TURN_FALLBACK, subagentLabel } from "../provider-turn.js"
 import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
@@ -142,7 +143,152 @@ export function grokProposedPlan(id: string, text: string): LiveUpdate[] {
 }
 
 /** What Grok's updates mean beyond ACP's own fields, read the same live and from `updates.jsonl`. */
+/**
+ * Grok records the start of the turn it runs after a background command as a
+ * user chunk it wrote itself, then closes it with `turn_completed` whose
+ * prompt id is `task-completed-<task>` (grok 1.0.41):
+ *
+ *   <system-reminder>
+ *   Background task "<id>" completed (exit code: 0).
+ *   Description: <description> | Duration: 8.2s
+ *   …
+ *
+ * A background subagent that finishes while Grok is idle wakes it the same
+ * way (grok 1.0.44):
+ *
+ *   <system-reminder>
+ *   While you were idle, 1 background subagent completed:
+ *   - [general-purpose] "<description>" — completed successfully (32.9s, 2 tool calls)
+ *   …
+ */
+export function backgroundReminderLabel(text: string): string | undefined {
+  const body = /^\s*<system-reminder>\s*([\s\S]*?)<\/system-reminder>\s*$/.exec(text)?.[1]
+  if (!body) return undefined
+  const subagents = /^While you were idle, (\d+) background subagents? \w+:/.exec(body)
+  if (subagents) return subagentReminderLabel(body, Number(subagents[1]))
+  const status = /^Background task "[^"]*" ([^\n(.]+)/.exec(body)?.[1]?.trim()
+  if (!status) return undefined
+  const exitCode = /exit code:\s*(-?\d+)/.exec(body)?.[1]
+  return backgroundCommandLabel({
+    description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
+    exitCode: exitCode === undefined ? undefined : Number(exitCode),
+    stopped: /kill|stop|cancel/i.test(status),
+  })
+}
+
+function subagentReminderLabel(body: string, count: number): string {
+  if (count !== 1) return `${count} subagents finished`
+  const line = /^- \[[^\]]*\] "(.*)" — (\S+)/m.exec(body)
+  const status = line?.[2] ?? ""
+  return subagentLabel({
+    description: line?.[1],
+    state: /^complete/i.test(status) ? "completed" : /cancel|stop|kill/i.test(status) ? "cancelled" : /fail|error/i.test(status) ? "failed" : undefined,
+  })
+}
+
+
+/**
+ * A user message Grok replays on `session/load`, drawn as its store's line
+ * is (`readGrokSession`): a turn Grok started itself opens as Grok's, its
+ * /compact is the compaction already drawn, a background reminder opens
+ * Grok's turn, and a steer is what the person typed. Grok marks the chunk
+ * itself (xai-grok-shell `session/storage`).
+ */
+export function grokReplayedUser(update: AcpUserChunk): LiveUpdate | null | undefined {
+  const meta = GrokUserMeta.parse(update._meta)
+  const text = update.content.type === "text" ? update.content.text : ""
+  if (meta?.hostTurn) return text.trim() === "/compact" ? null : { kind: "provider-turn", reason: backgroundReminderLabel(text) ?? PROVIDER_TURN_FALLBACK }
+  const reminder = update.content.type === "text" ? backgroundReminderLabel(text) : undefined
+  if (reminder) return { kind: "provider-turn", reason: reminder }
+  const typed = meta?.interjection ? GrokDisplayText.safeParse(update.content._meta).data?.displayText : undefined
+  return typed === undefined ? undefined : { kind: "user", text: typed, steeringFor: "running" }
+}
+
+const GrokUserMeta = z.looseObject({ hostTurn: z.boolean().optional(), interjection: z.boolean().optional() }).nullish().catch(undefined)
+const GrokDisplayText = z.looseObject({ displayText: z.string() })
+
+/**
+ * How Mako reads each of Grok's session updates beyond ACP's own (the kinds
+ * of its `SessionUpdate`, xai-org/grok-build 1.0.45
+ * `extensions/notification.rs`), live and saved alike. A kind missing here
+ * is unknown, and kept as such.
+ *
+ * - `marker`: a transcript fact, drawn by `grokUpdateMarker`.
+ * - `activity`: what Grok is doing or the session's title, shown live only.
+ * - `observed`: read by other observers: background tasks, the turns Grok
+ *   starts itself, and subagents, which Mako follows through their
+ *   `meta.json`. A `turn_completed` also says why Grok ended the turn
+ *   itself, which is drawn.
+ * - `ignored`: Grok's own bookkeeping and streaming detail, already shown
+ *   through ACP's updates or not about the conversation.
+ */
+export const GROK_UPDATES: Record<string, "marker" | "activity" | "observed" | "ignored"> = {
+  auto_compact_completed: "marker",
+  auto_compact_failed: "marker",
+  model_auto_switched: "marker",
+  retry_state: "marker",
+  image_dropped: "marker",
+  hook_annotation: "marker",
+  scheduled_task_created: "marker",
+  scheduled_task_fired: "marker",
+  scheduled_task_deleted: "marker",
+  auto_recovery_started: "marker",
+  auto_recovery_exhausted: "marker",
+  auto_compact_started: "activity",
+  auto_compact_cancelled: "activity",
+  session_summary_generated: "activity",
+  background_tasks: "observed",
+  task_completed: "observed",
+  turn_completed: "observed",
+  subagent_spawned: "observed",
+  subagent_finished: "observed",
+  task_backgrounded: "ignored",
+  compaction_checkpoint: "ignored",
+  session_recap: "ignored",
+  session_recap_unavailable: "ignored",
+  subagent_progress: "ignored",
+  turn_usage: "ignored",
+  reasoning_completed: "ignored",
+  tool_call_delta_chunk: "ignored",
+  diff_review: "ignored",
+  pending_interaction: "ignored",
+  interaction_resolved: "ignored",
+  plan_kept: "ignored",
+  plan_cleared: "ignored",
+  plan_executing: "ignored",
+  goal_updated: "ignored",
+  workflow_updated: "ignored",
+  rewind_marker: "ignored",
+  hook_run_started: "ignored",
+  hook_execution: "ignored",
+  hooks_changed: "ignored",
+  plugins_changed: "ignored",
+  plugin_updates_installed: "ignored",
+  session_status: "ignored",
+  relay_sync_status: "ignored",
+  last_turn_summary: "ignored",
+  served_model: "ignored",
+  image_compressed: "ignored",
+  // The end of the turn Grok continues after compacting; its `turn_completed` follows.
+  auto_continue_completed: "ignored",
+  // Grok asking for a rating of the session, which it shows only in its own pager.
+  feedback_request: "ignored",
+  // A monitor's output lines, which reach the model in its reminders.
+  monitor_event: "ignored",
+  // `session/set_config_option` answers with the model, and `config_option_update` shows it.
+  model_changed: "ignored",
+}
+
+/** Grok's memory and response streaming detail, every kind of which is `ignored`. */
+const GROK_IGNORED_PREFIXES = ["memory_", "response_"]
+
+/** How Mako reads a Grok session update kind; undefined for one it doesn't know. */
+export function grokUpdateReading(kind: string): (typeof GROK_UPDATES)[string] | undefined {
+  return Object.hasOwn(GROK_UPDATES, kind) ? GROK_UPDATES[kind] : GROK_IGNORED_PREFIXES.some((prefix) => kind.startsWith(prefix)) ? "ignored" : undefined
+}
+
 export const GROK_ACP_HOOKS = {
+  replayedUser: grokReplayedUser,
   toolName: (tool) => grokToolName(GrokToolMeta.safeParse(tool._meta).data, tool.title),
   toolFailed: (update) => grokCommandFailed(RawOutput.parse(update.rawOutput)),
   /**
