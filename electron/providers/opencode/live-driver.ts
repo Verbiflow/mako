@@ -5,9 +5,8 @@ import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { isOpenCodeInstruction, openCodeNoticeLabel, PROVIDER_TURN_FALLBACK } from "@mako/sessions"
+import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
 import { compactionFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
-import { z } from "zod"
 import { applyControlEnvironment } from "../../control-launch.js"
 import { launchContext, reportedRuntime } from "../../execution-context.js"
 import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
@@ -45,7 +44,7 @@ import {
   type OpenCodeCatalog,
   type OpenCodeModelRef,
 } from "./catalog.js"
-import { OpenCodeDecoder, openCodeCatalogChange, type OpenCodeEffect } from "./decoder.js"
+import { OpenCodeDecoder, openCodeCatalogChange, type OpenCodeEffect, type OpenCodeNotice, type OpenCodeTurnFact } from "./decoder.js"
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
@@ -57,16 +56,6 @@ const OPENCODE_NATIVE_IDENTITY = {
   kind: "unavailable",
   reason: "The native API reports provider configuration, not the effective identity for each selected model backend.",
 } as const
-
-type NoticePayload = Extract<Extract<OpenCodeEvent, { type: "session.inbox.enqueued" }>["data"]["item"], { type: "synthetic" }>["payload"]
-
-/** A notice's metadata: what ended (a shell, or a subagent's session), and how. */
-const NoticeMetadata = z.object({
-  source: z.string().optional(),
-  state: z.string().optional(),
-  shellID: z.string().optional(),
-  childID: z.string().optional(),
-})
 
 /**
  * One native send and the execution it starts. The inbox ID binds both. A
@@ -254,13 +243,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     return live
   }
 
-  const owns = (live: Live, sessionID: string) => live.decoder?.owns(sessionID) ?? false
-
-  /** Effects act on the native event they were decoded from. */
-  function deliver(live: Live, decoded: readonly Decoded<OpenCodeEffect>[], event?: OpenCodeEvent): void {
+  function deliver(live: Live, decoded: readonly Decoded<OpenCodeEffect>[]): void {
     if (!decoded.length) return
-    live.sink ??= engine.sink(live, { effect: () => {} })
-    deliverDecoded(decoded, event ? { ...live.sink, effect: effect => act(live, effect, event) } : live.sink)
+    live.sink ??= engine.sink(live, { effect: effect => act(live, effect) })
+    deliverDecoded(decoded, live.sink)
   }
 
   function usage(live: Live) {
@@ -366,13 +352,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     await Promise.race([endBackground(live).catch(() => {}), delay(SHUTDOWN_GRACE_MS, undefined, { ref: false })])
   }
 
-  function observeNotice(live: Live, inboxID: string, notice: NoticePayload): void {
-    const parsed = NoticeMetadata.safeParse(notice.metadata ?? {})
-    const metadata = parsed.success ? parsed.data : {}
-    const ended = metadata.shellID ?? metadata.childID
-    if (ended && live.stopped.delete(ended)) live.stopNotices.add(inboxID)
-    const read = { text: notice.text, description: notice.description, source: metadata.source, state: metadata.state }
-    if (!live.turn && !isOpenCodeInstruction(read)) live.providerTurnCause = openCodeNoticeLabel(read)
+  function observeNotice(live: Live, inbox: string, notice: OpenCodeNotice): void {
+    if (notice.ended && live.stopped.delete(notice.ended)) live.stopNotices.add(inbox)
+    if (!live.turn && notice.cause) live.providerTurnCause = notice.cause
   }
 
   function mark(live: Live, markers: readonly TranscriptEvent[]): void {
@@ -398,17 +380,21 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     live.providerTurnCause = undefined
   }
 
-  /** What the driver does with what its decoder read; `event` is the native event it came from. */
-  function act(live: Live, effect: OpenCodeEffect, event: OpenCodeEvent): void {
+  /** What the driver does with what its decoder read. */
+  function act(live: Live, effect: OpenCodeEffect): void {
     switch (effect.type) {
       case "turn":
-        bindTurn(live, event)
+        bindTurn(live, effect.turn)
         return
-      case "request":
-        if (event.type === "form.created" || event.type === "form.replied" || event.type === "form.cancelled" || event.type === "permission.asked" || event.type === "permission.replied")
-          live.queue = live.queue.then(() => live.interactions?.observe(event)).catch(error =>
-            hostWarn("opencode", "a native request could not be shown", { conversation: live.state.id, error: errorText({ error }) }))
+      case "child-settled":
+        for (const settle of live.childSettling.get(effect.sessionID) ?? []) settle()
         return
+      case "request": {
+        const { request } = effect
+        live.queue = live.queue.then(() => live.interactions?.observe(request)).catch(error =>
+          hostWarn("opencode", "a native request could not be shown", { conversation: live.state.id, error: errorText({ error }) }))
+        return
+      }
       case "catalog":
         live.catalogGeneration++
         refreshCatalog(live)
@@ -425,69 +411,56 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     }
   }
 
-  /** Inbox receipts and execution ends, bound to the turn Mako sent or one OpenCode started. */
-  function bindTurn(live: Live, event: OpenCodeEvent): void {
+  /** The root session's inbox receipts and execution ends, bound to the turn Mako sent or one OpenCode started. */
+  function bindTurn(live: Live, fact: OpenCodeTurnFact): void {
     const root = live.root
     if (!root) return
-    switch (event.type) {
-      case "session.inbox.enqueued": {
-        if (event.data.sessionID !== root) return
-        if (event.data.item.type === "synthetic") observeNotice(live, event.data.inboxID, event.data.item.payload)
+    switch (fact.type) {
+      case "enqueued": {
+        if (fact.notice) observeNotice(live, fact.inbox, fact.notice)
         const turn = live.turn
         if (!turn) return
-        if (turn.kind === "command" && !turn.inboxId && event.data.item.type === "user") turn.inboxId = event.data.inboxID
-        if (turn.inboxId !== event.data.inboxID || turn.enqueued) return
+        if (turn.kind === "command" && !turn.inboxId && fact.item === "user") turn.inboxId = fact.inbox
+        if (turn.inboxId !== fact.inbox || turn.enqueued) return
         turn.enqueued = true
-        turn.dispatch?.report({ kind: "accepted", source: "native-echo", referenceId: event.data.inboxID })
-        if (turn.kind !== "compaction") engine.patch(live, { nativeRunId: event.data.inboxID })
+        turn.dispatch?.report({ kind: "accepted", source: "native-echo", referenceId: fact.inbox })
+        if (turn.kind !== "compaction") engine.patch(live, { nativeRunId: fact.inbox })
         return
       }
-      case "session.inbox.delivered":
-        if (event.data.sessionID !== root) return
-        if (live.turn?.inboxId === event.data.inboxID) live.turn.delivered = true
-        if (live.stopNotices.delete(event.data.inboxID) && live.turn?.kind === "provider") {
+      case "delivered":
+        if (live.turn?.inboxId === fact.inbox) live.turn.delivered = true
+        if (live.stopNotices.delete(fact.inbox) && live.turn?.kind === "provider") {
           live.turn.stopRequested = true
           live.api.client.session.interrupt({ sessionID: root }).catch(error =>
             hostWarn("opencode", "The turn started on a stopped task's notice was not interrupted", { conversation: live.state.id, error: errorText({ error }) }))
         }
         return
-      case "session.execution.started":
-        if (event.data.sessionID === root && !live.turn && (live.state.status === "ready" || live.state.status === "failed"))
-          openProviderTurn(live)
+      case "started":
+        if (!live.turn && (live.state.status === "ready" || live.state.status === "failed")) openProviderTurn(live)
         return
-      case "session.inbox.cancelled":
-        if (event.data.sessionID === root && live.turn?.inboxId === event.data.inboxID && !live.turn.delivered)
-          finish(live, { kind: "interrupted", reason: "cancelled before delivery" })
+      case "cancelled":
+        if (live.turn?.inboxId === fact.inbox && !live.turn.delivered) finish(live, { kind: "interrupted", reason: "cancelled before delivery" })
         return
-      case "session.execution.succeeded":
-      case "session.execution.failed":
-      case "session.execution.interrupted": {
-        const sessionID = event.data.sessionID
-        if (sessionID !== root) {
-          for (const settle of live.childSettling.get(sessionID) ?? []) settle()
-          return
-        }
-        const stopped = event.type === "session.execution.interrupted"
-          ? openCodeStopped(event.data.reason, live.turn?.stopRequested === true)
-          : undefined
+      case "succeeded":
+        if (live.turn?.delivered) finish(live, { kind: "succeeded" })
+        return
+      case "failed":
+        if (live.turn?.delivered) finish(live, { kind: "failed", message: fact.error.message, type: fact.error.type })
+        return
+      case "interrupted": {
+        const stopped = openCodeStopped(fact.reason, live.turn?.stopRequested === true)
         if (stopped) {
-          engine.event(live, stopped, event.id)
-          hostWarn("opencode", "turn interrupted", { conversation: live.state.id, reason: event.type === "session.execution.interrupted" ? event.data.reason : "", detail: stopped.detail ?? "" })
+          engine.event(live, stopped, fact.source)
+          hostWarn("opencode", "turn interrupted", { conversation: live.state.id, reason: fact.reason, detail: stopped.detail ?? "" })
         }
-        if (!live.turn?.delivered) return
-        if (event.type === "session.execution.succeeded") finish(live, { kind: "succeeded" })
-        else if (event.type === "session.execution.failed") finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
-        else finish(live, { kind: "interrupted", reason: event.data.reason })
+        if (live.turn?.delivered) finish(live, { kind: "interrupted", reason: fact.reason })
         return
       }
-      case "session.compaction.failed":
-        if (event.data.sessionID !== root) return
+      case "compaction-failed":
         // Compaction Mako asked for fails its action and turn; any other would leave no trace.
-        if (live.turn?.kind === "compaction" && (!event.data.inputID || event.data.inputID === live.turn.inboxId))
-          finish(live, { kind: "failed", message: event.data.error.message, type: event.data.error.type })
-        else engine.event(live, compactionFailedEvent(event.data.error.message), event.id)
-        return
-      default:
+        if (live.turn?.kind === "compaction" && (!fact.inbox || fact.inbox === live.turn.inboxId))
+          finish(live, { kind: "failed", message: fact.error.message, type: fact.error.type })
+        else engine.event(live, compactionFailedEvent(fact.error.message), fact.source)
         return
     }
   }
@@ -504,7 +477,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     if (event.type === "session.retry.scheduled" && event.data.sessionID === decoder.root)
       hostLog("opencode", "provider retry scheduled", { conversation: live.state.id, attempt: event.data.attempt, error: event.data.error.message })
     if (!decoder.transcript(event) || (!live.projection && !unnamedCall(live, event))) {
-      deliver(live, decoder.decode(event), event)
+      deliver(live, decoder.decode(event))
       return
     }
     // Later content waits behind a native name lookup so rows keep their order.
@@ -514,7 +487,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const name = await nativeToolName(live, event)
         if (name && !live.closed) engine.emitUpdates(live, decoder.content.open(event.data.sessionID, event.data.id, name))
       }
-      if (!live.closed) deliver(live, decoder.decode(event), event)
+      if (!live.closed) deliver(live, decoder.decode(event))
     }).catch(error => hostWarn("opencode", "a native event could not be applied", { conversation: live.state.id, type: event.type, error: errorText({ error }) }))
       .finally(() => { if (live.projection === projection) live.projection = undefined })
     live.projection = projection
@@ -785,7 +758,6 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         live.capture = nativeCapture("opencode", options.conversationId, () => ({ root: decoder.root, cwd, launchAccess, contextSize: contextSize() ?? null }))
         live.interactions = new OpenCodeInteractions({
           client: api.client, root: approvalRoot, conversationId: live.state.id,
-          owns: sessionID => owns(live, sessionID),
           emit: event => { if (!live.closed) live.emit(event) },
           describe: (sessionID, toolID) => ({
             title: toolID ? decoder.content.title(sessionID, toolID) : undefined,

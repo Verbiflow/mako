@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
-import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
-import { z } from "zod"
+import type { OpenCodeClient } from "@opencode/client"
 import type { LiveDriverEvent, LivePermissionRequest, LivePermissionResponse } from "../../shared.js"
 import type { NativeApprovalIdentity } from "../../contracts/approval-response.js"
 import type { ApprovalDispatch } from "../live-driver.js"
@@ -10,14 +9,9 @@ import { readLegacyOpenCodeDecisions } from "./legacy-approval-decisions.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { hostWarn } from "../../host-log.js"
 import { NativeForm, openCodeQuestions, openCodeFormAnswer, openCodeAnswerDigest } from "./forms.js"
+import { NativePermission, type OpenCodeRequest } from "./requests.js"
 import { openCodeToolKind } from "@mako/sessions/opencode-content"
 
-const NativePermission = z.object({
-  id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), action: z.string(), message: z.string().optional(),
-  resources: z.array(z.string()), save: z.array(z.string()).optional(),
-  source: z.object({ type: z.literal("tool"), id: z.string() }).optional(),
-})
-type NativePermission = z.infer<typeof NativePermission>
 interface Pending { request: LivePermissionRequest; kind: "form" | "permission"; sessionID: string; id: string; sending: boolean }
 /** Retained per connection; older completions leave first. */
 const MAX_COMPLETED = 2000
@@ -31,7 +25,7 @@ export interface OpenCodeRequestClient {
 
 interface InteractionsInput {
   client: OpenCodeRequestClient; root: string; conversationId: string;
-  owns(sessionID: string): boolean; emit(event: LiveDriverEvent): void
+  emit(event: LiveDriverEvent): void
   /** The live row title of the tool that asked, and a child session's label. */
   describe?(sessionID: string, toolID: string | undefined): { title?: string; prefix?: string }
 }
@@ -54,21 +48,18 @@ export class OpenCodeInteractions {
       ...await readLegacyOpenCodeDecisions(join(this.input.root, "opencode"), previous),
     ]) if (!this.stopped) this.input.emit({ type: "live-approval-decision", id: this.input.conversationId, decision })
   }
-  async observe(event: OpenCodeEvent): Promise<void> {
+  /** A request of a session this conversation owns; the decoder decides which those are. */
+  async observe(request: OpenCodeRequest): Promise<void> {
     if (this.stopped) return
-    if (event.type === "form.created") {
-      if (!this.input.owns(event.data.form.sessionID)) return
-      const form = NativeForm.parse(event.data.form)
-      this.add("form", form.sessionID, form.id, this.formTitle(form.sessionID, form.title), openCodeQuestions(form))
-    } else if (event.type === "permission.asked") {
-      if (!this.input.owns(event.data.sessionID)) return
-      this.permission(NativePermission.parse(event.data))
-    } else if (event.type === "form.replied") {
-      await this.decide(event.data.sessionID, event.data.id, openCodeAnswerDigest(event.data.answer), event.created)
-    } else if (event.type === "permission.replied") {
-      await this.decide(event.data.sessionID, event.data.requestID, approvalAnswerDigest({ kind: "choice", optionId: event.data.reply }), event.created)
-    } else if (event.type === "form.cancelled") {
-      await this.decide(event.data.sessionID, event.data.id, approvalAnswerDigest({ kind: "choice", optionId: null }), event.created)
+    switch (request.type) {
+      case "form":
+        this.add("form", request.form.sessionID, request.form.id, this.formTitle(request.form.sessionID, request.form.title), openCodeQuestions(request.form))
+        return
+      case "permission":
+        this.permission(request.permission)
+        return
+      case "resolved":
+        await this.decide(request.sessionID, request.id, approvalAnswerDigest(request.answer), request.at)
     }
   }
   private formTitle(sessionID: string, title: string): string {

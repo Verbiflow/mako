@@ -47,7 +47,10 @@ export function openCodeFormAnswer(questions: readonly LiveInputQuestion[], resp
   }
   return result
 }
+/** A form's native answer as the shared answer shape: every value a list of strings. */
+export function openCodeFormResponse(answer: z.infer<typeof NativeFormAnswer>): LivePermissionResponse {
+  return { kind: "answers", answers: Object.fromEntries(Object.entries(answer).map(([key, value]) => [key, Array.isArray(value) ? value : [String(value)]])) }
+}
 export function openCodeAnswerDigest(raw: z.input<typeof NativeFormAnswer>): string {
-  const answer = NativeFormAnswer.parse(raw)
-  return approvalAnswerDigest({ kind: "answers", answers: Object.fromEntries(Object.entries(answer).map(([key, value]) => [key, Array.isArray(value) ? value : [String(value)]])) })
+  return approvalAnswerDigest(openCodeFormResponse(NativeFormAnswer.parse(raw)))
 }
