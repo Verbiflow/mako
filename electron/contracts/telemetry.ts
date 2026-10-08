@@ -7,6 +7,9 @@
  * the kinds of native records no decoder understood, with paths, emails and
  * secrets scrubbed out. Neither ever carries a prompt, a reply, a file, a
  * path, a title, a repository or branch name, or a session ID.
+ *
+ * Who sent it: a random install ID, a salted hash naming the computer, and
+ * the Mako account while signed in.
  */
 export interface TelemetryChoice {
   usage: boolean
@@ -66,6 +69,12 @@ export interface ProductEvents {
     subagents: number
   }
   "feature.used": { feature: TelemetryFeature; harness?: string }
+  /**
+   * Once per computer and account, while signed in: the cloud merges this
+   * computer's anonymous history into the account's, so one person is one
+   * person whether or not they were signed in.
+   */
+  "account.linked": Record<string, never>
 }
 
 export type TelemetryFeature =
@@ -75,9 +84,17 @@ export type TelemetryFeature =
   | "automation.ran"
   | "cloud.signed-in"
 
+/** The Mako cloud's routes this Mac calls, by name, never by path: a path can hold an ID. */
+export type CloudRoute = "devices.enroll" | "devices.token" | "devices.list" | "devices.remove"
+
 export interface DiagnosticEvents {
   "error.reported": { kind: string; name?: string; message: string; stack?: string; breadcrumbs?: string[] }
   "native.unknown": { harness: string; kind: string; reason: "unknown" | "unreadable"; count: number }
+  /**
+   * One call to the Mako cloud and how it went: `refused` is a 4xx, `failed` a 5xx, `unreachable` no answer.
+   * `correlationId` is a random ID sent with the call, which names the same call in the cloud's logs and traces.
+   */
+  "cloud.request": { route: CloudRoute; outcome: "ok" | "refused" | "failed" | "unreachable"; status?: number; ms: number; correlationId: string }
 }
 
 export interface TelemetryApp {
@@ -102,6 +119,8 @@ export interface TelemetryEvent {
 /** `POST /v1/telemetry`. */
 export interface TelemetryBatch {
   install: string
+  /** This computer, shared by every install on it (`machine-id.ts`); absent when the system won't say. */
+  machine?: string
   sentAt: number
   app: TelemetryApp
   consent: { product: boolean; diagnostics: boolean }

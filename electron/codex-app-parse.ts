@@ -6,6 +6,7 @@ import {
 } from "./providers/codex/agents.js"
 import { attachmentFromCodexContent } from "./providers/codex/content.js"
 import { z } from "zod"
+import { CodexFunctionOutputSchema, codexGeneratedImage } from "@mako/sessions/codex-presentation"
 import { codexTokens, CodexWireUsage } from "@mako/sessions/harnesses"
 import type { TokenCounts } from "./contracts/providers-acp.js"
 import {
@@ -242,16 +243,10 @@ const McpStatusSchema = z.object({
 })
 const SafetyBufferingSchema = z.object({ turnId: z.string(), showBufferingUi: z.boolean() })
 const SummaryPartSchema = z.object({ turnId: z.string(), itemId: z.string(), summaryIndex: z.number() })
-const FUNCTION_OUTPUT_PLACEHOLDERS = { input_image: "[image]", input_audio: "[audio]", encrypted_content: "[encrypted content]" } as const
 const FunctionCallOutputSchema = z.object({
   name: z.string().min(1),
   namespace: z.string().nullable(),
-  output: z.union([z.string(), z.array(z.discriminatedUnion("type", [
-    z.object({ type: z.literal("input_text"), text: z.string() }),
-    z.object({ type: z.literal("input_image") }).loose(),
-    z.object({ type: z.literal("input_audio") }).loose(),
-    z.object({ type: z.literal("encrypted_content") }).loose(),
-  ])).transform((parts) => parts.map((part) => part.type === "input_text" ? part.text : FUNCTION_OUTPUT_PLACEHOLDERS[part.type]).join("\n"))]),
+  output: CodexFunctionOutputSchema,
 }).loose()
 
 export function parseJsonRpcEnvelope(line: string): JsonRpcEnvelope {
@@ -677,13 +672,8 @@ function parseThreadItem(value: JsonValue | undefined): ThreadItem | null {
       const path = stringValue(root.path)
       return path === undefined ? { type: "unsupported", id, sourceType: type } : { type, id, path, attachment: attachmentFromCodexContent(root) }
     }
-    case "imageGeneration": {
-      return {
-        type: "attachment",
-        id,
-        attachment: attachmentFromCodexContent(root),
-      }
-    }
+    case "imageGeneration":
+      return { type: "attachment", id, attachment: codexGeneratedImage(root) }
     case "collabAgentToolCall": {
       const parsed = CodexAgentItemSchema.safeParse(root)
       return parsed.success ? parsed.data : { type: "unsupported", id, sourceType: type }

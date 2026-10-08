@@ -12,6 +12,8 @@ import {
   codexPresentation,
   codexPrompt,
   codexPromptImages,
+  codexSearchResults,
+  codexSearchTarget,
   codexWarningEvent,
   firstLine,
 } from "@mako/sessions/codex-presentation"
@@ -233,12 +235,6 @@ const PatchKindSchema = z.object({
   type: z.enum(["add", "delete", "update"]),
   move_path: z.string().nullish(),
 })
-const SearchActionSchema = z.object({
-  query: z.string().nullish(),
-  queries: z.array(z.string()).nullish(),
-  url: z.string().nullish(),
-})
-const SearchResultSchema = z.object({ title: z.string().optional(), url: z.string().min(1) })
 /**
  * `request_user_input`'s question, which reaches Mako only as this server
  * request (codex 0.159.3): no item carries it. Its questions are the model's
@@ -694,7 +690,7 @@ export class CodexDecoder {
         return
       case "webSearch": {
         const input = item.action ?? { query: item.query }
-        const title = item.query || searchTarget(item.action) || "Web search"
+        const title = item.query || codexSearchTarget(item.action) || "Web search"
         startTool(out, tracker, title, "web_search", completed ? "completed" : "inProgress", input)
         // The query is empty until the search ends.
         if (completed)
@@ -704,7 +700,7 @@ export class CodexDecoder {
             title: boundedText(title, 500),
             input: boundedJson(input),
             status: "completed",
-            output: searchResults(item.results),
+            output: boundedSearchResults(item.results),
           }))
         return
       }
@@ -928,22 +924,9 @@ function patchText(changes: FileChange[]): string {
   })), MAX_TOOL_OUTPUT)
 }
 
-function searchTarget(action: JsonObject | null): string | undefined {
-  const target = SearchActionSchema.safeParse(action)
-  if (!target.success) return undefined
-  const { query, queries, url } = target.data
-  return query || queries?.join(" · ") || url || undefined
-}
-
-/** Standalone search returns results out of band; hosted search returns none. */
-function searchResults(results: JsonValue[] | null): string | undefined {
-  const lines = (results ?? []).flatMap((result) => {
-    const parsed = SearchResultSchema.safeParse(result)
-    if (!parsed.success) return []
-    const { title, url } = parsed.data
-    return [title ? `${title}\n${url}` : url]
-  })
-  return lines.length ? boundedText(lines.join("\n\n"), MAX_TOOL_OUTPUT) : undefined
+function boundedSearchResults(results: JsonValue[] | null): string | undefined {
+  const text = codexSearchResults(results)
+  return text === undefined ? undefined : boundedText(text, MAX_TOOL_OUTPUT)
 }
 
 function duration(milliseconds: number): string {

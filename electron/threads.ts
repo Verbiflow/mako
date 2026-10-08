@@ -53,6 +53,7 @@ import type {
 } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "./host-log.js"
+import { retainUnread } from "./native-unknown.js"
 import { readConversationFile } from "./host-workspace.js"
 import { threadFileWorkspace } from "./contracts/thread-file-workspace.js"
 import { WorktreeOrigins } from "./worktree-origins.js"
@@ -1030,7 +1031,10 @@ export async function pageThread(
   const { source, signal } = await awaitCatalogReady()
   signal.throwIfAborted()
   const page = await source.page(path, before, limit, options)
-  return page ? { ...page, ref: annotate(page.ref) } : null
+  if (!page) return null
+  const { unread, ...shown } = page
+  retainUnread(page.ref, unread)
+  return { ...shown, ref: annotate(page.ref) }
 }
 
 /**
@@ -1091,7 +1095,10 @@ export async function openThread(path: string): Promise<Thread | null> {
     source === daemon
       ? await openThreadViaDaemon(path)
       : await source.open(path)
-  return thread ? { ...thread, ref: annotate(thread.ref) } : null
+  if (!thread) return null
+  const { unread, ...shown } = thread
+  retainUnread(thread.ref, unread)
+  return { ...shown, ref: annotate(thread.ref) }
 }
 
 async function openThreadViaDaemon(path: string): Promise<Thread | null> {

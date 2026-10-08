@@ -3,6 +3,7 @@ import { dirname, join } from "node:path"
 import { hasVocabulary, isDeclaredTool } from "@mako/sessions/tool-identity"
 import type { JsonValue } from "./codex-app-json.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
+import type { UnreadRecord } from "@mako/sessions"
 import { hostLog, hostLogPath } from "./host-log.js"
 import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
 
@@ -39,17 +40,17 @@ export function nativeUnknownPath(): string | null {
   return log ? join(dirname(log), NATIVE_UNKNOWN_FILE) : null
 }
 
-/** Count a record and keep the first of its kind; never throws. */
-export function retainUnknown(harness: string, kind: string, reason: UnknownReason, raw?: JsonValue): void {
+/** Count records and keep the first of their kind; never throws. */
+export function retainUnknown(harness: string, kind: string, reason: UnknownReason, raw?: JsonValue, count = 1): void {
   const key = `${harness}\0${kind}\0${reason}`
   const known = kinds.get(key)
   if (known) {
-    known.count++
+    known.count += count
     return
   }
   if (kinds.size >= MAX_KINDS) kinds.delete(kinds.keys().next().value!)
   const now = Date.now()
-  kinds.set(key, { harness, kind, reason, count: 1, firstSeen: now })
+  kinds.set(key, { harness, kind, reason, count, firstSeen: now })
   const path = nativeUnknownPath()
   hostLog("live", reason === "unknown" ? "native event not handled" : "native event unreadable", {
     harness, kind, kept: raw === undefined || !path ? undefined : NATIVE_UNKNOWN_FILE,
@@ -70,6 +71,26 @@ export function retainUndeclaredTools(harness: string, updates: readonly LiveUpd
   for (const update of updates) {
     if (update.kind !== "tool" || !update.name || isDeclaredTool(harness, update.name)) continue
     retainUnknown(harness, `tool ${update.name}`, "unknown", { name: update.name, title: update.title, toolKind: update.toolKind ?? null })
+  }
+}
+
+const retainedUnread = new Set<string>()
+const MAX_RETAINED_UNREAD = 4096
+
+/**
+ * The saved records a thread's history couldn't read, kept as kind
+ * `saved <kind>` beside the live ones, once per thread: its pages are read
+ * again on every scroll and reopen. A declared kind history doesn't draw
+ * yet is the harness table's own gap, not news.
+ */
+export function retainUnread(ref: { harness: string; path: string }, unread: readonly UnreadRecord[] | undefined): void {
+  for (const record of unread ?? []) {
+    if (record.reason === "undrawn") continue
+    const key = `${ref.path}\0${record.kind}\0${record.reason}`
+    if (retainedUnread.has(key)) continue
+    if (retainedUnread.size >= MAX_RETAINED_UNREAD) retainedUnread.clear()
+    retainedUnread.add(key)
+    retainUnknown(ref.harness, `saved ${record.kind}`, record.reason, record.sample, record.count)
   }
 }
 

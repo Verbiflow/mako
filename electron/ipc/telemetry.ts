@@ -8,7 +8,8 @@ import { hostLog } from "../host-log.js"
 import { HostTelemetry, type HostTelemetrySources } from "../host-telemetry.js"
 import { unknownKinds } from "../native-unknown.js"
 import { Telemetry, telemetryOff } from "../telemetry.js"
-import { cloudConnectionToken, cloudSignedIn } from "./cloud-account.js"
+import { telemetryMachineId } from "../machine-id.js"
+import { cloudAccountId, cloudConnectionToken } from "./cloud-account.js"
 import { registerIpc } from "./register.js"
 
 /**
@@ -25,11 +26,12 @@ export async function installTelemetry({
     app: describeApp(),
     off: telemetryOff(process.env, fixture),
     token: cloudConnectionToken,
+    machine: () => telemetryMachineId(),
     log: (message, fields) => hostLog("telemetry", message, fields),
   })
   registerIpc("mako:telemetry", () => telemetry.state())
   registerIpc("mako:telemetry-choose", (_event, choice) => telemetry.choose(choice))
-  return new HostTelemetry(telemetry, { ...sources, crashesAfter, crashIdAt, unknownKinds, signedIn: cloudSignedIn })
+  return new HostTelemetry(telemetry, { ...sources, crashesAfter, crashIdAt, unknownKinds, account: cloudAccountId })
 }
 
 function describeApp(): TelemetryApp {

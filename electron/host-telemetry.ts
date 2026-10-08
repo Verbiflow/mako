@@ -1,6 +1,6 @@
 import type { HarnessUpdates } from "./contracts/harness-updates.js"
 import type { LiveSnapshot } from "./contracts/live-conversations.js"
-import type { ProductEvents, TelemetryFeature } from "./contracts/telemetry.js"
+import type { DiagnosticEvents, ProductEvents, TelemetryFeature } from "./contracts/telemetry.js"
 import type { CrashReport } from "./crash.js"
 import type { UnknownKind } from "./native-unknown.js"
 import type { Telemetry } from "./telemetry.js"
@@ -24,7 +24,8 @@ export interface HostTelemetrySources {
   crashesAfter(id: string): CrashReport[]
   crashIdAt(at: number): string
   unknownKinds(): UnknownKind[]
-  signedIn(): Promise<boolean>
+  /** The signed-in Mako account's ID, or undefined while signed out. */
+  account(): Promise<string | undefined>
   /** A window is open on this host. The heartbeat counts days someone used Mako, not days a host ran. */
   attended(): boolean
   inventory(): Promise<{ harnesses: string[]; runtimes: HarnessUpdates; threads: number }>
@@ -47,12 +48,15 @@ export class HostTelemetry {
   /** The host is up: `app.started` now, the first sweep in a minute, then every five. */
   async started(startupMs: number | undefined): Promise<void> {
     if (this.telemetry.crashesThrough() === undefined) await this.telemetry.reportedCrashesThrough(this.#sources.crashIdAt(this.#now()))
-    if (this.telemetry.collects("usage"))
+    if (this.telemetry.collects("usage")) {
+      const account = await this.#account()
       this.telemetry.record("app.started", {
         ...(startupMs !== undefined && { startupMs: Math.min(Math.round(startupMs), 600_000) }),
         firstRun: this.telemetry.firstRun,
-        signedIn: await this.#sources.signedIn().catch(() => false),
+        signedIn: account !== undefined,
       })
+      if (account) await this.telemetry.linkAccount(account)
+    }
     const sweep = () => void this.sweep().catch(() => undefined)
     const first = setTimeout(sweep, FIRST_SWEEP_MS)
     const every = setInterval(sweep, SWEEP_MS)
@@ -96,6 +100,18 @@ export class HostTelemetry {
     this.telemetry.record("feature.used", id ? { feature, harness: id } : { feature })
   }
 
+  /** This Mac just signed in to Mako: the feature, and its history linked to the account. */
+  async signedIn(): Promise<void> {
+    this.feature("cloud.signed-in")
+    const account = await this.#account()
+    if (account) await this.telemetry.linkAccount(account)
+  }
+
+  /** A call to the Mako cloud ended. Its correlation ID finds the cloud's side of it. */
+  cloudRequest(call: DiagnosticEvents["cloud.request"]): void {
+    this.telemetry.report("cloud.request", call)
+  }
+
   /** Crash reports and unknown native records since the last sweep, and the heartbeat when it is due. */
   async sweep(): Promise<void> {
     if (this.telemetry.state().off) return
@@ -103,12 +119,13 @@ export class HostTelemetry {
     const unknown = unknownSince(this.#sources.unknownKinds(), this.#unknownReported)
     if (this.telemetry.collects("errors")) for (const props of unknown) this.telemetry.report("native.unknown", props)
     if (this.#sources.attended() && (await this.telemetry.heartbeatDue())) {
-      const [inventory, signedIn] = await Promise.all([this.#sources.inventory(), this.#sources.signedIn().catch(() => false)])
+      const [inventory, account] = await Promise.all([this.#sources.inventory(), this.#account()])
       this.telemetry.record("app.heartbeat", {
         harnesses: harnessInventory(inventory.harnesses, inventory.runtimes),
         threads: Math.min(inventory.threads, 1e7),
-        signedIn,
+        signedIn: account !== undefined,
       })
+      if (account) await this.telemetry.linkAccount(account)
     }
   }
 
@@ -128,6 +145,10 @@ export class HostTelemetry {
     if (this.telemetry.collects("errors"))
       for (const crash of fresh.slice(-MAX_CRASHES_PER_SWEEP)) this.telemetry.report("error.reported", errorReported(crash))
     await this.telemetry.reportedCrashesThrough(newest.id)
+  }
+
+  #account(): Promise<string | undefined> {
+    return this.#sources.account().catch(() => undefined)
   }
 
   #now(): number {

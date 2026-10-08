@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { z } from "zod"
@@ -51,6 +51,8 @@ const StoredSchema = z.object({
   heartbeatAt: z.number().optional(),
   /** The newest crash report already reported; the crash folder is read past it. */
   crashesThrough: z.string().optional(),
+  /** A hash of the account this computer's history was last linked to, so `account.linked` goes once per account. */
+  linked: z.string().optional(),
 })
 type Stored = z.infer<typeof StoredSchema>
 
@@ -64,6 +66,8 @@ export interface TelemetryOptions {
   off?: Exclude<TelemetryOff, "no-cloud">
   /** A connection token while this Mac is signed in to Mako, so its events count for the account. */
   token?: () => Promise<string | undefined>
+  /** This computer's telemetry ID (`machine-id.ts`), read once, at the first send, so never while nothing is collected. */
+  machine?: () => Promise<string | undefined>
   fetch?: typeof fetch
   now?: () => number
   log?: (message: string, fields?: HostLogFields) => void
@@ -90,6 +94,7 @@ export class Telemetry {
   #retryMs = RETRY_MS.first
   #failing = false
   #closed = false
+  #machine: Promise<string | undefined> | undefined
 
   private constructor(options: TelemetryOptions, stored: Stored, firstRun: boolean) {
     this.#options = options
@@ -148,6 +153,16 @@ export class Telemetry {
     this.#stored = { ...this.#stored, heartbeatAt: now }
     await this.#save()
     return true
+  }
+
+  /** Links this computer's history to the signed-in account, once per account. */
+  async linkAccount(accountId: string): Promise<void> {
+    if (!this.collects("usage")) return
+    const mark = createHash("sha256").update(`mako-telemetry-account\0${accountId}`).digest("hex").slice(0, 32)
+    if (this.#stored.linked === mark) return
+    this.record("account.linked", {})
+    this.#stored = { ...this.#stored, linked: mark }
+    await this.#save()
   }
 
   /** The newest crash already reported; undefined the first time, which reports none from before. */
@@ -221,8 +236,11 @@ export class Telemetry {
   async #send(events: Queued[]): Promise<"sent" | "paused" | "retry"> {
     const endpoint = this.#endpoint
     if (!endpoint || !events.length) return "sent"
+    this.#machine ??= (this.#options.machine?.() ?? Promise.resolve(undefined)).catch(() => undefined)
+    const machine = await this.#machine
     const batch: TelemetryBatch = {
       install: this.#stored.install,
+      ...(machine && { machine }),
       sentAt: this.#now(),
       app: this.#options.app,
       consent: { product: this.#stored.usage, diagnostics: this.#stored.errors },
@@ -344,4 +362,5 @@ const SCRUB_PROPS: DiagnosticScrubs = {
     ...(breadcrumbs && { breadcrumbs: breadcrumbs.map(scrub) }),
   }),
   "native.unknown": (props) => props,
+  "cloud.request": (props) => props,
 }

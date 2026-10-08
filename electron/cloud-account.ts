@@ -13,6 +13,7 @@ import {
   type CloudPerson,
   type CloudSignedOutNotice,
 } from "./contracts/cloud-account.js"
+import type { CloudRoute, DiagnosticEvents } from "./contracts/telemetry.js"
 import type { SecretEncryption } from "./secure-storage.js"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
@@ -24,6 +25,8 @@ const PING_MS = 25_000
 const SILENT_MS = 60_000
 const BACKOFF_MS = [500, 1_000, 2_000, 5_000, 10_000, 30_000] as const
 const REQUEST_MS = 15_000
+/** The cloud logs and traces a call under this ID, so the cloud's side of any call this Mac reports can be found. */
+const CORRELATION_HEADER = "x-mako-correlation-id"
 /** Close codes the cloud sends: fetch a new token and reconnect, or this device is gone. */
 const CLOSE = { tokenExpired: 4001, deviceRemoved: 4003 } as const
 
@@ -92,6 +95,8 @@ export type CloudAccountOptions = {
   fixture?: boolean
   onChange: (account: CloudAccount) => void
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
+  /** Every call to the cloud, as it ends, for error reports. */
+  onRequest?: (call: DiagnosticEvents["cloud.request"]) => void
 }
 
 export class CloudAccountError extends Error {
@@ -245,13 +250,13 @@ export class CloudAccounts {
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {
-    return DevicesSchema.parse(await (await this.#call("GET", "/v1/devices")).json())
+    return DevicesSchema.parse(await (await this.#call("devices.list", "GET", "/v1/devices")).json())
   }
 
   /** Removing this Mac is signing out; any other device of the account is cut off within seconds. */
   async removeDevice(id: string): Promise<CloudAccount> {
     if (this.#stored?.device.id === id) return this.signOut()
-    await this.#call("DELETE", `/v1/devices/${encodeURIComponent(id)}`)
+    await this.#call("devices.remove", "DELETE", `/v1/devices/${encodeURIComponent(id)}`)
     return this.account()
   }
 
@@ -260,7 +265,7 @@ export class CloudAccounts {
     const stored = this.#stored
     if (stored) {
       // Best effort: signed out here either way, and the cloud forgets an unreachable device's credential when it's removed elsewhere.
-      await this.#call("DELETE", `/v1/devices/${encodeURIComponent(stored.device.id)}`).catch((error) => {
+      await this.#call("devices.remove", "DELETE", `/v1/devices/${encodeURIComponent(stored.device.id)}`).catch((error) => {
         this.#options.log?.("cloud sign-out couldn't reach the cloud", { error: messageOf(error, "unknown") })
       })
     }
@@ -286,7 +291,7 @@ export class CloudAccounts {
 
   async #enroll(code: string, verifier: string): Promise<void> {
     const cloud = this.#require()
-    const response = await fetch(new URL("/v1/devices/enroll", cloud), {
+    const response = await this.#fetch("devices.enroll", new URL("/v1/devices/enroll", cloud), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ code, codeVerifier: verifier }),
@@ -391,7 +396,7 @@ export class CloudAccounts {
   async #refresh(): Promise<string> {
     const stored = this.#stored
     if (!stored) throw new Removed()
-    const response = await fetch(new URL("/v1/devices/token", this.#require()), {
+    const response = await this.#fetch("devices.token", new URL("/v1/devices/token", this.#require()), {
       method: "POST",
       headers: { authorization: `Bearer ${stored.credential}`, accept: "application/json" },
       redirect: "error",
@@ -411,11 +416,11 @@ export class CloudAccounts {
     return refreshed.connection.token
   }
 
-  async #call(method: "GET" | "DELETE", path: string, retried = false): Promise<Response> {
+  async #call(route: CloudRoute, method: "GET" | "DELETE", path: string, retried = false): Promise<Response> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })
-    const response = await fetch(new URL(path, this.#require()), {
+    const response = await this.#fetch(route, new URL(path, this.#require()), {
       method,
       headers: { authorization: `Bearer ${token}`, accept: "application/json" },
       redirect: "error",
@@ -424,9 +429,29 @@ export class CloudAccounts {
     // The token can lapse between being handed out and arriving; one fresh one settles it.
     if (response.status === 401 && !retried) {
       if (this.#token?.token === token) this.#token = undefined
-      return this.#call(method, path, true)
+      return this.#call(route, method, path, true)
     }
     if (!response.ok) throw new CloudAccountError(await problemOf(response, "The Mako cloud refused that."))
+    return response
+  }
+
+  /** Every call to the cloud: sent under a fresh correlation ID, and reported when it ends. */
+  async #fetch(route: CloudRoute, url: URL, init: RequestInit & { headers: Record<string, string> }): Promise<Response> {
+    const correlationId = randomUUID()
+    const started = performance.now()
+    const report = (outcome: DiagnosticEvents["cloud.request"]["outcome"], status?: number) => {
+      const ms = Math.round(performance.now() - started)
+      this.#options.onRequest?.({ route, outcome, ...(status !== undefined && { status }), ms, correlationId })
+      if (outcome !== "ok") this.#options.log?.("cloud request", { route, outcome, ...(status !== undefined && { status }), ms, correlationId })
+    }
+    let response: Response
+    try {
+      response = await fetch(url, { ...init, headers: { ...init.headers, [CORRELATION_HEADER]: correlationId } })
+    } catch (error) {
+      report("unreachable")
+      throw error
+    }
+    report(response.ok ? "ok" : response.status < 500 ? "refused" : "failed", response.status)
     return response
   }
 

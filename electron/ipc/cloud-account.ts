@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { cloudUrl } from "../build-identity.js"
 import { CloudAccounts } from "../cloud-account.js"
+import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import { hostLog } from "../host-log.js"
 import { electronSecretEncryption } from "../secure-storage.js"
 import type { HostEvent } from "../shared.js"
@@ -24,15 +25,27 @@ export function cloudConnectionToken(): Promise<string | undefined> {
   return accounts?.optionalConnectionToken() ?? Promise.resolve(undefined)
 }
 
-export async function cloudSignedIn(): Promise<boolean> {
-  return (await accounts?.ready())?.state.status === "signed-in"
+/** The signed-in Mako account's ID, or undefined while signed out. */
+export async function cloudAccountId(): Promise<string | undefined> {
+  const state = (await accounts?.ready())?.state
+  return state?.status === "signed-in" ? state.account.id : undefined
 }
 
 /**
  * The Mako account, against the cloud `cloudUrl()` names; a build without one says so and offers nothing.
  * A fixture desk signs in only to a cloud on this Mac and keeps the sign-in in memory, so its profile isn't written.
  */
-export function installCloudAccountIpc({ emit, fixture, signedIn }: { emit: (event: HostEvent) => void; fixture: boolean; signedIn?: () => void }): void {
+export function installCloudAccountIpc({
+  emit,
+  fixture,
+  signedIn,
+  request,
+}: {
+  emit: (event: HostEvent) => void
+  fixture: boolean
+  signedIn?: () => void
+  request?: (call: DiagnosticEvents["cloud.request"]) => void
+}): void {
   let status: string | undefined
   const cloud = new CloudAccounts({
     url: cloudUrl(),
@@ -47,6 +60,7 @@ export function installCloudAccountIpc({ emit, fixture, signedIn }: { emit: (eve
       emit({ type: "cloud-account", account })
     },
     log: (message, fields) => hostLog("cloud", message, fields),
+    onRequest: request,
   })
   accounts = cloud
   powerMonitor.on("resume", wake)

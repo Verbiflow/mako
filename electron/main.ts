@@ -1530,7 +1530,12 @@ function bindIpc() {
       void listConnections().then((connections) => emit({ type: "provider-connections", connections }))
     })
   }
-  installCloudAccountIpc({ emit, fixture: fixtureDesk, signedIn: () => hostTelemetry?.feature("cloud.signed-in") })
+  installCloudAccountIpc({
+    emit,
+    fixture: fixtureDesk,
+    signedIn: () => void hostTelemetry?.signedIn(),
+    request: (call) => hostTelemetry?.cloudRequest(call),
+  })
   /* Harness accounts: several logins per CLI, Orca-style isolated homes. */
   handle("mako:accounts", () => accountCatalog())
   handle("mako:account-login-start", (_e, harness: AccountHarness, renew?: string) => startAccountLogin(harness, renew))
