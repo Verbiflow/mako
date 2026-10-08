@@ -2,7 +2,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 
 /** Every harness in Mako's order, as the host describes it on any Mac. */
-export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities">[] = [
+export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities" | "usage">[] = [
   {
     "provider": "claude",
     "displayName": "Claude Code",
@@ -83,6 +83,46 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "contextBreakdown": {
         "state": "implemented",
         "via": "The Agent SDK's `getContextUsage`, by category."
+      }
+    },
+    "usage": {
+      "context": {
+        "state": "implemented",
+        "via": "The main agent's last call: what it read, cached or not, and wrote."
+      },
+      "window": {
+        "state": "implemented",
+        "via": "The answering model's `contextWindow` in each result's `modelUsage`."
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "The compact boundary's `post_tokens`."
+      },
+      "tokens": {
+        "state": "implemented",
+        "via": "Each result's session totals, less what the process had counted before."
+      },
+      "cost": {
+        "state": "implemented",
+        "via": "Each result's `total_cost_usd`, less what the process had counted before."
+      },
+      "missedCalls": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Claude Code's results never say they left a call out."
+      },
+      "resetCredits": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Claude's usage report has no reset credits."
+      },
+      "contextBreakdown": {
+        "state": "implemented",
+        "via": "The Agent SDK's `getContextUsage`, by category."
+      },
+      "outsideMako": {
+        "state": "implemented",
+        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
       }
     }
   },
@@ -182,6 +222,47 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "by": "harness",
         "reason": "The app-server reports token totals and the context window, not what fills it."
       }
+    },
+    "usage": {
+      "context": {
+        "state": "implemented",
+        "via": "Codex's own reading in `thread/tokenUsage/updated`."
+      },
+      "window": {
+        "state": "implemented",
+        "via": "The model's window in the same reading."
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "Codex sends a new reading after compacting, before the compaction item completes."
+      },
+      "tokens": {
+        "state": "implemented",
+        "via": "The reading's thread total, less what it said before."
+      },
+      "cost": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Codex reports tokens only and prices none of them."
+      },
+      "missedCalls": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Codex's readings never say they left a call out."
+      },
+      "resetCredits": {
+        "state": "implemented",
+        "via": "ChatGPT's usage report lists the plan's reset credits, and the account's row spends one."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "The app-server reports token totals and the context window, not what fills it."
+      },
+      "outsideMako": {
+        "state": "implemented",
+        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
+      }
     }
   },
   {
@@ -268,6 +349,52 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "by": "harness",
         "reason": "The SDK reports a run's token usage, not what fills the context."
       }
+    },
+    "usage": {
+      "context": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Cursor's SDK reports what each turn spent, never how full the context is."
+      },
+      "window": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Cursor's SDK names no model's window."
+      },
+      "compaction": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "With no context reading, a summary Cursor writes has no meter to update."
+      },
+      "tokens": {
+        "state": "implemented",
+        "via": "Each turn's `usage` message from the SDK."
+      },
+      "cost": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Cursor's SDK reports tokens only and prices none of them."
+      },
+      "missedCalls": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Cursor's usage messages never say they left a call out."
+      },
+      "resetCredits": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Cursor's usage report has no reset credits."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "The SDK reports a run's token usage, not what fills the context."
+      },
+      "outsideMako": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Cursor's SDK store keeps no token counts, so Settings › Usage counts only what Mako measured while running it."
+      }
     }
   },
   {
@@ -285,7 +412,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       }
     },
     "defaults": {
-      "work": []
+      "work": [],
+      "none": "OpenCode's models are the person's own providers, so it starts on the model they configured."
     },
     "resumable": true,
     "capabilities": {
@@ -342,6 +470,47 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "absent",
         "by": "harness",
         "reason": "OpenCode reports token totals per message, not what fills the context."
+      }
+    },
+    "usage": {
+      "context": {
+        "state": "implemented",
+        "via": "The main session's last step: what it read, cached or not, and wrote."
+      },
+      "window": {
+        "state": "implemented",
+        "via": "The model's context limit in OpenCode's provider catalog."
+      },
+      "compaction": {
+        "state": "default",
+        "reason": "OpenCode doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."
+      },
+      "tokens": {
+        "state": "implemented",
+        "via": "Each step's tokens."
+      },
+      "cost": {
+        "state": "implemented",
+        "via": "Each step's cost."
+      },
+      "missedCalls": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "OpenCode's steps never say they left a call out."
+      },
+      "resetCredits": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "OpenCode's providers report no reset credits to it."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "OpenCode reports token totals per message, not what fills the context."
+      },
+      "outsideMako": {
+        "state": "implemented",
+        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
       }
     }
   },
@@ -425,6 +594,46 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "absent",
         "by": "harness",
         "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      }
+    },
+    "usage": {
+      "context": {
+        "state": "implemented",
+        "via": "The main agent's last call, from each `response_completed`."
+      },
+      "window": {
+        "state": "implemented",
+        "via": "The current model's `totalContextTokens`, in the reply that opens the session and in Grok's model-list updates."
+      },
+      "compaction": {
+        "state": "implemented",
+        "via": "`auto_compact_completed`'s `tokens_after`."
+      },
+      "tokens": {
+        "state": "implemented",
+        "via": "Each `turn_completed`'s usage."
+      },
+      "cost": {
+        "state": "implemented",
+        "via": "Each `turn_completed`'s `costUsdTicks`."
+      },
+      "missedCalls": {
+        "state": "implemented",
+        "via": "`usageIsIncomplete` on a turn's usage."
+      },
+      "resetCredits": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Grok's usage report has no reset credits."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      },
+      "outsideMako": {
+        "state": "implemented",
+        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
       }
     }
   },
@@ -516,6 +725,48 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "absent",
         "by": "harness",
         "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      }
+    },
+    "usage": {
+      "context": {
+        "state": "implemented",
+        "via": "ACP's `usage_update` from the main agent: what is in context."
+      },
+      "window": {
+        "state": "implemented",
+        "via": "The same `usage_update`'s `size`."
+      },
+      "compaction": {
+        "state": "default",
+        "reason": "Devin doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."
+      },
+      "tokens": {
+        "state": "implemented",
+        "via": "The tokens in each `usage_update`'s `_meta`."
+      },
+      "cost": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Devin's usage updates carry no cost."
+      },
+      "missedCalls": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Devin's usage updates never say they left a call out."
+      },
+      "resetCredits": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Devin's usage report has no reset credits."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      },
+      "outsideMako": {
+        "state": "implemented",
+        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
       }
     }
   }

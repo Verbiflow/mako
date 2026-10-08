@@ -3,6 +3,7 @@ import { useState, useSyncExternalStore } from "react"
 import type { ThreadEntry } from "@mako/sessions"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
 import { acpBlocksToMessages } from "@/lib/acp-blocks"
 import { Prose } from "@/components/transcript/markdown"
 import { TranscriptAttachment } from "@/components/transcript/attachment"
@@ -80,7 +81,7 @@ const entries: ThreadEntry[] = [
       {
         type: "tool",
         id: "plan",
-        name: "Plan",
+        name: AGENT_PLAN_TOOL,
         output: "",
         details: [
           {

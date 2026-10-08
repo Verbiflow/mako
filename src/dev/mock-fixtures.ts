@@ -391,28 +391,15 @@ export const INTEGRATIONS: IntegrationCatalogSnapshot = {
       connection: { kind: "ready", detail: "Signed in with GitHub CLI" },
     },
     {
-      id: "mako-backend",
-      label: "Mako Backend",
-      description:
-        "Remote MCP, skills, integrations, and communication channels.",
-      category: "Development",
-      trust: "mako",
-      auth: "mako-backend",
-      capabilities: ["MCP", "Skills", "Slack", "Durable agent"],
-      events: [],
-      connection: { kind: "ready", detail: "production · 0.1.0" },
-    },
-    {
       id: "slack",
       label: "Slack",
-      description:
-        "Read and send messages through your authenticated Mako backend.",
+      description: "Read and send channel and thread messages.",
       category: "Communication",
-      trust: "mako",
-      auth: "mako-backend",
+      trust: "official",
+      auth: "provider-oauth",
       capabilities: ["Channels", "Messages", "Threads", "Send"],
       events: [],
-      connection: { kind: "ready", detail: "production · 0.1.0" },
+      connection: { kind: "connected", detail: "claude", providers: ["claude"] },
     },
     {
       id: "notion",
@@ -521,6 +508,7 @@ export const SKILLS: SkillRegistrySnapshot = {
     account,
     available,
     readsUniversalRoot: false,
+    readsWorkspace: true,
   })),
   skills: [
     {

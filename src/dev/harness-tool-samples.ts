@@ -1,4 +1,4 @@
-import type { ToolIdentity, ToolSource } from "@mako/sessions/tool-identity"
+import { AGENT_PLAN_TOOL, type ToolIdentity, type ToolSource } from "@mako/sessions/tool-identity"
 
 // Names and argument keys as each harness records them (scripts/audit-native-tools.ts
 // over this machine's sessions, 2026-09-30); the values are stand-ins.
@@ -61,9 +61,11 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "codex", name: "exec_command", input: json({ command: "/bin/zsh -lc \"rg -n 'export|read\\\\(' src\"" }) }, expect: { target: "rg -n 'export|read\\(' src" } },
   { source: { harness: "codex", name: "exec_command", input: json({ command: ["bash", "-lc", "npm test"] }) }, expect: { target: "npm test" } },
   { source: { harness: "codex", name: "exec_command", input: json({ command: "/bin/zsh -lc 'a' && b" }) }, expect: { target: "/bin/zsh -lc 'a' && b" } },
-  { source: { harness: "codex", name: "exec", input: "text(await tools.exec_command({cmd:'curl -s localhost:3000', yield_time_ms: 1000}))" }, expect: { kind: "shell", via: "exec", target: "curl -s localhost:3000" } },
-  { source: { harness: "codex", name: "exec", input: "text(await tools.mcp__mako__app_status({}))" }, expect: { kind: "mcp", label: "App status", server: "mako", via: "exec" } },
-  { source: { harness: "codex", name: "exec", input: "const a = await tools.exec_command({cmd:'ls'})\nconst b = await tools.exec_command({cmd:'pwd'})" }, expect: { kind: "code", label: "Script", target: "exec_command, exec_command" } },
+  // A Codex code cell draws only when it failed, after its calls' own rows: the row is the cell, named by what it ran.
+  { source: { harness: "codex", name: "exec", input: "text(await tools.exec_command({cmd:'curl -s localhost:3000', yield_time_ms: 1000}))" }, expect: { kind: "code", label: "Script", via: undefined, target: "curl -s localhost:3000" } },
+  { source: { harness: "codex", name: "exec", input: "text(await tools.mcp__mako__app_status({}))" }, expect: { kind: "code", label: "Script", server: undefined, target: "App status" } },
+  { source: { harness: "codex", name: "exec", input: "const a = await tools.exec_command({cmd:'ls'})\nconst b = await tools.exec_command({cmd:'pwd'})" }, expect: { kind: "code", label: "Script", target: "ls, pwd" } },
+  { source: { harness: "codex", name: "exec", input: "throw new Error('release day unknown')" }, expect: { kind: "code", label: "Script", target: "throw new Error('release day unknown')" } },
   { source: { harness: "codex", name: "apply_patch", input: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch" }, expect: { kind: "edit", target: "src/a.ts" } },
   { source: { harness: "codex", name: "js", input: json({ code: "await page.click()", title: "Open settings" }) }, expect: { kind: "computer", target: "Open settings" } },
   { source: { harness: "codex", name: "spawn_agent", input: json({ task_name: "review", message: "…", fork_turns: 1 }) }, expect: { kind: "agent", target: "review" } },
@@ -94,8 +96,13 @@ export const HARNESS_TOOL_SAMPLES: Sample[] = [
   { source: { harness: "cursor", name: "CallDynamicTool", input: json({ namespace: "mako-browser-use", toolName: "mako_browser_screenshot", arguments: { target: "t1" } }) }, expect: { kind: "computer", label: "Computer: screenshot" } },
   { source: { harness: "grok", name: "kill_command_or_subagent", input: json({ task_id: "t2" }) }, expect: { kind: "shell-stop", target: "t2" } },
   { source: { harness: "grok", name: "web_search", input: json({ variant: "v", backend: "b" }) }, expect: { kind: "web-search", target: undefined } },
-  { source: { harness: "codex", name: "exec", input: "text(await tools.apply_patch(`*** Begin Patch\n*** Add File: c.md\n+x\n*** End Patch`))" }, expect: { kind: "edit", target: "c.md" } },
-  { source: { harness: "codex", name: "exec", input: "text(await tools.write_stdin({session_id: 41, chars: ''}))" }, expect: { kind: "shell-input", target: "41" } },
+  { source: { harness: "codex", name: "exec", input: "text(await tools.apply_patch(`*** Begin Patch\n*** Add File: c.md\n+x\n*** End Patch`))" }, expect: { kind: "code", target: "c.md" } },
+  { source: { harness: "codex", name: "exec", input: "text(await tools.write_stdin({session_id: 41, chars: ''}))" }, expect: { kind: "code", target: "Terminal input" } },
+
+  // The block Mako draws for an ACP agent's plan update is its to-do list, whichever harness sent it.
+  { source: { harness: "devin", name: AGENT_PLAN_TOOL }, expect: { kind: "todo", label: "To-dos" } },
+  { source: { harness: "grok", name: AGENT_PLAN_TOOL }, expect: { kind: "todo", label: "To-dos" } },
+  { source: { harness: "seventh", name: AGENT_PLAN_TOOL }, expect: { kind: "todo", label: "To-dos" } },
 
   // A name nobody declares falls back to ACP's kind, then to a readable label.
   { source: { harness: "grok", name: "frobnicate", acpKind: "execute", input: json({ command: "x" }) }, expect: { kind: "shell", target: "x" }, undeclared: true },
