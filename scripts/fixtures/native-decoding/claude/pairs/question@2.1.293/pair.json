@@ -1,0 +1,14 @@
+{
+  "harness": "claude",
+  "native": {
+    "version": "2.1.293"
+  },
+  "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
+  "stores": [
+    {
+      "reader": "claude",
+      "path": ".claude/projects/-tmp-mako-pair-project/4f99e8be-a3ad-4f16-abe6-9e1a42cf07f6.jsonl",
+      "known": []
+    }
+  ]
+}

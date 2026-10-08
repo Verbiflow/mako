@@ -7,8 +7,16 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#button-catshark",
+      "path": ".local/share/devin/cli/sessions.db#sassy-ragamuffin",
+      "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/de9ba50d-9983-4801-af4a-0cfd1c0468b8.db",
       "known": []
     }
-  ]
+  ],
+  "replay": {
+    "known": []
+  }
 }

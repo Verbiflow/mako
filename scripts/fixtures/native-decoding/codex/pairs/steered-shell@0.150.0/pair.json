@@ -1,0 +1,14 @@
+{
+  "harness": "codex",
+  "native": {
+    "version": "0.150.0"
+  },
+  "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/07/rollout-2026-10-07T21-15-49-01a119b9-7f67-7f80-a66f-f5b2e1809fa2.jsonl",
+      "known": []
+    }
+  ]
+}

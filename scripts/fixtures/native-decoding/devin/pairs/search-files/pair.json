@@ -7,8 +7,58 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#common-cashew",
+      "path": ".local/share/devin/cli/sessions.db#handy-train",
       "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/05083eb8-4ae4-4b19-b523-9cc98ed83382.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 find find_file_by_name {\"query\":\"**/*.md\"} ->  attachments=plan.md application/octet-stream, notes.md application/octet-stream, todo.md application/octet-stream",
+          "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+        },
+        {
+          "side": "+",
+          "line": "tool #1 find find_file_by_name {\"query\":\"**/*.md\"} -> ",
+          "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+        },
+        {
+          "side": "-",
+          "line": "tool #2 search grep {\"file_pattern\":\"*.md\",\"path\":\".\",\"query\":\"Friday\"} ->  details=[{\"path\":\".\",\"type\":\"location\"}] attachments=plan.md application/octet-stream, notes.md application/octet-stream",
+          "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+        },
+        {
+          "side": "+",
+          "line": "tool #2 search grep {\"file_pattern\":\"*.md\",\"path\":\".\",\"query\":\"Friday\"} ->  details=[{\"path\":\".\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+        }
+      ]
     }
-  ]
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "tool #1 find find_file_by_name {\"query\":\"**/*.md\"} ->  attachments=plan.md application/octet-stream, notes.md application/octet-stream, todo.md application/octet-stream",
+        "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+      },
+      {
+        "side": "+",
+        "line": "tool #1 find find_file_by_name {\"query\":\"**/*.md\"} -> ",
+        "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+      },
+      {
+        "side": "-",
+        "line": "tool #2 search grep {\"file_pattern\":\"*.md\",\"path\":\".\",\"query\":\"Friday\"} ->  details=[{\"path\":\".\",\"type\":\"location\"}] attachments=plan.md application/octet-stream, notes.md application/octet-stream",
+        "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+      },
+      {
+        "side": "+",
+        "line": "tool #2 search grep {\"file_pattern\":\"*.md\",\"path\":\".\",\"query\":\"Friday\"} ->  details=[{\"path\":\".\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.10.23 replays a finished search on session/load as the call and a bare `completed` update, without the files it listed live. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the files."
+      }
+    ]
+  }
 }

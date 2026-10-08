@@ -17,22 +17,22 @@
         {
           "side": "-",
           "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         },
         {
           "side": "+",
           "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         },
         {
           "side": "-",
           "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\",\"new_string\":\"The release ships on Monday.\",\"old_string\":\"The release ships on Friday.\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
         },
         {
           "side": "+",
           "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
         }
       ]
     }
@@ -42,22 +42,22 @@
       {
         "side": "-",
         "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       },
       {
         "side": "+",
         "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       },
       {
         "side": "-",
         "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\",\"new_string\":\"The release ships on Monday.\",\"old_string\":\"The release ships on Friday.\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
       },
       {
         "side": "+",
         "line": "tool #3 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Thursday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
       }
     ]
   }

@@ -7,7 +7,7 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#ripe-success",
+      "path": ".local/share/devin/cli/sessions.db#seasoned-hook",
       "known": [
         {
           "side": "-",
@@ -16,10 +16,60 @@
         },
         {
           "side": "+",
-          "line": "user: What colour is the attached image? Don't run commands. [1791359246086587000-66579-0-pasted.png image/png]",
+          "line": "user: What colour is the attached image? Don't run commands. [1791429165453841000-66704-0-pasted.png image/png]",
           "reason": "Devin saves a prompt image as its own devin-pasted-images/<time>-…-pasted.png and its transcript names that file, not the one Mako showed"
         }
       ]
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/973efea7-3591-499f-ab39-a64aacbc039b.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
+          "reason": "Devin 3000.10.23 replays a prompt's image as its bytes and type alone, with no name or path, so it can only be called an image. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store names Devin's own copy of it."
+        },
+        {
+          "side": "+",
+          "line": "user: What colour is the attached image? Don't run commands. [image image/png]",
+          "reason": "Devin 3000.10.23 replays a prompt's image as its bytes and type alone, with no name or path, so it can only be called an image. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store names Devin's own copy of it."
+        },
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\"} -> View image /tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png (32x32) details=[{\"path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+        },
+        {
+          "side": "+",
+          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\"} ->  details=[{\"path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+        }
+      ]
     }
-  ]
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
+        "reason": "Devin 3000.10.23 replays a prompt's image as its bytes and type alone, with no name or path, so it can only be called an image. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store names Devin's own copy of it."
+      },
+      {
+        "side": "+",
+        "line": "user: What colour is the attached image? Don't run commands. [image image/png]",
+        "reason": "Devin 3000.10.23 replays a prompt's image as its bytes and type alone, with no name or path, so it can only be called an image. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store names Devin's own copy of it."
+      },
+      {
+        "side": "-",
+        "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\"} -> View image /tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png (32x32) details=[{\"path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+      },
+      {
+        "side": "+",
+        "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\"} ->  details=[{\"path\":\"/tmp/mako-pair/tmp/devin-pasted-images/1791429165453841000-66704-0-pasted.png\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+      }
+    ]
+  }
 }

@@ -17,17 +17,17 @@
         {
           "side": "-",
           "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         },
         {
           "side": "+",
           "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         },
         {
           "side": "-",
           "line": "note: Context compacted",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays nothing of a compaction on session/load: `_cognition.ai/compaction` and its `Context compacted` status line are live only. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the compaction."
         }
       ]
     }
@@ -37,17 +37,17 @@
       {
         "side": "-",
         "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       },
       {
         "side": "+",
         "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       },
       {
         "side": "-",
         "line": "note: Context compacted",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays nothing of a compaction on session/load: `_cognition.ai/compaction` and its `Context compacted` status line are live only. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the compaction."
       }
     ]
   }

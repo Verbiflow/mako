@@ -1,0 +1,14 @@
+{
+  "harness": "codex",
+  "native": {
+    "version": "0.161.0"
+  },
+  "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
+  "stores": [
+    {
+      "reader": "codex",
+      "path": ".codex/sessions/2026/10/07/rollout-2026-10-07T21-14-35-01a119b8-5dc2-70f3-bf9a-017683cebc29.jsonl",
+      "known": []
+    }
+  ]
+}

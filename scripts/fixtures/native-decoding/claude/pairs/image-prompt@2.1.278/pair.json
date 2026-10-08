@@ -1,0 +1,25 @@
+{
+  "harness": "claude",
+  "native": {
+    "version": "2.1.278"
+  },
+  "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
+  "stores": [
+    {
+      "reader": "claude",
+      "path": ".claude/projects/-tmp-mako-pair-project/00a272a5-e5e4-47fd-bd2b-5dc5ddd36e9b.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: What colour is the attached image? Don't run commands. [swatch.png image/png]",
+          "reason": "Claude Code keeps a prompt image as a base64 block in its transcript, without the file name Mako showed, so the reader names it image"
+        },
+        {
+          "side": "+",
+          "line": "user: What colour is the attached image? Don't run commands. [image image/png]",
+          "reason": "Claude Code keeps a prompt image as a base64 block in its transcript, without the file name Mako showed, so the reader names it image"
+        }
+      ]
+    }
+  ]
+}

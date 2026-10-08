@@ -1,0 +1,14 @@
+{
+  "harness": "opencode",
+  "native": {
+    "version": "0.0.0-beta-19271"
+  },
+  "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
+  "stores": [
+    {
+      "reader": "opencode",
+      "path": ".local/share/opencode/opencode.db#v2:ses_ee6461d13ffenV59VWjObgBWvC",
+      "known": []
+    }
+  ]
+}

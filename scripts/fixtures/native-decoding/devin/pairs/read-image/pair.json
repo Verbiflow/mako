@@ -7,8 +7,38 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#harvest-snowstorm",
+      "path": ".local/share/devin/cli/sessions.db#elemental-partner",
       "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/9cac88b1-efd9-488c-bfc5-803ee6a24d3a.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/swatch.png\"} -> View image ./swatch.png (32x32) details=[{\"path\":\"/tmp/mako-pair/project/swatch.png\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+        },
+        {
+          "side": "+",
+          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/swatch.png\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/swatch.png\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+        }
+      ]
     }
-  ]
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/swatch.png\"} -> View image ./swatch.png (32x32) details=[{\"path\":\"/tmp/mako-pair/project/swatch.png\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+      },
+      {
+        "side": "+",
+        "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/swatch.png\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/swatch.png\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+      }
+    ]
+  }
 }

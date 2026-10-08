@@ -8,18 +8,7 @@
     {
       "reader": "devin",
       "path": ".local/share/devin/cli/sessions.db#yellow-vibraphone",
-      "known": [
-        {
-          "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> Exited with code 0",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> ",
-          "reason": ""
-        }
-      ]
+      "known": []
     },
     {
       "reader": "devin-ide",
@@ -27,33 +16,23 @@
       "known": [
         {
           "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> Exited with code 0",
-          "reason": ""
-        },
-        {
-          "side": "-",
           "line": "steered: Also read notes.md and tell me the release day.",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> ",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a message steered into a running turn as a user message with the same `_meta` a new prompt has, and the replay has no turn ends, so nothing tells a steer from a prompt. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the steer."
         },
         {
           "side": "+",
           "line": "user: Also read notes.md and tell me the release day.",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a message steered into a running turn as a user message with the same `_meta` a new prompt has, and the replay has no turn ends, so nothing tells a steer from a prompt. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the steer."
         },
         {
           "side": "-",
           "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         },
         {
           "side": "+",
           "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": ""
+          "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         }
       ]
     }
@@ -62,33 +41,23 @@
     "known": [
       {
         "side": "-",
-        "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> Exited with code 0",
-        "reason": ""
-      },
-      {
-        "side": "-",
         "line": "steered: Also read notes.md and tell me the release day.",
-        "reason": ""
-      },
-      {
-        "side": "+",
-        "line": "tool #1 shell exec {\"command\":\"sleep 3\"} -> ",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a message steered into a running turn as a user message with the same `_meta` a new prompt has, and the replay has no turn ends, so nothing tells a steer from a prompt. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the steer."
       },
       {
         "side": "+",
         "line": "user: Also read notes.md and tell me the release day.",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a message steered into a running turn as a user message with the same `_meta` a new prompt has, and the replay has no turn ends, so nothing tells a steer from a prompt. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the steer."
       },
       {
         "side": "-",
         "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       },
       {
         "side": "+",
         "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": ""
+        "reason": "Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       }
     ]
   }

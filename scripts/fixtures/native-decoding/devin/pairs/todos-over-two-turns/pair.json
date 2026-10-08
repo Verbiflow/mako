@@ -13,52 +13,10 @@
     {
       "reader": "devin-ide",
       "path": "Library/Application Support/Devin/User/acp-messages/b5451513-3429-4d85-97a5-d56d8449b935.db",
-      "known": [
-        {
-          "side": "-",
-          "line": "tool #1 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}],\"type\":\"plan\"}]",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "tool #1 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}]} -> ",
-          "reason": ""
-        },
-        {
-          "side": "-",
-          "line": "tool #2 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}],\"type\":\"plan\"}]",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "tool #2 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}]} -> ",
-          "reason": ""
-        }
-      ]
+      "known": []
     }
   ],
   "replay": {
-    "known": [
-      {
-        "side": "-",
-        "line": "tool #1 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}],\"type\":\"plan\"}]",
-        "reason": ""
-      },
-      {
-        "side": "+",
-        "line": "tool #1 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"in_progress\"},{\"content\":\"Ship the release\",\"status\":\"pending\"}]} -> ",
-        "reason": ""
-      },
-      {
-        "side": "-",
-        "line": "tool #2 other Plan  ->  details=[{\"entries\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}],\"type\":\"plan\"}]",
-        "reason": ""
-      },
-      {
-        "side": "+",
-        "line": "tool #2 todo todo_write {\"todos\":[{\"content\":\"QA sign-off\",\"status\":\"completed\"},{\"content\":\"Ship the release\",\"status\":\"in_progress\"}]} -> ",
-        "reason": ""
-      }
-    ]
+    "known": []
   }
 }
