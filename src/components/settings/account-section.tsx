@@ -13,13 +13,20 @@ import {
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
 import { Action, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
-import { MakoMark } from "@/components/ui/mako-mark"
+import { MakoTile } from "@/components/ui/mako-mark"
 import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
+import { useDeskIdentity } from "@/components/identity/desk-identity"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloudAccountState, CloudDevice } from "@/lib/types"
+import type { CloudAccountState, CloudDevice, CloudPerson } from "@/lib/types"
 
 type SignedIn = Extract<CloudAccountState, { status: "signed-in" }>
+
+const SIGNED_IN_WITH = {
+  github: "with GitHub",
+  google: "with Google",
+  local: "with a test account",
+} satisfies Record<NonNullable<CloudPerson["signedInWith"]>, string>
 
 /** This Mac's Mako account: signing in through the browser, and the devices it's signed in on. */
 export function AccountSection() {
@@ -63,7 +70,7 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
             ? "Choose your account on the page that opened. Mako carries on by itself once you have."
             : notice?.kind === "removed"
               ? notice.message
-              : "Connect this Mac to your Mako account. Signing in happens in your browser with GitHub or Google, so Mako never sees your password."}
+              : "Connect this Mac to your Mako account, or create one. Signing in happens in your browser with GitHub or Google, so Mako never sees your password."}
       </p>
 
       {notice && notice.kind !== "removed" ? (
@@ -120,7 +127,7 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
 function ThisMacToMako({ state }: { state: "idle" | "waiting" | "connected" | "broken" }) {
   return (
     <div className="flex items-center gap-3" aria-hidden>
-      <div className="flex size-13 items-center justify-center rounded-[15px] border border-hairline bg-background text-muted-foreground shadow-xs [&_svg]:size-6">
+      <div className="flex size-13 items-center justify-center rounded-[11px] border border-hairline bg-background text-muted-foreground shadow-xs [&_svg]:size-6">
         <LaptopIcon strokeWidth={1.6} />
       </div>
       <div
@@ -141,9 +148,7 @@ function ThisMacToMako({ state }: { state: "idle" | "waiting" | "connected" | "b
           </span>
         ) : null}
       </div>
-      <div className="flex size-13 items-center justify-center rounded-[15px] bg-foreground text-background shadow-sm">
-        <MakoMark className="size-7" />
-      </div>
+      <MakoTile className="size-13" />
     </div>
   )
 }
@@ -151,13 +156,18 @@ function ThisMacToMako({ state }: { state: "idle" | "waiting" | "connected" | "b
 function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null }) {
   const busy = useCloudAccount((store) => store.busy)
   const failure = useCloudAccount((store) => store.failure)
+  const identity = useDeskIdentity()
   const { account } = state
   const invited = account.entitlements.includes("cloud")
   return (
     <>
       <div className="flex flex-col gap-4 rounded-2xl border border-hairline bg-raised/40 p-5">
         <div className="flex items-center gap-4">
-          <Avatar src={account.image ?? undefined} name={account.name || account.email} size={14} />
+          <Avatar
+            src={identity.kind === "mako" ? identity.avatar : (account.image ?? undefined)}
+            name={account.name || account.email}
+            size={14}
+          />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-title font-medium">{account.name || account.email}</h3>
@@ -174,6 +184,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
           <LockIcon className="size-3 shrink-0" />
           <span className="truncate">
             {cloud ? `Signed in to ${hostOf(cloud)}` : "Signed in"}
+            {account.signedInWith ? ` ${SIGNED_IN_WITH[account.signedInWith]}` : null}
             {state.kept === "keychain"
               ? ", kept in this Mac's keychain"
               : state.kept === "fixture"

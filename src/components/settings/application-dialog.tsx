@@ -8,7 +8,7 @@ import {
 } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, IconAction } from "@/components/ui/kit"
-import { MakoMark } from "@/components/ui/mako-mark"
+import { MakoTile } from "@/components/ui/mako-mark"
 import { Notice, NoticeAction } from "@/components/ui/notice"
 import { application, useApplication } from "@/state/application"
 import type { LifecycleWork } from "../../../electron/shared"
@@ -82,9 +82,7 @@ export function ApplicationDialog() {
         }}
       >
         <div className="flex items-start justify-between px-6 pt-6">
-          <div className="flex size-11 items-center justify-center rounded-xl bg-raised ring-1 ring-hairline">
-            <MakoMark className="size-7 text-foreground" />
-          </div>
+          <MakoTile className="size-11" />
           <IconAction
             label={quitting ? "Cancel quitting" : "Not now"}
             disabled={locked}

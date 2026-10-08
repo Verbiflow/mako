@@ -7,7 +7,7 @@ import {
   ShieldCheckIcon,
 } from "lucide-react"
 import { Action, Chip } from "@/components/ui/kit"
-import { MakoMark } from "@/components/ui/mako-mark"
+import { MakoTile } from "@/components/ui/mako-mark"
 import { updates, useUpdates } from "@/state/updates"
 import { application, useApplication } from "@/state/application"
 import { runCommand } from "@/extend/commands"
@@ -60,9 +60,7 @@ export function UpdatesSection() {
   return (
     <div className="flex flex-col gap-6" data-testid="updates-section">
       <div className="flex items-start gap-4">
-        <div className="flex size-14 shrink-0 items-center justify-center rounded-xl border border-hairline bg-raised">
-          <MakoMark className="size-9" />
-        </div>
+        <MakoTile className="size-14" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-title font-medium">Mako {release.version}</h3>

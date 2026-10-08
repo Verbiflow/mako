@@ -171,7 +171,7 @@ export function StageStrip({
                   agentHarness ? (
                     <HarnessIcon harness={agentHarness} className="size-4" />
                   ) : (
-                    <MakoMark className="size-4 text-foreground/75" />
+                    <MakoMark className="size-4" />
                   )
                 ) : document.kind === "transcript" ? (
                   <ScrollTextIcon className="size-3.5 shrink-0" />

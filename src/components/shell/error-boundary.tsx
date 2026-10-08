@@ -80,7 +80,7 @@ export class ErrorBoundary extends Component<
         className={`flex ${surface ? "h-full min-h-0 justify-start overflow-auto py-4" : "h-svh justify-center"} flex-col items-center gap-5 bg-shell px-8 text-foreground`}
         role="alert"
       >
-        {!surface && <MakoMark className="size-8 text-foreground/40" />}
+        {!surface && <MakoMark className="size-8" />}
         <div className="max-w-dialog text-center">
           <h1 className="text-title font-medium">
             {surface
