@@ -133,17 +133,8 @@ driver version Mako was verified against and offers the driver's own update.
 **Integrations.** Settings > Integrations lists what each agent can reach:
 local capabilities such as Browser Use, Computer use, Apple Mail, and Apple
 Messages; Google Workspace through your signed-in local browser; GitHub
-through the GitHub CLI; Linear, Notion, Sentry, Atlassian, and Microsoft Teams
-through their own sign-in; and Slack through the optional Mako backend.
-
-## Slack and remote work
-
-With the optional backend paired, you can send work to your Mac from Slack.
-The backend verifies Slack's timestamped signatures against a team and user
-allowlist, queues requests while the Mac is offline, and runs them when it is
-back. It never runs a model. You can deploy it yourself; see
-[Run your own Mako Slack bot](docs/self-hosted-slack.md). Browser and computer
-control never go through the backend.
+through the GitHub CLI; and Linear, Notion, Sentry, Atlassian, Slack, and
+Microsoft Teams through their own sign-in.
 
 ## Install
 
@@ -251,9 +242,6 @@ full set of rules.
 - Browser and computer control run on your machine over loopback. There is
   no cloud browser mode. The extension talks only to Mako, and the driver
   acts under Mako's own macOS permissions.
-- The Mako backend is optional and inert until you pair it. It carries Slack
-  and connector traffic, never browser or computer control, and you can run
-  your own.
 - UI extensions are trusted local code. They run inside Mako's renderer with
   full access to its state, so only load files you wrote or read.
 - Crash reports are kept on disk. With error reports on, each is also sent
@@ -296,7 +284,7 @@ that account. Events wait up to 30 seconds and go in one request, sooner once
 
 ```bash
 npm run lint
-npm run typecheck:all
+npm run typecheck
 npm test --workspace @mako/sessions
 ```
 
@@ -306,8 +294,7 @@ Read [AGENTS.md](AGENTS.md) before touching provider or host code.
 
 Mako is source-available under the [Elastic License 2.0](LICENSE),
 © 2026 Verbiflow. Use it, modify it, fork it, and run it for yourself or
-your company at any size, free, including the optional backend for your own
-team. The license forbids one thing: offering Mako itself to third parties
+your company at any size, free. The license forbids one thing: offering Mako itself to third parties
 as a hosted or managed service. Versions up to v0.1.37 were released under
 MIT and stay that way.
 

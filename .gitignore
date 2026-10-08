@@ -25,9 +25,6 @@ dist-ssr
 !.env.example
 .next
 .vercel
-packages/backend/.eve
-packages/backend/.output
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -23,9 +23,6 @@
       "path": "./packages/protocol"
     },
     {
-      "path": "./packages/relay"
-    },
-    {
       "path": "./packages/control"
     },
     {

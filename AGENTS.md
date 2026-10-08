@@ -675,82 +675,9 @@ dependencies because Cursor canvas previews bundle a canvas in the host.
 
 ## Hosted service boundary
 
-Mako's hosted service is developed in a separate private repository, checked out beside this one as `../mako-backend`. The dependency runs one way: that repository consumes this one's packages as pinned artifacts, and nothing here imports from it, even behind a flag. Clients and the runtime reach hosted features only over the network, through open protocol packages (`@mako/relay` today) and their tests. Everything committed here is public, so hosted design, pricing and planning notes don't belong in this repository's files, commit messages or pull requests.
+Mako's hosted service is developed in a separate private repository, checked out beside this one as `../mako-backend`. The dependency runs one way: that repository consumes this one's packages as pinned artifacts, and nothing here imports from it, even behind a flag. Clients and the runtime reach hosted features only over the network, through open protocol packages and their tests. Everything committed here is public, so hosted design, pricing and planning notes don't belong in this repository's files, commit messages or pull requests.
 
 Planning and audit docs under `docs/` that are gitignored (`docs/audits/`, `docs/meta-harness/`, `docs/meta-harness*.md` and the other ignored pages) are symlinks into the private checkout. Read and write them at their usual paths; a new audit in `docs/audits/<date>/<topic>/` lands in the private checkout directly. Never `git add -f` them. Audits meant to be public go in `docs/public-audits/<date>/<topic>/`, which is committed here. On a fresh checkout, run `npm run wayfinder:link` in `../mako-backend` to create the symlinks.
-
-## Remote control plane
-
-`@mako/relay` is the pure provider-neutral protocol and headless worker core.
-It owns remote jobs, canonical events, event cursors, controls, the worker loop,
-and the storage contract. It must not import Electron, Next, Azure, Slack, or a
-provider implementation. Desktop and headless hosts supply an executor and
-transport; gateways register backend delivery adapters.
-
-Relay workers authenticate with short-lived tenant/device tokens. The shared
-MCP token is registration bootstrap only unless an operator explicitly enables
-the temporary legacy migration flag. Keep event persistence idempotent, validate
-batch and lease ownership before writes, reconcile queue/table partial failures,
-and stream attachment bodies through measured limits rather than buffering them.
-
-The desktop worker (`electron/relay-worker.ts`) is gateway-neutral; nothing in
-it names Slack. A remote request never runs in `process.cwd()`: the packaged
-app starts in `/`, and the first real relay job died there with
-`ENOENT: mkdir '/.mako-relay-…'`. `relay-workspace.ts` resolves the workspace
-in order — the thread's pinned project (`selection.cwd`), the thread's session
-directory, the most recently worked-in project, then home — and treats scratch
-paths (`/`, temp roots, fixture directories) as never eligible. A pinned project
-that is missing fails the job with a message that asks for `projects`; it never
-falls back silently. Attachments stage under the profile's `remote-assets`
-directory; only `.mako-relay/<job>/outbound-files.json` touches the workspace,
-because a sandboxed agent may write nowhere else, and it is removed afterwards.
-
-Only the default profile serves remote work. `MAKO_PROFILE`, `--sandbox`, and
-`MAKO_DATA_ROOT` hosts leave the relay off unless `MAKO_RELAY=1`, and
-`MAKO_RELAY=0` turns it off anywhere; before this gate every review and test
-profile registered as a worker in the production tenant and could lease the
-installed app's requests. Opted-in profiles register as `<host> (<profile>)`.
-
-The worker never swallows a failure: `HeadlessRelayWorker` reports each lease,
-renew, control, event, execute, and complete failure with its phase, backs off
-lease failures exponentially to 60s, and publishes a `RelayWorkerStatus`
-snapshot. `relay-status.ts` turns that into the Mako Backend detail in Settings
-(`Relay listening as … · checked 3s ago · new requests run in …`,
-`Relay failing: lease — …`); three consecutive failures mark the integration
-unavailable even while `/api/health` answers. Polling is one second for two
-minutes after any work and decays to fifteen seconds when idle. A thread's
-mapping may name only a project and tuning with no session yet; `new` keeps the
-project and drops the session. The backend's per-lease reconcile selects only
-pending and delivered rows. `scripts/test-relay-workspace.ts` and
-`packages/relay/test/relay.mjs` cover the resolution order, staging locations,
-presence text, idle polling, and reported lease failures.
-
-Presence is the worker's own word, not the gateway's inference. Every lease
-request and every renewal carries a `WorkerHeartbeat` with `kind` (`desktop` or
-`cloud`), a `generation` minted per worker start, `activity` (`idle`, `busy`,
-`failing`), the current job, and the project a new request would run in. A
-worker busy with a long job sends no lease requests, so renewals run every 20
-seconds and the renew route heartbeats too; before that the desk looked offline
-whenever it was working. The host supplies the moving parts of the heartbeat as
-a function; the worker adds generation and activity. Slack `status` renders
-that row and nothing from a transcript, and `activeWorker` prefers an idle
-worker over a busy or failing one. `scripts/prune-relay-workers.ts` in the
-backend removes workers unseen for a window together with their registrations,
-never one a thread is pinned to, dry-run by default and bounded per pass.
-
-The detached host ignores its stdio, so the relay keeps its own log at
-`<userData>/logs/relay.log` (`relay-log.ts`, 1 MiB then one rotation): worker
-start and stop, each lease and completion with its job id, and de-duplicated
-failures. Every user-facing relay failure ends in `(job <first 8 of the id>)`
-so a Slack reply can be traced to that log and to the gateway's job row.
-
-The cloud option is the same worker in a container: `HeadlessRelayWorker`
-already takes an executor and transport and never imports Electron, and a cloud
-worker registers with `kind: "cloud"` so the gateway can say where a run lives.
-What remains for a run to carry on in the cloud is a headless executor that
-launches a provider CLI against a checked-out workspace, and event-cursor
-resumption (`RelayEventSequencer` epochs already make a restarted worker's
-events distinguishable). Do not build a second worker loop for it.
 
 ## Zero lint debt
 
@@ -1469,7 +1396,8 @@ journal's own Session. `createSession` and `renameThread` take a
 caller-minted operation ID: a replay returns the first result and the same
 ID with different content is refused. Every journaled request records its
 `actor` (a person for the desk and socket, a delegated child for its result's
-delivery, or the `relay` or `auto-continue` service); the host assigns it and
+delivery, or the `auto-continue` service; older records may name the removed
+`relay` service, which still parses); the host assigns it and
 never reads it from caller input. A store with a newer
 schema is refused without writing. `npm run test:thread-store` covers the
 rules, six-harness migration across a restart and actors.

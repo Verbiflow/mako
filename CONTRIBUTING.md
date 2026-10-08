@@ -20,7 +20,7 @@ privileged path in public types, bridge names, UI language or session handling.
 npm install
 npm run desktop          # a desktop client against the dev profile's host
 npm run lint             # ESLint and Oxlint; both must be clean
-npm run typecheck:all
+npm run typecheck
 ```
 
 Every source change must leave `npm run lint` at zero warnings and zero
