@@ -101,6 +101,8 @@ export interface ScriptedModelOptions {
   reply: (heard: string) => ScriptedReply | undefined
   /** What a side request (a title, a summary) gets. */
   aside?: string
+  /** A side request that carries the conversation's tools without forcing one, told apart by what it asks. */
+  side?: (heard: string) => boolean
 }
 
 export async function scriptedModel(options: ScriptedModelOptions) {
@@ -149,7 +151,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
   const answer = (path: string, body: { tools?: JsonValue[]; tool_choice?: JsonValue }, heard: string): ScriptedReply => {
     const aside = options.aside ?? "Notes"
     const forced = forcedReply(body.tool_choice, body.tools, aside)
-    const conversation = Boolean(body.tools?.length) && !forced
+    const conversation = Boolean(body.tools?.length) && !forced && !options.side?.(heard)
     const scripted = conversation ? options.reply(heard) : forced ?? { text: aside }
     requests.push({ path, conversation, unscripted: scripted ? undefined : true })
     return scripted ?? { text: "The script has no more steps." }

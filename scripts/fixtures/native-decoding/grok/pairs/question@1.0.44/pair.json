@@ -1,0 +1,14 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.44"
+  },
+  "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a119c2-f578-7042-b5ac-333c0a374ffd/updates.jsonl",
+      "known": []
+    }
+  ]
+}

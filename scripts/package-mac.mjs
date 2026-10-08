@@ -138,6 +138,7 @@ try {
   // The Mako cloud a release signs in to and reports to; a build packaged without one offers neither.
   const makoCloud = process.env.MAKO_CLOUD_URL ? new URL(process.env.MAKO_CLOUD_URL).origin : undefined
   if (makoCloud) assert.match(makoCloud, /^https:\/\//, "MAKO_CLOUD_URL must be an https origin to bake into a package")
+  else if (!args.includes("--dir")) console.warn("::warning::MAKO_CLOUD_URL is unset: this release can't sign in to the Mako cloud or send telemetry")
   const configuration = { ...pkg.build, extraMetadata: { ...pkg.build.extraMetadata, makoBuild, ...(makoCloud && { makoCloud }) } }
   const buildConfig = localIdentity ? localMacConfig(configuration, localIdentity) : configuration
   const workspaceFiles = buildConfig.files.flatMap((entry) => {

@@ -1,0 +1,25 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.44"
+  },
+  "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / Without reading anything, which day did notes.md name? A turn, a manual compaction, then a turn that leans on the summary.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a119cf-bf5e-73e1-a804-c39e216bc2e1/updates.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Context compacted — Automatic · 1k → 1k tokens",
+          "reason": "Grok 1.0.44 reports a /compact with auto_compact_completed, the notice of its own compactions. Mako's ACP host labels the one it asked for Manual (asManualCompaction in electron/acp.ts), which the decoder alone does not know; the store reads it from the /compact turn Grok saves after it."
+        },
+        {
+          "side": "+",
+          "line": "note: Context compacted — Manual · 1k → 1k tokens",
+          "reason": "Grok 1.0.44 reports a /compact with auto_compact_completed, the notice of its own compactions. Mako's ACP host labels the one it asked for Manual (asManualCompaction in electron/acp.ts), which the decoder alone does not know; the store reads it from the /compact turn Grok saves after it."
+        }
+      ]
+    }
+  ]
+}

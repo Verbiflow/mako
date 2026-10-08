@@ -78,8 +78,9 @@ if (await stat(path).then((info) => info.isDirectory(), () => false)) {
     console.log(`\n${title}`)
     printAligned(left, right)
     for (const difference of known) console.log(`known ${difference.side} ${difference.reason || "(no reason given)"}`)
-    const problems = result.unexplained.length + result.settled.length + result.cited.conflicts.length + result.cited.oneSided.length
+    const problems = result.unexplained.length + result.settled.length + result.cited.conflicts.length + result.cited.oneSided.length + result.citedNow.length
     for (const problem of [...result.cited.conflicts, ...result.cited.oneSided]) console.log(`marker: ${problem}`)
+    for (const listed of result.citedNow) console.log(`marker: listed as uncited, but now cited: ${listed.marker}`)
     console.log(`${result.unexplained.length} unexplained, ${result.settled.length} listed but settled, ${result.cited.agreed} markers cite the same record`)
     failing += problems
   }

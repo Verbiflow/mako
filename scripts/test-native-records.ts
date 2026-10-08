@@ -6,7 +6,7 @@ import { z } from "zod"
 import type { JsonObject } from "../electron/codex-app-json.ts"
 import { installHostLog } from "../electron/host-log.ts"
 import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "../electron/native-capture.ts"
-import { flushUnknown, nativeUnknownPath, retainUnknown, unknownKinds } from "../electron/native-unknown.ts"
+import { flushUnknown, nativeUnknownPath, retainUnknown, retainUnread, unknownKinds } from "../electron/native-unknown.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { decoderFor, decodeSession, readRecording } from "./native-decoding.ts"
 
@@ -53,6 +53,24 @@ const log = installHostLog(join(root, "host.log"))
   assert.equal(host.match(/native event not handled harness=codex kind=future\/notification/g)?.length, 1, "the host log names a kind once")
   assert.match(host, /native event unreadable harness=codex kind=item\/commandExecution\/invalid kept=native-unknown.jsonl/)
   console.log("PASS: unknown native records are kept once per kind, counted and scrubbed")
+}
+
+{
+  const unread = [
+    { kind: "response_item future_item", reason: "unknown" as const, count: 3, sample: { type: "response_item", payload: { type: "future_item", token: "fixture-token" } } },
+    { kind: "response_item image_generation_call", reason: "undrawn" as const, count: 2 },
+  ]
+  retainUnread({ harness: "codex", path: "/rollouts/a.jsonl" }, unread)
+  retainUnread({ harness: "codex", path: "/rollouts/a.jsonl" }, unread)
+  retainUnread({ harness: "codex", path: "/rollouts/b.jsonl" }, unread.slice(0, 1))
+  await flushUnknown()
+  assert.deepEqual(unknownKinds().filter((kind) => kind.kind.startsWith("saved ")).map((kind) => [kind.kind, kind.reason, kind.count]), [
+    ["saved response_item future_item", "unknown", 6],
+  ], "each thread's count lands once however often it is paged, and a declared gap isn't news")
+  const saved = (await readFile(nativeUnknownPath()!, "utf8")).trim().split("\n").map((line) => z.object({ kind: z.string(), record: z.json() }).parse(JSON.parse(line)))
+    .filter((line) => line.kind.startsWith("saved "))
+  assert.deepEqual(saved.map((line) => line.record), [{ type: "response_item", payload: { type: "future_item", token: "[redacted]" } }], "the first saved record is kept, scrubbed")
+  console.log("PASS: saved records history couldn't read are kept beside live ones, once per thread")
 }
 
 {

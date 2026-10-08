@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -101,6 +101,17 @@ try {
   assert.deepEqual(await treeLeaks(streamRoot, ana), [])
 } finally {
   await rm(streamRoot, { recursive: true, force: true })
+}
+const pathRoot = await mkdtemp(join(tmpdir(), "mako-fixture-privacy-"))
+try {
+  await mkdir(join(pathRoot, "home", "Library", "Application Support"), { recursive: true })
+  await writeFile(join(pathRoot, "home", "Library", "Application Support", "state.json"), "{}")
+  assert.deepEqual(await treeLeaks(pathRoot, ana), [], "a sandbox's home/Library is the fixture's own folders")
+  await mkdir(join(pathRoot, encodeURIComponent("/Users/bob/project")))
+  await writeFile(join(pathRoot, encodeURIComponent("/Users/bob/project"), "updates.jsonl"), "")
+  assert.deepEqual((await treeLeaks(pathRoot, ana)).map(({ kinds }) => kinds), [["home path"]], "a folder named for an absolute path still leaks it")
+} finally {
+  await rm(pathRoot, { recursive: true, force: true })
 }
 assert.equal(scrubJsonLines("not json\n/Users/ana", ana), "not json\n/Users/ana", "a text that isn't JSON Lines is left to the plain scrub")
 

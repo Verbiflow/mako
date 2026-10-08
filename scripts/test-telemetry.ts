@@ -21,6 +21,7 @@ import { PrincipalIdSchema } from "../electron/contracts/thread-identity.ts"
 import type { TelemetryBatch } from "../electron/contracts/telemetry.ts"
 import type { CrashReport } from "../electron/crash.ts"
 import { HostTelemetry, type HostTelemetrySources } from "../electron/host-telemetry.ts"
+import { hashMachineId } from "../electron/machine-id.ts"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "../electron/telemetry.ts"
 import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "../electron/telemetry-events.ts"
 
@@ -108,6 +109,55 @@ test("events wait for a batch, which goes to the cloud's telemetry route with wh
   assert.equal(new Set(request.batch.events.map((event) => event.id)).size, 2, "each event has its own ID, for the cloud to drop a repeat")
   await telemetry.flush()
   assert.equal(cloud.sent.length, 1, "an empty queue sends nothing")
+})
+
+test("every install on a computer names it the same way, read once and only when a batch goes", async () => {
+  let reads = 0
+  const machine = async () => (reads++, hashMachineId("4C4C4544-0042-3510-8051-B7C04F4E3432"))
+  const first = await open({ machine })
+  const second = await open({ machine })
+  assert.equal(reads, 0, "nothing is read before there is something to send")
+  for (const { telemetry } of [first, second]) {
+    telemetry.record("app.started", started)
+    telemetry.record("app.started", started)
+    await telemetry.flush()
+    telemetry.record("app.started", started)
+    await telemetry.flush()
+  }
+  assert.equal(reads, 2, "once per install, not per batch")
+  const sent = [...first.cloud.sent, ...second.cloud.sent]
+  assert.equal(new Set(sent.map((request) => request.batch.install)).size, 2, "each install keeps its own ID")
+  assert.deepEqual(new Set(sent.map((request) => request.batch.machine)), new Set([hashMachineId("4c4c4544-0042-3510-8051-b7c04f4e3432")]))
+  assert.match(sent[0]!.batch.machine!, /^[0-9a-f]{32}$/)
+  assert.ok(!sent[0]!.text.toLowerCase().includes("4c4c4544"), "the hardware ID itself never leaves")
+
+  const unknown = await open({ machine: async () => undefined })
+  unknown.telemetry.record("app.started", started)
+  await unknown.telemetry.flush()
+  assert.equal(unknown.cloud.sent[0]?.batch.machine, undefined)
+})
+
+test("a signed-in computer links its history to the account once per account, and again only for another account", async () => {
+  const { telemetry, cloud, time, file } = await open()
+  let account: string | undefined
+  const { host: hostTelemetry } = host(telemetry, time, { account: async () => account })
+  await hostTelemetry.started(500)
+  account = "2c4b0d9e-7f1a-4d0e-9a51-3b8f6a1c2d40"
+  await hostTelemetry.signedIn()
+  await hostTelemetry.signedIn()
+  await hostTelemetry.sweep()
+  await telemetry.flush()
+  assert.deepEqual(cloud.names(), ["app.started", "feature.used", "account.linked", "feature.used", "app.heartbeat"])
+  assert.deepEqual(cloud.sent[0]?.batch.events.find((event) => event.name === "account.linked")?.props, {})
+  assert.ok(!(await readFile(file, "utf8")).includes(account), "the file keeps a hash, not the account")
+
+  const reopened = await Telemetry.open({ file, cloud: "https://cloud.example.test", app: { version: "0.4.0", distribution: "signed", os: "macOS", arch: "arm64" }, fetch: cloud.fetch })
+  const { host: again } = host(reopened, time, { account: async () => account })
+  await again.started(500)
+  account = "9d0e3f6a-1b2c-4d5e-8f70-112233445566"
+  await again.signedIn()
+  await reopened.flush()
+  assert.deepEqual(cloud.names().slice(5), ["app.started", "feature.used", "account.linked"], "a restart doesn't link again; another account does")
 })
 
 test("fifty events send at once; a batch holds at most a hundred", async () => {
@@ -266,7 +316,7 @@ function host(telemetry: Telemetry, time: { now: () => number }, overrides: Part
     crashesAfter: (id) => crashes.filter((crash) => crash.id > id),
     crashIdAt: (at) => new Date(at).toISOString().replace(/[:.]/g, "-"),
     unknownKinds: () => [],
-    signedIn: async () => false,
+    account: async () => undefined,
     attended: () => true,
     inventory: async () => ({ harnesses: ["claude", "codex"], runtimes: { claude: { installed: "2.0.14 (Claude Code)" } }, threads: 12 }),
     now: time.now,

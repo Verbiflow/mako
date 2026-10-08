@@ -8,6 +8,7 @@ import { existsSync } from "node:fs"
 import { cp, mkdir, rm, symlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { acpClientCapabilities } from "../electron/providers/acp-source.js"
 import { devinAcpSource } from "../electron/providers/devin/acp.js"
@@ -28,6 +29,31 @@ const CWD = "/tmp/mako-pair/project"
 const capabilities = acpClientCapabilities(devinAcpSource)
 const Steps = z.object({ steps: z.array(z.object({ userMessageId: z.string() })) })
 const timings: string[] = []
+
+const SavedSessions = z.tuple([z.object({ id: z.string(), main_chain_id: z.number() })])
+const SavedNodes = z.array(z.object({ node_id: z.number(), parent_node_id: z.number().nullable(), role: z.string().nullable(), message_id: z.string().nullable() }))
+
+/** A pair's one session as its store holds it: the head, and the main chain's prompts, oldest first, each with the node it follows. */
+interface SavedSession {
+  id: string
+  head: string
+  prompts: { id: string; after: string }[]
+}
+
+function savedSession(pair: string): SavedSession {
+  const db = new DatabaseSync(join(PAIRS, pair, "home/.local/share/devin/cli/sessions.db"), { readOnly: true })
+  try {
+    const [session] = SavedSessions.parse(db.prepare("SELECT id, main_chain_id FROM sessions WHERE hidden = 0").all())
+    const rows = db.prepare("SELECT node_id, parent_node_id, json_extract(chat_message, '$.role') AS role, json_extract(chat_message, '$.message_id') AS message_id FROM message_nodes WHERE session_id = ?").all(session.id)
+    const nodes = new Map(SavedNodes.parse(rows).map((node) => [node.node_id, node]))
+    const prompts: SavedSession["prompts"] = []
+    for (let node = nodes.get(session.main_chain_id); node; node = node.parent_node_id === null ? undefined : nodes.get(node.parent_node_id))
+      if (node.role === "user" && node.message_id) prompts.unshift({ id: node.message_id, after: String(node.parent_node_id) })
+    return { id: session.id, head: String(session.main_chain_id), prompts }
+  } finally {
+    db.close()
+  }
+}
 
 async function withPair(pair: string, work: (pair: {
   env: NodeJS.ProcessEnv
@@ -77,16 +103,19 @@ async function withPair(pair: string, work: (pair: {
 }
 
 await withPair("rewound-turn", async ({ env, agent, fork }) => {
-  const SOURCE = "longhaired-secretary"
-  const turns = ["c165ec98-d681-47db-a68e-ebaf7420b3a3", "86191e75-13d6-412a-9f20-540f1ab18639"]
-  assert.equal(devinCheckpoint({ nativeId: SOURCE, env }), "32", "the saved head, where the last turn ended")
+  const saved = savedSession("rewound-turn")
+  const SOURCE = saved.id
+  const turns = saved.prompts.map((prompt) => prompt.id)
+  const second = saved.prompts[1]
+  assert.ok(second, "the rewound pair keeps two turns")
+  assert.equal(devinCheckpoint({ nativeId: SOURCE, env }), saved.head, "the saved head, where the last turn ended")
   assert.equal(devinCheckpoint({ nativeId: "no-such-session", env }), undefined)
   const holder = await agent()
   try {
     await holder.load(SOURCE)
     assert.deepEqual(await holder.steps(SOURCE), turns)
-    const early = await fork(SOURCE, "26")
-    const late = await fork(SOURCE, "32")
+    const early = await fork(SOURCE, second.after)
+    const late = await fork(SOURCE, saved.head)
     const reader = await agent()
     try {
       await reader.load(early)
@@ -98,8 +127,8 @@ await withPair("rewound-turn", async ({ env, agent, fork }) => {
     }
     assert.deepEqual(await holder.steps(SOURCE), turns, "the source session is untouched")
     await assert.rejects(fork(SOURCE, "head"), /Devin could not fork the session: "head" is not one of its nodes/)
-    await assert.rejects(fork("no-such-session", "26"), /Devin could not fork the session: /)
-    await assert.rejects(fork(SOURCE, "26", AbortSignal.abort()), /Devin could not fork the session: the conversation closed/)
+    await assert.rejects(fork("no-such-session", second.after), /Devin could not fork the session: /)
+    await assert.rejects(fork(SOURCE, second.after, AbortSignal.abort()), /Devin could not fork the session: the conversation closed/)
   } finally {
     await holder.close()
   }
@@ -107,9 +136,11 @@ await withPair("rewound-turn", async ({ env, agent, fork }) => {
 
 // A steer is a step of its own in Devin's list; the turn's checkpoint, read as it ends, is past it.
 await withPair("steered-shell", async ({ env, agent, fork }) => {
-  const SOURCE = "adorable-waitress"
+  const saved = savedSession("steered-shell")
+  const SOURCE = saved.id
   const checkpoint = devinCheckpoint({ nativeId: SOURCE, env })
-  assert.equal(checkpoint, "30")
+  assert.equal(checkpoint, saved.head)
+  assert.ok(checkpoint)
   const reader = await agent()
   try {
     await reader.load(SOURCE)

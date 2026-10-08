@@ -1,0 +1,17 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.44"
+  },
+  "about": "Read notes.md and tell me the release day. Don't run commands. / (resumed) / Without reading anything, which day did notes.md name? Answer with just the day. A turn with a tool, the harness's process closed and the session resumed in a new one, then a turn that leans on the first. What the harness replays while it opens is history.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a119d1-dafa-74b0-8588-9cf8367209b5/updates.jsonl",
+      "known": []
+    }
+  ],
+  "replay": {
+    "known": []
+  }
+}

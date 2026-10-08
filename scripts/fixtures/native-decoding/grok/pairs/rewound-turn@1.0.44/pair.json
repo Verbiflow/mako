@@ -1,0 +1,25 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.44"
+  },
+  "about": "Read notes.md and tell me the release day. Don't run commands. / Which day does QA sign off? Answer without reading anything. / /rewind / Without reading anything, how many lines does notes.md have? Two turns, a rewind to before the second, then a turn that replaces it.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a119d0-8111-7cd3-988d-ea4ee3fb9e8e/updates.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: Which day does QA sign off? Answer without reading anything.",
+          "reason": "The rewind took this turn back out: Grok 1.0.44 appends a `rewind_marker` to updates.jsonl and sends the client nothing, so the store drops the turn where Grok's own replay does while the live drawing, which never hears of the rewind, keeps it. Mako declares no rewind for Grok."
+        },
+        {
+          "side": "-",
+          "line": "text: QA signs off on Thursday.",
+          "reason": "The rewind took this turn back out: Grok 1.0.44 appends a `rewind_marker` to updates.jsonl and sends the client nothing, so the store drops the turn where Grok's own replay does while the live drawing, which never hears of the rewind, keeps it. Mako declares no rewind for Grok."
+        }
+      ]
+    }
+  ]
+}

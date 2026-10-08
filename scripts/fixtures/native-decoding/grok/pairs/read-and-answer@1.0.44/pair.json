@@ -1,0 +1,14 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.44"
+  },
+  "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a119c2-ee25-7b42-b5c2-37e77f5f9921/updates.jsonl",
+      "known": []
+    }
+  ]
+}

@@ -4,7 +4,7 @@ import { once } from "node:events"
 import { existsSync } from "node:fs"
 import { cp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, dirname, extname, join, relative } from "node:path"
+import { basename, dirname, extname, join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
@@ -55,6 +55,8 @@ import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Con
  *   npm run harness:decode-pairs                      every harness, every scenario
  *   npm run harness:decode-pairs -- grok shell-and-edit
  *   npm run harness:decode-pairs -- grok --write      keep what was recorded
+ *   npm run harness:decode-pairs -- codex --native <binary> --write
+ *                                                     another build of one harness, kept as <scenario>@<version>
  *
  * The harness launches as Mako launches it; its model is `scripted-model.ts`,
  * so no account is used and nothing is sent anywhere. `--write` keeps each
@@ -99,7 +101,9 @@ interface Recorder {
   keeps: (file: string) => boolean
   /** The folder `keeps` looks through, when the session needs more than its store's own folder. */
   storeFolder?: (store: string) => string
-  record: (sandbox: Sandbox, scenario: Scenario) => Promise<RecordedPair>
+  /** `build` is another build of the harness to run than the installed one (`--native`), for a recorder that takes one. */
+  record: (sandbox: Sandbox, scenario: Scenario, build?: string) => Promise<RecordedPair>
+  takesBuild?: true
   /** Credential values the run had, which nothing recorded may contain. Read here, never printed or kept. */
   secrets?: () => Promise<string[]>
 }
@@ -120,6 +124,8 @@ function unrecordable(recorder: Recorder, scenario: Scenario): string | undefine
   }
   return undefined
 }
+
+const GROK_DASHBOARD_ASK = `"role":"user","content":"<system-reminder>Write an ultra-short dashboard line`
 
 const GROK_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
@@ -155,8 +161,9 @@ const grok: Recorder = {
   model: { kind: "scripted", tools: GROK_TOOLS },
   controls: { steer: "driven", rewind: "driven", compact: "driven", resume: "driven" },
   keeps: (file) => /\/sessions\/[^/]+\/[^/]+\/(updates\.jsonl|summary\.json)$/.test(file),
-  async record(sandbox, scenario) {
-    const version = await versionOf("grok")
+  takesBuild: true,
+  async record(sandbox, scenario, build) {
+    const version = await versionOf(build ?? "grok")
     const steps = script(scenario, GROK_TOOLS, sandbox.project)
     const model = await scriptedModel({
       answers: new Map([
@@ -164,10 +171,19 @@ const grok: Recorder = {
         ["/v1/models", JSON.stringify({ object: "list", data: [] })],
       ]),
       reply: steps.reply,
+      // Grok 1.0.44 asks for its dashboard line after each turn on the conversation's own request, tools and all.
+      side: (heard) => heard.lastIndexOf(GROK_DASHBOARD_ASK) > heard.lastIndexOf(`"role":"assistant"`),
     })
     const env: NodeJS.ProcessEnv = {
       ...sandbox.env, ...scenario.env, GROK_HOME: join(sandbox.home, ".grok"), XAI_API_KEY: "mako-decode-pair",
       GROK_XAI_API_BASE_URL: `${model.url}/v1`, GROK_CLI_CHAT_PROXY_BASE_URL: `${model.url}/v1`, GROK_MODELS_BASE_URL: `${model.url}/v1`,
+    }
+    if (build) {
+      // Mako's ACP source runs the first `grok` on PATH.
+      const bin = join(sandbox.home, ".mako-build")
+      await mkdir(bin, { recursive: true })
+      await symlink(build, join(bin, "grok"))
+      env.PATH = [bin, env.PATH].filter(Boolean).join(":")
     }
     try {
       const launch = await grokAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: grokAcpSource.access?.default })
@@ -215,7 +231,8 @@ const claude: Recorder = {
     resume: "driven",
   },
   keeps: (file) => /\/projects\/[^/]+\/.+\.jsonl$/.test(file),
-  async record(sandbox, scenario) {
+  takesBuild: true,
+  async record(sandbox, scenario, build) {
     const steps = script(scenario, CLAUDE_TOOLS, sandbox.project)
     const model = await scriptedModel({ reply: steps.reply })
     const env = {
@@ -271,6 +288,8 @@ const claude: Recorder = {
           prompt: input(turns),
           options: {
             ...options, abortController: abort,
+            // A build Mako runs as the person's configured Claude Code.
+            ...build && { pathToClaudeCodeExecutable: build },
             // A question is answered with each one's first option, keyed by its text as Mako answers it.
             canUseTool: async (name, toolInput) => {
               const asked = name === "AskUserQuestion" ? ClaudeQuestions.safeParse(toolInput).data : undefined
@@ -384,8 +403,9 @@ const codex: Recorder = {
     resume: "driven",
   },
   keeps: (file) => /\/sessions\/\d{4}\/\d\d\/\d\d\/rollout-[^/]+\.jsonl$/.test(file),
-  async record(sandbox, scenario) {
-    const executable = await resolveCodexExecutable()
+  takesBuild: true,
+  async record(sandbox, scenario, build) {
+    const executable = build ?? await resolveCodexExecutable()
     if (!executable) throw new Error("Codex is not installed")
     const version = /\d+(?:\.\d+)+/.exec((await run(executable, ["--version"])).stdout)?.[0]
     if (!version) throw new Error("Codex reported no version")
@@ -393,7 +413,8 @@ const codex: Recorder = {
     const model = await scriptedModel({ reply: steps.reply })
     const codexHome = join(sandbox.home, ".codex")
     await mkdir(codexHome, { recursive: true })
-    await writeFile(join(codexHome, "config.toml"), `openai_base_url = "${model.url}/v1"\nchatgpt_base_url = "${model.url}/backend-api"\n`)
+    // Plugins on, Codex clones github.com/openai/plugins into the home in the background, still writing after the server stops.
+    await writeFile(join(codexHome, "config.toml"), `openai_base_url = "${model.url}/v1"\nchatgpt_base_url = "${model.url}/backend-api"\n\n[features]\nplugins = false\n`)
     await writeFile(join(codexHome, "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "mako-decode-pair" }))
     const spawnServer = () => spawn(executable, ["app-server"], { cwd: sandbox.project, env: { ...sandbox.env, ...scenario.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] })
     let child = spawnServer()
@@ -533,8 +554,9 @@ const opencode: Recorder = {
     resume: "driven",
   },
   keeps: (file) => /\/opencode\/opencode(?:-next)?\.db$/.test(file),
-  async record(sandbox, scenario) {
-    const installation = await resolveOpenCodeInstallation(process.env)
+  takesBuild: true,
+  async record(sandbox, scenario, build) {
+    const installation = await resolveOpenCodeInstallation(build ? { ...process.env, OPENCODE_BIN_PATH: build } : process.env)
     const steps = script(scenario, OPENCODE_TOOLS, sandbox.project)
     const model = await scriptedModel({ reply: steps.reply })
     const launchAccess = openCodeLaunchAccess(OPENCODE_DEFAULT_MODE)
@@ -1265,9 +1287,12 @@ interface Found {
   replay?: Difference[]
 }
 
-async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Found): Promise<string> {
-  const folder = join(FIXTURE_ROOT, harness, PAIRS_FOLDER, scenario.name)
-  const before = await readFile(join(folder, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
+async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Found, build?: string): Promise<string> {
+  const pairs = join(FIXTURE_ROOT, harness, PAIRS_FOLDER)
+  const folder = join(pairs, build ? `${scenario.name}@${pair.version}` : scenario.name)
+  const pairAt = (at: string) => readFile(join(at, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
+  // Another build's pair starts from the reasons the installed build's pair gives.
+  const before = await pairAt(folder) ?? (build ? await pairAt(join(pairs, scenario.name)) : undefined)
   await rm(folder, { recursive: true, force: true })
   await mkdir(join(folder, "home"), { recursive: true })
   const replacements = rootReplacements(sandbox)
@@ -1283,10 +1308,12 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     return line
   }
   const openings = pair.recording.openings ?? []
+  const empty = (opening: Opening): boolean => opening.at === opening.opened
   const at = (index: number): JsonObject[] => [
-    ...openings.filter((opening) => opening.opened === index).map((): JsonObject => ({ opened: true })),
+    ...openings.filter((opening) => opening.opened === index && !empty(opening)).map((): JsonObject => ({ opened: true })),
+    ...openings.filter((opening) => opening.at === index && empty(opening)).flatMap((): JsonObject[] => [{ opening: true }, { opened: true }]),
     ...prompts.filter((prompt) => prompt.at === index).map(promptLine),
-    ...openings.filter((opening) => opening.at === index).map((): JsonObject => ({ opening: true })),
+    ...openings.filter((opening) => opening.at === index && !empty(opening)).map((): JsonObject => ({ opening: true })),
   ]
   const body = pair.recording.messages.flatMap((message, index) => [...at(index), { message }])
   body.push(...at(pair.recording.messages.length), ...prompts.filter((prompt) => prompt.at > pair.recording.messages.length).map(promptLine))
@@ -1303,11 +1330,15 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     harness,
     native: { version: pair.version },
     about: `${scenario.turns.map((turn) => turn.prompt).join(" / ")} ${scenario.about}`,
-    stores: found.stores.map(({ reader, path, differences }) => ({
-      reader,
-      path: scrub(relative(sandbox.home, path)),
-      known: explained(differences, before?.stores.find((store) => store.reader === reader)?.known),
-    })),
+    stores: found.stores.map(({ reader, path, differences }) => {
+      const previous = before?.stores.find((store) => store.reader === reader)
+      return {
+        reader,
+        path: scrub(relative(sandbox.home, path)),
+        known: explained(differences, previous?.known),
+        ...previous?.uncited && { uncited: previous.uncited },
+      }
+    }),
   }
   if (found.replay) kept.replay = { known: explained(found.replay, before?.replay?.known) }
   await writeFile(join(folder, "pair.json"), `${JSON.stringify(kept, null, 2)}\n`)
@@ -1363,9 +1394,15 @@ async function copyDatabase(from: string, target: string, replacements: readonly
 
 const args = process.argv.slice(2)
 const write = args.includes("--write")
-const named = args.filter((arg) => arg !== "--write")
+const nativeAt = args.indexOf("--native")
+const nativeArg = nativeAt >= 0 ? args[nativeAt + 1] : undefined
+if (nativeAt >= 0 && !nativeArg) throw new Error("--native needs the build to run")
+// Each harness runs from its sandbox's project, where a relative path names nothing.
+const native = nativeArg && resolve(nativeArg)
+const named = args.filter((arg, index) => arg !== "--write" && index !== nativeAt && index !== nativeAt + 1)
 const harnesses = named.filter((arg) => RECORDERS.has(arg))
 const scenarios = named.filter((arg) => !RECORDERS.has(arg))
+if (native && harnesses.length !== 1) throw new Error("--native runs one harness's build; name that harness")
 for (const name of scenarios)
   if (!SCENARIOS.some((scenario) => scenario.name === name))
     throw new Error(`${name} is neither a harness (${[...RECORDERS.keys()].join(", ")}) nor a scenario (${SCENARIOS.map((scenario) => scenario.name).join(", ")})`)
@@ -1385,7 +1422,8 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
         await writeFile(join(sandbox.project, file), text)
       }
       for (const [file, bytes] of Object.entries(scenario.images ?? {})) await writeFile(join(sandbox.project, file), bytes)
-      const pair = await recorder.record(sandbox, scenario)
+      if (native && !recorder.takesBuild) throw new Error(`${harness} records only with its installed build`)
+      const pair = await recorder.record(sandbox, scenario, native)
       await credentialFree(pair, await recorder.secrets?.() ?? [])
       const live = liveDrawing(harness, pair.recording)
       console.log(`${harness} ${pair.version} ${scenario.name}: ${pair.recording.messages.length} wire messages; live draws ${live.length} lines`)
@@ -1407,7 +1445,7 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
         found.replay = differences(drawing(replayed.live), drawing(replayed.replay))
         report("the replay", found.replay)
       }
-      if (write) console.log(`  kept ${relative(process.cwd(), await keep(harness, recorder, scenario, sandbox, pair, found))}`)
+      if (write) console.log(`  kept ${relative(process.cwd(), await keep(harness, recorder, scenario, sandbox, pair, found, native))}`)
     })
   }
 }

@@ -13,6 +13,7 @@ import type { JsonObject } from "../electron/codex-app-json.ts"
 import { resolveExecutable } from "../electron/executable.ts"
 import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
 import { devinExecutable } from "../electron/providers/devin/executable.ts"
+import { codexBinary } from "./harness-binaries.ts"
 
 /**
  * Records what a harness says about itself, names only, as the fixtures its
@@ -57,17 +58,6 @@ async function executableBuild(executable: string | null, versionArgs = ["--vers
   const version = /\d+(?:\.\d+)+/.exec(stdout)?.[0]
   if (!version) throw new Error(`${harness} printed no version: ${stdout.slice(0, 80)}`)
   return { version, files: [await realpath(executable)] }
-}
-
-async function codexBinary(): Promise<string | null> {
-  const launcher = await resolveCodexExecutable()
-  if (!launcher) return null
-  const real = await realpath(launcher)
-  if (!real.endsWith(".js")) return real
-  // The npm launcher runs a native binary from its platform package.
-  const vendor = join(dirname(real), "..", "node_modules", `@openai/codex-${process.platform}-${process.arch}`, "vendor")
-  const [target] = await readdir(vendor)
-  return target ? join(vendor, target, "bin", "codex") : null
 }
 
 async function cursorSdk(): Promise<Build> {

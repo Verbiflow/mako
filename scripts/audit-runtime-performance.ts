@@ -201,6 +201,7 @@ for (const count of [5000, 20000]) {
     displayName: "Fixture",
     roots: () => [],
     discover: async () => files,
+    records: async () => null,
     peek: async (file) => {
       peeks++
       return {

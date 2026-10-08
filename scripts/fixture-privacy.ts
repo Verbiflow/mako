@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir, hostname, userInfo } from "node:os"
-import { join, relative } from "node:path"
+import { join, relative, sep } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
@@ -399,11 +399,28 @@ function encodeVarint(value: number): Uint8Array {
   return Uint8Array.from(bytes)
 }
 
+/**
+ * A file's own path checked name by name: harnesses fold an absolute path into
+ * one folder name (Grok's `%2FUsers%2F…`), while a sandbox's `home/Library` is
+ * two names under the fixture, nobody's home.
+ */
+function pathLeaks(path: string, identity: readonly Identity[]): string[] {
+  return path.split(sep).flatMap((name) => leaksIn(decodedName(name), identity))
+}
+
+function decodedName(name: string): string {
+  try {
+    return decodeURIComponent(name)
+  } catch {
+    return name
+  }
+}
+
 /** What under `root` identifies someone, by file and kind. Binary files are read as bytes; JSON Lines files and columns of JSON rows also stream by stream. */
 export async function treeLeaks(root: string, identity: readonly Identity[]): Promise<Leak[]> {
   const leaks: Leak[] = []
   for (const file of await filesUnder(root)) {
-    const kinds = new Set(leaksIn(relative(root, file), identity))
+    const kinds = new Set(pathLeaks(relative(root, file), identity))
     if (file.endsWith(".db")) {
       const database = new DatabaseSync(file, { readOnly: true })
       try {

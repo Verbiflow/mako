@@ -7,8 +7,8 @@
   "tool identity resolves every declared name": 0.347,
   "claude decodes claude/plan-turn x50": 8.375,
   "codex decodes codex/notices-and-waits x50": 3.499,
-  "cursor decodes cursor/plan-and-build x50": 3.186,
+  "cursor decodes cursor/subagent-progress x50": 10.81,
   "opencode decodes opencode/plan-and-build x50": 7.289,
-  "grok decodes grok/acp-session x50": 1.455,
+  "grok decodes grok/pager-notices x50": 0.411,
   "devin decodes devin/plan-approved x50": 9.622
 }

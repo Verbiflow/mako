@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
-import { comparePair, PAIRS_FOLDER, type Compared, type Known } from "./decode-compare.ts"
+import { comparePair, PAIRS_FOLDER, type Compared, type Known, type Uncited } from "./decode-compare.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
 
 /**
@@ -19,10 +19,12 @@ let resumes = 0
 let replays = 0
 let cited = 0
 
-function problems(result: Compared, known: Known): string[] {
+function problems(result: Compared, known: Known, uncited: Uncited = []): string[] {
   return [
     ...result.cited.conflicts,
     ...result.cited.oneSided,
+    ...uncited.filter((listed) => !listed.reason).map((listed) => `listed as uncited without a reason: ${listed.marker}`),
+    ...result.citedNow.map((listed) => `listed as uncited, but the store now cites it the same as live; drop it: ${listed.marker}`),
     ...result.unexplained.map((difference) => `${difference.side} ${difference.line}`),
     ...known.filter((difference) => !difference.reason).map((difference) => `listed without a reason: ${difference.side} ${difference.line}`),
     ...result.settled.map((difference) => `listed, but both sides now agree; drop it: ${difference.side} ${difference.line}`),
@@ -41,7 +43,10 @@ for (const harness of await readdir(FIXTURE_ROOT)) {
     for (const [index, store] of compared.entries()) {
       stores++
       cited += store.cited.agreed
-      found.push(...problems(store, pair.stores[index]!.known).map((problem) => `${store.reader} ${problem}`))
+      found.push(...problems(store, pair.stores[index]!.known, pair.stores[index]!.uncited).map((problem) => `${store.reader} ${problem}`))
+      // A declared kind the reader doesn't draw yet shows as a listed difference; anything else it couldn't read is a reader to fix.
+      for (const record of store.unread.filter((record) => record.reason !== "undrawn"))
+        found.push(`${store.reader} store holds ${record.count} ${record.reason} ${record.kind} record${record.count === 1 ? "" : "s"}`)
     }
     if (replay) {
       replays++

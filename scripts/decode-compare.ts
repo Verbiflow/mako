@@ -14,6 +14,7 @@ import { deliverDecoded } from "../electron/contracts/native-decoding.ts"
 import { drawnWhileOpening, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveSessionState } from "../electron/shared.ts"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.ts"
+import type { UnreadRecord } from "../packages/sessions/src/format.ts"
 import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
 import { CodexProvider } from "../packages/sessions/src/providers/codex.ts"
 import { CursorProvider } from "../packages/sessions/src/providers/cursor.ts"
@@ -134,10 +135,10 @@ function messagesOf(harness: string, updates: LiveUpdate[]): ChatMessage[] {
   return foldTools(acpBlocksToMessages(reduceLiveUpdates([], updates), false, harness).messages)
 }
 
-async function storeMessages(reader: string, harness: string, home: string, path: string): Promise<ChatMessage[]> {
+export async function storeMessages(reader: string, harness: string, home: string, path: string): Promise<{ messages: ChatMessage[]; unread: UnreadRecord[] }> {
   const thread = await storeReader(reader, home).read(path)
   if (!thread) throw new Error(`${path} is not a session ${reader} reads`)
-  return foldTools(threadToMessages(thread.entries, 0, harness))
+  return { messages: foldTools(threadToMessages(thread.entries, 0, harness)), unread: thread.unread ?? [] }
 }
 
 export function liveDrawing(harness: string, recording: Recording): string[] {
@@ -145,7 +146,7 @@ export function liveDrawing(harness: string, recording: Recording): string[] {
 }
 
 export async function storeDrawing(reader: string, harness: string, home: string, path: string): Promise<string[]> {
-  return drawing(await storeMessages(reader, harness, home, path))
+  return drawing((await storeMessages(reader, harness, home, path)).messages)
 }
 
 /**
@@ -333,6 +334,10 @@ export const PAIRS_FOLDER = "pairs"
 const KnownSchema = z.array(z.object({ side: z.enum(["-", "+"]), line: z.string(), reason: z.string() }))
 export type Known = z.infer<typeof KnownSchema>
 
+/** Markers live cites that a store keeps no record of (`Context compacted #1`), each with why. */
+const UncitedSchema = z.array(z.object({ marker: z.string(), reason: z.string() }))
+export type Uncited = z.infer<typeof UncitedSchema>
+
 /**
  * A kept pair: `capture.jsonl` as Mako records the wire, `home/` holding each
  * store the same session wrote, and the differences already understood, each
@@ -347,7 +352,7 @@ export const PairSchema = z.object({
    * client's record of the same session (Devin.app's journal). `path` is
    * relative to `home/`; `-` in `known` is what only the wire draws.
    */
-  stores: z.array(z.object({ reader: z.string(), path: z.string(), known: KnownSchema })).min(1),
+  stores: z.array(z.object({ reader: z.string(), path: z.string(), known: KnownSchema, uncited: UncitedSchema.optional() })).min(1),
   /**
    * For a capture that resumes: what the history the harness replayed while
    * opening draws unlike the live turns before it (`-` only live, `+` only the
@@ -369,21 +374,27 @@ export interface Compared {
   unexplained: Difference[]
   settled: Known
   cited: MarkerCitations
+  /** Listed as uncited, but the store now cites them or no longer draws them. */
+  citedNow: Uncited
 }
 
-function compared(left: readonly ChatMessage[], right: readonly ChatMessage[], known: Known): Compared & { left: string[]; right: string[] } {
+function compared(left: readonly ChatMessage[], right: readonly ChatMessage[], known: Known, uncited: Uncited = []): Compared & { left: string[]; right: string[] } {
   const leftLines = drawing(left)
   const rightLines = drawing(right)
   const found = differences(leftLines, rightLines)
   const key = (difference: Difference) => `${difference.side}${difference.line}`
   const explained = new Set(known.filter((difference) => difference.reason).map(key))
   const seen = new Set(found.map(key))
+  const citations = citedMarkers(left, right)
+  const liveOnly = (marker: string) => `${marker} cited live only`
+  const excused = new Set(uncited.filter((listed) => listed.reason).map((listed) => liveOnly(listed.marker)))
   return {
     left: leftLines,
     right: rightLines,
     unexplained: found.filter((difference) => !explained.has(key(difference))),
     settled: known.filter((difference) => !seen.has(key(difference))),
-    cited: citedMarkers(left, right),
+    cited: { ...citations, oneSided: citations.oneSided.filter((problem) => !excused.has(problem)) },
+    citedNow: uncited.filter((listed) => !citations.oneSided.includes(liveOnly(listed.marker))),
   }
 }
 
@@ -391,7 +402,8 @@ function compared(left: readonly ChatMessage[], right: readonly ChatMessage[], k
 export async function comparePair(folder: string): Promise<{
   pair: Pair
   live: string[]
-  stores: (Compared & { reader: string; path: string; store: string[] })[]
+  /** Each store's drawing, and the records its reader reported it couldn't draw. */
+  stores: (Compared & { reader: string; path: string; store: string[]; unread: UnreadRecord[] })[]
   /** The capture's launches that resumed the session. */
   resumes: number
   replay?: Compared & { live: string[]; replay: string[] }
@@ -400,15 +412,16 @@ export async function comparePair(folder: string): Promise<{
   const home = join(folder, "home")
   const recording = await readRecording(join(folder, "capture.jsonl"))
   const liveDrawn = messagesOf(pair.harness, liveUpdates(pair.harness, recording))
-  const stores = await Promise.all(pair.stores.map(async ({ reader, path, known }) => {
-    const { unexplained, settled, cited, right } = compared(liveDrawn, await storeMessages(reader, pair.harness, home, join(home, path)), known)
-    return { reader, path, store: right, unexplained, settled, cited }
+  const stores = await Promise.all(pair.stores.map(async ({ reader, path, known, uncited }) => {
+    const { messages, unread } = await storeMessages(reader, pair.harness, home, join(home, path))
+    const { unexplained, settled, cited, citedNow, right } = compared(liveDrawn, messages, known, uncited)
+    return { reader, path, store: right, unexplained, settled, cited, citedNow, unread }
   }))
   const result: Awaited<ReturnType<typeof comparePair>> = { pair, live: drawing(liveDrawn), stores, resumes: recording.openings?.length ?? 0 }
   const drawn = replayDrawings(pair.harness, recording)
   if (drawn) {
-    const { unexplained, settled, cited, left, right } = compared(drawn.live, drawn.replay, pair.replay?.known ?? [])
-    result.replay = { unexplained, settled, cited, live: left, replay: right }
+    const { unexplained, settled, cited, citedNow, left, right } = compared(drawn.live, drawn.replay, pair.replay?.known ?? [])
+    result.replay = { unexplained, settled, cited, citedNow, live: left, replay: right }
   }
   return result
 }

@@ -36,7 +36,7 @@ for (const event of spec.events) {
   else if (event.endReplay) {
     const meta = event.endReplay.meta ?? undefined
     const dropped = meta?.["cognition.ai/host/replayDropped"]
-    await store.endReplay(file, true, { mode: typeof dropped === "number" && dropped >= 0 ? "tail" : "replace", replyCursor: acp.getHostLogCursorMeta(meta) })
+    await store.endReplay(file, true, { mode: Number.isInteger(dropped) && dropped >= 0 ? "tail" : "replace", replyCursor: acp.getHostLogCursorMeta(meta) })
   }
 }
 await store.flush(file)

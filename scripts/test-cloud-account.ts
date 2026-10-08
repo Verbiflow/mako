@@ -15,6 +15,7 @@ import { after, test } from "node:test"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { CloudAccounts, type CloudAccountOptions } from "../electron/cloud-account.ts"
 import type { CloudAccount, CloudAccountState, CloudDevice } from "../electron/contracts/cloud-account.ts"
+import type { DiagnosticEvents } from "../electron/contracts/telemetry.ts"
 import type { SecretEncryption } from "../electron/secure-storage.ts"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
@@ -36,6 +37,7 @@ async function fakeCloud() {
   const devices = new Map<string, FakeDevice>()
   const sockets = new Map<ServerSocket, string>()
   const calls: string[] = []
+  const correlations: (string | string[] | undefined)[] = []
   const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false }
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
   const token = (deviceId: string) => {
@@ -58,6 +60,7 @@ async function fakeCloud() {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://cloud")
     calls.push(`${request.method} ${url.pathname}`)
+    correlations.push(request.headers["x-mako-correlation-id"])
     const send = (status: number, body?: string) => {
       response.writeHead(status, { "content-type": "application/json" }).end(body)
     }
@@ -141,7 +144,12 @@ async function fakeCloud() {
   return {
     url,
     calls,
+    correlations,
     options,
+    stop: () => {
+      server.closeAllConnections()
+      server.close()
+    },
     devices,
     /** What a browser does after the person picks an account: the cloud redirects to the loopback with a code. */
     async approve(signInUrl: string, tamper?: { state?: string }) {
@@ -372,6 +380,44 @@ test("without a keychain the sign-in lasts until Mako quits and nothing is writt
   const state = mac.accounts.account().state
   assert.equal(state.status === "signed-in" && state.kept, "memory")
   await assert.rejects(stat(storePath))
+})
+
+test("every call to the cloud goes under its own correlation ID, and is reported by route, never by path", async () => {
+  const cloud = await fakeCloud()
+  const reported: DiagnosticEvents["cloud.request"][] = []
+  const loggedCalls: string[] = []
+  const mac = await signedIn(cloud, {
+    onRequest: (call) => void reported.push(call),
+    log: (_message, fields) => {
+      if (fields?.correlationId !== undefined) loggedCalls.push(String(fields.route))
+    },
+  })
+  await mac.accounts.devices()
+  await assert.rejects(mac.accounts.removeDevice("not-a-device"), /No such device/)
+
+  assert.deepEqual(
+    reported.map(({ route, outcome, status }) => ({ route, outcome, status })),
+    [
+      { route: "devices.enroll", outcome: "ok", status: 201 },
+      { route: "devices.list", outcome: "ok", status: 200 },
+      { route: "devices.remove", outcome: "refused", status: 404 },
+    ]
+  )
+  const sent = cloud.correlations.filter((id) => id !== undefined)
+  assert.equal(sent.length, cloud.calls.length, "every call carries one")
+  assert.deepEqual(
+    reported.map((call) => call.correlationId),
+    sent,
+    "the ID reported is the ID the cloud saw"
+  )
+  assert.equal(new Set(sent).size, sent.length, "no two calls share one")
+  for (const call of reported) assert.ok(Number.isInteger(call.ms) && call.ms >= 0)
+  assert.deepEqual(loggedCalls, ["devices.remove"], "only what failed is logged")
+
+  cloud.stop()
+  await assert.rejects(mac.accounts.devices())
+  assert.equal(reported.at(-1)?.outcome, "unreachable")
+  assert.equal(reported.at(-1)?.status, undefined)
 })
 
 test("cancelling closes the loopback listener; a code that fails to enroll says so", async () => {
