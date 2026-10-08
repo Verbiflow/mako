@@ -9,6 +9,7 @@ import { OpenCodeContent } from "@mako/sessions/opencode-content"
 import { openCodeEventUpdates } from "../electron/providers/opencode/content.ts"
 import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "../electron/providers/opencode/interactions.ts"
 import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
+import { OpenCodeDecoder } from "../electron/providers/opencode/decoder.ts"
 import { createOpenCodeDriver, openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
 import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "../electron/providers/opencode/notices.ts"
 import { flushHostLog, installHostLog } from "../electron/host-log.ts"
@@ -171,9 +172,15 @@ try {
     const reports: ApprovalSubmission[] = []
     return { reports, assertCurrent() {}, report: (result: ApprovalSubmission) => { reports.push(result) } }
   }
+  // Requests reach the store as the driver hands them over: decoded, and only for sessions this conversation owns.
+  const decoder = new OpenCodeDecoder(root, cwd, { launchAccess: "ask", contextSize: () => undefined })
+  decoder.decode(event("session.created", { sessionID: child, parentID: root, title: "Explore" }))
+  const observe = async (target: OpenCodeInteractions, native: OpenCodeEvent) => {
+    for (const item of decoder.decode(native))
+      if (item.kind === "effect" && item.effect.type === "request") await target.observe(item.effect.request)
+  }
   const interactions = new OpenCodeInteractions({
     client, root: store, conversationId: "conversation",
-    owns: sessionID => sessionID === root || sessionID === child,
     emit: item => { emitted.push(item) },
     describe: (sessionID, toolID) => ({ title: toolID === "call_1" ? "rm -rf build" : undefined, prefix: sessionID === child ? "Explore: " : "" }),
   })
@@ -181,7 +188,7 @@ try {
     id, sessionID, action: "bash", resources: ["rm -rf build"], save: ["rm *", "*"], metadata: {}, source: { type: "tool", messageID: message, id: "call_1" }, ...extra })
   const requests = () => emitted.flatMap(item => item.type === "live-permission" ? [item.request] : [])
 
-  await interactions.observe(asked("per_1"))
+  await observe(interactions, asked("per_1"))
   const [request] = requests()
   assert.equal(request.title, "rm -rf build", "the asking tool's row title names the request")
   assert.equal(request.kind, "execute")
@@ -203,27 +210,29 @@ try {
     "a decline returns to the model, as in every other harness")
   assert.deepEqual(openCodePermissionReply(root, "per_1", null), { sessionID: root, requestID: "per_1", reply: "reject" }, "only a dismissed request stops the turn")
 
-  await interactions.observe(event("permission.replied", { sessionID: root, requestID: "per_1", reply: "once" }))
+  await observe(interactions, event("permission.replied", { sessionID: root, requestID: "per_1", reply: "once" }))
   assert.ok(emitted.some(item => item.type === "live-permission-ended" && item.requestId === request.id && item.source === "native-resolution"))
   assert.ok(emitted.some(item => item.type === "live-approval-decision"), "the native decision is retained")
   const count = requests().length
-  await interactions.observe(asked("per_1"))
+  await observe(interactions, asked("per_1"))
   assert.equal(requests().length, count, "a resolved request is not shown again")
   const late = dispatch()
   await interactions.respond(request.id, { kind: "choice", optionId: "once" }, late)
   assert.deepEqual(late.reports, [{ kind: "not-submitted", pending: false, reason: "request-ended" }])
 
-  await interactions.observe(asked("per_2", child, { source: undefined, message: undefined }))
+  await observe(interactions, asked("per_2", child, { source: undefined, message: undefined }))
   assert.equal(requests().at(-1)!.title, "Explore: rm -rf build", "a child's request carries its session label")
-  await interactions.observe(asked("per_other", "ses_foreign"))
+  await observe(interactions, asked("per_other", "ses_foreign"))
   assert.equal(requests().at(-1)!.native!.requestId, "per_2", "another conversation's request is not shown")
+  assert.deepEqual(decoder.decode(event("permission.asked", { id: "per_bad", sessionID: root })).map(item => item.kind === "unknown" && [item.type, item.reason]),
+    [["permission.asked", "unreadable"]], "a request Mako can't read is kept as unreadable, not thrown inside the request queue")
 
   openPermissions = []
   await interactions.reconcile(child)
   assert.ok(emitted.some(item => item.type === "live-permission-ended" && item.requestId === requests().at(-1)!.id && item.source === "native-resolution"),
     "a permission that vanished during a gap was resolved natively")
 
-  await interactions.observe(event("form.created", { form: { id: "frm_1", sessionID: root, title: "Pick a colour",
+  await observe(interactions, event("form.created", { form: { id: "frm_1", sessionID: root, title: "Pick a colour",
     fields: [{ key: "colour", type: "string", title: "Colour", required: true, options: [{ value: "red", label: "Red" }, { value: "blue", label: "Blue" }] }] } }))
   const form = requests().at(-1)!
   assert.equal(form.title, "Pick a colour")
@@ -235,22 +244,22 @@ try {
   assert.ok(emitted.some(item => item.type === "live-permission-ended" && item.requestId === form.id && item.source === "native-resolution"),
     "the native form state resolves the request even before its event")
 
-  await interactions.observe(event("form.created", { form: { id: "frm_2", sessionID: root, title: "Skip me", fields: [{ key: "x", type: "string" }] } }))
+  await observe(interactions, event("form.created", { form: { id: "frm_2", sessionID: root, title: "Skip me", fields: [{ key: "x", type: "string" }] } }))
   const skipped = requests().at(-1)!
   await interactions.respond(skipped.id, { kind: "choice", optionId: null }, dispatch())
   assert.deepEqual(calls.at(-1), ["form.cancel", { sessionID: root, formID: "frm_2" }])
 
-  await interactions.observe(event("form.created", { form: { id: "frm_3", sessionID: root, title: "Still open", fields: [{ key: "x", type: "string" }] } }))
-  whileReadingState = () => interactions.observe(asked("per_late"))
+  await observe(interactions, event("form.created", { form: { id: "frm_3", sessionID: root, title: "Still open", fields: [{ key: "x", type: "string" }] } }))
+  whileReadingState = () => observe(interactions, asked("per_late"))
   await interactions.reconcile(root)
   const askedDuring = requests().find(item => item.native?.requestId === "per_late")
   assert.ok(askedDuring, "a request asked during reconciliation is shown")
   assert.ok(!emitted.some(item => item.type === "live-permission-ended" && item.requestId === askedDuring.id),
     "a request asked while reconciliation waits is not ended as resolved")
-  await interactions.observe(event("permission.replied", { sessionID: root, requestID: "per_late", reply: "once" }))
-  await interactions.observe(event("form.cancelled", { sessionID: root, id: "frm_3" }))
+  await observe(interactions, event("permission.replied", { sessionID: root, requestID: "per_late", reply: "once" }))
+  await observe(interactions, event("form.cancelled", { sessionID: root, id: "frm_3" }))
 
-  for (let index = 0; index < 300; index++) await interactions.observe(asked(`flood_${index}`))
+  for (let index = 0; index < 300; index++) await observe(interactions, asked(`flood_${index}`))
   const flood = requests().filter(item => item.native?.requestId.startsWith("flood_"))
   assert.equal(flood.length, 256, "one conversation shows at most 256 pending native requests")
 
@@ -262,9 +271,9 @@ try {
   const blocked = join(store, "blocked")
   await writeFile(blocked, "")
   const unretained: LiveDriverEvent[] = []
-  const failing = new OpenCodeInteractions({ client, root: join(blocked, "evidence"), conversationId: "conversation", owns: () => true, emit: item => { unretained.push(item) } })
-  await failing.observe(asked("per_9"))
-  await failing.observe(event("permission.replied", { sessionID: root, requestID: "per_9", reply: "reject" }))
+  const failing = new OpenCodeInteractions({ client, root: join(blocked, "evidence"), conversationId: "conversation", emit: item => { unretained.push(item) } })
+  await observe(failing, asked("per_9"))
+  await observe(failing, event("permission.replied", { sessionID: root, requestID: "per_9", reply: "reject" }))
   assert.ok(unretained.some(item => item.type === "live-permission-ended" && item.source === "native-resolution"))
   assert.ok(!unretained.some(item => item.type === "live-approval-decision"))
   await failing.close().catch(() => {})
@@ -412,19 +421,25 @@ process.stdin.on("end", () => process.exit(0))
       { kind: "retrying", attempt: 2, reason: "Too many requests", retryAt }, "the countdown runs to OpenCode's next attempt")
 
     push(event("session.step.ended", { sessionID: root, assistantMessageID, finish: "stop", cost: 0, tokens: { input: 150_000, output: 500, reasoning: 0, cache: { read: 0, write: 0 } } }))
-    push(event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" }))
+    const compacting = event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" })
+    push(compacting)
     push(event("session.compaction.delta", { sessionID: root, text: "Sum" }))
     const compacted = event("session.compaction.ended", { sessionID: root, reason: "auto", text: "Summary of the work so far.", recent: "" })
     push(compacted)
     push(compacted)
+    // OpenCode stores an automatic compaction under its start's id, message-prefixed.
+    const stored = compacting.id.replace(/^evt_/, "msg_")
     assert.deepEqual(await until("the compaction", () => markers().find(marker => marker.label === "Context compacted")),
-      { kind: "event", id: compacted.id, source: { harness: "opencode", record: compacted.id }, label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
+      { kind: "event", id: stored, source: { harness: "opencode", record: stored }, label: "Context compacted", detail: "Automatic · from 151k tokens", body: "Summary of the work so far." })
+    assert.equal(markers().filter(marker => marker.label === "Context compacted").length, 1, "a replayed end draws no second marker")
 
-    push(event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" }))
+    const retrying = event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" })
+    push(retrying)
     const failed = event("session.compaction.failed", { sessionID: root, reason: "auto", error: { type: "compaction.failed", message: "The model could not summarize" } })
     push(failed)
+    const unsettled = retrying.id.replace(/^evt_/, "msg_")
     assert.deepEqual(await until("the failed compaction", () => markers().find(marker => marker.label === "Compaction failed")),
-      { kind: "event", id: failed.id, source: { harness: "opencode", record: failed.id }, label: "Compaction failed", detail: "The model could not summarize", tone: "warning" }, "an automatic compaction that fails leaves its trace")
+      { kind: "event", id: unsettled, source: { harness: "opencode", record: unsettled }, label: "Compaction failed", detail: "The model could not summarize", tone: "warning" }, "an automatic compaction that fails leaves its trace, citing the message it was stored as")
     assert.equal(activities().at(-1), null, "compacting ends with the failure")
     assert.equal(markers().filter(marker => marker.label === "Context compacted").length, 1, "OpenCode's event replayed is drawn once")
 
@@ -433,6 +448,19 @@ process.stdin.on("end", () => process.exit(0))
     assert.deepEqual(await until("OpenCode's stop", () => markers().find(marker => marker.label === "Stopped by OpenCode")),
       { kind: "event", id: interrupted.id, source: { harness: "opencode", record: interrupted.id }, label: "Stopped by OpenCode", detail: "the workspace was idle too long" })
     await until("the stopped turn to settle", () => session()?.status === "ready")
+
+    const beforeNotice = emitted.length
+    push(event("session.inbox.enqueued", { sessionID: root, inboxID: "msg_notice", item: { type: "synthetic", payload: {
+      text: '<shell id="sh_1" state="completed" command="npm test">ok\nCommand exited with code 0.</shell>',
+      metadata: { source: "shell", state: "completed", shellID: "sh_1" } } } }))
+    push(event("session.inbox.delivered", { sessionID: root, inboxID: "msg_notice" }))
+    push(event("session.execution.started", { sessionID: root }))
+    const opener = await until("the turn OpenCode starts on the notice", () =>
+      emitted.slice(beforeNotice).find(item => item.type === "live-update" && item.update.kind === "provider-turn"))
+    assert.deepEqual(opener.type === "live-update" && opener.update, { kind: "provider-turn", reason: "Background command \"npm test\" completed (exit code 0)" },
+      "a turn OpenCode starts on a finished command names that command")
+    push(event("session.execution.succeeded", { sessionID: root }))
+    await until("OpenCode's own turn to end", () => session()?.status === "ready" && session()?.lastStop === "end_turn")
 
     mcpServers = [{ name: "docs", status: { status: "failed", error: "spawn docs-mcp ENOENT" } }]
     push(event("mcp.status.changed", { server: "docs" }))
@@ -475,4 +503,4 @@ process.stdin.on("end", () => process.exit(0))
   }
 }
 
-console.log("OpenCode projection: session-scoped rows, child labels, diffs, plans, answered question rows, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids; retry countdown, compaction summary and failure, OpenCode's own stops, MCP failures once, explicit ignores and unknown-event logging")
+console.log("OpenCode projection: session-scoped rows, child labels, diffs, plans, answered question rows, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids; retry countdown, compaction summary and failure, OpenCode's own stops, a turn OpenCode starts on a notice, MCP failures once, explicit ignores and unknown-event logging")

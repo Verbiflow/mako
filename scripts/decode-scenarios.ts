@@ -33,7 +33,12 @@ export interface ToolVocabulary {
   ask: Optional<(question: Question) => Call>
   /** How a plan-mode turn proposes `plan`: the steps that end it, approved where the harness asks. */
   plan: Optional<(plan: string) => Step[]>
+  /** A subagent started on `task`, which runs its own calls and reports back. */
+  subagent: Optional<(task: { description: string; prompt: string }) => Call>
 }
+
+/** Why a harness answered by the scripted model records no subagent. */
+export const SCRIPTED_SUBAGENT = "The scripted model answers one conversation step by step, and a subagent's own requests would take its parent's next step"
 
 /** A type, not an interface, so it is JSON a call's arguments can carry. */
 export type Question = {
@@ -69,6 +74,12 @@ export interface Turn {
    * client. Mako draws nothing for it; `prompt` is what a person types for it.
    */
   rewind?: number
+  /**
+   * The harness's process closed and a new one resumed the session, as Mako
+   * does when an idle conversation's process has closed, instead of a prompt.
+   * What the harness sends while it opens is history; `prompt` is only a label.
+   */
+  resume?: true
   /** Files of the scenario's `images` sent with the prompt, staged as Mako stages an attachment. */
   attachments?: string[]
 }
@@ -93,10 +104,10 @@ export interface Step {
  * step. The prompts name what to do, so a harness's own model, which only
  * the prompt steers, takes the same path.
  */
-export type Need = "todos" | "search" | "codeMode" | "ask" | "plan"
+export type Need = "todos" | "search" | "codeMode" | "ask" | "plan" | "subagent"
 
 /** What a scenario does to a running session besides prompting it, which each recorder drives or says why it can't. */
-export type Control = "steer" | "rewind" | "compact"
+export type Control = "steer" | "rewind" | "compact" | "resume"
 
 export interface Scenario {
   name: string
@@ -127,6 +138,11 @@ function search(tools: ToolVocabulary, pattern: string): Call {
 function cell(tools: ToolVocabulary, source: string): Call {
   if ("absent" in tools.codeMode) throw new Error(tools.codeMode.absent)
   return tools.codeMode.cell(source)
+}
+
+function subagent(tools: ToolVocabulary, task: { description: string; prompt: string }): Call {
+  if ("absent" in tools.subagent) throw new Error(tools.subagent.absent)
+  return tools.subagent(task)
 }
 
 function ask(tools: ToolVocabulary, question: Question): Call {
@@ -329,6 +345,24 @@ export const SCENARIOS: Scenario[] = [
     }],
   },
   {
+    name: "failing-cell",
+    about: "A code cell that runs one command and then throws, so the cell's own failure, which no nested call carries, can be told apart from a cell that finished.",
+    files: { "notes.md": NOTES },
+    needs: ["codeMode"],
+    turns: [{
+      prompt: "In one code cell, run `cat notes.md`, then throw an error saying the release day is unknown, and tell me what happened.",
+      steps: [
+        {
+          call: (tools) => cell(tools, [
+            `await tools.exec_command({ cmd: "cat notes.md" })`,
+            `throw new Error("The release day is unknown")`,
+          ].join("\n")),
+        },
+        { text: "The cell read notes.md and then stopped on the error." },
+      ],
+    }],
+  },
+  {
     name: "question",
     about: "A question with two options, answered with the first, then the answer.",
     files: { "notes.md": NOTES },
@@ -475,6 +509,19 @@ export const SCENARIOS: Scenario[] = [
         { text: "notes.md and docs/plan.md mention Friday." },
       ],
     }],
+  },
+  {
+    name: "subagent",
+    about: "A subagent that reads two files and reports back, whose own calls are its progress while it runs, then the answer from its report.",
+    needs: ["subagent"],
+    files: { "notes.md": NOTES, "docs/plan.md": "Freeze the branch on Friday.\n" },
+    turns: [{
+      prompt: "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports.",
+      steps: [
+        { call: (tools) => subagent(tools, { description: "Read the release notes", prompt: "Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes." }) },
+        { text: "The release ships on Friday, and the branch freezes on Friday." },
+      ],
+    }],
   },  {
     name: "steered-shell",
     about: "A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
@@ -514,25 +561,95 @@ export const SCENARIOS: Scenario[] = [
       },
     ],
   },
+  {
+    name: "rewound-past-marker",
+    about: "Two turns failing with a server error, each leaving a marker both sides cite, a rewind to before the second, then a turn that replaces it: the first marker stays, citing the same record, and the second goes.",
+    files: {},
+    env: { GROK_MAX_RETRIES: "1", CLAUDE_CODE_MAX_RETRIES: "1" },
+    scripted: "the model has to fail on cue",
+    controls: ["rewind"],
+    turns: [
+      {
+        prompt: "Say hello.",
+        steps: [{ fail: { status: 500, message: "The scripted model failed" } }],
+      },
+      {
+        prompt: "Say hello again.",
+        steps: [{ fail: { status: 500, message: "The scripted model failed again" } }],
+      },
+      { prompt: "/rewind", rewind: 1, steps: [] },
+      {
+        prompt: "Without running anything, say done.",
+        steps: [{ text: "Done." }],
+      },
+    ],
+  },
+  {
+    name: "resumed",
+    about: "A turn, a manual compaction, the harness's process closed and the session resumed in a new one, then a turn that leans on the summary. What the harness replays while it opens is history.",
+    files: { "notes.md": NOTES },
+    controls: ["compact", "resume"],
+    turns: [
+      {
+        prompt: "Read notes.md and tell me the release day. Don't run commands.",
+        steps: [
+          { call: (tools, project) => tools.read(join(project, "notes.md")) },
+          { text: "The release ships on Friday." },
+        ],
+      },
+      { prompt: "/compact", compact: true, steps: [{ text: COMPACT_SUMMARY }] },
+      { prompt: "(resumed)", resume: true, steps: [] },
+      {
+        prompt: "Without reading anything, which day did notes.md name?",
+        steps: [{ text: "Friday." }],
+      },
+    ],
+  },
+  {
+    name: "resumed-turn",
+    about: "A turn with a tool, the harness's process closed and the session resumed in a new one, then a turn that leans on the first. What the harness replays while it opens is history.",
+    files: { "notes.md": NOTES },
+    controls: ["resume"],
+    turns: [
+      {
+        prompt: "Read notes.md and tell me the release day. Don't run commands.",
+        steps: [
+          { call: (tools, project) => tools.read(join(project, "notes.md")) },
+          { text: "The release ships on Friday." },
+        ],
+      },
+      { prompt: "(resumed)", resume: true, steps: [] },
+      {
+        prompt: "Without reading anything, which day did notes.md name? Answer with just the day.",
+        steps: [{ text: "Friday." }],
+      },
+    ],
+  },
 ]
 
 /**
  * Each conversation request takes the next step, its call numbered in order.
- * A script that ends failing keeps failing: a server that is down stays down,
- * however many times the harness retries.
+ * A failed step keeps failing until a request carries the next turn's prompt:
+ * a server that is down stays down, however many times the harness retries.
  */
 export function script(scenario: Scenario, tools: ToolVocabulary, project: string): Script {
-  const steps = scenario.turns.flatMap((turn) => turn.steps).flatMap((step) => {
-    if (step.plan === undefined) return [step]
+  const steps = scenario.turns.flatMap((turn) => turn.steps.map((step) => ({ step, turn }))).flatMap(({ step, turn }) => {
+    if (step.plan === undefined) return [{ step, turn }]
     if ("absent" in tools.plan) throw new Error(tools.plan.absent)
-    return tools.plan(step.plan)
+    return tools.plan(step.plan).map((planned) => ({ step: planned, turn }))
   })
   let next = 0
   const unheard: string[] = []
+  const retried = (heard: string) => {
+    const failed = steps[next - 1]
+    if (!failed?.step.fail) return false
+    const following = steps[next]
+    return !following || (following.turn !== failed.turn && !heard.includes(JSON.stringify(following.turn.prompt).slice(1, -1)))
+  }
   return {
     unheard,
     reply: (heard) => {
-      const step = steps[next++] ?? (steps.at(-1)?.fail ? steps.at(-1) : undefined)
+      const step = retried(heard) ? steps[next - 1]!.step : steps[next++]?.step
       if (!step) return undefined
       if (step.hears && !heard.includes(step.hears)) unheard.push(`step ${next} never heard "${step.hears}"`)
       const call = step.call?.(tools, project, heard)

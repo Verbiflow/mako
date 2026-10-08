@@ -22,7 +22,7 @@ import { providerHost } from "../electron/providers/index.ts"
 import { usageHarnesses, usageSummary } from "../electron/usage.ts"
 import { UsageLedger } from "../electron/usage-ledger.ts"
 import { decoderFor, readRecording } from "./native-decoding.ts"
-import { PairSchema, storeReader } from "./decode-compare.ts"
+import { ownStore, PairSchema, storeReader } from "./decode-compare.ts"
 
 // ── The maps ────────────────────────────────────────────────────────────────
 
@@ -134,8 +134,8 @@ async function readers(harness: string, folder: string): Promise<Record<Reader, 
     for (const item of decoder.decode(message))
       if (item.kind === "state" && item.patch.usage?.tokens) live = item.patch.usage.tokens
   const home = join(folder, "home")
-  const thread = await storeReader(harness, home).read(join(home, pair.store))
-  if (!thread) throw new Error(`${folder}: the history reader found no session at ${pair.store}`)
+  const thread = await storeReader(harness, home).read(join(home, ownStore(pair)))
+  if (!thread) throw new Error(`${folder}: the history reader found no session at ${ownStore(pair)}`)
   const summary = await usageSummary(harnesses, join(folder, "no-sessions"), home, undefined, { now: NOW })
   if (summary.truncated) throw new Error(`${folder}: the scanner left records unread`)
   const { input, output, cacheRead, cacheWrite } = summary.total
@@ -171,7 +171,7 @@ try {
     usageSummary(harnesses, join(scratch, "no-sessions"), empty, undefined, { now: NOW, env, ...ledger && { ledger } })
 
   const grokPair = join(PAIRS, "grok", "pairs", "read-and-answer")
-  const grokStore = PairSchema.parse(JSON.parse(await readFile(join(grokPair, "pair.json"), "utf8"))).store
+  const grokStore = ownStore(PairSchema.parse(JSON.parse(await readFile(join(grokPair, "pair.json"), "utf8"))))
   const grokHome = join(scratch, "grok-elsewhere")
   await cp(join(grokPair, "home", ".grok"), grokHome, { recursive: true })
   const grokMoved = await spendOf({ GROK_HOME: grokHome })
@@ -181,7 +181,7 @@ try {
   assert.deepEqual(sum(grokThread?.entries ?? []), { input: 2_400, output: 80, cacheRead: 0, cacheWrite: 0 }, "the history reader follows GROK_HOME too")
 
   const openCodePair = join(PAIRS, "opencode", "pairs", "read-and-answer")
-  const openCodeStore = PairSchema.parse(JSON.parse(await readFile(join(openCodePair, "pair.json"), "utf8"))).store
+  const openCodeStore = ownStore(PairSchema.parse(JSON.parse(await readFile(join(openCodePair, "pair.json"), "utf8"))))
   const dataHome = join(scratch, "data-elsewhere")
   await cp(join(openCodePair, "home", ".local", "share"), dataHome, { recursive: true })
   const openCodeMoved = await spendOf({ XDG_DATA_HOME: dataHome })
@@ -191,7 +191,7 @@ try {
 
   // Claude's store moves only by declaration: Mako launches Claude without an exported CLAUDE_CONFIG_DIR, so neither reader follows one.
   const claudePair = join(PAIRS, "claude", "pairs", "read-and-answer")
-  const claudeStore = PairSchema.parse(JSON.parse(await readFile(join(claudePair, "pair.json"), "utf8"))).store
+  const claudeStore = ownStore(PairSchema.parse(JSON.parse(await readFile(join(claudePair, "pair.json"), "utf8"))))
   const claudeSpent = (await readers("claude", claudePair)).scanned
   const claudeElsewhere = join(scratch, "claude-elsewhere")
   await cp(join(claudePair, "home", ".claude"), claudeElsewhere, { recursive: true })
@@ -207,7 +207,7 @@ try {
   assert.deepEqual(sum((await new ClaudeProvider(declaring).read(claudeFile))?.entries ?? []), claudeSpent, "and reads the same spend from it")
 
   const devinPair = join(PAIRS, "devin", "pairs", "read-and-answer")
-  const devinStore = PairSchema.parse(JSON.parse(await readFile(join(devinPair, "pair.json"), "utf8"))).store
+  const devinStore = ownStore(PairSchema.parse(JSON.parse(await readFile(join(devinPair, "pair.json"), "utf8"))))
   const devinSpent = (await readers("devin", devinPair)).scanned
   const devinData = join(scratch, "devin-data-elsewhere")
   await cp(join(devinPair, "home", ".local", "share"), devinData, { recursive: true })

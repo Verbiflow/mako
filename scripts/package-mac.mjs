@@ -135,7 +135,10 @@ try {
     ? Boolean(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" }).trim())
     : process.env.MAKO_BUILD_DIRTY === "1"
   const makoBuild = { id: createHash("sha256").update(JSON.stringify(before)).digest("hex").slice(0, 16), builtAt: new Date().toISOString(), revision, dirty }
-  const configuration = { ...pkg.build, extraMetadata: { ...pkg.build.extraMetadata, makoBuild } }
+  // The Mako cloud a release signs in to and reports to; a build packaged without one offers neither.
+  const makoCloud = process.env.MAKO_CLOUD_URL ? new URL(process.env.MAKO_CLOUD_URL).origin : undefined
+  if (makoCloud) assert.match(makoCloud, /^https:\/\//, "MAKO_CLOUD_URL must be an https origin to bake into a package")
+  const configuration = { ...pkg.build, extraMetadata: { ...pkg.build.extraMetadata, makoBuild, ...(makoCloud && { makoCloud }) } }
   const buildConfig = localIdentity ? localMacConfig(configuration, localIdentity) : configuration
   const workspaceFiles = buildConfig.files.flatMap((entry) => {
     const parsed = z.object({ from: z.string(), to: z.string(), filter: z.array(z.string()).optional() }).passthrough().safeParse(entry)

@@ -68,6 +68,8 @@ const CaptureLineSchema = z.union([
   z.object({ message: z.json() }),
   z.object({ prompted: z.literal(true), text: z.string().optional(), run: z.string().optional(), attachments: z.array(z.object({ name: z.string(), mimeType: z.string() })).optional() }),
   z.object({ steered: z.literal(true), text: z.string() }),
+  z.object({ opening: z.literal(true) }),
+  z.object({ opened: z.literal(true) }),
 ])
 
 export function decoders(): ProviderDecoderSource[] {
@@ -150,6 +152,19 @@ export interface Recording {
   session: JsonObject
   messages: JsonValue[]
   prompts?: Prompt[]
+  /** Each launch that resumed the session, in order. */
+  openings?: Opening[]
+}
+
+/**
+ * A launch resuming the session from the message at `at`: what the harness
+ * sent from there until the session was open, before `opened`, is history it
+ * replayed, which Mako's host doesn't draw (`drawnWhileOpening`).
+ */
+export interface Opening {
+  at: number
+  /** Where the session was open; absent when the capture ends first. */
+  opened?: number
 }
 
 /** A turn Mako opened, or a message it steered into the running one, before the message at `at`. */
@@ -181,6 +196,7 @@ export async function readRecording(path: string): Promise<Recording> {
   const body = header.success ? lines.slice(1) : lines
   const messages: JsonValue[] = []
   const prompts: Prompt[] = []
+  const openings: Opening[] = []
   for (const line of body) {
     const value = z.json().parse(JSON.parse(line))
     if (!header.success) {
@@ -194,6 +210,15 @@ export async function readRecording(path: string): Promise<Recording> {
       messages.push(kept.message)
       continue
     }
+    if ("opening" in kept) {
+      openings.push({ at: messages.length })
+      continue
+    }
+    if ("opened" in kept) {
+      const open = openings.at(-1)
+      if (open && open.opened === undefined) open.opened = messages.length
+      continue
+    }
     const prompt: Prompt = { at: messages.length }
     if (kept.text !== undefined) prompt.text = kept.text
     if ("run" in kept && kept.run !== undefined) prompt.run = kept.run
@@ -201,9 +226,10 @@ export async function readRecording(path: string): Promise<Recording> {
     if ("steered" in kept) prompt.steered = true
     prompts.push(prompt)
   }
-  return header.success
-    ? { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts }
-    : { session: {}, messages }
+  if (!header.success) return { session: {}, messages }
+  const recording: Recording = { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts }
+  if (openings.length) recording.openings = openings
+  return recording
 }
 
 /** Fixture JSON with a stable key order, so `--update` diffs stay small. */

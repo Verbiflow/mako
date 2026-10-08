@@ -53,6 +53,33 @@ const claude = new ClaudeAgents()
   assert.equal(cursor.project({ ...next, status: "completed", result: { status: "success", value: { agentId: "other", isBackground: false } } }), undefined)
   assert.equal(cursor.project({ ...next, args: undefined, status: "completed", result })?.state.kind, "completed")
 }
+{
+  // A running subagent's own calls, as the child forwards SDK 1.0.31's `tool-call-delta`.
+  const cursor = new CursorAgents()
+  const task = {
+    type: "tool_call", agent_id: "parent", run_id: "parent-run", name: "task",
+    call_id: "task-1", status: "running",
+    args: { agentId: "child", description: "Run the checks" },
+  } satisfies CursorSdkMessage
+  const call = (callId: string, status: "running" | "completed" | "error", task = "task-1") =>
+    ({ type: "subagent-call", task, callId, name: "shell", status, args: { command: `npm run ${callId}` } }) as const
+  assert.equal(cursor.progress(call("lint", "running")), undefined, "a call under a task not yet seen is no agent's")
+  cursor.project(task)
+  assert.deepEqual(cursor.progress(call("lint", "running"))?.state, { kind: "working", activity: "npm run lint" }, "a call that starts is the subagent's activity, titled as its row")
+  assert.equal(cursor.progress(call("lint", "completed"))?.usage?.toolUses, 1)
+  assert.equal(cursor.progress(call("lint", "completed")), undefined, "a call the SDK ends twice counts once")
+  const failed = cursor.progress(call("test", "error"))
+  assert.equal(failed?.usage?.toolUses, 2, "a call that failed was still used")
+  assert.deepEqual(failed?.state, { kind: "working", activity: "npm run lint" }, "an ended call leaves the activity where it was")
+  assert.equal(cursor.progress(call("other", "running", "task-9")), undefined)
+  const done = cursor.project({ ...task, status: "completed", result: { status: "success", value: { agentId: "child", isBackground: false } } })
+  assert.equal(done?.state.kind, "completed")
+  assert.equal(done?.usage?.toolUses, 2, "the finished subagent keeps the count of its calls")
+  assert.equal(cursor.progress(call("late", "running")), undefined, "a call after its task settled changes nothing")
+  const resumed = cursor.project({ ...task, call_id: "task-2" })
+  assert.equal(resumed?.usage, undefined, "a resumed subagent counts its own calls")
+  assert.equal(cursor.progress(call("build", "completed", "task-2"))?.usage?.toolUses, 1)
+}
 const common = { uuid: randomUUID(), session_id: "parent", task_id: "agent-1" }
 const started = {
   ...common,

@@ -99,6 +99,8 @@ export interface UnknownGroup {
   reason: string
   count: number
   newest: string
+  /** The fixture whose step of this kind decodes now: a build since the log was written handles it. */
+  handledBy?: string
 }
 
 export interface AuthLine {
@@ -111,6 +113,8 @@ export interface HostLogKind {
   kind: string
   reason: "unknown" | "unreadable"
   count: number
+  /** As on `UnknownGroup`. */
+  handledBy?: string
 }
 
 export interface HostLogCounts {
@@ -201,7 +205,7 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
       version: versionReport(await installed(harness), files),
       decoder: decoderReport(harness, files, fixtures.invalid.filter((file) => file.name.startsWith(`${harness}/`)).map((file) => file.name)),
       tools: toolReport(harness),
-      logs: logReports.get(harness) ?? emptyLogs(harness),
+      logs: markHandled(logReports.get(harness) ?? emptyLogs(harness), handledKinds(harness, files)),
     }
   }))
   return { dataDir: options.dataDir, logs, days: options.days, since: since.toISOString(), harnesses: reports }
@@ -279,6 +283,39 @@ export function decoderReport(harness: string, files: FixtureFile[], invalid: st
     silentKinds: source.silent.size,
     silentExercised: [...source.silent].filter((kind) => exercised.has(kind)).length,
   }
+}
+
+/**
+ * Each kind a fixture step decodes without an unknown, and the first fixture
+ * that shows it. Logs keep a week of kinds an older build did not handle;
+ * this tells those apart from the ones still open.
+ */
+function handledKinds(harness: string, files: FixtureFile[]): Map<string, string> {
+  const source = providerHost.decoders.get(harness)
+  const handled = new Map<string, string>()
+  if (!source) return handled
+  for (const file of files)
+    for (const step of file.fixture.steps) {
+      const kind = source.kind(step.message)
+      if (!step.decoded || handled.has(kind) || step.decoded.some(isUnknownDecoding)) continue
+      handled.set(kind, file.name)
+    }
+  return handled
+}
+
+const UnknownDecoding = z.object({ kind: z.literal("unknown") })
+
+function isUnknownDecoding(item: JsonValue): boolean {
+  return UnknownDecoding.safeParse(item).success
+}
+
+/** An unreadable record is a known kind that arrived malformed; a fixture of the kind does not show it reads now. */
+function markHandled(logs: LogReport, handled: Map<string, string>): LogReport {
+  for (const entry of [...logs.unknown ?? [], ...logs.hostLog?.kinds ?? []]) {
+    const fixture = entry.reason === "unknown" ? handled.get(entry.kind) : undefined
+    if (fixture) entry.handledBy = fixture
+  }
+  return logs
 }
 
 export function toolReport(harness: string): ToolReport {
@@ -485,14 +522,16 @@ function formatHarness(report: HarnessReport): string {
   else if (!logs.unknown.length) row("unknown", "none recorded")
   else {
     row("unknown", `${logs.unknown.length} kind${logs.unknown.length === 1 ? "" : "s"} kept in native-unknown.jsonl:`)
-    for (const group of logs.unknown) more(`  ${group.kind}  ${group.reason} ×${group.count}  newest ${group.newest}`)
+    for (const group of logs.unknown) more(`  ${group.kind}  ${group.reason} ×${group.count}  newest ${group.newest}${handledNote(group)}`)
   }
   row("host.log", logs.hostLog
     ? `${logs.hostLog.notHandled} not handled · ${logs.hostLog.unreadable} unreadable · ${logs.captures} capture${logs.captures === 1 ? "" : "s"} on disk`
     : `none recorded (no host.log) · ${logs.captures} capture${logs.captures === 1 ? "" : "s"} on disk`)
   const kinds = logs.hostLog?.kinds ?? []
   if (kinds.length) {
-    const shown = kinds.slice(0, HOST_KINDS_SHOWN).map((entry) => `${entry.kind}${entry.reason === "unreadable" ? " (unreadable)" : ""} ×${entry.count}`)
+    // Kinds still open first: those are the ones to act on.
+    const ordered = [...kinds.filter((entry) => !entry.handledBy), ...kinds.filter((entry) => entry.handledBy)]
+    const shown = ordered.slice(0, HOST_KINDS_SHOWN).map((entry) => `${entry.kind}${entry.reason === "unreadable" ? " (unreadable)" : ""} ×${entry.count}${handledNote(entry)}`)
     more(`${shown.join(", ")}${kinds.length > HOST_KINDS_SHOWN ? `, +${kinds.length - HOST_KINDS_SHOWN} more` : ""}`)
   }
   const { signIn } = logs
@@ -504,4 +543,8 @@ function formatHarness(report: HarnessReport): string {
     }
   }
   return lines.join("\n")
+}
+
+function handledNote(entry: { handledBy?: string }): string {
+  return entry.handledBy ? ` (handled now: ${entry.handledBy})` : ""
 }

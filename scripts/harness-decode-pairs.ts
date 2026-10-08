@@ -1,10 +1,12 @@
 import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { once } from "node:events"
 import { existsSync } from "node:fs"
 import { cp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, extname, join, relative } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
@@ -26,6 +28,7 @@ import { CodexRolloutCalls, codexRolloutDue } from "../electron/providers/codex/
 import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig } from "../electron/providers/codex/settings.ts"
 import { OPENCODE_DEFAULT_MODE, openCodeAgentForMode, openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
 import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
+import { SHUTDOWN_GRACE_MS } from "../electron/providers/live-driver.ts"
 import { openCodeMessageId, promptFiles } from "../electron/providers/opencode/live-driver.ts"
 import { cursorSdkSelection, cursorSdkStateRoot, cursorSdkStorePath, normalizeCursorSdkModels, OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import { build } from "esbuild"
@@ -38,11 +41,11 @@ import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { acpClientCapabilities, type ProviderAcpSource } from "../electron/providers/acp-source.ts"
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
-import { differences, liveDrawing, PairSchema, PAIRS_FOLDER, storeDrawing, storeReader, type Pair } from "./decode-compare.ts"
+import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, replayDrawings, storeDrawing, storeReader, drawing, type Difference, type Known, type Pair } from "./decode-compare.ts"
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
-import { FIXTURE_ROOT, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
+import { FIXTURE_ROOT, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
-import { planFile, SCENARIOS, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
+import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
 
 /**
  * Records a live capture and the store the same session wrote, from a real
@@ -75,6 +78,8 @@ interface RecordedPair {
   recording: Recording
   /** The session's store file, under the sandbox's home. */
   store: string
+  /** Other clients' records of the same session, each with its `storeReader`. */
+  others?: { reader: string; path: string }[]
 }
 
 type Model =
@@ -117,6 +122,7 @@ function unrecordable(recorder: Recorder, scenario: Scenario): string | undefine
 }
 
 const GROK_TOOLS: ToolVocabulary = {
+  subagent: { absent: SCRIPTED_SUBAGENT },
   read: (path, lines) => ({ name: "read_file", arguments: { target_file: path, ...lines } }),
   shell: (command, description) => ({ name: "run_terminal_command", arguments: { command, description } }),
   edit: (path, from, to) => ({ name: "search_replace", arguments: { file_path: path, old_string: from, new_string: to } }),
@@ -147,7 +153,7 @@ async function grokRewind(call: AcpCall, sessionId: string, target: number): Pro
 /** Grok over ACP, as Mako's ACP source launches it. */
 const grok: Recorder = {
   model: { kind: "scripted", tools: GROK_TOOLS },
-  controls: { steer: "driven", rewind: "driven", compact: "driven" },
+  controls: { steer: "driven", rewind: "driven", compact: "driven", resume: "driven" },
   keeps: (file) => /\/sessions\/[^/]+\/[^/]+\/(updates\.jsonl|summary\.json)$/.test(file),
   async record(sandbox, scenario) {
     const version = await versionOf("grok")
@@ -167,13 +173,13 @@ const grok: Recorder = {
       const launch = await grokAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: grokAcpSource.access?.default })
       if (!launch) throw new Error("Grok's ACP source declined to launch")
       launch.configureEnvironment?.(env)
-      const wire = await acpSession({ command: launch.command, args: launch.args, env, cwd: sandbox.project, source: grokAcpSource, rewind: grokRewind }, scenario.turns)
+      const { messages, prompts, openings } = await acpSession({ command: launch.command, args: launch.args, env, cwd: sandbox.project, source: grokAcpSource, rewind: grokRewind }, scenario.turns)
       scripted("Grok", scenario, model.requests, steps)
       const [file] = await storeReader("grok", sandbox.home).discover()
       if (!file) throw new Error("Grok wrote no session to its store")
       return {
         version,
-        recording: { harness: "grok", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire },
+        recording: { harness: "grok", session: { settings: { model: null } }, native: { version, origin: "captured" }, messages, prompts, openings },
         store: file.path,
       }
     } finally {
@@ -183,6 +189,7 @@ const grok: Recorder = {
 }
 
 const CLAUDE_TOOLS: ToolVocabulary = {
+  subagent: { absent: SCRIPTED_SUBAGENT },
   read: (path, lines) => ({ name: "Read", arguments: { file_path: path, ...lines } }),
   shell: (command, description) => ({ name: "Bash", arguments: { command, description } }),
   edit: (path, from, to) => ({ name: "Edit", arguments: { file_path: path, old_string: from, new_string: to } }),
@@ -205,6 +212,7 @@ const claude: Recorder = {
     steer: "driven",
     rewind: { absent: "Claude Code 2.1.283's SDK rewinds files only (`rewindFiles`); its conversation rewind is the TUI's /rewind" },
     compact: "driven",
+    resume: "driven",
   },
   keeps: (file) => /\/projects\/[^/]+\/.+\.jsonl$/.test(file),
   async record(sandbox, scenario) {
@@ -215,21 +223,17 @@ const claude: Recorder = {
       ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: "mako-decode-pair", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     }
     const conversationId = randomUUID()
-    const { options } = await claudeSdkOptions(sandbox.project, {
-      conversationId, modeId: claudeMode(scenario.turns[0]),
-      mcpSnapshot: async () => ({ cwd: sandbox.project, generatedAt: Date.now(), servers: [], providers: [] }),
-      accountLaunch: { env, account: { name: "default" }, selection: { kind: "unavailable" } },
-    }, new ProviderLaunchTrace({ provider: "claude", conversation: "decode-pairs" }))
     const messages: JsonValue[] = []
     const prompts: Prompt[] = []
+    const openings: Opening[] = []
     let version: string | undefined
     let settled = () => {}
     let stopping: Turn | undefined
     let steering: { text: string; uuid: ReturnType<typeof randomUUID>; due: () => void } | undefined
     let conversation: Query | undefined
-    async function* input(): AsyncGenerator<SDKUserMessage> {
-      let mode = claudeMode(scenario.turns[0])
-      for (const turn of scenario.turns) {
+    async function* input(turns: readonly Turn[]): AsyncGenerator<SDKUserMessage> {
+      let mode = claudeMode(turns[0])
+      for (const turn of turns) {
         stopping = turn.stop && turn
         const done = new Promise<void>((resolve) => { settled = resolve })
         // The first turn's mode is the launch's; the query exists for the ones after.
@@ -251,11 +255,20 @@ const claude: Recorder = {
     }
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), TURN_MS * scenario.turns.length)
-    let results = 0
-    try {
+    /**
+     * One launch's turns in one query, launched as Mako launches Claude: a
+     * resume is a new query with `resume`, and Claude Code replays nothing.
+     */
+    const launch = async (turns: readonly Turn[], resume: boolean) => {
+      const { options } = await claudeSdkOptions(sandbox.project, {
+        conversationId, resume: resume ? conversationId : undefined, modeId: claudeMode(turns[0]),
+        mcpSnapshot: async () => ({ cwd: sandbox.project, generatedAt: Date.now(), servers: [], providers: [] }),
+        accountLaunch: { env, account: { name: "default" }, selection: { kind: "unavailable" } },
+      }, new ProviderLaunchTrace({ provider: "claude", conversation: "decode-pairs" }))
+      let results = 0
       try {
         conversation = query({
-          prompt: input(),
+          prompt: input(turns),
           options: {
             ...options, abortController: abort,
             // A question is answered with each one's first option, keyed by its text as Mako answers it.
@@ -289,19 +302,35 @@ const claude: Recorder = {
         }
       } catch (error) {
         // The input ends after the last result, and Claude Code exits non-zero when that turn failed.
-        if (results < scenario.turns.length) throw error
+        if (results < turns.length) throw error
+      }
+    }
+    try {
+      for (const [index, turns] of launches(scenario.turns).entries()) {
+        if (index) openings.push({ at: messages.length, opened: messages.length })
+        await launch(turns, index > 0)
       }
       if (abort.signal.aborted) throw new Error(`Claude Code did not finish ${scenario.name} within ${TURN_MS * scenario.turns.length / 1000}s`)
       if (!version) throw new Error("Claude Code reported no version")
       scripted("Claude Code", scenario, model.requests, steps)
       const file = (await storeReader("claude", sandbox.home).discover()).find((candidate) => candidate.path.endsWith(`${conversationId}.jsonl`))
       if (!file) throw new Error("Claude Code wrote no session to its store")
-      return { version, recording: { harness: "claude", session: { settings: { model: null } }, native: { version, origin: "captured" }, messages, prompts }, store: file.path }
+      return { version, recording: { harness: "claude", session: { settings: { model: null } }, native: { version, origin: "captured" }, messages, prompts, openings }, store: file.path }
     } finally {
       clearTimeout(timer)
       await model.close()
     }
   },
+}
+
+/** A scenario's turns split at each resume: the turns each launch runs. */
+function launches(turns: readonly Turn[]): Turn[][] {
+  const split: Turn[][] = [[]]
+  for (const turn of turns) {
+    if (turn.resume) split.push([])
+    else split.at(-1)!.push(turn)
+  }
+  return split
 }
 
 function claudeMode(turn: Turn | undefined): "plan" | "default" {
@@ -321,6 +350,7 @@ function scripted(harness: string, scenario: Scenario, requests: Awaited<ReturnT
 const CODEX_MODEL = "gpt-5.5"
 
 const CODEX_TOOLS: ToolVocabulary = {
+  subagent: { absent: SCRIPTED_SUBAGENT },
   read: (path, lines) => ({
     name: "exec_command",
     arguments: { cmd: lines ? `sed -n '${lines.offset},${lines.offset + lines.limit - 1}p' ${path}` : `cat ${path}` },
@@ -351,6 +381,7 @@ const codex: Recorder = {
     steer: "driven",
     rewind: { absent: "Codex 0.159.3's app-server has no rollback; its generated protocol names none" },
     compact: "driven",
+    resume: "driven",
   },
   keeps: (file) => /\/sessions\/\d{4}\/\d\d\/\d\d\/rollout-[^/]+\.jsonl$/.test(file),
   async record(sandbox, scenario) {
@@ -364,13 +395,15 @@ const codex: Recorder = {
     await mkdir(codexHome, { recursive: true })
     await writeFile(join(codexHome, "config.toml"), `openai_base_url = "${model.url}/v1"\nchatgpt_base_url = "${model.url}/backend-api"\n`)
     await writeFile(join(codexHome, "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "mako-decode-pair" }))
-    const child = spawn(executable, ["app-server"], { cwd: sandbox.project, env: { ...sandbox.env, ...scenario.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] })
+    const spawnServer = () => spawn(executable, ["app-server"], { cwd: sandbox.project, env: { ...sandbox.env, ...scenario.env, CODEX_HOME: codexHome }, stdio: ["pipe", "pipe", "pipe"] })
+    let child = spawnServer()
     const messages: JsonValue[] = []
     const prompts: Prompt[] = []
+    const openings: Opening[] = []
     let turnDone = () => {}
     let stopTurn: (() => void) | undefined
     let rollout: { thread: string; calls: CodexRolloutCalls } | undefined
-    const peer = rpcPeer(child, {
+    const connect = () => rpcPeer(child, {
       jsonrpc: false,
       timeoutMs: TURN_MS,
       refusal: "Mako's decode-pairs client does not answer this",
@@ -398,15 +431,38 @@ const codex: Recorder = {
         return result
       },
     })
-    try {
+    let peer = connect()
+    const initialize = async () => {
       await peer.call("initialize", { clientInfo: { name: "mako-decode-pairs", version: "0" }, capabilities: CODEX_CLIENT_CAPABILITIES })
       peer.notify("initialized")
+    }
+    try {
+      await initialize()
       const codeMode = scenario.needs?.includes("codeMode") && !("absent" in CODEX_TOOLS.codeMode) ? CODEX_TOOLS.codeMode.model : undefined
-      const thread = z.object({ thread: z.object({ id: z.string(), path: z.string().nullish() }) }).parse(await peer.call("thread/start", { cwd: sandbox.project, model: codeMode ?? CODEX_MODEL, config: codexInteractiveConfig() }))
-      if (thread.thread.path) rollout = { thread: thread.thread.id, calls: new CodexRolloutCalls(thread.thread.path) }
       const threadModel = codeMode ?? CODEX_MODEL
+      const thread = CodexThread.parse(await peer.call("thread/start", { cwd: sandbox.project, model: threadModel, config: codexInteractiveConfig() }))
+      if (thread.thread.path) rollout = { thread: thread.thread.id, calls: new CodexRolloutCalls(thread.thread.path) }
+      /** As Mako resumes Codex (`openThread`, `excludeTurns`): an idle app-server ends and a new one resumes the thread, replaying no turns; Mako draws the store's. */
+      const resume = async () => {
+        peer.close()
+        await stop(child)
+        child = spawnServer()
+        peer = connect()
+        await initialize()
+        const opening: Opening = { at: messages.length }
+        openings.push(opening)
+        const replay = z.json().parse(await peer.call("thread/resume", { threadId: thread.thread.id, cwd: sandbox.project, model: threadModel, config: codexInteractiveConfig(), excludeTurns: true }))
+        messages.push({ replay })
+        opening.opened = messages.length
+        const resumed = CodexThread.parse(replay)
+        if (resumed.thread.path) rollout = { thread: resumed.thread.id, calls: new CodexRolloutCalls(resumed.thread.path) }
+      }
       const planning = scenario.turns.some((turn) => turn.plan)
       for (const turn of scenario.turns) {
+        if (turn.resume) {
+          await resume()
+          continue
+        }
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error(`Codex did not finish a ${scenario.name} turn within ${TURN_MS / 1000}s`)), TURN_MS)
           turnDone = () => (clearTimeout(timer), resolve())
@@ -437,7 +493,7 @@ const codex: Recorder = {
       scripted("Codex", scenario, model.requests, steps)
       const file = (await storeReader("codex", sandbox.home).discover()).find((candidate) => candidate.path.includes(thread.thread.id))
       if (!file) throw new Error("Codex wrote no session to its store")
-      return { version, recording: { harness: "codex", session: { threadId: thread.thread.id }, native: { version, origin: "captured" }, messages, prompts }, store: file.path }
+      return { version, recording: { harness: "codex", session: { threadId: thread.thread.id }, native: { version, origin: "captured" }, messages, prompts, openings }, store: file.path }
     } finally {
       peer.close()
       await stop(child)
@@ -447,6 +503,7 @@ const codex: Recorder = {
 }
 
 const OPENCODE_TOOLS: ToolVocabulary = {
+  subagent: { absent: SCRIPTED_SUBAGENT },
   read: (path, lines) => ({ name: "read", arguments: { path, ...lines } }),
   shell: (command) => ({ name: "shell", arguments: { command } }),
   edit: (path, from, to) => ({ name: "edit", arguments: { path, oldString: from, newString: to } }),
@@ -473,6 +530,7 @@ const opencode: Recorder = {
     steer: "driven",
     rewind: "driven",
     compact: "driven",
+    resume: "driven",
   },
   keeps: (file) => /\/opencode\/opencode(?:-next)?\.db$/.test(file),
   async record(sandbox, scenario) {
@@ -487,16 +545,19 @@ const opencode: Recorder = {
       OPENCODE_DISABLE_AUTOUPDATE: "1",
     }
     configureOpenCodePermissions(env, launchAccess)
-    const api = await startOpenCodeApi({ command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
-    const stream = new AbortController()
     const messages: JsonValue[] = []
     const prompts: Prompt[] = []
+    const openings: Opening[] = []
     let root: string | undefined
     let turnEnded = () => {}
     let reverted = () => {}
     let stopping: Turn | undefined
     let steering: (() => void) | undefined
-    try {
+    const location = { directory: sandbox.project }
+    /** One native API, following its event stream before any session exists, as Mako's driver does. */
+    const launch = async () => {
+      const api = await startOpenCodeApi({ command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
+      const stream = new AbortController()
       const events = api.client.event.subscribe({ signal: stream.signal })[Symbol.asyncIterator]()
       const hello = await events.next()
       if (hello.done || hello.value.type !== "server.connected") throw new Error("OpenCode's event stream did not open")
@@ -525,18 +586,34 @@ const opencode: Recorder = {
           }
         }
       })().catch(() => undefined)
-      const location = { directory: sandbox.project }
       await api.client.plugin.awaitActivation({ location })
+      return { api, close: async () => { stream.abort(); await api.close() } }
+    }
+    let launched = await launch()
+    try {
+      let { api } = launched
       const models = await api.client.model.list({ location })
       const chosen = models.data.find((entry) => entry.providerID === "anthropic" && entry.enabled && entry.status !== "deprecated")
       if (!chosen) throw new Error("OpenCode offers no Anthropic model with the pair's key")
       const agent = openCodeAgentForMode(OPENCODE_DEFAULT_MODE, launchAccess)
       const session = await api.client.session.create({ location, agent, model: { id: chosen.id, providerID: "anthropic" } })
       root = session.id
+      const sessionID = session.id
       let current = agent
       /** Each prompt's message id, which OpenCode's revert names. */
       const sent: string[] = []
       for (const turn of scenario.turns) {
+        if (turn.resume) {
+          // As Mako resumes OpenCode: the idle API closes, and a new one gets the session; OpenCode replays nothing.
+          await launched.close()
+          const opening: Opening = { at: messages.length }
+          openings.push(opening)
+          launched = await launch()
+          api = launched.api
+          await api.client.session.get({ sessionID })
+          opening.opened = messages.length
+          continue
+        }
         if (turn.rewind !== undefined) {
           // As a person reverts in OpenCode: stage the revert to the turn's prompt, then commit it.
           const messageID = sent[turn.rewind]
@@ -584,14 +661,12 @@ const opencode: Recorder = {
       scripted("OpenCode", scenario, model.requests, steps)
       const version = api.health.version
       // Closed first, so the store is whole when it is read.
-      stream.abort()
-      await api.close()
+      await launched.close()
       const file = (await storeReader("opencode", sandbox.home).discover()).find((candidate) => candidate.path.endsWith(encodeURIComponent(session.id)))
       if (!file) throw new Error("OpenCode wrote no session to its store")
-      return { version, recording: { harness: "opencode", session: { root: session.id, cwd: sandbox.project, launchAccess, contextSize: null }, native: { version, origin: "captured" }, messages, prompts }, store: file.path }
+      return { version, recording: { harness: "opencode", session: { root: session.id, cwd: sandbox.project, launchAccess, contextSize: null }, native: { version, origin: "captured" }, messages, prompts, openings }, store: file.path }
     } finally {
-      stream.abort()
-      await api.close()
+      await launched.close()
       await model.close()
     }
   },
@@ -652,8 +727,10 @@ const devin: Recorder = {
     // Mako's conversation process doesn't advertise `cognition.ai/revert` (only its fork process does, `devin/fork.ts`); the pair turns it on to read what a revert writes.
     rewind: "driven",
     compact: "driven",
+    resume: "driven",
   },
-  keeps: (file) => file.endsWith("/devin/cli/sessions.db"),
+  keeps: (file) => file.endsWith("/devin/cli/sessions.db") || /\/Devin\/User\/(acp-messages\/[^/]+\.db|globalStorage\/state\.vscdb)$/.test(file),
+  storeFolder: (store) => store.includes(`/${DEVIN_APP_USER}/`) ? store.slice(0, store.indexOf(`/${DEVIN_APP_USER}/`) + DEVIN_APP_USER.length + 1) : dirname(store),
   secrets: async () => credentialValues(await readFile(DEVIN_CREDENTIALS, "utf8")),
   async record(sandbox, scenario) {
     if (!existsSync(DEVIN_CREDENTIALS)) throw new Error("Devin isn't signed in; run `devin` once and sign in")
@@ -666,17 +743,80 @@ const devin: Recorder = {
     if (!launch) throw new Error("Devin's ACP source declined to launch")
     launch.configureEnvironment(env)
     const version = await versionOf(launch.command)
-    const wire = await acpSession({
+    const { loads, ...wire } = await acpSession({
       command: launch.command, args: launch.args, env, cwd: sandbox.project,
       mode: devinAcpSource.access?.native?.edits, source: devinAcpSource, rewind: devinRewind,
       meta: scenario.turns.some((turn) => turn.rewind !== undefined) ? { "cognition.ai/revert": true } : undefined,
-    }, scenario.turns)
+    }, [...scenario.turns, DEVIN_APP_REOPENS])
     devinPromptRuns(wire)
     const [file] = await storeReader("devin", sandbox.home).discover()
     if (!file) throw new Error("Devin wrote no session to its store")
-    return { version, recording: { harness: "devin", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire }, store: file.path }
+    const recording: Recording = { harness: "devin", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire }
+    return { version, recording, store: file.path, others: [{ reader: "devin-ide", path: await devinAppJournal(sandbox.home, recording, loads) }] }
   },
 }
+
+/** Devin.app's own installation, whose message store writes a pair's journal. */
+const DEVIN_APP = "/Applications/Devin.app"
+
+/**
+ * Every Devin pair ends as Devin.app opening the session again: a new agent
+ * loads it, and Devin.app's journal is rewritten from what Devin replays,
+ * which is the only way the person's messages reach it from a client that,
+ * like Mako, doesn't ask Devin to echo them (`cognition.ai/clientMessageId`).
+ */
+const DEVIN_APP_REOPENS: Turn = { prompt: "(reopened in Devin.app)", resume: true, steps: [] }
+
+/**
+ * The journal Devin.app keeps of this session, written by its own message
+ * store (`devin-app-journal.mjs`) from what the recording says Devin sent:
+ * each update as the app ingests it, and each load's replay as the app
+ * replaces its journal with one. Its index row is the one the app's
+ * workbench writes beside it, under the id the app gives a Devin CLI session.
+ */
+async function devinAppJournal(home: string, recording: Recording, loads: readonly JsonObject[]): Promise<string> {
+  const user = join(home, DEVIN_APP_USER)
+  const uuid = randomUUID()
+  const file = join(user, "acp-messages", `${uuid}.db`)
+  const events: JsonObject[] = []
+  let sessionId: string | undefined
+  let loaded = 0
+  recording.messages.forEach((message, index) => {
+    for (const opening of recording.openings ?? []) {
+      if (opening.at === index) events.push({ beginReplay: true })
+      if (opening.opened === index) events.push({ endReplay: { meta: loads[loaded++]?._meta ?? null } })
+    }
+    const update = DevinAppUpdate.safeParse(message)
+    if (!update.success) return
+    // The session's own updates come first; a subagent's go to its own journal.
+    sessionId ??= update.data.params.sessionId
+    if (update.data.params.sessionId === sessionId) events.push({ ingest: update.data.params.update })
+  })
+  for (const opening of recording.openings ?? []) if (opening.opened === recording.messages.length) events.push({ endReplay: { meta: loads[loaded++]?._meta ?? null } })
+  if (!sessionId) throw new Error("Devin sent no session update for Devin.app's journal")
+  const child = spawn(join(DEVIN_APP, "Contents", "MacOS", "Devin"), [join(import.meta.dirname, "devin-app-journal.mjs")], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", HOME: home }, stdio: ["pipe", "pipe", "inherit"],
+  })
+  let out = ""
+  child.stdout.on("data", (chunk: Buffer) => { out += chunk.toString("utf8") })
+  child.stdin.end(JSON.stringify({ app: DEVIN_APP, file, events }))
+  const [code] = await once(child, "exit")
+  const { problems } = DevinAppJournalRun.parse(JSON.parse(out.trim().split("\n").at(-1) ?? "null"))
+  if (code !== 0 || problems.length) throw new Error(`Devin.app's message store failed (exit ${code}): ${problems.join("; ")}`)
+  const state = join(user, "globalStorage", "state.vscdb")
+  await mkdir(dirname(state), { recursive: true })
+  const database = new DatabaseSync(state)
+  try {
+    database.exec("CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+    database.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run(`windsurf.acp.messageStore.session.acp/devin-cli/${sessionId}`, JSON.stringify({ uuid, lastUpdated: Date.now() }))
+  } finally {
+    database.close()
+  }
+  return file
+}
+
+const DevinAppUpdate = z.object({ method: z.literal("session/update"), params: z.object({ sessionId: z.string(), update: z.record(z.string(), z.json()) }) })
+const DevinAppJournalRun = z.object({ problems: z.array(z.string()) })
 
 /** Cursor's own agent model, which follows the scenarios' prompts and costs little. */
 const CURSOR_MODEL = "composer-2.5"
@@ -719,13 +859,14 @@ const cursor: Recorder = {
     why: "Cursor's model is behind Cursor's own service, which the scripted model can't stand in for",
     lacks: {
       codeMode: "Cursor SDK 1.0.31 reports no tool that runs code calling its other tools (native-tools/cursor-1.0.31.json)",
-      ask: "Cursor SDK 1.0.31 declines every `askQuestion` itself in local runs (\"Interactive questions are not supported in local SDK runs\"), so Mako declares questions unavailable",
+      ask: "Cursor offers no `askQuestion` to a local SDK 1.0.31 run, even asked for by name, so Mako declares questions unavailable",
     },
   },
   controls: {
     steer: "driven",
     rewind: { absent: "Cursor SDK 1.0.31 has no rewind; Mako forks by writing the conversation into a new agent" },
-    compact: { absent: "Cursor summarizes on its server when the context fills; its protocol's summarize action is never sent by SDK 1.0.31, which offers no way to ask" },
+    compact: { absent: "Cursor summarizes on its server when the context fills; it accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one" },
+    resume: "driven",
   },
   // The agent's root is named in the SDK's `index.db`, not in its own store.
   keeps: (file) => /\/\.mako\/cursor-sdk\/(index\.db|agents\/agent-[0-9a-f]+\/store\.db)$/.test(file),
@@ -737,9 +878,10 @@ const cursor: Recorder = {
     const prompts: Prompt[] = []
     let turnDone = (_turn: string) => {}
     let toolStarted: (() => void) | undefined
-    const client = new CursorSdkClient({
-      owner: "mako-decode-pairs", cwd: sandbox.project, entry, execPath: process.execPath,
-      env: { ...sandbox.env, ...scenario.env, CURSOR_API_KEY: await cursorKey() },
+    const openings: Opening[] = []
+    const env = { ...sandbox.env, ...scenario.env, CURSOR_API_KEY: await cursorKey() }
+    const connect = () => new CursorSdkClient({
+      owner: "mako-decode-pairs", cwd: sandbox.project, entry, execPath: process.execPath, env,
       onEvent: (event: SdkEvent) => {
         if (event.event === "log" || event.event === "login-url") return
         messages.push(z.json().parse(event))
@@ -751,13 +893,26 @@ const cursor: Recorder = {
         }
       },
     })
+    let client = connect()
     try {
       const { sdkVersion } = await client.hello()
       const catalog = normalizeCursorSdkModels((await client.request("models", undefined)).models)
       const model = cursorSdkSelection({ model: CURSOR_MODEL }, catalog.models)?.selection
       if (!model) throw new Error(`Cursor doesn't offer ${CURSOR_MODEL} to this account`)
-      const opened = await client.request("open", { cwd: sandbox.project, stateRoot: cursorSdkStateRoot(sandbox.env, sandbox.home), agentId: randomUUID(), create: true, model })
+      const stateRoot = cursorSdkStateRoot(sandbox.env, sandbox.home)
+      const opened = await client.request("open", { cwd: sandbox.project, stateRoot, agentId: randomUUID(), create: true, model })
       for (const turn of scenario.turns) {
+        if (turn.resume) {
+          // As Mako resumes Cursor: the idle child closes, and a new one opens the agent from its store; the SDK replays nothing.
+          await client.close().catch(() => client.kill())
+          const opening: Opening = { at: messages.length }
+          openings.push(opening)
+          client = connect()
+          await client.hello()
+          await client.request("open", { cwd: sandbox.project, stateRoot, agentId: opened.agentId, create: false, model })
+          opening.opened = messages.length
+          continue
+        }
         const id = randomUUID()
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error(`Cursor did not finish a ${scenario.name} turn within ${TURN_MS / 1000}s`)), TURN_MS)
@@ -786,9 +941,9 @@ const cursor: Recorder = {
         if (text && !steered) throw new Error(`Cursor ran no tool to steer ${JSON.stringify(text)} into`)
         await steered
       }
-      const store = cursorSdkStorePath(cursorSdkStateRoot(sandbox.env, sandbox.home), opened.agentId)
+      const store = cursorSdkStorePath(stateRoot, opened.agentId)
       if (!existsSync(store)) throw new Error("Cursor wrote no session to its store")
-      return { version: sdkVersion, recording: { harness: "cursor", session: { settings: { model: model.id } }, native: { version: sdkVersion, origin: "captured" }, messages, prompts }, store }
+      return { version: sdkVersion, recording: { harness: "cursor", session: { settings: { model: model.id } }, native: { version: sdkVersion, origin: "captured" }, messages, prompts, openings }, store }
     } finally {
       await client.close().catch(() => client.kill())
     }
@@ -803,8 +958,9 @@ function credentialValues(toml: string): string[] {
 /** Fails, without saying what matched, when a recording or the store it names holds one of `secrets`. */
 async function credentialFree(pair: RecordedPair, secrets: readonly string[]): Promise<void> {
   if (!secrets.length) return
-  const store = pair.store.replace(/#.*$/, "")
-  const texts = [JSON.stringify(pair.recording.messages), ...await Promise.all([store, `${store}-wal`].map((file) => readFile(file, "latin1").catch(() => "")))]
+  const stores = [pair.store, ...(pair.others ?? []).map((other) => other.path)].map((store) => store.replace(/#.*$/, ""))
+  const files = stores.flatMap((store) => [store, `${store}-wal`])
+  const texts = [JSON.stringify(pair.recording.messages), ...await Promise.all(files.map((file) => readFile(file, "latin1").catch(() => "")))]
   if (texts.some((text) => secrets.some((secret) => text.includes(secret))))
     throw new Error(`The ${pair.recording.harness} recording or its store holds a credential the run had; nothing was printed or kept`)
 }
@@ -837,8 +993,15 @@ async function versionOf(command: string): Promise<string> {
 
 const Permission = z.object({ options: z.array(z.object({ optionId: z.string(), kind: z.string().optional() }).loose()) }).loose()
 const PromptReply = z.object({ stopReason: z.enum(["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"]) })
-const AcpInitialized = z.object({ agentCapabilities: z.object({ promptCapabilities: z.object({ image: z.boolean().optional() }).loose().nullish() }).loose().nullish() }).loose()
+const AcpInitialized = z.object({
+  agentCapabilities: z.object({
+    promptCapabilities: z.object({ image: z.boolean().optional() }).loose().nullish(),
+    sessionCapabilities: z.object({ close: z.json().optional() }).loose().nullish(),
+  }).loose().nullish(),
+}).loose()
+const CodexThread = z.object({ thread: z.object({ id: z.string(), path: z.string().nullish() }).loose() }).loose()
 const AcpNewSession = z.object({ sessionId: z.string(), modes: z.object({ currentModeId: z.string() }).loose().nullish() }).loose()
+const AcpLoadedSession = z.object({ modes: z.object({ currentModeId: z.string() }).loose().nullish() }).catchall(z.json())
 const GrokQuestions = z.object({ questions: z.array(z.object({ question: z.string(), options: z.array(z.object({ label: z.string() }).loose()) }).loose()) }).loose()
 const ClaudeQuestions = z.object({ questions: z.array(z.object({ question: z.string(), options: z.array(z.object({ label: z.string() }).loose()) }).loose()) }).loose()
 const CodexUserInput = z.object({ questions: z.array(z.object({ id: z.string(), options: z.array(z.object({ label: z.string() }).loose()).nullish() }).loose()) }).loose()
@@ -883,12 +1046,16 @@ function prompted(at: number, text: string, attachments: readonly PromptAttachme
   return { at, text, attachments: attachments.map(({ name, mimeType }): PromptFile => ({ name, mimeType })) }
 }
 
+/** An ACP session as recorded, and the reply to each `session/load` a resume sent, in order. */
+type AcpWire = Pick<Recording, "messages" | "prompts" | "openings"> & { loads: JsonObject[] }
+
 /**
  * Prompts over ACP in one session, every message the agent sends recorded as
  * Mako's ACP client records it: `{ method, params }`, or `{ request, params }`
  * for one it waits on. Permission is granted once, as a person allowing the
  * call would. A steer goes as the source declares Mako steers; a rewind, which
- * Mako doesn't drive, as `rewind` does it.
+ * Mako doesn't drive, as `rewind` does it. A resume stops the agent and loads
+ * the session in a new one, as Mako does after an idle process closed.
  */
 async function acpSession(
   input: {
@@ -898,18 +1065,20 @@ async function acpSession(
     meta?: JsonObject
   },
   turns: readonly Turn[],
-): Promise<Pick<Recording, "messages" | "prompts">> {
+): Promise<AcpWire> {
   const executable = resolveExecutable(input.command, input.env)
   if (!executable) throw new Error(`${input.command} is not installed`)
-  const child = spawn(executable, input.args, { cwd: input.cwd, env: input.env, stdio: ["pipe", "pipe", "pipe"] })
   const messages: JsonValue[] = []
   const sent: Prompt[] = []
+  const openings: Opening[] = []
+  const loads: JsonObject[] = []
   const params = (message: RpcMessage): JsonObject => z.record(z.string(), z.json()).parse(message.params ?? {})
   const updates = await acpSessionNotificationSchema()
   let stopTurn: (() => void) | undefined
   let steered: Promise<void> | undefined
   let compaction: AcpCompaction | undefined
-  const peer = rpcPeer(child, {
+  let child = spawn(executable, input.args, { cwd: input.cwd, env: input.env, stdio: ["pipe", "pipe", "pipe"] })
+  const connect = () => rpcPeer(child, {
     jsonrpc: true,
     timeoutMs: TURN_MS,
     refusal: "Mako's decode-pairs client does not answer this",
@@ -958,19 +1127,56 @@ async function acpSession(
       }
     },
   })
+  let peer = connect()
+  const call: AcpCall = (method, params) => peer.call(method, params)
   try {
     const capabilities = z.record(z.string(), z.json()).parse(acpClientCapabilities(input.source))
     if (input.meta) capabilities._meta = { ...z.record(z.string(), z.json()).parse(capabilities._meta ?? {}), ...input.meta }
-    const initialized = AcpInitialized.parse(await peer.call("initialize", { protocolVersion: 1, clientCapabilities: capabilities }))
-    // As Mako's ACP client reads them (`acp.ts`), with what a source declares its agent reads unadvertised.
-    const advertised = initialized.agentCapabilities?.promptCapabilities ?? {}
-    const reads = input.source.readsUnadvertised?.image ? { ...advertised, image: true } : advertised
+    let closes = false
+    const initialize = async () => {
+      const initialized = AcpInitialized.parse(await peer.call("initialize", { protocolVersion: 1, clientCapabilities: capabilities }))
+      closes = Boolean(initialized.agentCapabilities?.sessionCapabilities?.close)
+      // As Mako's ACP client reads them (`acp.ts`), with what a source declares its agent reads unadvertised.
+      const advertised = initialized.agentCapabilities?.promptCapabilities ?? {}
+      return input.source.readsUnadvertised?.image ? { ...advertised, image: true } : advertised
+    }
+    let reads = await initialize()
     const session = AcpNewSession.parse(await peer.call("session/new", { cwd: input.cwd, mcpServers: [] }))
     if (input.mode) await peer.call("session/set_mode", { sessionId: session.sessionId, modeId: input.mode })
     const own = input.mode ?? session.modes?.currentModeId
     let mode = own
-    const prompt = (text: string, attachments: readonly PromptAttachment[] = []) =>
-      peer.call("session/prompt", { sessionId: session.sessionId, prompt: z.array(z.json()).parse(acpPromptBlocks(text, attachments, reads)) })
+    const inFlight = new Set<Promise<unknown>>()
+    /**
+     * As Mako resumes: an idle agent, no prompt in flight, ends as Mako ends
+     * it (`endAgent`: `session/close` where the agent offers it, then its
+     * stdin closed); a new one loads the session, then gets back the mode it
+     * had, which Mako sets again when the load restored another.
+     */
+    const resume = async () => {
+      await Promise.allSettled(inFlight)
+      const exited = new Promise((resolve) => child.once("exit", resolve))
+      if (closes) await peer.call("session/close", { sessionId: session.sessionId }).catch(() => undefined)
+      child.stdin.end()
+      const ended = await Promise.race([exited.then(() => true), delay(SHUTDOWN_GRACE_MS).then(() => false)])
+      peer.close()
+      if (!ended) throw new Error(`${input.command} did not exit within ${SHUTDOWN_GRACE_MS / 1000}s of its stdin closing`)
+      child = spawn(executable, input.args, { cwd: input.cwd, env: input.env, stdio: ["pipe", "pipe", "pipe"] })
+      peer = connect()
+      reads = await initialize()
+      const opening: Opening = { at: messages.length }
+      openings.push(opening)
+      const loaded = AcpLoadedSession.parse(await peer.call("session/load", { sessionId: session.sessionId, cwd: input.cwd, mcpServers: [] }))
+      opening.opened = messages.length
+      loads.push(loaded)
+      if (mode && loaded.modes?.currentModeId && loaded.modes.currentModeId !== mode)
+        await peer.call("session/set_mode", { sessionId: session.sessionId, modeId: mode })
+    }
+    const prompt = (text: string, attachments: readonly PromptAttachment[] = []) => {
+      const reply = peer.call("session/prompt", { sessionId: session.sessionId, prompt: z.array(z.json()).parse(acpPromptBlocks(text, attachments, reads)) })
+      inFlight.add(reply)
+      void reply.finally(() => inFlight.delete(reply)).catch(() => undefined)
+      return reply
+    }
     const steer = async (text: string) => {
       const steering = input.source.steering
       if (steering.kind !== "supported") throw new Error(`${input.command} can't be steered: ${steering.reason}`)
@@ -985,7 +1191,11 @@ async function acpSession(
     for (const turn of turns) {
       if (turn.rewind !== undefined) {
         if (!input.rewind) throw new Error(`decode-pairs doesn't rewind ${input.command}`)
-        await input.rewind(peer.call, session.sessionId, turn.rewind)
+        await input.rewind(call, session.sessionId, turn.rewind)
+        continue
+      }
+      if (turn.resume) {
+        await resume()
         continue
       }
       const wanted = turn.plan ? "plan" : own
@@ -1017,7 +1227,7 @@ async function acpSession(
       await steered
       steered = undefined
     }
-    return { messages, prompts: sent }
+    return { messages, prompts: sent, openings, loads }
   } finally {
     peer.close()
     await stop(child)
@@ -1049,7 +1259,13 @@ function rootSubstitutions(replacements: readonly Replacement[]): Substitution[]
   return replacements.map(([from, to]) => literally(from, to))
 }
 
-async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Pair["known"]): Promise<string> {
+/** What a run found: each store's differences from the wire, by reader, and the replay's from the live turns before it. */
+interface Found {
+  stores: { reader: string; path: string; differences: Difference[] }[]
+  replay?: Difference[]
+}
+
+async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Found): Promise<string> {
   const folder = join(FIXTURE_ROOT, harness, PAIRS_FOLDER, scenario.name)
   const before = await readFile(join(folder, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
   await rm(folder, { recursive: true, force: true })
@@ -1066,19 +1282,34 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     if (attachments?.length) line.attachments = attachments.map(({ name, mimeType }) => ({ name, mimeType }))
     return line
   }
-  const body = pair.recording.messages.flatMap((message, index) => [...prompts.filter((prompt) => prompt.at === index).map(promptLine), { message }])
-  body.push(...prompts.filter((prompt) => prompt.at >= pair.recording.messages.length).map(promptLine))
+  const openings = pair.recording.openings ?? []
+  const at = (index: number): JsonObject[] => [
+    ...openings.filter((opening) => opening.opened === index).map((): JsonObject => ({ opened: true })),
+    ...prompts.filter((prompt) => prompt.at === index).map(promptLine),
+    ...openings.filter((opening) => opening.at === index).map((): JsonObject => ({ opening: true })),
+  ]
+  const body = pair.recording.messages.flatMap((message, index) => [...at(index), { message }])
+  body.push(...at(pair.recording.messages.length), ...prompts.filter((prompt) => prompt.at > pair.recording.messages.length).map(promptLine))
   const lines = [header, ...body].map((line) => JSON.stringify(line))
   await writeFile(join(folder, "capture.jsonl"), linesRootedAt(replacements)(`${lines.join("\n")}\n`))
-  await copyScrubbed(recorder.storeFolder?.(pair.store) ?? dirname(pair.store), join(folder, "home"), sandbox.home, replacements, recorder.keeps)
-  const reasons = new Map(before?.known.map((difference) => [`${difference.side}${difference.line}`, difference.reason]))
+  const stores = [{ reader: harness, path: pair.store }, ...pair.others ?? []]
+  for (const store of stores) await copyScrubbed(recorder.storeFolder?.(store.path) ?? dirname(store.path), join(folder, "home"), sandbox.home, replacements, recorder.keeps)
+  const reasons = (known: Known | undefined) => new Map(known?.map((difference) => [`${difference.side}${difference.line}`, difference.reason]))
+  const explained = (differences: readonly Difference[], known: Known | undefined): Known => {
+    const kept = reasons(known)
+    return differences.map((difference) => ({ ...difference, line: scrub(difference.line), reason: kept.get(`${difference.side}${scrub(difference.line)}`) ?? "" }))
+  }
   const kept: Pair = {
     harness,
     native: { version: pair.version },
     about: `${scenario.turns.map((turn) => turn.prompt).join(" / ")} ${scenario.about}`,
-    store: scrub(relative(sandbox.home, pair.store)),
-    known: found.map((difference) => ({ ...difference, line: scrub(difference.line), reason: reasons.get(`${difference.side}${scrub(difference.line)}`) ?? "" })),
+    stores: found.stores.map(({ reader, path, differences }) => ({
+      reader,
+      path: scrub(relative(sandbox.home, path)),
+      known: explained(differences, before?.stores.find((store) => store.reader === reader)?.known),
+    })),
   }
+  if (found.replay) kept.replay = { known: explained(found.replay, before?.replay?.known) }
   await writeFile(join(folder, "pair.json"), `${JSON.stringify(kept, null, 2)}\n`)
   const identity = machineIdentity()
   await scrubTree(folder, identity)
@@ -1157,16 +1388,26 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
       const pair = await recorder.record(sandbox, scenario)
       await credentialFree(pair, await recorder.secrets?.() ?? [])
       const live = liveDrawing(harness, pair.recording)
-      const store = await storeDrawing(harness, sandbox.home, pair.store)
-      const found = differences(live, store)
-      console.log(`${harness} ${pair.version} ${scenario.name}: ${pair.recording.messages.length} wire messages; live draws ${live.length} lines, the store ${store.length}`)
+      console.log(`${harness} ${pair.version} ${scenario.name}: ${pair.recording.messages.length} wire messages; live draws ${live.length} lines`)
       for (const line of live) console.log(`  live   ${line.slice(0, 180)}`)
-      if (found.length) {
+      const report = (what: string, found: Difference[]) => {
         unexplained += found.length
-        console.log(`  ${found.length} differences (- live only, + store only):`)
+        if (!found.length) return console.log(`  ${what} draws the same`)
+        console.log(`  ${what}: ${found.length} differences (- live only, + ${what} only):`)
         for (const difference of found) console.log(`    ${difference.side} ${difference.line}`)
-      } else console.log("  the store draws the same")
-      if (write) console.log(`  kept ${relative(process.cwd(), await keep(harness, recorder, scenario, sandbox, pair, found.map((difference) => ({ ...difference, reason: "" }))))}`)
+      }
+      const found: Found = { stores: [] }
+      for (const { reader, path } of [{ reader: harness, path: pair.store }, ...pair.others ?? []]) {
+        const differs = differences(live, await storeDrawing(reader, harness, sandbox.home, path))
+        report(`the ${reader} store`, differs)
+        found.stores.push({ reader, path, differences: differs })
+      }
+      const replayed = replayDrawings(harness, pair.recording)
+      if (replayed) {
+        found.replay = differences(drawing(replayed.live), drawing(replayed.replay))
+        report("the replay", found.replay)
+      }
+      if (write) console.log(`  kept ${relative(process.cwd(), await keep(harness, recorder, scenario, sandbox, pair, found))}`)
     })
   }
 }

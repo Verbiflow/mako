@@ -44,6 +44,7 @@ try {
     line(ago(1), "live", "native event unreadable", "harness=codex kind=thread/odd"),
     line(ago(1), "live", "native event not handled", "harness=grok kind=_x.ai/session/setup"),
     line(ago(1), "live", "native event not handled", "harness=grok kind=_x.ai/announcements/update"),
+    line(ago(1), "live", "native event not handled", "harness=grok kind=_x.ai/frobnicate/update"),
     line(ago(1), "claude-auth", "Native authentication failure",
       `conversation=${CONVERSATION} category=access-revoked cause=refresh-expired accessToken=present refreshToken=present ` +
       `expiresAt=2026-10-03T10:00:00.000Z token=${TOKEN_VALUE} session=${OPAQUE} detail=${JSON.stringify(`upstream said ${BEARER}`)}`),
@@ -83,9 +84,17 @@ try {
   assert.equal(codex.live?.contextBreakdown.state, "absent")
 
   const grok = harness("grok")
-  assert.deepEqual(grok.logs.unknown?.map((group) => group.kind), ["_x.ai/session/setup"])
-  assert.equal(grok.logs.hostLog?.notHandled, 2)
-  assert.deepEqual(grok.logs.hostLog?.kinds.map((entry) => entry.kind), ["_x.ai/announcements/update", "_x.ai/session/setup"], "long event kinds are not mistaken for tokens")
+  assert.deepEqual(grok.logs.unknown?.map((group) => [group.kind, group.handledBy]), [["_x.ai/session/setup", "grok/pager-notices"]],
+    "a kind an older build logged and a fixture now decodes reads as handled")
+  assert.equal(grok.logs.hostLog?.notHandled, 3)
+  assert.deepEqual(grok.logs.hostLog?.kinds.map((entry) => [entry.kind, entry.handledBy]), [
+    ["_x.ai/announcements/update", "grok/pager-settings"],
+    ["_x.ai/frobnicate/update", undefined],
+    ["_x.ai/session/setup", "grok/pager-notices"],
+  ], "long event kinds are not mistaken for tokens")
+  const grokText = formatReport({ ...report, harnesses: [grok] })
+  assert.ok(grokText.indexOf("_x.ai/frobnicate/update") < grokText.indexOf("_x.ai/announcements/update"), "kinds still open are listed first")
+  assert.ok(grokText.includes("_x.ai/session/setup ×1 (handled now: grok/pager-notices)"))
   assert.deepEqual(grok.tools.other, [{ name: "frobnicate_widgets", expected: true }])
   assert.equal(grok.version.verdict, "unreadable")
 

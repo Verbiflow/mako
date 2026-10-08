@@ -417,6 +417,42 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
     ["read", "failed", "Error: File not found"],
     ["refused", "failed", "Cursor did not run this call."],
   ], "a call its checkpoint answered shows that answer; one it didn't keeps the note")
+
+  // The child settles it while the run goes on, from the step's checkpoint.
+  // Should the stream end it after all, the row stays the one row.
+  const midway = new CursorSdkProjection("t6d")
+  midway.message({ ...run, type: "tool_call", call_id: "read", name: "read", status: "running", args: { path: "missing.md" } })
+  midway.message(shell("next", "running"))
+  assert.deepEqual(midway.settle(kept).filter((update) => update.kind === "tool-update").map((update) => [update.id, update.status, update.output]), [
+    ["read", "failed", "Error: File not found"],
+  ], "a call settled mid-run shows its checkpointed result while the next call runs")
+  assert.deepEqual(midway.settle(kept), [], "settling it again changes nothing")
+  const late = midway.message({ ...run, type: "tool_call", call_id: "read", name: "read", status: "error", args: { path: "missing.md" }, result: { status: "error", error: "Error: File not found" } })
+  assert.ok(!late.some((update) => update.kind === "tool"), "a late end for a settled call doesn't open a second row")
+  assert.deepEqual(midway.finish("finished", "Cursor did not run this call.").map((update) => update.kind === "tool-update" && update.id), ["next"],
+    "the turn's end closes only what is still open")
+
+  // The same read can also end with an error that says only "error". What
+  // the checkpoint kept, the model's own view, replaces it, mid-run or at
+  // the turn's end; a call that ended well is never asked about.
+  const vague = { ...run, type: "tool_call", call_id: "read", name: "read", status: "completed", args: { path: "missing.md" }, result: { status: "error", error: { message: "error" } } } as const
+  const reported = new CursorSdkProjection("t6e")
+  reported.message({ ...vague, status: "running", result: undefined })
+  reported.message(vague)
+  assert.deepEqual(reported.settle(kept).map((update) => update.kind === "tool-update" && [update.id, update.status, update.output]), [["read", "failed", "Error: File not found"]],
+    "an error result that says only \"error\" shows what the checkpoint kept")
+  const atEnd = new CursorSdkProjection("t6f")
+  atEnd.message({ ...vague, status: "running", result: undefined })
+  atEnd.message(vague)
+  atEnd.message(shell("ran", "running"))
+  atEnd.message(shell("ran", "completed"))
+  let asked: string[] = []
+  const ended = atEnd.finish("finished", "Cursor did not run this call.", (callIds) => {
+    asked = [...callIds]
+    return kept
+  })
+  assert.deepEqual(asked, ["read"], "the turn's end asks the checkpoint only about calls that ended in an error or never ended")
+  assert.deepEqual(ended.map((update) => update.kind === "tool-update" && [update.id, update.output]), [["read", "Error: File not found"]])
 }
 
 // A subagent's row is its reply to the parent, not its run. The run carries

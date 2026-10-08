@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
-import { aligned, comparePair, differences, liveDrawing, storeDrawing } from "./decode-compare.ts"
+import { aligned, comparePair, differences, liveDrawing, storeDrawing, type Compared, type Known } from "./decode-compare.ts"
 import {
   decoderFor,
   decodeSession,
@@ -30,9 +30,11 @@ import {
  *   npm run decode -- scripts/fixtures/native-decoding/grok/pairs/shell-and-edit
  *
  * `--compare` reads the store file the session wrote with the harness's
- * history reader (`--home` when the store is not under your own home) and
- * prints both drawings aligned: ` ` both sides draw a line, `-` only the
- * live wire, `+` only the store. A pair folder compares its own two halves.
+ * history reader, or `--reader devin-ide` for Devin.app's journal (`--home`
+ * when the store is not under your own home), and prints both drawings
+ * aligned: ` ` both sides draw a line, `-` only the live wire, `+` only the
+ * store. A pair folder compares its capture with each of its stores, and a
+ * capture that resumes also its replay with the live turns before it.
  *
  * Captures come from running Mako with `MAKO_NATIVE_CAPTURE=codex`; they sit
  * in `native-captures/` beside the host log. A capture holds conversation
@@ -57,6 +59,7 @@ const { values: options, positionals } = parseArgs({
     force: { type: "boolean", default: false },
     compare: { type: "string" },
     home: { type: "string" },
+    reader: { type: "string" },
   },
 })
 
@@ -68,12 +71,21 @@ if (!path) {
 }
 
 if (await stat(path).then((info) => info.isDirectory(), () => false)) {
-  const { pair, live, store, unexplained, settled } = await comparePair(path)
+  const { pair, live, stores, replay } = await comparePair(path)
   console.log(`${pair.harness} ${pair.native.version}: ${pair.about}`)
-  printAligned(live, store)
-  for (const difference of pair.known) console.log(`known ${difference.side} ${difference.reason || "(no reason given)"}`)
-  console.log(`${unexplained.length} unexplained, ${settled.length} listed but settled`)
-  process.exit(unexplained.length || settled.length ? 1 : 0)
+  let failing = 0
+  const report = (title: string, left: string[], right: string[], known: Known, result: Compared) => {
+    console.log(`\n${title}`)
+    printAligned(left, right)
+    for (const difference of known) console.log(`known ${difference.side} ${difference.reason || "(no reason given)"}`)
+    const problems = result.unexplained.length + result.settled.length + result.cited.conflicts.length + result.cited.oneSided.length
+    for (const problem of [...result.cited.conflicts, ...result.cited.oneSided]) console.log(`marker: ${problem}`)
+    console.log(`${result.unexplained.length} unexplained, ${result.settled.length} listed but settled, ${result.cited.agreed} markers cite the same record`)
+    failing += problems
+  }
+  stores.forEach((store, index) => report(`live against ${store.reader} (${store.path})`, live, store.store, pair.stores[index]!.known, store))
+  if (replay) report("live before resuming against the replay", replay.live, replay.replay, pair.replay?.known ?? [], replay)
+  process.exit(failing ? 1 : 0)
 }
 
 const recording = await readRecording(path)
@@ -86,7 +98,7 @@ const session = options.session ? z.record(z.string(), z.json()).parse(JSON.pars
 
 if (options.compare) {
   const live = liveDrawing(harness, { ...recording, session })
-  const store = await storeDrawing(harness, options.home ?? homedir(), options.compare)
+  const store = await storeDrawing(options.reader ?? harness, harness, options.home ?? homedir(), options.compare)
   printAligned(live, store)
   process.exit(differences(live, store).length ? 1 : 0)
 }
