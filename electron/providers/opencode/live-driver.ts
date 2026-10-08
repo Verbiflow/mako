@@ -48,7 +48,7 @@ import { OpenCodeDecoder, openCodeCatalogChange, type OpenCodeEffect, type OpenC
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
-import { openCodeCheckpoint, inspectOpenCodeSession } from "./resume.js"
+import { openCodeCheckpoint, openCodeForkDeclined, inspectOpenCodeSession } from "./resume.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
 
@@ -136,13 +136,16 @@ const TURN_PREAMBLE = new Set(["agent-switched", "model-switched", "location-swi
 /**
  * Where a fork after the turn `runId` opened ends: before whatever opened
  * the next turn, or through the whole session when that turn was the last.
- * `runId` is the turn's user message, whose ID Mako gives OpenCode.
+ * `runId` is the turn's user message, whose ID Mako gives OpenCode. OpenCode
+ * stores a steer as a user message too, with nothing that tells it from a
+ * prompt, so the turn's `steers` user messages are passed over.
  */
-export function openCodeForkBoundary(messages: ReadonlyArray<{ id: string; type: string }>, runId: string):
+export function openCodeForkBoundary(messages: ReadonlyArray<{ id: string; type: string }>, runId: string, steers = 0):
   { type: "before"; messageID: string } | { type: "through" } {
   const turn = messages.findIndex(message => message.type === "user" && message.id === runId)
   if (turn < 0) throw new Error("The answer to fork from is not in OpenCode's session")
-  const next = messages.findIndex((message, index) => index > turn && message.type === "user")
+  let passed = 0
+  const next = messages.findIndex((message, index) => index > turn && message.type === "user" && passed++ >= steers)
   if (next < 0) return { type: "through" }
   let start = next
   while (start - 1 > turn && TURN_PREAMBLE.has(messages[start - 1]!.type)) start--
@@ -662,7 +665,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         await startCompaction(requireLive(id), actionId)
       },
     },
-    fork: { kind: "native", point: "run", via: "`session.fork` at a message." },
+    fork: { kind: "native", point: "run", via: "`session.fork` at a message.", declines: openCodeForkDeclined },
     resume: {
       kind: "native",
       via: "The session ID on a new `opencode serve`, which reads the session from its own store.",
@@ -739,7 +742,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           session = fork
             ? await trace.step("session-open", async () => api.watch.step("session", api.client.session.fork({
                 sessionID: fork.nativeId,
-                boundary: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId),
+                boundary: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId, fork.steers),
               })))
             : await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
           const current = session.model ? { id: session.model.id, providerID: session.model.providerID, variant: session.model.variant } : undefined

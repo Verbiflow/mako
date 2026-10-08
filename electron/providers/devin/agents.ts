@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
+import { DEVIN_AGENT_STARTS } from "@mako/sessions/harnesses"
 import type { NativeAgentObservation } from "../../contracts/native-agents.js"
 import type { AcpAgentObserver } from "../acp-source.js"
 
@@ -90,7 +91,7 @@ export class DevinAgents implements AcpAgentObserver {
     // Nested children can themselves invoke run_subagent. Their explicit
     // resume identity is just as authoritative as a top-level call's.
     if ((update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") &&
-      (meta["cognition.ai/inferenceToolName"] === "run_subagent" || this.resumes.has(update.toolCallId))) {
+      (DEVIN_AGENT_STARTS.has(meta["cognition.ai/inferenceToolName"] ?? "") || this.resumes.has(update.toolCallId))) {
       const args = resumeInput.safeParse(update.rawInput)
       if (args.success && id.safeParse(update.toolCallId).success && !this.resumes.has(update.toolCallId)) {
         const previous = this.children.get(args.data.resume)

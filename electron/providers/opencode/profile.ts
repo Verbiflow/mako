@@ -17,7 +17,7 @@ const CATALOG_EVENTS = new Set<OpenCodeEvent["type"]>(["catalog.updated", "agent
 export const openCodeProfileLoader: ProviderProfileLoader = {
   provider: "opencode",
   label: "OpenCode",
-  defaults: { work: [] },
+  defaults: { work: [], none: "OpenCode's models are the person's own providers, so it starts on the model they configured." },
   transport: "sdk",
   cacheKey: (env) => {
     const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_CONFIG_HOME, env.OPENCODE_CONFIG_DIR,

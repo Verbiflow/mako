@@ -57,6 +57,38 @@ export function openCodeStoreHolds(path: string, nativeId: string): boolean {
   }
 }
 
+/**
+ * Worker-only: whether the session's history through the turn `runId`, and
+ * the `steers` user messages sent into it, holds reasoning OpenCode Console
+ * sealed for it. Console refuses that reasoning in any other session
+ * ("reasoning `encrypted_content` was not issued to this caller"), a copy
+ * made by OpenCode's own fork included (`opencode run --fork`, 2.0.1), while
+ * the session it was issued to goes on.
+ */
+export function openCodeHistorySealed(path: string, nativeId: string, runId: string, steers = 0): boolean {
+  const target = openCodeRecordLocator(path)
+  if (!target?.v2 || target.nativeId !== nativeId) return false
+  let db: DatabaseSync | undefined
+  try {
+    db = openNativeStore(realpathSync(target.database))
+    db.exec("PRAGMA busy_timeout=100")
+    return Boolean(db.prepare(`SELECT 1 FROM session_message message
+      WHERE message.session_id = ?1 AND message.type = 'assistant'
+        AND message.seq < coalesce((SELECT later.seq FROM session_message later
+          WHERE later.session_id = ?1 AND later.type = 'user'
+            AND later.seq > (SELECT turn.seq FROM session_message turn WHERE turn.session_id = ?1 AND turn.id = ?2)
+          ORDER BY later.seq LIMIT 1 OFFSET ?3), 9e18)
+        AND json_extract(message.data, '$.model.providerID') = 'opencode'
+        AND EXISTS (SELECT 1 FROM json_each(message.data, '$.content') part
+          WHERE json_extract(part.value, '$.state.reasoningEncryptedContent') <> '')
+      LIMIT 1`).get(nativeId, runId, steers))
+  } catch {
+    return false
+  } finally {
+    db?.close()
+  }
+}
+
 /** Worker-only: fingerprint one native record in a consistent read transaction. */
 export function readOpenCodeResumeRecord(path: string, nativeId: string): OpenCodeResumeRecord {
   const target = openCodeRecordLocator(path)

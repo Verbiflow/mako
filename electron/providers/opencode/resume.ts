@@ -2,6 +2,7 @@ import { Worker } from "node:worker_threads"
 import { z } from "zod"
 import { inspectNativeSession } from "../../native-continuation.js"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
+import type { NativeForkSource } from "../live-driver.js"
 import { openCodeProcessProbe } from "./process-probe.js"
 import { openCodeRecordLocator, type OpenCodeResumeRecord } from "./resume-store.js"
 
@@ -14,7 +15,13 @@ const holdsSchema = z.object({ kind: z.literal("holds"), holds: z.boolean() })
 
 const unavailable: OpenCodeResumeRecord = { kind: "unavailable", reason: "The OpenCode recovery reader did not complete. Retry after the native store is available." }
 
-function readInWorker<T>(workerData: { path: string; nativeId: string; read: "record" | "holds" }, schema: z.ZodType<T>, fallback: T): Promise<T> {
+const sealedSchema = z.object({ kind: z.literal("sealed"), sealed: z.boolean() })
+
+type WorkerRead =
+  | { read: "record" | "holds"; path: string; nativeId: string }
+  | { read: "sealed"; path: string; nativeId: string; runId: string; steers: number }
+
+function readInWorker<T>(workerData: WorkerRead, schema: z.ZodType<T>, fallback: T): Promise<T> {
   return new Promise<T>((resolve) => {
     const worker = new Worker(new URL("./resume-worker.js", import.meta.url), {
       workerData,
@@ -51,6 +58,15 @@ export async function openCodeStoreHoldsSession(path: string, nativeId: string):
   if (!target || target.nativeId !== nativeId) return false
   const read = await readInWorker({ path, nativeId, read: "holds" }, holdsSchema, { kind: "holds", holds: false })
   return read.holds
+}
+
+/** Why OpenCode can't fork this session itself, when its history holds reasoning Console sealed to it. */
+export async function openCodeForkDeclined(source: NativeForkSource): Promise<string | undefined> {
+  if (!source.path) return undefined
+  const read = await readInWorker({ read: "sealed", path: source.path, nativeId: source.nativeId, runId: source.runId, steers: source.steers ?? 0 }, sealedSchema, { kind: "sealed", sealed: false })
+  return read.sealed
+    ? "OpenCode Console ties this session's reasoning to the session itself and refuses it in a copy, so OpenCode's own fork would fail on the first message."
+    : undefined
 }
 
 export async function openCodeCheckpoint(path: string): Promise<string | undefined> {

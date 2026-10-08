@@ -3,6 +3,7 @@ import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitDevinSession } from "@mako/sessions"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
+import { byDefault, harnessLacks, implemented } from "../live-capabilities.js"
 import { devinAccountCapability } from "./accounts.js"
 import { devinAcpSource } from "./acp.js"
 import { devinMcpSource } from "./mcp.js"
@@ -19,6 +20,15 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
   provider: "devin",
   presentation: devinPresentation,
   diagnostics: { sdk: "@agentclientprotocol/sdk" },
+  usage: {
+    context: implemented("ACP's `usage_update` from the main agent: what is in context."),
+    window: implemented("The same `usage_update`'s `size`."),
+    compaction: byDefault("Devin doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."),
+    tokens: implemented("The tokens in each `usage_update`'s `_meta`."),
+    cost: harnessLacks("Devin's usage updates carry no cost."),
+    missedCalls: harnessLacks("Devin's usage updates never say they left a call out."),
+    resetCredits: harnessLacks("Devin's usage report has no reset credits."),
+  },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

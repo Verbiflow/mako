@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 import { z } from "zod"
 import { compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { devinCompactionRecord } from "@mako/sessions/harnesses"
@@ -64,11 +63,11 @@ export function devinNotification(method: string, params: JsonObject): AcpNotifi
       if (!parsed.success) return { sessionId, kind: method, notices: undefined }
       const { status, summary } = parsed.data
       const decoded = { sessionId, kind: `${method}/${status}`, notices: compaction(status, summary ?? undefined) }
-      // Devin sends no event ids. The summary names the file the compaction
-      // saved, and is written once per compaction: either names this one, so a
-      // load that replays it draws no second marker.
-      if (status !== "completed" || !summary) return decoded
-      return { ...decoded, id: devinCompactionRecord(summary) ?? `compaction:${summaryId(summary)}` }
+      // Devin sends no event ids; the summary names the history file the
+      // compaction saved. Devin 3000.10.23 writes every summary under that
+      // file's path, so one without it is a newer Devin's and stays uncited.
+      const record = status === "completed" && summary ? devinCompactionRecord(summary) : undefined
+      return record ? { ...decoded, id: record } : decoded
     }
     case "_cognition.ai/connection_retry": {
       const parsed = ConnectionRetry.safeParse(params)
@@ -148,10 +147,6 @@ function agentStopped(cause: string, errorMessage: string | undefined): NativeNo
     default:
       return undefined
   }
-}
-
-function summaryId(summary: string): string {
-  return createHash("sha256").update(summary).digest("hex").slice(0, 16)
 }
 
 function notice(marker: TranscriptEvent): NativeNotice {

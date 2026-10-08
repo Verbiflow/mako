@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
+import { DEVIN_QUESTION_TOOLS } from "@mako/sessions/harnesses"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { CreateElicitationRequest as ElicitationRequest, type CreateElicitationRequest, type SessionNotification } from "@agentclientprotocol/sdk"
@@ -12,7 +13,7 @@ const questionsSchema = z.array(z.object({ question: z.string(), header: z.strin
 const answersSchema = z.array(z.object({ question_index: z.number().int().nonnegative(), selected_options: z.array(z.string()) })).min(1).max(10)
 const storedAnswersSchema = z.object({ answers: z.array(z.object({ question_index: z.number().int().nonnegative(), selected: z.array(z.string()) })).min(1).max(10) })
 const metaSchema = z.object({
-  "cognition.ai/inferenceToolName": z.literal("ask_user_question"),
+  "cognition.ai/inferenceToolName": z.string().refine((name) => DEVIN_QUESTION_TOOLS.has(name)),
   "cognition.ai/questions": questionsSchema.optional(),
   "cognition.ai/answers": answersSchema.optional(),
 })
@@ -53,7 +54,7 @@ export function readDevinApprovalDecisions(path: string, previous: readonly Nati
       const node = nodeSchema.parse(statement.get(sessionId, next))
       const message = messageSchema.parse(JSON.parse(node.chat_message))
       for (const call of message.role === "assistant" ? message.tool_calls ?? [] : []) {
-        if (call.name === "ask_user_question") calls.set(call.id, (calls.get(call.id) ?? 0) + 1)
+        if (DEVIN_QUESTION_TOOLS.has(call.name)) calls.set(call.id, (calls.get(call.id) ?? 0) + 1)
       }
       if (message.role === "tool" && message.tool_call_id) {
         const answers = storedAnswersSchema.safeParse(message.metadata?.extensions?.["chisel/user_question_answers"])
