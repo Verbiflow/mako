@@ -92,6 +92,7 @@ export const ThreadRefSchema = z.object({
   revision: z.string().optional(),
   locked: z.boolean().optional(),
   active: z.boolean().optional(),
+  clientCopy: z.literal(true).optional(),
   archived: z.boolean().optional(),
   nativeArchived: z.boolean().optional(),
   nativeArchiveStamp: z.string().regex(/^\d+$/).optional(),

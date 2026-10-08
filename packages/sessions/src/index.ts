@@ -120,55 +120,49 @@ export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
 import type { EvictionPolicy } from "./archive.js"
-import { CodexProvider } from "./providers/codex.js"
-import { CursorProvider } from "./providers/cursor.js"
-import { GrokProvider } from "./providers/grok.js"
-import { DevinLocalProvider } from "./providers/devin-local.js"
-import { DevinCliProvider } from "./providers/devin-cli.js"
-import { ClaudeProvider } from "./providers/claude.js"
-import { OpenCodeProvider } from "./providers/opencode.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
 import { restrictNativeStores } from "./read-only-sqlite.js"
+import { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
+
+export { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
 // Freeze the implementation identity for this loaded module lifetime. A dev
 // rebuild on disk must not make an old host claim it loaded the new readers.
 const loadedCatalogCode = catalogCodeIdentity().catch(() => null)
 
-function defaultProviders() {
-  return [
-    new CodexProvider(), new ClaudeProvider(), new CursorProvider(),
-    new GrokProvider(), new OpenCodeProvider(), new DevinLocalProvider(),
-    new DevinCliProvider(),
-  ]
-}
-
 /** Compatibility for sharing discovery across installed and development hosts. */
-export async function defaultCatalogIdentity(archivePath: string): Promise<string> {
+export async function defaultCatalogIdentity(
+  archivePath: string,
+  readers: readonly SavedHistoryReader[] = SAVED_HISTORY_READERS
+): Promise<string> {
   const code = await loadedCatalogCode
   if (!code) throw new Error("Cannot establish catalog reader compatibility")
-  const providers = defaultProviders().map(provider => ({ harness: provider.harness, roots: provider.roots() }))
+  const providers = readers.map((reader) => reader()).map(provider => ({ harness: provider.harness, roots: provider.roots() }))
   return catalogSharingIdentity({ code, archivePath, providers })
 }
 
-/** The harnesses whose saved conversations the catalog reads. */
-export function readableHarnesses(): string[] {
-  return [...new Set(defaultProviders().map(provider => provider.harness))]
+/** The harnesses whose saved conversations these readers read. */
+export function readableHarnesses(readers: readonly SavedHistoryReader[] = SAVED_HISTORY_READERS): string[] {
+  return [...new Set(readers.map((reader) => reader().harness))]
 }
 
 /**
- * The catalog with every built-in provider, ready to scan. `readOnly` writes
- * neither the archive nor any harness's store, and from then on this process
- * opens every native store read-only at the file level.
+ * A catalog over `readers`, Mako's own unless given, ready to scan.
+ * `readOnly` writes neither the archive nor any harness's store, and from
+ * then on this process opens every native store read-only at the file level.
  */
 export function defaultCatalog(
-  options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean } = {}
+  options: {
+    cachePath?: string
+    archivePath?: string
+    eviction?: EvictionPolicy
+    readOnly?: boolean
+    readers?: readonly SavedHistoryReader[]
+  } = {}
 ): SessionCatalog {
-  if (options.readOnly) restrictNativeStores()
-  const catalog = new SessionCatalog(
-    defaultProviders(),
-    options
-  )
-  return catalog
+  const { readers = SAVED_HISTORY_READERS, ...rest } = options
+  if (rest.readOnly) restrictNativeStores()
+  return new SessionCatalog(readers.map((reader) => reader()), rest)
 }
 
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"

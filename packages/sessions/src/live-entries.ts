@@ -2,6 +2,7 @@ import type { AttachmentContent } from "./content.js"
 import type { TranscriptEvent } from "./events.js"
 import { clip, type EntryBlock, type ThreadEntry, type TurnUsage } from "./format.js"
 import { liveToolFinished, reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
+import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import { normalizeToolOutput } from "./tool-output.js"
 
 type ToolEntry = EntryBlock & { type: "tool" }
@@ -65,7 +66,7 @@ export function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveB
         break
       case "plan":
         assistant = undefined
-        entries.push({ kind: "assistant", at, blocks: [{ type: "tool", name: "Plan", output: "", details: [{ type: "plan", entries: block.entries }] }] })
+        entries.push({ kind: "assistant", at, blocks: [{ type: "tool", name: AGENT_PLAN_TOOL, output: "", details: [{ type: "plan", entries: block.entries }] }] })
         break
       case "text":
       case "thinking":

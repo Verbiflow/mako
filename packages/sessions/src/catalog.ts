@@ -75,17 +75,25 @@ interface HeldThread {
   mtimeMs: number
   revision?: string
   thread: Thread
+  weight: number
 }
 
 /**
- * Translated threads kept warm, bounded by the native bytes behind them: a
- * large thread's entries are tens of megabytes of objects, but most sessions
- * are a few megabytes, and switching back to one should not translate it
- * again. A reader never translates more than 64 MB of one record.
+ * Translated threads kept warm, bounded by the text they hold: a large
+ * thread's entries are tens of megabytes of objects, but most sessions are a
+ * few megabytes, and switching back to one should not translate it again.
+ * Native size says nothing here: a database record's `bytes` is a position,
+ * and a gigabyte file translates only its newest 64 MB.
  */
 const THREAD_CACHE_SIZE = 16
 const THREAD_CACHE_BYTES = 192 * 1024 * 1024
-const TRANSLATED_BYTES_CAP = 64 * 1024 * 1024
+
+/** UTF-16 bytes of a thread's translated text, the measure the warm cache bounds. */
+function translatedWeight(thread: Thread): number {
+  let chars = 0
+  for (const entry of thread.entries) chars += entryChars(entry)
+  return chars * 2
+}
 
 /** Below this a record translates faster than a preview helps. */
 const PREVIEW_MIN_BYTES = 4 * 1024 * 1024
@@ -486,16 +494,19 @@ export class SessionCatalog {
     // One session, one row — whatever the path. Symlinked roots and the
     // archive can each present the same conversation twice; identity is the
     // harness's own session id unless the provider says one id names two
-    // stores. Live beats archived; newest beats older.
+    // stores. Live beats archived, the harness's own record beats a client's
+    // copy, and newest beats older.
     const byIdentity = new Map<string, ThreadRef>()
     for (const ref of refs) {
       const key = threadIdentity(ref)
       const held = byIdentity.get(key)
+      const rank = (candidate: ThreadRef) => [candidate.archived ? 0 : 1, candidate.clientCopy ? 0 : 1] as const
+      const [heldLive, heldOwn] = held ? rank(held) : [0, 0]
+      const [live, own] = rank(ref)
       if (
         !held ||
-        (held.archived && !ref.archived) ||
-        (Boolean(held.archived) === Boolean(ref.archived) &&
-          (ref.updatedAt ?? "") > (held.updatedAt ?? ""))
+        live > heldLive ||
+        (live === heldLive && (own > heldOwn || (own === heldOwn && (ref.updatedAt ?? "") > (held.updatedAt ?? ""))))
       ) {
         byIdentity.set(key, ref)
       }
@@ -537,17 +548,17 @@ export class SessionCatalog {
           mtimeMs: stamp.mtimeMs,
           revision: stamp.revision,
           thread: native,
+          weight: held?.thread === native ? held.weight : translatedWeight(native),
         })
         let bytes = 0
-        for (const held of this.threadCache.values())
-          bytes += Math.min(held.bytes, TRANSLATED_BYTES_CAP)
+        for (const held of this.threadCache.values()) bytes += held.weight
         while (
           this.threadCache.size > 1 &&
           (this.threadCache.size > THREAD_CACHE_SIZE || bytes > THREAD_CACHE_BYTES)
         ) {
           const oldest = this.threadCache.keys().next().value
           if (oldest === undefined) break
-          bytes -= Math.min(this.threadCache.get(oldest)?.bytes ?? 0, TRANSLATED_BYTES_CAP)
+          bytes -= this.threadCache.get(oldest)?.weight ?? 0
           this.threadCache.delete(oldest)
         }
       }

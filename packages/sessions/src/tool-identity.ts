@@ -152,6 +152,17 @@ function vocabulary(entries: readonly (readonly [readonly string[], ToolSpec])[]
   return map
 }
 
+/**
+ * The tool block Mako draws for an agent's plan, ACP's `plan` update: the
+ * to-do list itself rather than a call that wrote it. No harness names it.
+ */
+export const AGENT_PLAN_TOOL = "Plan"
+
+/** Whether Mako drew this block itself, so no harness's vocabulary declares its name. */
+export function isDrawnByMako(name: string): boolean {
+  return name === AGENT_PLAN_TOOL
+}
+
 /** Names every harness, or several, use for the same tool. */
 const SHARED = vocabulary([
   [["bash", "shell", "sh", "exec_command", "run_terminal_cmd", "run_terminal_command", "local_shell", "monitor"], { kind: "shell" }],
@@ -173,7 +184,7 @@ const SHARED = vocabulary([
   [["close_agent"], { kind: "agent-message", label: "Close agent" }],
   [["wait_agent", "read_subagent"], { kind: "agent-wait" }],
   [["list_agents"], { kind: "agents" }],
-  [["todowrite", "todo_write", "todoread", "todo_read", "update_plan", "updatetodos", "taskcreate", "taskupdate", "tasklist"], { kind: "todo" }],
+  [["todowrite", "todo_write", "todoread", "todo_read", "update_plan", "updatetodos", "taskcreate", "taskupdate", "tasklist", AGENT_PLAN_TOOL], { kind: "todo" }],
   [["createplan", "write_plan"], { kind: "plan" }],
   [["exitplanmode", "exit_plan_mode"], { kind: "plan-exit" }],
   [["askquestion", "askuserquestion", "ask_user_question", "question", "request_user_input", "request_user_input_async", "requestuserinput", "awaituserinput", "humaninput", "promptuser"], { kind: "question" }],
@@ -529,22 +540,34 @@ function unwrapScript(source: ToolSource, name: string, wrapper: ScriptWrapper):
   const code = args ? textOf(args[wrapper.key ?? "code"]) : source.input
   if (!code) return undefined
   const calls = scriptCalls(code)
-  if (calls.length !== 1) {
-    const identity: ToolIdentity = { kind: "code", name, label: KINDS.code.label }
-    const shown = firstLine(code.replace(/^\s*(?:return\s+)?(?:await\s+)?/, ""))
-    if (shown) identity.target = shown
-    if (calls.length > 1) identity.target = calls.map((call) => call.name).join(", ")
-    return identity
+  if (wrapper.callsShown) {
+    const ran = new Set(calls.map((call) => {
+      const inner = identifyScriptCall(source, call)
+      return inner.command ?? inner.path ?? inner.url ?? inner.query ?? inner.pattern ?? inner.label
+    }))
+    return scriptIdentity(name, code, ran.size ? [...ran].join(", ") : undefined)
   }
+  if (calls.length !== 1) return scriptIdentity(name, code, calls.length ? calls.map((call) => call.name).join(", ") : undefined)
   const call = calls[0]!
-  const dotted = /^([\w-]+)\.(\w+)$/.exec(call.name)
-  const innerName = dotted ? `mcp__${dotted[1]}__${dotted[2]}` : call.name
-  const identity = identifyTool({ harness: source.harness, name: innerName, input: call.input })
+  const identity = identifyScriptCall(source, call)
   identity.name = name
   identity.via = name
-  identity.tool ??= dotted?.[2] ?? call.name
+  identity.tool ??= /^[\w-]+\.(\w+)$/.exec(call.name)?.[1] ?? call.name
   if (call.input) identity.input = call.input
   return identity
+}
+
+function scriptIdentity(name: string, code: string, ran: string | undefined): ToolIdentity {
+  const identity: ToolIdentity = { kind: "code", name, label: KINDS.code.label }
+  const shown = ran ?? firstLine(code.replace(/^\s*(?:return\s+)?(?:await\s+)?/, ""))
+  if (shown) identity.target = shown
+  return identity
+}
+
+/** `tools.exec_command(…)`, or `tools.mako.app_start(…)` for an MCP server's tool. */
+function identifyScriptCall(source: ToolSource, call: ScriptCall): ToolIdentity {
+  const dotted = /^([\w-]+)\.(\w+)$/.exec(call.name)
+  return identifyTool({ harness: source.harness, name: dotted ? `mcp__${dotted[1]}__${dotted[2]}` : call.name, input: call.input })
 }
 
 interface ScriptCall {

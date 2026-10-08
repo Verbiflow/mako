@@ -276,10 +276,10 @@ async function retainPayload(
 
 /**
  * Write a thread into Grok's own store — a session directory holding the
- * transcript and the summary its CLI lists sessions by. `agent --resume <id>`
- * replays it. The user's words go inside a `<user_query>` tag because that
- * is where Grok's own scaffolding puts them, and its resume path expects to
- * find them there.
+ * model's history, the update stream Grok restores and lists it from, and
+ * the summary its CLI lists sessions by. In the model's history the user's
+ * words go inside a `<user_query>` tag because that is where Grok's own
+ * scaffolding puts them, and its resume path expects to find them there.
  */
 export async function emitGrokSession(
   thread: Thread,
@@ -324,6 +324,8 @@ export async function emitGrokSession(
     `${lines.join("\n")}\n`,
     "utf8"
   )
+  const updates = grokUpdates(sessionId, messages, Date.parse(now))
+  await writeFile(join(dir, "updates.jsonl"), `${updates.join("\n")}\n`, "utf8")
   await writeFile(
     join(dir, "summary.json"),
     JSON.stringify({
@@ -339,7 +341,54 @@ export async function emitGrokSession(
     }),
     "utf8"
   )
-  return { sessionId, path: join(dir, "chat_history.jsonl") }
+  return { sessionId, path: join(dir, "updates.jsonl") }
+}
+
+/**
+ * The same messages as Grok's update stream, each exchange ending in the
+ * `turn_completed` its own sessions carry. Grok restores a session from
+ * `updates.jsonl` and gives its model `chat_history.jsonl`, so a session
+ * without the stream answers from the imported turns but never shows them.
+ */
+interface GrokUpdate {
+  sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "turn_completed"
+  content?: { type: "text"; text: string }
+  _meta?: { promptIndex: number }
+  prompt_id?: string
+  stop_reason?: "end_turn"
+}
+
+function grokUpdates(sessionId: string, messages: Message[], fallbackMs: number): string[] {
+  const lines: string[] = []
+  let promptIndex = 0
+  let promptId: string | undefined
+  let lastMs = fallbackMs
+  const line = (method: string, update: GrokUpdate, at: number): void => {
+    lines.push(JSON.stringify({
+      timestamp: Math.floor(at / 1000),
+      method,
+      params: { sessionId, update, _meta: { eventId: `${sessionId}-${lines.length + 1}`, agentTimestampMs: at } },
+    }))
+  }
+  const endTurn = (): void => {
+    if (!promptId) return
+    line("_x.ai/session/update", { sessionUpdate: "turn_completed", prompt_id: promptId, stop_reason: "end_turn" }, lastMs)
+    promptId = undefined
+  }
+  for (const message of messages) {
+    const parsed = message.at ? Date.parse(message.at) : Number.NaN
+    lastMs = Number.isNaN(parsed) ? lastMs : parsed
+    const content: GrokUpdate["content"] = { type: "text", text: message.text }
+    if (message.role === "user") {
+      endTurn()
+      promptId = randomUUID()
+      line("session/update", { sessionUpdate: "user_message_chunk", content, _meta: { promptIndex: promptIndex++ } }, lastMs)
+    } else {
+      line("session/update", { sessionUpdate: "agent_message_chunk", content }, lastMs)
+    }
+  }
+  endTurn()
+  return lines
 }
 
 /** The `refinery_schema_history` version of Devin's store this writer matches. */

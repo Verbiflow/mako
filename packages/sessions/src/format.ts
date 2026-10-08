@@ -94,13 +94,23 @@ export interface ThreadRef {
   settings?: SessionSettings
   startedAt?: string
   updatedAt?: string
-  /** Bytes of the native store — a cheap staleness check and a size hint. */
+  /**
+   * How far the native record reaches: a file's length, or a database
+   * record's position. A cheap staleness check, not a size.
+   */
   bytes?: number
   /** Provider-owned change token; includes sidecars for database stores. */
   revision?: string
   /** The provider reports that another live client holds this native session. */
   locked?: boolean
   active?: boolean
+  /**
+   * Another client's copy of a session its harness also keeps in its own
+   * store (Devin.app's journal of a Devin CLI session). The copy can lack
+   * what the harness kept, so where both present the session the catalog
+   * shows the harness's own record.
+   */
+  clientCopy?: true
   /** Earlier harnesses this conversation lived on, oldest first. */
   lineage?: ThreadOrigin[]
   /** The provider behind the model, when the harness records one. */
