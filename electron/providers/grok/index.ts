@@ -3,6 +3,7 @@ import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitGrokSession } from "@mako/sessions"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
+import { harnessLacks, implemented } from "../live-capabilities.js"
 import { grokAcpSource } from "./acp.js"
 import { grokMcpSource } from "./mcp.js"
 import { grokNativeRunner } from "./native-runner.js"
@@ -23,6 +24,15 @@ export const installGrok: ProviderModule = (host) => installHarness(host, {
   provider: "grok",
   presentation: grokPresentation,
   diagnostics: { sdk: "@agentclientprotocol/sdk" },
+  usage: {
+    context: implemented("The main agent's last call, from each `response_completed`."),
+    window: implemented("The current model's `totalContextTokens`, in the reply that opens the session and in Grok's model-list updates."),
+    compaction: implemented("`auto_compact_completed`'s `tokens_after`."),
+    tokens: implemented("Each `turn_completed`'s usage."),
+    cost: implemented("Each `turn_completed`'s `costUsdTicks`."),
+    missedCalls: implemented("`usageIsIncomplete` on a turn's usage."),
+    resetCredits: harnessLacks("Grok's usage report has no reset credits."),
+  },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

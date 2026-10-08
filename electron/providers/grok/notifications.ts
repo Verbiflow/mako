@@ -4,21 +4,25 @@ import { grokUpdateReading } from "@mako/sessions/harnesses"
 import { objectValue, type JsonObject } from "../../codex-app-json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
 import type { AcpNotificationDecoding } from "../acp-source.js"
-import { grokModelWindow, grokUsage } from "./usage.js"
+import { grokUsage } from "./usage.js"
 
 type Retrying = Extract<NativeActivityObservation, { kind: "retrying" }>
 
 /**
  * Grok's session updates beyond ACP's own, read against grok 1.0.44. They
- * arrive on `_x.ai/session_notification` and are saved as
- * `_x.ai/session/update`, both as `{ sessionId, update: { sessionUpdate, … } }`;
+ * arrive on `_x.ai/session_notification`, or for scheduled tasks and monitors
+ * on a method of their own (`notification_bridge.rs`, 1.0.46), and are saved as
+ * `_x.ai/session/update`, all as `{ sessionId, update: { sessionUpdate, … } }`;
  * one sent on ACP's own `session/update` reaches here after the SDK refuses its kind.
  * Shapes are checked against Grok's source (xai-org/grok-build 1.0.45,
  * `xai-grok-shell/src/extensions/notification.rs`) and the recorded pairs:
  * `retry_state` is flattened with a `type` tag: `retrying` with the
  * attempt and the error kind, then `failed` with the error that ends the turn.
  */
-const SESSION_METHODS = new Set(["_x.ai/session_notification", "_x.ai/session/update", "session/update"])
+const SESSION_METHODS = new Set([
+  "_x.ai/session_notification", "_x.ai/session/update", "session/update",
+  "_x.ai/scheduled_task_created", "_x.ai/scheduled_task_fired", "_x.ai/scheduled_task_deleted", "_x.ai/monitor_event",
+])
 
 /** Workspace indexing and search progress, which Grok documents as its other notifications. */
 const WORKSPACE_METHODS = new Set([
@@ -72,11 +76,8 @@ export function grokNotification(method: string, params: JsonObject): AcpNotific
   if (method === "_x.ai/task_completed") return { sessionId: Session.safeParse(params).data?.sessionId, kind: method, notices: [] }
   // The echo of a message Mako steered in; the host already shows it.
   if (method === "_x.ai/session/interjection") return { sessionId: Session.safeParse(params).data?.sessionId, kind: method, notices: [] }
-  // The model list, sent when the session opens and when its model changes, names the window.
-  if (method === "_x.ai/models/update") {
-    const size = grokModelWindow(params)
-    return { kind: method, connectionWide: true, notices: [], ...size && { usage: [{ kind: "window", size }] } }
-  }
+  // A new model list, sent only when Grok's remote catalog changes; the session's own list is in the reply that opens it.
+  if (method === "_x.ai/models/update") return { kind: method, connectionWide: true, notices: [], models: params }
   if (!SESSION_METHODS.has(method)) return undefined
   const envelope = Envelope.safeParse(params)
   const update = objectValue(params["update"])
@@ -127,8 +128,6 @@ function grokSessionUpdate(sessionUpdate: string, update: JsonObject, meta: Json
       return { notices: [{ kind: "activity", activity: null }, ...markers] }
     case "retry_state":
       return retryState(update, markers)
-    case "scheduled_task_deleted":
-      return { notices: markers }
     case "session_summary_generated": {
       const title = SummaryGenerated.safeParse(update).data?.session_summary?.trim()
       return title ? { notices: [], state: { title } } : { notices: [] }

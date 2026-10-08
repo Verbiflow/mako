@@ -6,6 +6,7 @@ import { GrokAgents } from "./agents.js"
 import { grokLaunchPolicy, grokPermissionPolicy } from "./permission-policy.js"
 import { grokMcpStartup } from "./mcp-startup.js"
 import { grokNotification } from "./notifications.js"
+import { grokModelWindow } from "./usage.js"
 import { GROK_FOLDER_TRUST_CAPABILITY } from "./folder-trust.js"
 import { grokCheckpoint, grokFork } from "./fork.js"
 import { grokRequests } from "./plans.js"
@@ -198,6 +199,7 @@ export const grokAcpSource: ProviderAcpSource = {
     },
   }),
   decodeNotification: grokNotification,
+  modelWindow: grokModelWindow,
   mcpStartup: grokMcpStartup,
   ...GROK_ACP_HOOKS,
   requests: grokRequests,

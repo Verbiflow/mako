@@ -39,16 +39,25 @@ export function grokUsage(sessionUpdate: string, update: JsonObject): UsageObser
   }
 }
 
-const ModelsUpdate = z.object({
+const window = z.number().int().positive()
+const ModelList = z.object({
   currentModelId: z.string(),
   availableModels: z.array(z.object({
     modelId: z.string(),
-    _meta: z.object({ totalContextTokens: z.number().positive() }).partial().nullish(),
+    _meta: z.object({ totalContextTokens: window, contextWindow: window, contextWindows: z.array(window) }).partial().nullish(),
   })),
 })
 
-/** `_x.ai/models/update`: the window of the model the session now answers with. */
-export function grokModelWindow(params: JsonObject): number | undefined {
-  const parsed = ModelsUpdate.safeParse(params).data
-  return parsed?.availableModels.find((model) => model.modelId === parsed.currentModelId)?._meta?.totalContextTokens
+/**
+ * The current model's window in Grok's model list (`models` in the reply that
+ * opens a session, and `_x.ai/models/update`): the window chosen for it when
+ * it offers that one, else its default, as Grok's own client reads it
+ * (`ModelState::get_context_window`).
+ */
+export function grokModelWindow(models: JsonObject): number | undefined {
+  const parsed = ModelList.safeParse(models).data
+  const meta = parsed?.availableModels.find((model) => model.modelId === parsed.currentModelId)?._meta
+  if (!meta) return undefined
+  const chosen = meta.contextWindow
+  return chosen && (chosen === meta.totalContextTokens || meta.contextWindows?.includes(chosen)) ? chosen : meta.totalContextTokens
 }

@@ -227,6 +227,11 @@ function isRepositoryRoot(dir: string): boolean {
   }
 }
 
+/** Whether Grok applies the project's own settings, instructions and skills in `cwd`. */
+export function grokTrustsProject(paths: GrokPermissionPaths): boolean {
+  return trustedProject(projectDirs(paths.cwd, paths.home), paths.grokHome)
+}
+
 /** Trust is recorded by real path, for the folder itself or its repository's root. */
 function trustedProject(project: readonly string[], grokHome: string): boolean {
   if (!project.length) return false
