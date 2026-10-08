@@ -3,6 +3,7 @@ import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from 
 import { childProcessEnv } from "../../accounts-common.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
+import { harnessLacks, implemented } from "../live-capabilities.js"
 import { cursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
 import { cursorMcpSource } from "./mcp.js"
@@ -47,6 +48,15 @@ export const installCursor: ProviderModule = (host) => {
     provider: "cursor",
     presentation: cursorPresentation,
     diagnostics: { sdk: "@cursor/sdk", runsInSdk: true },
+    usage: {
+      context: harnessLacks("Cursor's SDK reports what each turn spent, never how full the context is."),
+      window: harnessLacks("Cursor's SDK names no model's window."),
+      compaction: harnessLacks("With no context reading, a summary Cursor writes has no meter to update."),
+      tokens: implemented("Each turn's `usage` message from the SDK."),
+      cost: harnessLacks("Cursor's SDK reports tokens only and prices none of them."),
+      missedCalls: harnessLacks("Cursor's usage messages never say they left a call out."),
+      resetCredits: harnessLacks("Cursor's usage report has no reset credits."),
+    },
     hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
     commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

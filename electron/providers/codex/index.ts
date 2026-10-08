@@ -5,6 +5,7 @@ import { emitCodexSession } from "@mako/sessions"
 import { codexModelProvider } from "./credentials.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
+import { harnessLacks, implemented } from "../live-capabilities.js"
 import { codexAccountCapability } from "./accounts.js"
 import { codexDecoderSource } from "./decoder-source.js"
 import { codexMcpSource } from "./mcp.js"
@@ -21,6 +22,15 @@ export const installCodex: ProviderModule = (host) => installHarness(host, {
   provider: "codex",
   presentation: codexPresentation,
   diagnostics: {},
+  usage: {
+    context: implemented("Codex's own reading in `thread/tokenUsage/updated`."),
+    window: implemented("The model's window in the same reading."),
+    compaction: implemented("Codex sends a new reading after compacting, before the compaction item completes."),
+    tokens: implemented("The reading's thread total, less what it said before."),
+    cost: harnessLacks("Codex reports tokens only and prices none of them."),
+    missedCalls: harnessLacks("Codex's readings never say they left a call out."),
+    resetCredits: implemented("ChatGPT's usage report lists the plan's reset credits, and the account's row spends one."),
+  },
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
