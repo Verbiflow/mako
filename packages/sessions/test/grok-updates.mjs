@@ -2,8 +2,9 @@ import assert from "node:assert/strict"
 import { appendFile, mkdir, stat, writeFile } from "node:fs/promises"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 
+import { emitGrokSession } from "../dist/emit.js"
 import { GrokProvider } from "../dist/providers/grok.js"
 
 const home = mkdtempSync(join(tmpdir(), "sessions-grok-updates-"))
@@ -432,7 +433,40 @@ try {
     ],
     "a turn Grok ended by its own rule says which rule, a blocked prompt is explained once by its hook, and only a person's stop reads as Interrupted alone"
   )
-  console.log("Grok updates tests clean: authority, envelopes, chunks, tools, plans, usage, fallback, and convergence verified.")
+  // A conversation moved into Grok: Grok restores and lists it from the
+  // update stream, then appends its own turn there, numbering its prompt
+  // after the moved-in ones (grok 1.0.46).
+  const imported = await emitGrokSession(
+    {
+      ref: { harness: "claude", path: "/elsewhere.jsonl", title: "Moved in" },
+      entries: [
+        { kind: "user", at: "2026-01-02T00:00:00.000Z", text: "My codename is LANTERN." },
+        { kind: "assistant", at: "2026-01-02T00:00:01.000Z", blocks: [{ type: "text", text: "Noted." }] },
+        { kind: "user", at: "2026-01-02T00:00:02.000Z", text: "Remember it." },
+        { kind: "assistant", at: "2026-01-02T00:00:03.000Z", blocks: [{ type: "text", text: "I will." }] },
+      ],
+    },
+    { cwd: "/work", home }
+  )
+  assert.equal(basename(imported.path), "updates.jsonl", "a moved conversation is named by the file Grok restores it from")
+  assert.ok((await provider.discover()).some((file) => file.path === imported.path))
+  const grokTurn = (update, timestamp, metadata) => jsonl({ timestamp, method: update.sessionUpdate === "turn_completed" ? "_x.ai/session/update" : "session/update", params: { sessionId: imported.sessionId, update: metadata ? { ...update, _meta: metadata } : update } })
+  await appendFile(
+    imported.path,
+    grokTurn({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "What codename did I give?" } }, 1_767_312_010, { promptIndex: 2 }) +
+      grokTurn({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "LANTERN." } }, 1_767_312_011) +
+      grokTurn({ sessionUpdate: "turn_completed", prompt_id: "p-live", stop_reason: "end_turn" }, 1_767_312_012)
+  )
+  const moved = await provider.read(imported.path)
+  assert.deepEqual(
+    moved.entries.map((entry) => entry.kind === "user" ? `user:${entry.text}` : entry.kind === "assistant" ? `assistant:${entry.blocks.map((block) => block.text).join("")}` : entry.kind),
+    ["user:My codename is LANTERN.", "assistant:Noted.", "user:Remember it.", "assistant:I will.", "user:What codename did I give?", "assistant:LANTERN."],
+    "the moved-in turns read before the one Grok ran after loading them"
+  )
+  assert.equal(moved.entries[0].at, "2026-01-02T00:00:00.000Z", "a moved-in turn keeps its time")
+  assert.ok(moved.entries.every((entry) => entry.kind !== "event"), "a moved-in turn ends without a marker")
+
+  console.log("Grok updates tests clean: authority, envelopes, chunks, tools, plans, usage, fallback, moved-in sessions, and convergence verified.")
 } finally {
   rmSync(home, { recursive: true, force: true })
 }

@@ -51,16 +51,22 @@ try {
   assert.equal(provider.watchTarget(`${file.path}-wal`), file.path)
   assert.equal(provider.watchTarget(`${file.path}-shm`), file.path)
   assert.ok((await provider.read(file.path)).entries.some(e=>e.kind==='assistant'&&e.blocks.some(b=>b.type==='text'&&b.text.includes('New snapshot output'))))
-  // A CLI view and the IDE index identify one catalog row.
+  // A CLI view and the IDE index identify one catalog row: the CLI's own
+  // store, even when Devin.app touched its journal later.
+  assert.equal(thread.ref.clientCopy, true)
+  const { clientCopy, ...own } = thread.ref
+  const cliRef = { ...own, path: '/fixture/cli', updatedAt: '2000-01-01T00:00:00.000Z' }
   const cli = {
     harness:'devin', displayName:'Devin', roots:()=>[],
     discover:async()=>[{path:'/fixture/cli',bytes:1,mtimeMs:1}],
-    peek:async()=>({...thread.ref,path:'/fixture/cli'}),
-    read:async()=>({...thread,ref:{...thread.ref,path:'/fixture/cli'}}),
+    peek:async()=>cliRef,
+    read:async()=>({...thread,ref:cliRef}),
   }
   const catalog = new SessionCatalog([provider,cli],{cachePath:join(user,'catalog.json')})
   await catalog.scan()
-  assert.equal(catalog.list().filter(ref=>ref.nativeId===nativeId).length, 1)
+  const rows = catalog.list().filter(ref=>ref.nativeId===nativeId)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].path, '/fixture/cli', "Devin's own store wins over Devin.app's journal of the same session")
   await catalog.stop()
   note('agent_message', [chunk('agent_message_chunk', 'x'.repeat(4_000_001))], 5)
   const bounded = await provider.read(file.path)
