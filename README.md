@@ -268,20 +268,28 @@ was waiting to be sent is dropped and nothing more goes. `DO_NOT_TRACK=1` or
 `MAKO_TELEMETRY=off` in Mako's environment turns both off, and then nothing,
 not even an install ID, is written.
 
-- **Usage analytics:** a random install ID, the app version and OS, which
-  harnesses are installed, and for each turn its harness, model, reasoning
-  setting, mode, outcome, duration and token counts. Plus a few feature
-  counts: forks, rewinds, harness switches, automations and cloud sign-in.
-- **Error reports:** crash reports and the kinds of harness records Mako
-  couldn't read. Paths, emails, URLs, secrets and quoted text are scrubbed on
-  your Mac and again by the cloud.
+- **Usage analytics:** a random install ID, a computer ID, the app version
+  and OS, which harnesses are installed, and for each turn its harness,
+  model, reasoning setting, mode, outcome, duration and token counts. Plus a
+  few feature counts: forks, rewinds, harness switches, automations and cloud
+  sign-in.
+- **Error reports:** crash reports, the kinds of harness records Mako
+  couldn't read, and each call to the Mako cloud: which kind of call it was,
+  how long it took, how it ended, and a random ID that matches it to the
+  cloud's own log of it. Paths, emails, URLs, secrets and quoted text are
+  scrubbed on your Mac and again by the cloud.
 - **Never sent:** prompts, replies, file contents, file and folder names,
   Thread titles, repository and branch names, and session IDs.
 
-While you're signed in to the Mako cloud, events count for your account;
-otherwise only the install ID ties them together. Events wait up to 30
-seconds and go in one request, sooner once 50 are waiting. The code is in
-`electron/telemetry.ts`, and the full list of events is in
+The computer ID is a salted SHA-256 hash of the ID your OS gives the
+computer (on macOS, the hardware UUID), so every install and profile on one
+Mac counts once, and a reinstall isn't a new person. Error reports carry it
+too. The hash can't be turned back into the hardware ID. While you're signed
+in to the Mako cloud, events count for your account, and the first time a
+computer signs in to an account, its earlier anonymous events are joined to
+that account. Events wait up to 30 seconds and go in one request, sooner once
+50 are waiting. The code is in `electron/telemetry.ts` and
+`electron/machine-id.ts`, and the full list of events is in
 `electron/contracts/telemetry.ts`.
 
 ## Development

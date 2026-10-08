@@ -61,7 +61,7 @@
     "test:cursor-child": "node scripts/patch-cursor-sdk.mjs --check && node scripts/test-cursor-sdk-patch.mjs && npm run build:electron && tsx scripts/test-cursor-child-crash.ts",
     "test:automations": "tsx scripts/test-automations.ts && tsx scripts/test-automation-watchers.mjs",
     "test:codex-protocol": "tsx scripts/test-codex-protocol.ts",
-    "test:decoders": "tsx scripts/test-fixture-privacy.ts && tsx scripts/test-native-decoders.ts && tsx --tsconfig tsconfig.app.json scripts/test-decode-pairs.ts && tsx --tsconfig tsconfig.app.json scripts/test-follow-convergence.ts && tsx scripts/test-native-records.ts && tsx scripts/test-harness-doctor.ts",
+    "test:decoders": "tsx scripts/test-fixture-privacy.ts && tsx scripts/test-native-decoders.ts && tsx --tsconfig tsconfig.app.json scripts/test-decode-pairs.ts && tsx --tsconfig tsconfig.app.json scripts/test-codex-item-pairs.ts && tsx --tsconfig tsconfig.app.json scripts/test-harness-records.ts && tsx --tsconfig tsconfig.app.json scripts/test-source-retention.ts && tsx --tsconfig tsconfig.app.json scripts/test-follow-convergence.ts && tsx scripts/test-native-records.ts && tsx scripts/test-harness-doctor.ts",
     "decode": "tsx --tsconfig tsconfig.app.json scripts/decode-native.ts",
     "audit:tools": "tsx scripts/audit-native-tools.ts",
     "harness:self-report": "tsx scripts/harness-self-report.ts",
