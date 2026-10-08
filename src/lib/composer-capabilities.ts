@@ -1,6 +1,5 @@
 import {
   MAKO_COMPUTER_SERVER,
-  MAKO_RUNTIME_SERVERS,
   MAKO_THREAD_SERVER,
   isMakoManagedServer,
   reachableMcpServers,
@@ -80,13 +79,12 @@ export interface SkillReach {
 
 /** Product copy for Mako's own servers; the registry's detail is operational. */
 const BUILT_IN_DESCRIPTIONS = new Map<string, string>([
-  ["mako-backend", "Mako skills, integrations, and Slack"],
   [MAKO_COMPUTER_SERVER, "Drive pages, native windows, and system tasks"],
   [MAKO_THREAD_SERVER, "This Thread's worktree, app and recipe"],
 ])
 
 export function isMakoServerName(name: string): boolean {
-  return MAKO_RUNTIME_SERVERS.has(name) || BUILT_IN_DESCRIPTIONS.has(name)
+  return BUILT_IN_DESCRIPTIONS.has(name)
 }
 
 /**

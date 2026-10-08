@@ -22,6 +22,8 @@ export const LEAD_EXCHANGE_ID = "lead"
 export interface Exchange {
   /** A retained Mako request when proven, otherwise the opening message ID. Native anchors stay separate. */
   id: string
+  /** A released body keeps its navigator label and place until it reloads. */
+  unloaded?: string
   /** The user's message, absent for anything the agent said unprompted. */
   prompt?: ChatMessage
   /**
@@ -353,6 +355,7 @@ export function responseText(exchange: Exchange): string {
 
 /** A one-line label for the navigator and the jump list. */
 export function promptLabel(exchange: Exchange): string {
+  if (exchange.unloaded !== undefined) return exchange.unloaded
   const opening = exchange.prompt ?? exchange.opener
   const text = opening ? textOf(opening.blocks) : ""
   const line = text.replace(/\s+/g, " ").trim()

@@ -8,6 +8,7 @@ export interface AcpPlanEntry {
 }
 
 import { liveToolFinished, type LiveBlock as AcpBlock } from "@mako/sessions/live-content"
+import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
 export type { LiveBlock as AcpBlock } from "@mako/sessions/live-content"
 
 export interface AcpConversation {
@@ -146,7 +147,7 @@ export function acpBlocksToMessages(
           {
             type: "toolResult",
             id: `plan-${absolute}`,
-            name: "Plan",
+            name: AGENT_PLAN_TOOL,
             text: "",
             details: [{ type: "plan", entries: block.entries }],
           },

@@ -175,6 +175,7 @@ export type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkSett
 export { AUTOMATIC as UTILITY_AUTOMATIC } from "../../electron/contracts/utility-work"
 export type { ContinuationPlan, ContinuationResolution } from "../../electron/shared"
 export type { Capability, LiveCapabilities, LiveCapabilityKey } from "../../electron/contracts/harness-capabilities"
+export type { HarnessUsage, HarnessUsageKey } from "../../electron/contracts/harness-usage"
 
 export type { AccessEnforcement, AccessTier } from "../../electron/contracts/access"
 export type { Interruption, InterruptionReason, TurnContinuation } from "../../electron/contracts/live-conversations"
