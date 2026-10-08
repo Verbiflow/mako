@@ -156,7 +156,32 @@ await idle()
 assert.equal(reread.mock.callCount(), readsWhileSwitching + 1)
 assert.equal(loaded(left[0]!.session.id), true, "Opening an unloaded conversation reads it again")
 assert.equal(loaded(left[1]!.session.id), false)
+applyLiveSnapshot({
+  ...working,
+  revision: working.revision + 1,
+  session: { ...working.session, status: "ready" },
+})
+await idle()
+assert.equal(loaded(working.session.id), false, "A background conversation finishing releases its transcript without another tab switch")
+assert.equal(loaded(left[0]!.session.id), true, "A residency sweep keeps the conversation being read")
 stopResidency()
+// Growing the transcript being read can exhaust the budget without a switch.
+acpStore.set({ activeKey: null, conversations: {} })
+for (const item of left.slice(0, 2)) applyLiveSnapshot(item)
+acp.activate(left[0]!.session.id)
+const weight = (item: LiveSnapshot) => liveContentWeight({ blocks: item.blocks, base: item.base, requests: item.requests })
+const stopGrowthResidency = watchLiveResidency({ bytes: weight(left[0]!) + weight(left[1]!) + 1, recent: 0 })
+await idle()
+assert.equal(loaded(left[1]!.session.id), true, "Background history initially fits")
+applyLiveSnapshot({
+  ...left[0]!,
+  revision: left[0]!.revision + 1,
+  blocks: [...left[0]!.blocks, { type: "text", id: "budget-growth", text: "x".repeat(100_000) }],
+})
+await idle()
+assert.equal(loaded(left[1]!.session.id), false, "Content growth enforces the budget without another tab switch")
+assert.equal(loaded(left[0]!.session.id), true, "Content growth never evicts the active reader")
+stopGrowthResidency()
 reread.mock.restore()
 Reflect.deleteProperty(globalThis, "window")
 const root = await mkdtemp(join(tmpdir(), "mako-closed-cache-"))

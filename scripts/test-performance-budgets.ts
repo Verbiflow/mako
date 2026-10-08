@@ -1,5 +1,8 @@
 /**
- * Hot paths of the harness layer against recorded baselines. Each one is
+ * Hot paths of the harness layer against recorded baselines: the live path,
+ * each decoder, and each store reader opening its largest kept pair to the
+ * viewer's first page (`npm run harness:saved-open` times the largest
+ * sessions on this machine instead). Each one is
  * timed as a multiple of a fixed calibration workload run alongside it, so
  * a baseline holds across machines; one more than 25% over its baseline
  * fails, after a second measurement rules out a passing stall.
@@ -8,9 +11,11 @@
  *   npx tsx scripts/test-performance-budgets.ts --update       record what this machine measures now
  */
 import assert from "node:assert/strict"
-import { readFile, writeFile } from "node:fs/promises"
+import { cp, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
+import { SessionCatalog, VIEWER_PAGE } from "@mako/sessions"
 import { declaredToolNames, identifyTool } from "@mako/sessions/tool-identity"
 import {
   deliverLiveUpdates,
@@ -21,19 +26,22 @@ import {
   type LiveUpdate,
 } from "@mako/sessions/live-content"
 import { SessionUsage, type UsageObservation } from "../electron/session-usage"
-import { decodeSession, decoders, loadFixtures } from "./native-decoding"
+import { PAIRS_FOLDER, PairSchema, storeReader } from "./decode-compare"
+import { decodeSession, decoders, FIXTURE_ROOT, loadFixtures } from "./native-decoding"
 
 const BUDGETS = join(import.meta.dirname, "performance-budgets.json")
 const ALLOWED_REGRESSION = 1.25
 const BaselinesSchema = z.record(z.string(), z.number().positive())
 
+type Budget = () => number | Promise<number>
+
 /** The fastest of several runs: what the work costs without a collection or another process in the way. */
-function measure(run: () => number, repetitions = 11): number {
-  run()
+async function measure(run: Budget, repetitions = 11): Promise<number> {
+  await run()
   let fastest = Infinity
   for (let index = 0; index < repetitions; index++) {
     const started = performance.now()
-    run()
+    await run()
     fastest = Math.min(fastest, performance.now() - started)
   }
   return fastest
@@ -129,7 +137,7 @@ const hostBudgets = {
     return known
   },
 } satisfies Record<string, () => number>
-const budgets = new Map<string, () => number>(Object.entries(hostBudgets))
+const budgets = new Map<string, Budget>(Object.entries(hostBudgets))
 for (const source of sources) {
   const largest = files
     .filter((file) => file.fixture.harness === source.provider)
@@ -143,9 +151,49 @@ for (const source of sources) {
   })
 }
 
-function units(run: () => number): number {
-  const reference = measure(calibration)
-  return measure(run) / reference
+/** Each reader's largest kept pair store, copied out so no reader opens the fixture itself. */
+async function savedSessions(scratch: string): Promise<{ reader: string; name: string; home: string; path: string }[]> {
+  const largest = new Map<string, { name: string; folder: string; path: string; bytes: number }>()
+  for (const harness of await readdir(FIXTURE_ROOT)) {
+    const root = join(FIXTURE_ROOT, harness, PAIRS_FOLDER)
+    for (const name of await readdir(root).catch(() => [])) {
+      const folder = join(root, name)
+      const pair = PairSchema.parse(JSON.parse(await readFile(join(folder, "pair.json"), "utf8")))
+      const bytes = await treeBytes(join(folder, "home"))
+      for (const store of pair.stores)
+        if (bytes > (largest.get(store.reader)?.bytes ?? -1)) largest.set(store.reader, { name: `${harness}/${name}`, folder, path: store.path, bytes })
+    }
+  }
+  return Promise.all([...largest].map(async ([reader, session]) => {
+    const home = join(scratch, reader)
+    await cp(join(session.folder, "home"), home, { recursive: true })
+    return { reader, name: session.name, home, path: join(home, session.path) }
+  }))
+}
+
+async function treeBytes(folder: string): Promise<number> {
+  const files = (await readdir(folder, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile())
+  const sizes = await Promise.all(files.map(async (entry) => (await stat(join(entry.parentPath, entry.name))).size))
+  return sizes.reduce((sum, size) => sum + size, 0)
+}
+
+// Opening a saved conversation as the app does after a launch: discover the store, then the viewer's first page.
+const scratch = await mkdtemp(join(tmpdir(), "mako-saved-history-"))
+for (const session of await savedSessions(scratch)) {
+  budgets.set(`${session.reader} opens ${session.name} to its first page x10`, async () => {
+    let entries = 0
+    for (let round = 0; round < 10; round++) {
+      const catalog = new SessionCatalog([storeReader(session.reader, session.home)])
+      await catalog.scan()
+      entries += (await catalog.page(session.path, undefined, 100, VIEWER_PAGE))?.entries.length ?? 0
+    }
+    return entries
+  })
+}
+
+async function units(run: Budget): Promise<number> {
+  const reference = await measure(calibration)
+  return (await measure(run)) / reference
 }
 
 const update = process.argv.includes("--update")
@@ -153,17 +201,18 @@ const recorded = update ? {} : BaselinesSchema.parse(JSON.parse(await readFile(B
 const measured: Record<string, number> = {}
 const failures: string[] = []
 for (const [name, run] of budgets) {
-  assert.ok(run(), `${name} did no work`)
-  let value = units(run)
+  assert.ok(await run(), `${name} did no work`)
+  let value = await units(run)
   const baseline = recorded[name]
   if (!update && baseline === undefined) failures.push(`${name}: no baseline; run with --update and commit ${BUDGETS}`)
-  if (baseline !== undefined && value > baseline * ALLOWED_REGRESSION) value = Math.min(value, units(run))
+  if (baseline !== undefined && value > baseline * ALLOWED_REGRESSION) value = Math.min(value, await units(run))
   measured[name] = Number(value.toFixed(3))
   const ratio = baseline === undefined ? "" : ` (${((value / baseline) * 100).toFixed(0)}% of baseline)`
   console.log(`${name}: ${value.toFixed(3)} calibration units${ratio}`)
   if (baseline !== undefined && value > baseline * ALLOWED_REGRESSION)
     failures.push(`${name}: ${value.toFixed(3)} is more than ${Math.round((ALLOWED_REGRESSION - 1) * 100)}% over its baseline ${baseline}`)
 }
+await rm(scratch, { recursive: true, force: true })
 for (const name of Object.keys(recorded))
   if (!budgets.has(name)) failures.push(`${name}: a baseline with no budget; run with --update`)
 if (update) {

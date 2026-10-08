@@ -165,7 +165,7 @@ export function McpChip({ name }: { name: string }) {
       data-copy-reference={capabilityToken("$", "mcp", name)}
       className={chip}
     >
-      {builtIn ? <MakoMark className="size-3 shrink-0 text-foreground" /> : null}
+      {builtIn ? <MakoMark className="size-3" /> : null}
       {name}
     </span>
   )
