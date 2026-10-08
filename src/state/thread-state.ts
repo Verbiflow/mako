@@ -8,6 +8,7 @@ import type {
   ThreadRunState,
 } from "@/lib/types"
 import type { ThreadStatus } from "@/state/thread-status"
+import type { ReleasedTurn } from "@/state/transcript-residency"
 
 interface WorkingThreadsByPath {
   [path: string]: Extract<ThreadStatus, { kind: "working" }>
@@ -27,6 +28,7 @@ export type ViewedThreadEntry =
   ViewedUserEntry | Exclude<ThreadEntry, { kind: "user" }>
 
 export interface ViewedThread extends Omit<Thread, "entries"> {
+  releasedTurns?: ReleasedTurn[]
   entries: ViewedThreadEntry[]
   pageStart: number
   totalEntries: number

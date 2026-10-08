@@ -13,7 +13,7 @@ import {
   appendOptimisticReply,
   removeOptimisticReply,
 } from "@/state/thread-queue"
-import { leaveViewerForLive, viewedThread } from "@/state/thread-viewing"
+import { leaveViewerForLive, rememberThread, viewedThread } from "@/state/thread-viewing"
 import { threadsStore } from "@/state/thread-store"
 import { descriptorFor } from "@/state/descriptors"
 import { harnessLabel } from "@/lib/harness-label"
@@ -149,7 +149,9 @@ export const threadContinuationActions = {
       if (result.kind === "emitted") {
         const thread = await getMako().openThread(result.path)
         if (thread) {
-          threadsStore.set({ viewing: viewedThread(thread), run: null })
+          const viewed = viewedThread(thread)
+          threadsStore.set({ viewing: viewed, run: null })
+          rememberThread(viewed)
           void getMako().followThread(
             result.path,
             thread.checkpoint ?? thread.ref.bytes ?? 0
@@ -345,7 +347,9 @@ export const threadContinuationActions = {
       if (result.kind === "emitted") {
         const thread = await getMako().openThread(result.path)
         if (!thread) return false
-        threadsStore.set({ viewing: viewedThread(thread), run: null })
+        const viewed = viewedThread(thread)
+        threadsStore.set({ viewing: viewed, run: null })
+        rememberThread(viewed)
         void getMako().followThread(
           result.path,
           thread.checkpoint ?? thread.ref.bytes ?? 0

@@ -15,6 +15,8 @@ export type ConversationScope =
   | { kind: "missing" }
 
 export const ConversationScopeContext = createContext<ConversationScope | null>(null)
+/** Stable even when this pane switches between native/live renderers. */
+export const TranscriptPaneContext = createContext<string | null>(null)
 
 /** Null in the focused pane: it shows the active conversation. */
 export function useConversationScope(): ConversationScope | null {

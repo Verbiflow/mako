@@ -97,7 +97,8 @@ function startWatchingControlPreview(conversationId: string): () => void {
       if (closed || document.hidden) release()
       else if (refreshRequested) { refreshRequested = false; void poll() }
       else {
-        const activity = controlPreviewStore.get().previews[conversationId]?.activity
+        const state = controlPreviewStore.get()
+        const activity = state.previews[conversationId]?.activity ?? state.activities[conversationId]
         if (!activity || activity.kind === "browser" || activity.status === "running" || Date.now() - activity.updatedAt < 5000)
           timer = setTimeout(() => void poll(), 1000)
       }

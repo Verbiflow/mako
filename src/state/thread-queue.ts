@@ -1,6 +1,7 @@
 import type { ThreadRef } from "@/lib/types"
 import type { ViewedUserEntry } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
+import { rememberThread } from "@/state/thread-viewing"
 
 export function appendOptimisticReply(ref: ThreadRef, prompt: string): boolean {
   const { viewing } = threadsStore.get()
@@ -11,22 +12,18 @@ export function appendOptimisticReply(ref: ThreadRef, prompt: string): boolean {
     text: prompt,
     echo: true,
   }
-  threadsStore.set({
-    viewing: { ...viewing, entries: [...viewing.entries, echo] },
-  })
+  rememberThread({ ...viewing, entries: [...viewing.entries, echo] })
   return true
 }
 
 export function removeOptimisticReply(ref: ThreadRef, prompt: string): void {
   const viewing = threadsStore.get().viewing
   if (!viewing || viewing.ref.path !== ref.path) return
-  threadsStore.set({
-    viewing: {
-      ...viewing,
-      entries: viewing.entries.filter(
-        (entry) =>
-          entry.kind !== "user" || entry.echo !== true || entry.text !== prompt
-      ),
-    },
+  rememberThread({
+    ...viewing,
+    entries: viewing.entries.filter(
+      (entry) =>
+        entry.kind !== "user" || entry.echo !== true || entry.text !== prompt
+    ),
   })
 }

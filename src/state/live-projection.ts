@@ -9,6 +9,7 @@ import { toExchanges, type Exchange } from "@/lib/exchanges"
 import { changedLiveBlockStart, isTurnStart } from "@mako/sessions/live-content"
 import { touchedFiles, type TouchedFile } from "@/lib/context-files"
 import { nativePromptRequestIds } from "../../electron/contracts/native-prompt-identity"
+import { releasedExchanges, type ReleasedTurn } from "@/state/transcript-residency"
 
 export interface LiveProjection {
   messages: ChatMessage[]
@@ -19,6 +20,7 @@ export interface LiveProjection {
 type ProjectionInput = Pick<LiveSnapshot, "blocks" | "base" | "baseCoveredBlocks" | "history"> & {
   session: Pick<LiveSnapshot["session"], "status" | "harness">
   requests?: LiveSnapshot["requests"]
+  releasedTurns?: ReleasedTurn[]
 }
 interface ProjectionCache {
   input: ProjectionInput
@@ -140,7 +142,7 @@ export function projectLive(
   const result: LiveProjection = {
     messages,
     files: touchedFiles(messages),
-    exchanges: toExchanges(messages, previous?.exchanges),
+    exchanges: releasedExchanges(toExchanges(messages, previous?.exchanges), snapshot.releasedTurns),
     plan: live.plan,
   }
   remember(result, snapshot, pendingPrompts, Boolean(starting))
@@ -156,6 +158,7 @@ function canProjectTail(
     held.starting ||
     held.pending !== pending ||
     held.input.base !== input.base ||
+    held.input.releasedTurns !== input.releasedTurns ||
     held.input.baseCoveredBlocks !== input.baseCoveredBlocks ||
     held.input.history?.blockStart !== input.history?.blockStart ||
     held.input.history?.token !== input.history?.token ||
@@ -248,6 +251,7 @@ export function projectAcp(conversation: AcpConversation): LiveProjection {
       base: conversation.base ?? null,
       baseCoveredBlocks: conversation.baseCoveredBlocks,
       history: conversation.history,
+      releasedTurns: conversation.releasedTurns,
       requests: conversation.requests,
       session:
         conversation.kind === "live"

@@ -5,6 +5,7 @@ import type { LiveProjection } from "@/state/live-projection"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
 import type { WorktreeStep } from "../../electron/contracts/thread-worktrees"
+import type { ReleasedTurn } from "@/state/transcript-residency"
 import type {
   LivePermissionRequest,
   PromptAttachment,
@@ -20,6 +21,7 @@ export interface AcpQueuedPrompt {
 interface AcpConversationBase {
   hasSessionQuestions?: boolean
   history?: LiveSnapshot["history"]
+  releasedTurns?: ReleasedTurn[]
   replyBindingId?: string
   pendingPrompts?: PendingPrompt[]
   nativeAgents?: LiveSnapshot["nativeAgents"]

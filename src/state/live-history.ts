@@ -5,6 +5,8 @@ import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot, EntryBlock } from "@/lib/types"
 import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistorySnapshot } from "../../electron/contracts/live-history"
 import { LiveBlockSchema, type LiveBlock } from "@mako/sessions/live-content"
+import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
+import type { ReleasedTurn } from "@/state/transcript-residency"
 
 /** Reassemble one explicitly requested value, validating part identity/order.
  * JSON is produced by the same typed host contract as the ordinary bridge. */
@@ -40,7 +42,8 @@ export async function readLiveSnapshot(id: string, conditional = false): Promise
     try { return await readLiveValue<LiveHistorySnapshot>(id, { kind: "snapshot", epoch: held?.epoch,
       ifCurrent: conditional && held?.hydrated && held.history && held.revision !== undefined
         ? { token: held.history.token, revision: held.revision } : undefined,
-      from: held?.history ? { blocks: held.history.blockStart, base: held.base?.start ?? 0 } : undefined }) }
+      from: held?.history ? { blocks: held.history.blockStart, base: held.base?.start ?? 0 }
+        : transcriptReaders.rememberedWindow(liveReadingSource(id)) }) }
     catch (error) {
       // Existing hosts keep their old read API. A data/transport failure is
       // never a reason to silently retry an unbounded read.
@@ -95,6 +98,12 @@ export function prependLiveHistory<T extends Pick<LiveSnapshot, "blocks" | "base
 /** A page can begin halfway through an answer. Copy reads its missing prefix
  * from the same captured view without moving the viewport or loading tool bodies. */
 export async function completeLiveAnswer(id: string | undefined, exchange: Exchange): Promise<string> {
+  const release = id ? transcriptReaders.protect(liveReadingSource(id), exchange.id) : () => {}
+  try { return await readCompleteLiveAnswer(id, exchange) }
+  finally { release() }
+}
+
+async function readCompleteLiveAnswer(id: string | undefined, exchange: Exchange): Promise<string> {
   const current = id ? acpStore.get().conversations[id] : undefined
   if (exchange.prompt || current?.kind !== "live" || !current.history?.before) return responseText(exchange)
   let view = { ...current, base: current.base ?? null }
@@ -112,11 +121,60 @@ export async function completeLiveAnswer(id: string | undefined, exchange: Excha
   return responseText(answer)
 }
 
+const turnLoads = new Map<string, Promise<void>>()
+
+/** Restore exactly the released coordinates from their immutable capture.
+ * Controls and later streaming bytes always remain the current state's. */
+export function loadReleasedLiveTurn(id: string, turnId: string): Promise<void> {
+  const key = JSON.stringify([id, turnId])
+  const loading = turnLoads.get(key)
+  if (loading) return loading
+  const work = (async () => {
+    const held = acpStore.get().conversations[id]
+    const turn = held?.releasedTurns?.find(item => item.id === turnId)
+    if (held?.kind !== "live" || !held.history || !turn) return
+    const release = transcriptReaders.protect(liveReadingSource(id), turnId)
+    try {
+      const page = await readLiveValue<LiveHistoryPage>(id, { kind: "range", token: held.history.token,
+        from: { blocks: turn.blocks.start, base: turn.base.start }, to: { blocks: turn.blocks.end, base: turn.base.end } })
+      const current = acpStore.get().conversations[id]
+      if (current?.kind !== "live" || current.history?.token !== held.history.token ||
+          current.releasedTurns?.find(item => item.id === turnId) !== turn) return
+      if (page.history.token !== held.history.token || page.history.blockStart !== turn.blocks.start ||
+          page.history.blockEnd !== turn.blocks.end || page.blocks.length !== turn.blocks.end - turn.blocks.start ||
+          (turn.base.end > turn.base.start && (!page.base || page.base.start !== turn.base.start ||
+            page.base.entries.length !== turn.base.end - turn.base.start)))
+        throw new Error("The reloaded turn did not match this conversation view.")
+      const next = restoreTurn(current, turn, page)
+      replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
+    } catch (error) {
+      if (!(error instanceof Error) || !/history view expired|native history changed/.test(error.message)) throw error
+      // Expiry/rewrite reacquires the source across the held window, keeping
+      // the old display until the coherent replacement is ready.
+      const { hydrateLive } = await import("@/state/live-recovery")
+      if (!(await hydrateLive(id))) throw error
+    } finally { release() }
+  })().finally(() => turnLoads.delete(key))
+  turnLoads.set(key, work)
+  return work
+}
+
+function restoreTurn<T extends { blocks: LiveBlock[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
+  current: T, turn: ReleasedTurn, page: LiveHistoryPage): T {
+  const blocks = current.blocks.slice()
+  blocks.splice(turn.blocks.start - current.history!.blockStart, page.blocks.length, ...page.blocks)
+  const base = current.base && page.base ? { ...current.base, entries: current.base.entries.slice() } : current.base
+  if (base && page.base) base.entries.splice(turn.base.start - base.start, page.base.entries.length, ...page.base.entries)
+  return { ...current, blocks, base, releasedTurns: current.releasedTurns?.filter(item => item !== turn) }
+}
+
 export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistoryAddress): Promise<void> {
   const key = JSON.stringify([id, token, at])
   const held = loading.get(key)
   if (held) return held
   const work = (async () => {
+    const release = transcriptReaders.protect(liveReadingSource(id), "*")
+    try {
     const value = await readLiveValue<LiveBlock | EntryBlock>(id, { kind: "detail", token, at })
     const current = acpStore.get().conversations[id]
     if (current?.kind !== "live" || current.history?.token !== token) return
@@ -142,6 +200,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       const next = { ...current, base: { ...base, entries } }
       replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
     }
+    } finally { release() }
   })().finally(() => loading.delete(key))
   loading.set(key, work)
   return work

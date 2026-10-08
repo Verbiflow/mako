@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo } from "react"
 import { toast } from "sonner"
 import { z } from "zod"
 import type { ThreadRef } from "@/lib/types"
@@ -16,7 +16,7 @@ import {
 } from "@/state/thread-sessions"
 import type { ViewedThread } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
-import { readThreadForPane, rememberedThread } from "@/state/thread-viewing"
+import { readThreadForPane, useRememberedThreads } from "@/state/thread-viewing"
 import { AGENT_TAB_ID, viewer, viewerStore, type PaneSession, type PaneSide, type ViewerState } from "@/state/viewer"
 
 /**
@@ -289,21 +289,14 @@ function keepPaneLayout(): () => void {
 function usePaneThread(ref: ThreadRef | undefined): ViewedThread | null {
   const path = ref?.path
   const version = ref ? `${ref.path}\n${ref.revision ?? ""}\n${ref.bytes ?? ""}\n${ref.updatedAt}` : ""
-  const [read, setRead] = useState<ViewedThread | null>(null)
+  const read = useRememberedThreads(state => path ? state.views.get(path) ?? null : null)
   useEffect(() => {
     if (!path) return
-    let current = true
     readThreadForPane(path)
-      .then((thread) => {
-        if (current && thread) setRead(thread)
-      })
       .catch(() => {})
-    return () => {
-      current = false
-    }
   }, [path, version])
   if (!path) return null
-  return read?.ref.path === path ? read : (rememberedThread(path) ?? null)
+  return read
 }
 
 /** What a pane's chat reads: null for the active conversation, else its bound Session. */

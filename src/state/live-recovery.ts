@@ -13,6 +13,7 @@ import { settleMessage } from "@/state/message-outbox"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
 import type { LiveHistoryCursor, LiveHistoryPage } from "../../electron/contracts/live-history"
+import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 
 const fetching = new Map<string, Promise<boolean>>()
 const pending = new Map<string, LiveBatch[]>()
@@ -205,6 +206,7 @@ export function unloadLive(id: string): boolean {
     baseCoveredBlocks: undefined,
     history: undefined,
     projection: undefined,
+    releasedTurns: undefined,
   })
   return true
 }
@@ -269,6 +271,8 @@ export function applyLiveBatch(batch: LiveBatch): void {
     // and a fresh snapshot is taken rather than merged onto the wrong state.
     !sameEpoch(current, batch) ||
     batch.historyChanged ||
+    (current.releasedTurns?.length && batch.updates.length &&
+      (batch.changedFrom === undefined || current.releasedTurns.some(turn => batch.changedFrom! < turn.blocks.end))) ||
     (current.history && (batch.base !== undefined || batch.baseCoveredBlocks !== undefined ||
       (batch.changedFrom !== undefined && batch.changedFrom < current.history.blockStart) ||
       batch.updates.some(update => update.kind === "tool-update" && current.blocks.some(block =>
@@ -344,7 +348,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
         ? current.projection
         : acpStore.get().activeKey === batch.id
           ? projectLive(
-              { blocks, base, baseCoveredBlocks, history, session, requests },
+              { blocks, base, baseCoveredBlocks, history, session, requests, releasedTurns: current.releasedTurns },
               current.projection,
               pendingPrompts
             )
@@ -469,6 +473,18 @@ export function hydrateLiveSummaries(
 }
 
 export async function loadEarlierLive(id: string): Promise<void> {
+  const release = transcriptReaders.protect(liveReadingSource(id), "*")
+  try {
+    try { await readEarlierLive(id) }
+    catch (error) {
+      if (!(error instanceof Error) || !/history view expired|native history changed/.test(error.message)) throw error
+      if (!(await hydrateLive(id))) throw error
+      await readEarlierLive(id)
+    }
+  } finally { release() }
+}
+
+async function readEarlierLive(id: string): Promise<void> {
   const held = acpStore.get().conversations[id]
   if (held?.kind === "live" && held.history) {
     const before = held.history.before
