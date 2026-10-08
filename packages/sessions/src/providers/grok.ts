@@ -190,15 +190,6 @@ export function grokUpdateMarker(kind: string | undefined, update: JsonObject): 
       const text = warned ? message.slice(1).trim() : message
       return warned || update["kind"] === "tool_outcome" ? { ...event("Hook", text), tone: "warning" } : event("Hook", text)
     }
-    case "scheduled_task_created":
-      return event("Scheduled task", stringValue(update["human_schedule"]), stringValue(update["prompt"]))
-    case "scheduled_task_fired":
-      return event("Scheduled task ran", stringValue(update["human_schedule"]), stringValue(update["prompt"]))
-    case "scheduled_task_deleted": {
-      // `shutdown` only clears the task's chip: the task stays on disk and re-arms on resume.
-      const reason = stringValue(update["reason"])
-      return reason === "completed" || reason === "expired" || reason === "deleted" ? event("Scheduled task removed", plainWords(reason)) : undefined
-    }
     case "auto_recovery_started":
       return event("Notice", "Grok is recovering the turn", reasonOf(update))
     case "auto_recovery_exhausted":

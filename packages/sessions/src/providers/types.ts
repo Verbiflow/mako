@@ -27,6 +27,12 @@ export class SessionUnreadable extends Error {
 /** A native session file as discovery sees it: a path and its stat facts. */
 export interface NativeFile {
   path: string
+  /**
+   * How far the record reaches, in the unit its follower counts: a file's
+   * length, or a database record's position (OpenCode's revision, the newest
+   * Devin CLI node). It stamps changes and resumes followers; it is a size only
+   * for a provider with `tail` or `recent`, which must count it in bytes.
+   */
   bytes: number
   mtimeMs: number
   revision?: string

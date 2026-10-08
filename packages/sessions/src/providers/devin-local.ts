@@ -239,6 +239,10 @@ export class DevinLocalProvider implements SessionProvider {
       startedAt: meta?.createdAt,
       updatedAt: meta?.updatedAt ?? new Date(file.mtimeMs).toISOString(),
       bytes: file.bytes,
+      // Devin.app runs local sessions through Devin's CLI, whose store keeps
+      // what the journal lacks: prompts until a reopen, and what a reopen's
+      // replay drops.
+      clientCopy: true,
     }
     if (!ref.title || !ref.startedAt) {
       // No metadata (or a stale cache): the journal's own first lines carry
