@@ -38,4 +38,11 @@ export interface RecordedDecoder {
   decode(message: JsonValue): Decoded<DecoderEffect>[]
   /** A turn opened where the capture says so, for a decoder whose driver starts one per turn. */
   prompted?(): void
+  /**
+   * A resumed session's process starting where the capture says so: until
+   * `opened`, what it reports is its history replayed, whose spend was
+   * counted when it happened.
+   */
+  opening?(): void
+  opened?(): void
 }

@@ -103,14 +103,28 @@ export type NativeResume =
   | DriverAbsent
 
 /**
+ * The session a fork starts from: its native ID, the run it forks at, and its
+ * native store when known. `steers` counts the messages Mako sent into that
+ * run while it ran, for a harness that stores them like the prompts that open
+ * turns.
+ */
+export interface NativeForkSource {
+  nativeId: string
+  runId: string
+  path?: string
+  steers?: number
+}
+
+/**
  * Forking a conversation at an answer. `native`: the harness forks its own
  * session, at a completed run or at a checkpoint inside one. `import`: it
  * can't, so Mako writes the conversation up to the fork point into a new
  * native session and resumes it, which needs native resume and a session
- * emitter.
+ * emitter. A native fork's `declines` says why the harness can't fork one
+ * session itself, when it can't; that fork goes the `import` way.
  */
 export type NativeFork =
-  | { kind: "native"; point: "run" | "checkpoint"; via: string }
+  | { kind: "native"; point: "run" | "checkpoint"; via: string; declines?(source: NativeForkSource): Promise<string | undefined> }
   | { kind: "import"; via: string }
   | DriverAbsent
 
@@ -183,7 +197,7 @@ export interface ProviderStartOptions extends LiveStartOptions {
   observedUsage?: import("../contracts/providers-acp.js").NativeTotals
   emit?: (event: LiveDriverEvent) => void
   mcpSnapshot?: () => Promise<McpRegistrySnapshot>
-  fork?: { nativeId: string; runId: string }
+  fork?: NativeForkSource
   conversationTools?: ConversationTools
   /** Set on the agent process with `applyThreadEnvironment`, beside the control environment. */
   threadEnvironment?: ThreadEnvironment

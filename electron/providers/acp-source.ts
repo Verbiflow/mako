@@ -179,6 +179,12 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   /** Whose reading a `usage_update` is, and what its `_meta` adds to ACP's own used, size and cost. Pure. */
   usageUpdate?(meta: JsonObject | undefined): AcpUsageReading
   /**
+   * The window of the current model in ACP's model list (`models` in the
+   * reply that opens the session, or a list the agent sends later), for an
+   * agent that names its windows there and not in `usage_update`. Pure.
+   */
+  modelWindow?(models: JsonObject): number | undefined
+  /**
    * How the agent reports its MCP servers starting, opened once per session:
    * which servers it will start, and which did not, as setup notices.
    * Consulted before `decodeNotification`. A notice naming no session is the
@@ -256,6 +262,8 @@ export interface AcpNotificationDecoding {
   state?: Pick<Partial<LiveSessionState>, "title">
   /** What the notification says about tokens, cost or the window, for the session's usage meter. */
   usage?: UsageObservation[]
+  /** A new model list in ACP's shape, replacing the one the session opened with; `modelWindow` reads it. */
+  models?: JsonObject
   /** About the agent process rather than one session; Mako runs one session per process, so it is this session's. */
   connectionWide?: true
   /** The native event's own id, when the provider gives one; it names the notification's markers. */

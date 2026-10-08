@@ -18,4 +18,10 @@ export interface ProviderSkillSource extends ProviderCapability {
    * fails silently.
    */
   readsUniversalRoot: boolean
+  /**
+   * Whether the CLI loads the project's skills in `cwd`, its own folder's
+   * and `.agents/skills`; always, when absent. A project skill it won't load
+   * there is handed over like one from another provider.
+   */
+  readsWorkspace?(cwd: string): boolean
 }

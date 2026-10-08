@@ -2,7 +2,7 @@ import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import type { HarnessProfile } from "../shared.js"
 import type { ProviderCapability } from "./registry.js"
 import { hostWarn } from "../host-log.js"
-import { workDefault, type HarnessDefaults } from "../contracts/harness-defaults.js"
+import { workDefault, workDefaultProblems, type HarnessDefaults } from "../contracts/harness-defaults.js"
 
 /** This query's owner, independent of a session's native execution authority.
  * Stop only this query's process on cancellation and await cleanup. A waiter
@@ -36,6 +36,8 @@ export function availableProviderProfile(
   }
   const settings = workDefault(loader.defaults, catalog.models) ?? catalog.settings
   if (settings) profile.settings = settings
+  const problems = catalog.models.length ? workDefaultProblems(loader.defaults, catalog.models) : []
+  if (problems.length) hostWarn("discovery", "Mako's default model isn't offered", { harness: loader.provider, problems: problems.join("; ") })
   if (catalog.configurationError)
     profile.configurationError = catalog.configurationError
   if (catalog.defaultModel) profile.defaultModel = catalog.defaultModel

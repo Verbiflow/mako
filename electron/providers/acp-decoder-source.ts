@@ -1,7 +1,7 @@
 import type { RequestPermissionRequest, SessionNotification } from "@agentclientprotocol/sdk"
 import { z } from "zod"
 import { AcpDecoder } from "../acp-decoder.js"
-import { acpNotificationUsage, acpUsageReading } from "../acp-usage.js"
+import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "../acp-usage.js"
 import { SessionUsage, type UsageObservation } from "../session-usage.js"
 import { decoded, decodedNotices, type Decoded } from "../contracts/native-decoding.js"
 import type { AcpAsk, ProviderAcpSource } from "./acp-source.js"
@@ -10,25 +10,28 @@ import type { DecoderEffect, ProviderDecoderSource } from "./decoder-source.js"
 /**
  * An ACP agent's decoder, offered to Mako's tools: the same `AcpDecoder` the
  * live client runs, over recorded messages. A recorded message is
- * `{ method, params }` for a notification and `{ request, params }` for a
- * request the agent waits on. Its kind is `session/update/<kind>` for an
- * update and the method otherwise.
+ * `{ method, params }` for a notification, `{ request, params }` for a
+ * request the agent waits on and `{ response, result }` for the reply that
+ * opened the session. Its kind is `session/update/<kind>` for an update and
+ * the method otherwise.
  *
  * Vendor notifications go through the provider's `decodeNotification`, as
  * the live client reads them: their notices become the markers and activity
  * the window draws, and one the provider does not know stays unknown. Their
- * spend and ACP's `usage_update` reach a meter of the session's own, whose
- * readings are the usage the window would show.
+ * spend, ACP's `usage_update` and the window a model list names reach a
+ * meter of the session's own, whose readings are the usage the window would show.
  */
 const DECODED_UPDATES = ["user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "tool_call",
   "tool_call_update", "plan", "current_mode_update", "config_option_update", "session_info_update", "usage_update"]
 const SILENT_UPDATES = ["available_commands_update"]
 const PERMISSION = "session/request_permission"
+const OPENINGS = ["session/new", "session/load"] as const
 
 const JsonObjectSchema = z.record(z.string(), z.json())
 const RecordedSchema = z.union([
   z.object({ method: z.string(), params: JsonObjectSchema }),
   z.object({ request: z.string(), params: JsonObjectSchema }),
+  z.object({ response: z.enum(OPENINGS), result: JsonObjectSchema }),
 ])
 const NotificationSchema = z.looseObject({ sessionId: z.string(), update: z.looseObject({ sessionUpdate: z.string() }) })
 const PermissionSchema = z.looseObject({
@@ -50,13 +53,14 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
     "method" in message && message.method !== "session/update" ? source.decodeNotification?.(message.method, message.params) : undefined
   const kind = (message: z.infer<typeof RecordedSchema>) => {
     if ("request" in message) return message.request
+    if ("response" in message) return message.response
     if (message.method !== "session/update") return vendor(message)?.kind ?? message.method
     return `session/update/${NotificationSchema.safeParse(message.params).data?.update.sessionUpdate ?? "(none)"}`
   }
   return {
     provider: source.provider,
-    decoded: new Set([...DECODED_UPDATES.map((update) => `session/update/${update}`), PERMISSION, ...(source.requests?.methods ?? [])]),
-    silent: new Set(SILENT_UPDATES.map((update) => `session/update/${update}`)),
+    decoded: new Set([...DECODED_UPDATES.map((update) => `session/update/${update}`), PERMISSION, ...(source.requests?.methods ?? []), ...source.modelWindow ? OPENINGS : []]),
+    silent: new Set([...SILENT_UPDATES.map((update) => `session/update/${update}`), ...source.modelWindow ? [] : OPENINGS]),
     kind(message) {
       const recorded = RecordedSchema.safeParse(message)
       return recorded.success ? kind(recorded.data) : "(unreadable)"
@@ -65,20 +69,34 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
       const recorded = RecordedSchema.safeParse(message)
       const notified = recorded.success ? vendor(recorded.data) : undefined
       if (notified?.notices === undefined) return undefined
-      return notified.notices.length || notified.usage?.length ? "decoded" : "silent"
+      return notified.notices.length || notified.usage?.length || (notified.models && source.modelWindow) ? "decoded" : "silent"
     },
     open(session) {
       const settings = SessionSchema.safeParse(session).data?.settings
       const decoder = new AcpDecoder(source, () => settings)
       const usage = new SessionUsage()
+      const models = new AcpModelWindow(source)
+      // As the live client, which counts no spend before the session has its id.
+      let opening = false
       const metered = (observations: UsageObservation[]): Decoded<DecoderEffect>[] => {
-        const reading = observations.length ? usage.observe(...observations) : undefined
+        const counted = opening ? observations.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") : observations
+        const reading = counted.length ? usage.observe(...counted) : undefined
         return reading ? [decoded.state({ usage: reading })] : []
       }
       return {
+        opening() {
+          opening = true
+        },
+        opened() {
+          opening = false
+        },
         decode(message): Decoded<DecoderEffect>[] {
           const recorded = RecordedSchema.safeParse(message)
           if (!recorded.success) return [decoded.unknown("(unreadable)", message, "unreadable")]
+          if ("response" in recorded.data) {
+            opening = false
+            return metered(models.opened(recorded.data.result))
+          }
           if ("request" in recorded.data) {
             const type = recorded.data.request
             if (type === PERMISSION) {
@@ -96,7 +114,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
             return [
               ...decodedNotices(notified.notices, notified.id),
               ...notified.state ? [decoded.state(notified.state)] : [],
-              ...metered(acpNotificationUsage(notified)),
+              ...metered([...acpNotificationUsage(notified), ...notified.models ? models.relisted(notified.models) : []]),
             ]
           }
           const notification = NotificationSchema.safeParse(recorded.data.params)
