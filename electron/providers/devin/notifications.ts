@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { devinCompactionRecord } from "@mako/sessions/harnesses"
 import type { JsonObject } from "../../codex-app-json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
 import type { AcpNotificationDecoding } from "../acp-source.js"
@@ -63,9 +64,11 @@ export function devinNotification(method: string, params: JsonObject): AcpNotifi
       if (!parsed.success) return { sessionId, kind: method, notices: undefined }
       const { status, summary } = parsed.data
       const decoded = { sessionId, kind: `${method}/${status}`, notices: compaction(status, summary ?? undefined) }
-      // Devin sends no event ids. A summary is written once per compaction, so
-      // it names this one: a load that replays it draws no second marker.
-      return status === "completed" && summary ? { ...decoded, id: `compaction:${summaryId(summary)}` } : decoded
+      // Devin sends no event ids. The summary names the file the compaction
+      // saved, and is written once per compaction: either names this one, so a
+      // load that replays it draws no second marker.
+      if (status !== "completed" || !summary) return decoded
+      return { ...decoded, id: devinCompactionRecord(summary) ?? `compaction:${summaryId(summary)}` }
     }
     case "_cognition.ai/connection_retry": {
       const parsed = ConnectionRetry.safeParse(params)

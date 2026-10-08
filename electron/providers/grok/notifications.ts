@@ -1,5 +1,6 @@
 import { z } from "zod"
-import { grokErrorLabel, grokUpdateMarker } from "@mako/sessions"
+import { grokErrorLabel, grokTurnCause, grokUpdateMarker } from "@mako/sessions"
+import { grokUpdateReading } from "@mako/sessions/harnesses"
 import { objectValue, type JsonObject } from "../../codex-app-json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
 import type { AcpNotificationDecoding } from "../acp-source.js"
@@ -29,54 +30,26 @@ const WORKSPACE_METHODS = new Set([
 ])
 
 /**
- * Read by other observers: background tasks, the turns Grok starts itself,
- * and subagents, which Mako follows through their `meta.json`.
+ * What Grok tells its own pager about the process, each known to Mako another
+ * way or not about the conversation (xai-org/grok-build 1.0.45,
+ * `xai-grok-pager/src/app/acp_handler`; recorded from grok 1.0.46).
  */
-const OBSERVED = new Set(["background_tasks", "task_completed", "turn_completed", "subagent_spawned", "subagent_finished"])
-
-/**
- * Grok's own bookkeeping and streaming detail, already shown through ACP's
- * updates or not about the conversation. The kinds are those of its
- * `SessionUpdate` (xai-org/grok-build 1.0.45 `extensions/notification.rs`).
- */
-const IGNORED = new Set([
-  "task_backgrounded",
-  "compaction_checkpoint",
-  "session_recap",
-  "session_recap_unavailable",
-  "subagent_progress",
-  "turn_usage",
-  "reasoning_completed",
-  "tool_call_delta_chunk",
-  "diff_review",
-  "pending_interaction",
-  "interaction_resolved",
-  "plan_kept",
-  "plan_cleared",
-  "plan_executing",
-  "goal_updated",
-  "workflow_updated",
-  "rewind_marker",
-  "hook_run_started",
-  "hook_execution",
-  "hooks_changed",
-  "plugins_changed",
-  "plugin_updates_installed",
-  "session_status",
-  "relay_sync_status",
-  "last_turn_summary",
-  "served_model",
-  "image_compressed",
-  // The end of the turn Grok continues after compacting; its `turn_completed` follows.
-  "auto_continue_completed",
-  // Grok asking for a rating of the session, which it shows only in its own pager.
-  "feedback_request",
-  // A monitor's output lines, which reach the model in its reminders.
-  "monitor_event",
-  // `session/set_config_option` answers with the model, and `config_option_update` shows it.
-  "model_changed",
+const PAGER_METHODS = new Set([
+  // The steps of opening a session ("loading your plugins"), sent while
+  // `session/new` or `session/load` runs; MCP servers are read from their own notices.
+  "_x.ai/session/setup",
+  // The roster of every session the process runs, for Grok's fleet dashboard.
+  "_x.ai/sessions/changed",
+  // Grok's shared prompt queue, which holds only what Mako itself sent.
+  "_x.ai/queue/changed",
+  // The end of a turn, which the `session/prompt` response and `turn_completed`
+  // both carry; Grok keeps it for older pagers and plans to drop it.
+  "_x.ai/session/prompt_complete",
+  // Feature flags and tips for Grok's pager, refreshed with its remote settings.
+  "_x.ai/settings/update",
+  // xAI's product announcements, which Grok shows as a banner in its pager.
+  "_x.ai/announcements/update",
 ])
-const IGNORED_PREFIXES = ["memory_", "response_"]
 
 const GrokUpdate = z.looseObject({ sessionUpdate: z.string() })
 /** `_meta.eventId` is Grok's own id for the update, the same live and saved. */
@@ -94,7 +67,7 @@ const RetryState = z.object({
 const SummaryGenerated = z.object({ session_summary: text })
 
 export function grokNotification(method: string, params: JsonObject): AcpNotificationDecoding | undefined {
-  if (WORKSPACE_METHODS.has(method)) return { kind: method, notices: [] }
+  if (WORKSPACE_METHODS.has(method) || PAGER_METHODS.has(method)) return { kind: method, notices: [] }
   // The snapshot that announces a turn Grok starts itself; the provider-turn observer reads it.
   if (method === "_x.ai/task_completed") return { sessionId: Session.safeParse(params).data?.sessionId, kind: method, notices: [] }
   // The echo of a message Mako steered in; the host already shows it.
@@ -111,7 +84,8 @@ export function grokNotification(method: string, params: JsonObject): AcpNotific
   const { sessionId } = envelope.data
   const { sessionUpdate } = envelope.data.update
   const kind = `${method}/${sessionUpdate}`
-  const decoded = grokSessionUpdate(sessionUpdate, update)
+  const meta = objectValue(params["_meta"])
+  const decoded = grokSessionUpdate(sessionUpdate, update, meta)
   const usage = grokUsage(sessionUpdate, update)
   const id = envelope.data._meta?.eventId
   return {
@@ -131,10 +105,17 @@ interface DecodedUpdate {
   kind?: string
 }
 
-/** Activity and title here; every transcript marker comes from `grokUpdateMarker`, which saved history reads too. */
-function grokSessionUpdate(sessionUpdate: string, update: JsonObject): DecodedUpdate {
-  if (OBSERVED.has(sessionUpdate) || IGNORED.has(sessionUpdate) || IGNORED_PREFIXES.some((prefix) => sessionUpdate.startsWith(prefix)))
-    return { notices: [] }
+/**
+ * Activity and title here; every transcript marker comes from `grokUpdateMarker`
+ * or `grokTurnCause`, which saved history reads too.
+ */
+function grokSessionUpdate(sessionUpdate: string, update: JsonObject, meta: JsonObject | undefined): DecodedUpdate {
+  if (sessionUpdate === "turn_completed") {
+    const cause = grokTurnCause(meta)
+    return { notices: cause ? [{ kind: "event", event: cause }] : [] }
+  }
+  const reading = grokUpdateReading(sessionUpdate)
+  if (reading === "observed" || reading === "ignored") return { notices: [] }
   const marker = grokUpdateMarker(sessionUpdate, update)
   const markers: NativeNotice[] = marker ? [{ kind: "event", event: marker }] : []
   switch (sessionUpdate) {
