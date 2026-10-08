@@ -112,7 +112,7 @@ export {
   type CursorSdkSelectionResult,
 } from "./providers/cursor-sdk-models.js"
 export type { CursorSdkModelSelection } from "./cursor-sdk-content.js"
-export { GrokProvider, grokErrorLabel, grokHome, grokUpdateMarker, grokWorkspaceCwd } from "./providers/grok.js"
+export { GrokProvider, grokErrorLabel, grokHome, grokTurnCause, grokUpdateMarker, grokWorkspaceCwd } from "./providers/grok.js"
 export { ClaudeProvider } from "./providers/claude.js"
 export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"

@@ -96,6 +96,8 @@ export const CONTEXT_COMPACTED = "Context compacted"
 export const COMPACTION_FAILED = "Compaction failed"
 export const TURN_FAILED = "Turn failed"
 export const INTERRUPTED = "Interrupted"
+/** The harness ended the turn by its own rule, neither stopped by the person nor failed; the detail says which rule. */
+export const TURN_ENDED = "Turn ended"
 
 export interface Compaction {
   trigger?: "automatic" | "manual"

@@ -201,6 +201,21 @@ export interface Thread {
   checkpoint?: number
   ref: ThreadRef
   entries: ThreadEntry[]
+  /** Native records the reader kept no meaning for; absent when it read them all. */
+  unread?: UnreadRecord[]
+}
+
+/**
+ * Native records of one kind a history reader couldn't draw: a kind it
+ * doesn't know, or a known kind whose shape it couldn't read. The first is
+ * kept as it was, so the kind can be read and decided on, not guessed at.
+ */
+export interface UnreadRecord {
+  kind: string
+  reason: "unknown" | "unreadable"
+  count: number
+  /** The first such record, as the store holds it. */
+  sample?: z.infer<ReturnType<typeof z.json>>
 }
 
 export interface ThreadPage {
@@ -212,6 +227,8 @@ export interface ThreadPage {
   hasEarlier: boolean
   /** `translatorBuild()` of the code that produced these entries. */
   translator?: string
+  /** The thread's `unread` records; set on a page read from the whole thread. */
+  unread?: UnreadRecord[]
   /**
    * Read from the record's tail alone and cut at its first prompt, so a
    * cold whale paints before the whole record is translated. `start` and
@@ -496,6 +513,7 @@ export class EntrySink {
   /** `droppedEntries` at the last snapshot. */
   private reported = 0
   private unchangedCount = 0
+  private readonly unreadKinds = new Map<string, UnreadRecord>()
 
   constructor(max = 6000, maxCharacters = 32 * 1024 * 1024) {
     this.max = max
@@ -554,9 +572,12 @@ export class EntrySink {
     }
     const tail = last >= this.weights.length ? entryCharacters(this.list[last]!) : 0
     let characters = this.weighed + tail
-    while (this.list.length > 1 && characters > this.maxCharacters) {
-      const count = Math.max(1, Math.ceil(this.list.length / 8))
-      for (let index = 0; index < count; index++) characters -= this.weights[index]!
+    if (characters > this.maxCharacters) {
+      // An eighth of the room is left free, so a growing session isn't cut
+      // again on every write. Weighed, not counted: an entry can be a whole turn.
+      const room = this.maxCharacters - this.maxCharacters / 8
+      let count = 0
+      while (count < this.list.length - 1 && characters > room) characters -= this.weights[count++]!
       this.drop(count)
     }
     const header = this.droppedEntries > 0 ? 1 : 0
@@ -577,6 +598,19 @@ export class EntrySink {
 
   done(): ThreadEntry[] {
     return this.snapshot()
+  }
+
+  /** A native record this sink's reader couldn't draw, counted by kind; the first of each is kept. */
+  unread(kind: string, reason: UnreadRecord["reason"], sample?: UnreadRecord["sample"]): void {
+    const key = `${reason}\0${kind}`
+    const known = this.unreadKinds.get(key)
+    if (known) known.count++
+    else this.unreadKinds.set(key, sample === undefined ? { kind, reason, count: 1 } : { kind, reason, count: 1, sample })
+  }
+
+  /** What `unread` counted, in the order each kind first came; undefined when every record was read. */
+  get unreadRecords(): UnreadRecord[] | undefined {
+    return this.unreadKinds.size ? [...this.unreadKinds.values()] : undefined
   }
 
   private unsettle(index: number): void {

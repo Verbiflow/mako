@@ -106,6 +106,16 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("retract"), ids: z.array(z.string()).min(1) }),
 ])
 export type LiveUpdate = z.infer<typeof LiveUpdateSchema>
+
+/**
+ * Whether the host draws `update` while a conversation it already shows is
+ * opening. A harness resuming its session replays the history then, which
+ * the saved history already shows; only a setup notice is about this launch.
+ */
+export function drawnWhileOpening(update: LiveUpdate): boolean {
+  return update.kind === "event" && update.setup === true
+}
+
 export const LiveBlockSchema = z.discriminatedUnion("type", [
   ProposedPlanSchema,
   z.object({

@@ -119,6 +119,20 @@ export const CursorSdkDeltaSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("summary-completed") }),
   /** The tail of what a running shell command printed since the last one, coalesced by the child. */
   z.object({ type: z.literal("shell-output"), text: z.string() }),
+  /**
+   * A call a running subagent made, from the SDK's `tool-call-delta`: `task`
+   * is the parent's `task` call the subagent runs under. The child forwards a
+   * call's start and its end, with long strings in `args` clipped and the
+   * result left out; the subagent's text and thinking are not forwarded.
+   */
+  z.object({
+    type: z.literal("subagent-call"),
+    task: z.string(),
+    callId: z.string(),
+    name: z.string(),
+    status: z.enum(["running", "completed", "error"]),
+    args: z.json().optional(),
+  }),
   /** An update kind this child does not know, sent once per kind. */
   z.object({ type: z.literal("unhandled"), kind: z.string() }),
 ])
@@ -158,11 +172,18 @@ export function compactionSummary(message: CursorSdkMessage): string | undefined
 /** One message of a run as `run_events` keeps it, with when it was written. */
 export interface CursorSdkRunEvent {
   message: CursorSdkMessage
+  /** Its place among what the run streamed, from 0: the `seq` the live child gave it. */
+  index: number
   at?: string
 }
 
 /** The results a run's checkpoint kept for `callIds`, asked once, when the run ends with calls still open. */
 export type CursorSettled = (callIds: ReadonlySet<string>) => ReadonlyMap<string, CursorToolResult>
+
+/** A run message's native identity, the same live and saved: its run, and its place among what the run streamed. */
+export function cursorSdkMessageRecord(message: CursorSdkMessage, index: number): string {
+  return `${message.run_id}:${index}`
+}
 
 /** What a saved run's replay needs beyond its messages. */
 export interface CursorSdkReplay {
@@ -196,7 +217,7 @@ export function cursorRunEntries(events: Iterable<CursorSdkRunEvent>, replay: Cu
       at.push(time)
     }
   }
-  for (const { message, at: time } of events) {
+  for (const { message, index, at: time } of events) {
     if (message.type === "user") {
       const text = message.message.content.map((part) => part.text).join("")
       add([{ kind: "user", text, ...replay.prompt && { steeringFor: replay.prompt } }], time)
@@ -204,7 +225,7 @@ export function cursorRunEntries(events: Iterable<CursorSdkRunEvent>, replay: Cu
     }
     add(projection.message(message), time)
     const summary = compactionSummary(message)
-    if (summary) add([{ kind: "event", ...compactionEvent({ summary }) }], time)
+    if (summary) add([{ kind: "event", ...compactionEvent({ summary }), source: { harness: "cursor", record: cursorSdkMessageRecord(message, index) } }], time)
   }
   const ending = replay.ending
   if (ending) add(projection.finish(ending.outcome, cursorUnfinishedToolNote(ending.outcome, ending.error), replay.settled), ending.at)
@@ -232,6 +253,8 @@ export class CursorSdkProjection {
   private thinking = new Accumulated()
   private readonly tools = new Map<string, { name: string; input: JsonValue | undefined; output?: string }>()
   private readonly settled = new Set<string>()
+  /** Calls the stream ended with an error result, by name, until their checkpoint says what the model was told. */
+  private readonly reported = new Map<string, string>()
 
   private readonly turn: string
 
@@ -285,6 +308,8 @@ export class CursorSdkProjection {
         return []
       case "shell-output":
         return this.shellOutput(delta.text)
+      // A subagent's own calls show as its progress; its `task` row holds what it reported.
+      case "subagent-call":
       case "summary-started":
       case "unhandled":
         return []
@@ -355,6 +380,8 @@ export class CursorSdkProjection {
           if (proposal) updates.push(proposal)
           return updates
         }
+        if (cursorCallErrored(message.status, isObject(message.result) ? stringOf(message.result.status) : undefined))
+          this.reported.set(message.call_id, message.name)
         return this.toolEnded(message.call_id, message.name, message.status === "error", message.args, message.result)
       }
       case "task":
@@ -415,7 +442,8 @@ export class CursorSdkProjection {
    * more. Without this the row would spin forever.
    */
   finish(outcome: CursorTurnOutcome, note: string, settled?: CursorSettled): LiveUpdate[] {
-    const updates = settled && this.tools.size ? this.settle(settled(new Set(this.tools.keys()))) : []
+    const asked = new Set([...this.tools.keys(), ...this.reported.keys()])
+    const updates = settled && asked.size ? this.settle(settled(asked)) : []
     for (const id of this.tools.keys()) {
       const update: LiveUpdate = {
         kind: "tool-update",
@@ -433,16 +461,20 @@ export class CursorSdkProjection {
   }
 
   /**
-   * Ends the open calls a checkpoint kept results for. The child reads them
-   * while the run goes on, as Cursor saves each step, and again when it ends.
+   * Shows what a checkpoint kept for calls the stream left open, or ended
+   * with only an error result: what the model itself was told. The child
+   * reads them while the run goes on, as Cursor saves each step, and again
+   * when it ends.
    */
   settle(results: ReadonlyMap<string, CursorToolResult>): LiveUpdate[] {
     const updates: LiveUpdate[] = []
-    for (const [id, tool] of this.tools) {
+    const calls = [...this.tools].map(([id, tool]) => [id, tool.name] as const).concat([...this.reported])
+    for (const [id, name] of calls) {
       const result = results.get(id)
       if (!result) continue
+      this.reported.delete(id)
       this.settled.add(id)
-      updates.push(...this.toolEnded(id, tool.name, result.failed, undefined, result.failed ? { status: "error", error: result.output } : result.output))
+      updates.push(...this.toolEnded(id, name, result.failed, undefined, result.failed ? { status: "error", error: result.output } : result.output))
     }
     return updates
   }
@@ -633,6 +665,17 @@ export function toolTitle(name: string, args: JsonValue | undefined): string {
 }
 
 /** A call that errored, or an MCP tool that answered with `isError`. */
+/**
+ * A call the SDK ended as an error. Its error can say less than the
+ * checkpoint: SDK 1.0.31 ended a read of a missing file with
+ * `{status: "error", error: {message: "error"}}`, and its checkpoint kept
+ * "Error: File not found". A command that exits non-zero completes with its
+ * output, and isn't one.
+ */
+export function cursorCallErrored(status: string, resultStatus: string | undefined): boolean {
+  return status === "error" || resultStatus === "error"
+}
+
 function resultFailed(result: JsonValue | undefined): boolean {
   if (!isObject(result)) return false
   return result.status === "error" || (isObject(result.value) && result.value.isError === true)

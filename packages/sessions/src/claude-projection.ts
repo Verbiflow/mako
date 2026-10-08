@@ -230,7 +230,7 @@ export class ClaudeProjection {
       if (this.finalized.size > 4096)
         this.finalized.delete(this.finalized.values().next().value ?? "")
       const text = (): string => message.message.content.map((block) => block.type === "text" ? block.text : "").join("")
-      if (message.error) return [{ kind: "event", ...claudeApiErrorEvent(message.error, text()) }]
+      if (message.error) return [{ kind: "event", ...claudeApiErrorEvent(message.error, text()), source: { harness: "claude", record: message.uuid } }]
       // Claude Code composes this filler itself for a turn with nothing to answer.
       if (message.message.model === "<synthetic>" && text().trim() === "No response requested.") return []
       const slots = this.slots(message.message.id)

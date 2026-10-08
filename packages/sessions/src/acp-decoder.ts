@@ -34,6 +34,7 @@ const unknown = (type: string, raw: Raw): AcpDecoded => ({ kind: "unknown", type
 
 export type AcpToolCallUpdate = Extract<SessionUpdate, { sessionUpdate: "tool_call" }>
 export type AcpToolCallChange = Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>
+export type AcpUserChunk = Extract<SessionUpdate, { sessionUpdate: "user_message_chunk" }>
 
 /** The plan handover a harness layers on ACP's updates, opened once per session. Pure. */
 export interface AcpPlanDecoder {
@@ -53,6 +54,13 @@ export interface AcpDecoderHooks<Plans extends AcpPlanDecoder = AcpPlanDecoder> 
   toolReading?: AcpToolReading
   /** An update the agent sends only to redraw its own display and never keeps in its store; Mako leaves it out, so a session reads the same reopened. */
   transient?(notification: SessionNotification): boolean
+  /**
+   * A user message the agent replays on `session/load`, as its store reader
+   * reads the same record: a turn the agent started itself, a command whose
+   * effect is already drawn (`null`), or a steer's typed text. `undefined`
+   * keeps it the person's message as sent.
+   */
+  replayedUser?(update: AcpUserChunk): LiveUpdate | null | undefined
   /**
    * The agent's plan handover: proposed plans from its updates, and on the
    * live side the request whose approval builds one. Opened once per
@@ -195,6 +203,11 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
   update(notification: SessionNotification): AcpDecoded[] {
     if (this.hooks?.transient?.(notification)) return []
     const { update } = notification
+    if (update.sessionUpdate === "user_message_chunk") {
+      const read = this.hooks?.replayedUser?.(update)
+      if (read === null) return []
+      if (read) return [content(read)]
+    }
     const toolName = update.sessionUpdate === "tool_call" ? this.hooks?.toolName?.(update) : undefined
     const toolFailed = update.sessionUpdate === "tool_call_update" && update.status === "completed" && this.hooks?.toolFailed?.(update)
     const out = decodeAcpUpdate(update, { settings: this.settings(), toolName, toolFailed, toolReading: this.hooks?.toolReading, tools: this.tools }).map((item) =>

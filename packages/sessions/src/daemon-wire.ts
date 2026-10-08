@@ -1,8 +1,10 @@
 import { StringDecoder } from "node:string_decoder"
+import { z } from "zod"
 import {
   EntryBlockSchema,
   ThreadEntrySchema,
   ThreadRefSchema,
+  UnreadRecordSchema,
 } from "./thread-schema.js"
 import type {
   EntryBlock,
@@ -10,6 +12,7 @@ import type {
   ThreadEntry,
   ThreadPage,
   ThreadRef,
+  UnreadRecord,
 } from "./format.js"
 
 /**
@@ -381,7 +384,14 @@ function parseThread(value: JsonValue | undefined): Thread | null {
   const result: Thread = { ref, entries }
   const checkpoint = readNumber(value, "checkpoint")
   if (checkpoint !== undefined) result.checkpoint = checkpoint
+  const unread = parseUnread(value.unread)
+  if (unread) result.unread = unread
   return result
+}
+
+function parseUnread(value: JsonValue | undefined): UnreadRecord[] | undefined {
+  const parsed = z.array(UnreadRecordSchema).safeParse(value)
+  return parsed.success && parsed.data.length ? parsed.data : undefined
 }
 
 function parseThreadPage(value: JsonValue | undefined): ThreadPage | null {
@@ -405,6 +415,8 @@ function parseThreadPage(value: JsonValue | undefined): ThreadPage | null {
   const translator = readString(value, "translator")
   if (translator !== undefined) result.translator = translator
   if (readBoolean(value, "preview")) result.preview = true
+  const unread = parseUnread(value.unread)
+  if (unread) result.unread = unread
   return result
 }
 

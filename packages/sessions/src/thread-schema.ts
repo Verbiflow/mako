@@ -113,8 +113,15 @@ export const ThreadRefSchema = z.object({
   threadId: z.string().optional(),
   sessionId: z.string().optional(),
 })
+export const UnreadRecordSchema = z.object({
+  kind: z.string(),
+  reason: z.enum(["unknown", "unreadable"]),
+  count: z.number().int().positive(),
+  sample: z.json().optional(),
+})
 export const ThreadSchema = z.object({
   ref: ThreadRefSchema,
   entries: z.array(ThreadEntrySchema),
   checkpoint: z.number().nonnegative().optional(),
+  unread: z.array(UnreadRecordSchema).optional(),
 })

@@ -577,7 +577,7 @@ export class SessionCatalog {
     const total = thread.entries.length
     const end = Math.min(total, Math.max(0, before ?? total))
     const slice = pageSlice(thread.entries, end, limit, options)
-    return {
+    const page: ThreadPage = {
       ref: thread.ref,
       checkpoint: thread.checkpoint,
       entries: slice.entries,
@@ -586,6 +586,8 @@ export class SessionCatalog {
       hasEarlier: slice.start > 0,
       translator: translatorBuild(),
     }
+    if (thread.unread) page.unread = thread.unread
+    return page
   }
 
   /**

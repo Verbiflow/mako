@@ -3,7 +3,7 @@ import { z } from "zod"
 import { AcpUpdateDecoder, type AcpDecoderHooks, type AcpSessionPatch } from "./acp-decoder.js"
 import { AcpContentBlockSchema } from "./acp-tool-details.js"
 import type { AttachmentContent } from "./content.js"
-import { cleanEntry, EntrySink, type ThreadEntry, type TurnUsage } from "./format.js"
+import { cleanEntry, EntrySink, type ThreadEntry, type TurnUsage, type UnreadRecord } from "./format.js"
 import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
 import { turnEntries, userEntry } from "./live-entries.js"
 
@@ -21,6 +21,20 @@ const SavedUpdateSchema = z.discriminatedUnion("sessionUpdate", [
   z.looseObject({ sessionUpdate: z.literal("plan"), entries: z.array(z.looseObject({ content: z.string(), status: z.string() })) }),
   z.looseObject({ sessionUpdate: z.literal("session_info_update"), title: z.string().nullish() }),
 ])
+
+const SCREENED = new Set<string>(SavedUpdateSchema.options.map((option) => option.shape.sessionUpdate.value))
+/** ACP's updates for the host rather than the transcript: usage, the command list, the mode and the config options. */
+const HOST_UPDATES = new Set(["usage_update", "available_commands_update", "current_mode_update", "config_option_update"])
+
+/**
+ * Why `acpSavedNotification` refused a saved update of this kind: one the
+ * screen reads but this one failed it, or one ACP's saved readers don't know.
+ * Nothing for the host's own kinds and the person's chunks, which each reader reads itself.
+ */
+export function acpSavedRefusal(kind: string): UnreadRecord["reason"] | undefined {
+  if (HOST_UPDATES.has(kind) || kind === "user_message_chunk") return undefined
+  return SCREENED.has(kind) ? "unreadable" : "unknown"
+}
 
 export const SavedAcpUpdateSchema = z.looseObject({ sessionUpdate: z.string() })
 /** A saved `session/update` as its store keeps it, before the screen; hooks read its `_meta` too. */
@@ -99,6 +113,7 @@ export class AcpSavedTurns {
     for (const item of this.decoder.update(notification)) {
       if (item.kind === "update") this.queue(item.update, at)
       else if (item.kind === "state") patches.push(item.patch)
+      else this.sink.unread(item.type, item.reason, item.raw)
     }
     return patches
   }
