@@ -791,6 +791,8 @@ export const hostCallInputs = {
   ]),
   "mako:stage-file": z.tuple([z.string(), z.string()]),
   "mako:stage-file-path": z.tuple([z.string()]),
+  "mako:telemetry": z.tuple([]),
+  "mako:telemetry-choose": z.tuple([z.object({ usage: z.boolean().optional(), errors: z.boolean().optional() }).strict()]),
   "mako:terminal-acknowledge": z.tuple([z.string(), z.number()]),
   "mako:terminal-attach": z.tuple([z.string()]),
   "mako:terminal-create": z.tuple([

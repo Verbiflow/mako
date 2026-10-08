@@ -113,6 +113,7 @@ const reads = [
   "mako:browser-control-status",
   "mako:computer-permissions",
   "mako:computer-driver",
+  "mako:telemetry",
 ] as const
 
 /**
@@ -166,6 +167,8 @@ const replays = [
   "mako:utility-choice",
   /** Saving the same harness order again leaves the same order. */
   "mako:harness-order",
+  /** `Telemetry.choose`: the same choice saved twice is one choice. */
+  "mako:telemetry-choose",
   /** `ThreadWorktreeService.want`: stamps the project wanted and tops its spares up to a fixed count. */
   "mako:worktree-want",
   /** `ThreadWorktreeService.skip`: a start already skipped, or past its worktree, ignores a repeat. */

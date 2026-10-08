@@ -44,6 +44,8 @@ const fixtureReads = [
   "mako:utility-model-settings",
   "mako:harness-order-saved",
   "mako:default-commit-prompt",
+  /** Says telemetry is off on a fixture desk; answers from memory. */
+  "mako:telemetry",
 ] as const
 
 export const fixtureDeskHostCalls: ReadonlySet<string> = new Set<string>(fixtureReads)

@@ -57,6 +57,7 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudDevice } from "./cloud-account.js"
+import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type {
   Automation,
@@ -443,6 +444,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
     cloudDeviceRemove: (id: string) => invokeTrustedHost<CloudAccount>("mako:cloud-device-remove", id),
     cloudSignOut: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-out"),
+
+    /* What this install reports to Mako, and what the person allows. */
+    telemetry: () => invokeTrustedHost<TelemetryState>("mako:telemetry"),
+    chooseTelemetry: (choice: Partial<TelemetryChoice>) => invokeTrustedHost<TelemetryState>("mako:telemetry-choose", choice),
 
     /* Harness accounts: several logins per CLI. */
     accounts: () => invokeTrustedHost<AccountCatalog>("mako:accounts"),
