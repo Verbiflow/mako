@@ -24,7 +24,7 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
-import { mockCloudAccount } from "./mock-cloud-account"
+import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
 import type {
@@ -136,6 +136,12 @@ const MOCK_PROVIDERS: UtilityProviderInfo[] = [
   { id: "openai-compatible", name: "OpenAI-compatible", description: "OpenRouter, local models, or your own endpoint" },
 ]
 // The mock drafts a message, so it starts with the key it drafts with; `?mock&keys=0` starts with none.
+const MOCK_GITHUB_AVATAR = `data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.5 -0.5 6 6" shape-rendering="crispEdges"><rect x="-0.5" y="-0.5" width="6" height="6" fill="#f0f0f0"/><path fill="#3fae8c" d="${[
+    [0, 0], [4, 0], [1, 1], [3, 1], [2, 1], [0, 2], [4, 2], [2, 2], [1, 3], [3, 3], [0, 4], [4, 4], [2, 4],
+  ].map(([x, y]) => `M${x} ${y}h1v1h-1z`).join("")}"/></svg>`
+)}`
+
 let mockConnections: UtilityConnection[] = new URLSearchParams(globalThis.location?.search).get("keys") === "0"
   ? []
   : [{ provider: "google", model: "gemini-3.8-flash", name: "Gemini 3.8 Flash", contextTokens: 1_048_576 }]
@@ -993,13 +999,13 @@ export function installMockBridge() {
     writePlugin: async () => {},
     deletePlugin: async () => {},
     revealPlugins: async () => {},
-    githubStatus: async () => ({
-      installed: true,
-      authenticated: true,
-      login: "you",
-      repo: "you/mako",
-      defaultBranch: "main",
-    }),
+    // `?github=off` is a desk whose gh CLI isn't signed in, and `?github=other` one signed in as someone else.
+    githubStatus: async () => {
+      const github = new URLSearchParams(globalThis.location?.search).get("github")
+      if (github === "off") return { installed: true, authenticated: false }
+      const user = github === "other" ? { login: "ada-work", userId: "9100224" } : { login: "you", userId: MOCK_GITHUB_USER_ID }
+      return { installed: true, authenticated: true, ...user, repo: "you/mako", defaultBranch: "main" }
+    },
     pullRequest: async () => sinceOpen,
     pullRequests: async () => [],
     pullBranches: async () => ["main", "release"],
@@ -1018,9 +1024,9 @@ export function installMockBridge() {
     },
     rerunChecks: async () => 0,
     repoAvatar: async () => undefined,
-    // A 1x1 warm-grey png; enough for the identity badge to show an image path.
+    // A GitHub-style identicon, so screenshots of the identity show a picture as GitHub would draw one.
     userAvatar: async () =>
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mPcv2H9fwAHmwM6iEyzTAAAAABJRU5ErkJggg==",
+      new URLSearchParams(globalThis.location?.search).get("github") === "off" ? undefined : MOCK_GITHUB_AVATAR,
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()

@@ -70,7 +70,7 @@ function EmptyTranscript() {
     <div className="relative flex min-h-full justify-center px-6">
       <div className="relative mt-8 mb-auto w-full max-w-[460px] py-12">
         <div className="flex items-center gap-3.5">
-          <MakoMark className="size-8 shrink-0 text-foreground/85" />
+          <MakoMark className="size-8" />
           <div className="min-w-0">
             <p className="text-welcome font-medium">What are we working on?</p>
             <p className="mt-1 flex min-w-0 items-center gap-1.5 text-ui text-faint">

@@ -271,6 +271,64 @@ async function transcriptAnchor() {
   )
 }
 
+async function finishedAnswerAnchor(windowed = false) {
+  const exchanges: ExchangeData[] = [{
+    id: "finished-answer",
+    system: [],
+    response: [{
+      id: "long-answer",
+      role: "assistant",
+      blocks: [{ type: "text", text: Array.from({ length: 40 }, (_, index) =>
+        `Paragraph ${index}. A finished answer can contain previews and images that finish laying out while the reader is partway through the same turn.`
+      ).join("\n\n") }],
+    }],
+  }]
+  if (windowed) exchanges.unshift(...Array.from({ length: 200 }, (_, index) => ({
+    id: `earlier-${index}`, system: [], response: [{ id: `short-${index}`, role: "assistant" as const, blocks: [{ type: "text" as const, text: `Earlier answer ${index}.` }] }],
+  })))
+  flushSync(() => root.render(
+    <div className="flex h-96 flex-col" style={{ width: 640 }}>
+      <ConversationTimeline identity={`finished-answer-check-${windowed}`} exchanges={exchanges} entrance={false} empty={null} />
+    </div>
+  ))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const scroller = fixture.querySelector<HTMLDivElement>(".scroll-fade-scroller")!
+  scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true }))
+  scroller.scrollTop -= 120
+  scroller.dispatchEvent(new Event("scroll", { bubbles: true }))
+  scroller.dispatchEvent(new Event("scrollend", { bubbles: true }))
+  await new Promise((resolve) => requestAnimationFrame(resolve))
+  const bounds = scroller.getBoundingClientRect()
+  const marker = Array.from(scroller.querySelectorAll("p")).find((paragraph) => {
+    const box = paragraph.getBoundingClientRect()
+    return box.top >= bounds.top && box.bottom <= bounds.bottom
+  })!
+  check(Boolean(marker), "a finished answer has visible text inside its long turn")
+  const before = marker.getBoundingClientRect().top
+  const columnHeight = scroller.firstElementChild!.getBoundingClientRect().height
+  const latePreview = document.createElement("div")
+  latePreview.style.height = "2000px"
+  const turn = marker.closest("[data-exchange]")!
+  turn.insertBefore(latePreview, turn.firstChild)
+  if (windowed) await until(() => scroller.firstElementChild!.getBoundingClientRect().height > columnHeight + 1990)
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))))
+  check(
+    Math.abs(marker.getBoundingClientRect().top - before) <= 2,
+    `late layout inside a finished answer preserves the visible text within 2px (${windowed ? "virtual rows" : "normal flow"}, ${Math.abs(marker.getBoundingClientRect().top - before).toFixed(2)}px)`
+  )
+  const end = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true })
+  scroller.dispatchEvent(end)
+  check(end.defaultPrevented, "End uses the timeline's explicit follow-to-end action")
+  // An End press already at the bottom must keep following later layout.
+  scroller.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }))
+  latePreview.style.height = "2400px"
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  check(
+    scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1,
+    "End at the bottom keeps following subsequent layout"
+  )
+}
+
 async function clipboard() {
   const bridge = window.mako!
   const original = bridge.copy
@@ -642,6 +700,8 @@ button.onclick = async () => {
     await openingDraft()
     await paragraphs()
     await transcriptAnchor()
+    await finishedAnswerAnchor()
+    await finishedAnswerAnchor(true)
     await clipboard()
     await attachmentClipboard()
     await divider()

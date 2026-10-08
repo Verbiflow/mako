@@ -42,7 +42,7 @@ function whenIdle(work: () => void): void {
   else setTimeout(work, 0)
 }
 
-/** Unloads what the budget has no room for after the active conversation changes. */
+/** Reconsider residency when content, activity, or the visible panes change. */
 export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
   /** In what order each conversation was last on screen; the one shown now is pinned instead. */
   const shownAt = new Map<string, number>()
@@ -70,16 +70,20 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
   }
   const settle = () => {
     const next = acpStore.get().activeKey
-    if (next === active) return
-    if (active) shownAt.set(active, ++shown)
-    active = next
+    if (next !== active) {
+      if (active) shownAt.set(active, ++shown)
+      active = next
+    }
     if (scheduled) return
     scheduled = true
     whenIdle(sweep)
   }
   const unsubscribe = acpStore.subscribe(settle)
+  const unsubscribePanes = viewerStore.subscribe(settle)
+  settle()
   return () => {
     stopped = true
     unsubscribe()
+    unsubscribePanes()
   }
 }

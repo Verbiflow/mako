@@ -1,15 +1,26 @@
 import type { CloudAccount, CloudDevice, CloudPerson, HostEvent } from "@/lib/types"
 
+/** The mock gh CLI's user, so a mock account signed in with GitHub is the same person. */
+export const MOCK_GITHUB_USER_ID = "583231"
+
 /**
  * The Mako account without a cloud: signing in "finishes in the browser"
  * after a moment, and the other devices can be removed, so every state of
  * Settings › Account can be looked at in `?mock`. `?mock&cloud=signed-in`
  * starts signed in, `cloud=removed` as just removed and `cloud=offline` with
- * the connection down.
+ * the connection down. The account signed in with GitHub, as the mock's gh
+ * user; `signin=google` with Google and no GitHub user, and `signin=legacy`
+ * before the cloud said either.
  */
 export function mockCloudAccount(emit: (event: HostEvent) => void) {
   const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+  const params = new URLSearchParams(globalThis.location?.search)
+  const signIn = params.get("signin")
   const person: CloudPerson = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: [] }
+  if (signIn !== "legacy") {
+    person.signedInWith = signIn === "google" ? "google" : "github"
+    person.githubId = signIn === "google" ? null : MOCK_GITHUB_USER_ID
+  }
   const thisMac: CloudDevice = {
     id: "d1",
     kind: "desktop",
@@ -24,7 +35,7 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     { ...thisMac, id: "d2", name: "Studio", platform: "macOS 15.5", appVersion: "0.3.9", lastSeenAt: minutesAgo(60 * 5) },
     { ...thisMac, id: "d3", kind: "cli", name: "build-box", platform: "Linux", appVersion: null, enrolledBy: "device-code", lastSeenAt: minutesAgo(60 * 24 * 12) },
   ]
-  const start = new URLSearchParams(globalThis.location?.search).get("cloud")
+  const start = params.get("cloud")
   let account: CloudAccount = {
     cloud: "127.0.0.1:8787",
     state:

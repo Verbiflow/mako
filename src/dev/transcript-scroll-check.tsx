@@ -93,7 +93,11 @@ const params = new URL(location.href).searchParams
 const TURNS = Number(params.get("turns") ?? 90)
 /** With `paged=N`, the source holds back all but the newest N turns and serves 20 per request. */
 const PAGED = Number(params.get("paged") ?? 0)
-const base = conversation(TURNS)
+// A history page can begin inside one long answer, before its prompt loads.
+const base = conversation(TURNS).filter((message) =>
+  message.role !== "user" ||
+  (!params.has("lead") && (!params.has("single") || message.id === "u0"))
+)
 
 interface ProbeState {
   messages: ChatMessage[]

@@ -78,6 +78,8 @@ function turnKeys(
 interface ScrollAnchor {
   exchangeId?: string
   exchangeOffset?: number
+  /** A mounted text block holds a position inside a turn, not just between turns. */
+  block?: { element: Element; offset: number }
   scrollHeight: number
   scrollTop: number
   shown: number
@@ -99,8 +101,8 @@ function headOf(shown: ExchangeData[]): string {
 }
 
 /**
- * The reading position, as the first exchange still on screen (or the one
- * given) and its offset from the top of the scrollport. The lead exchange
+ * The reading position, as a painted text block and its turn (or the turn
+ * given), with their offsets from the scrollport. The lead exchange
  * cannot serve: history prepended to an agent-first session lands inside it,
  * so its top moves.
  */
@@ -110,18 +112,47 @@ function captureAnchor(
   hasEarlier: boolean,
   at?: Element
 ): ScrollAnchor {
-  const viewportTop = node.getBoundingClientRect().top
+  const viewport = node.getBoundingClientRect()
+  const viewportTop = viewport.top
+  const painted = document.elementFromPoint(
+    viewport.left + viewport.width / 2,
+    viewport.top + viewport.height / 2
+  )
+  const blockAt = (y: number) =>
+    document.elementFromPoint(viewport.left + viewport.width / 2, y)
+      ?.closest("p,pre,li,td,h1,h2,h3,h4,h5,h6")
+  let block = painted?.closest("p,pre,li,td,h1,h2,h3,h4,h5,h6")
+  // The middle of the pane can land in a paragraph's margin. Nearby painted
+  // text is a better anchor than the container of an entire long answer.
+  for (
+    let offset = 8;
+    !block && offset <= Math.min(48, viewport.height / 2);
+    offset += 8
+  )
+    block = blockAt(viewport.top + viewport.height / 2 + offset) ??
+      blockAt(viewport.top + viewport.height / 2 - offset)
+  const visibleTurn = (block ?? painted)?.closest("[data-exchange]")
   const anchor =
     at ??
+    (visibleTurn && node.contains(visibleTurn) &&
+      visibleTurn.getAttribute("data-exchange") !== LEAD_EXCHANGE_ID
+      ? visibleTurn
+      : undefined) ??
     Array.from(node.querySelectorAll("[data-exchange]")).find(
       (element) =>
         element.getAttribute("data-exchange") !== LEAD_EXCHANGE_ID &&
         element.getBoundingClientRect().bottom > viewportTop + 1
     )
+  const readingBlock = !at && block && anchor?.contains(block)
+    ? block
+    : undefined
   return {
     exchangeId: anchor?.getAttribute("data-exchange") ?? undefined,
     exchangeOffset: anchor
       ? anchor.getBoundingClientRect().top - viewportTop
+      : undefined,
+    block: readingBlock
+      ? { element: readingBlock, offset: readingBlock.getBoundingClientRect().top - viewportTop }
       : undefined,
     scrollHeight: node.scrollHeight,
     scrollTop: node.scrollTop,
@@ -173,6 +204,12 @@ function holdPrependedHeights(node: HTMLDivElement, exchangeId?: string) {
 }
 
 function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor) {
+  const block = snapshot.block
+  if (block?.element.isConnected && node.contains(block.element)) {
+    node.scrollTop += block.element.getBoundingClientRect().top -
+      node.getBoundingClientRect().top - block.offset
+    return
+  }
   const anchor = snapshot.exchangeId
     ? node.querySelector(`[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`)
     : null
@@ -285,6 +322,7 @@ export function ConversationTimeline({
   const viewport = useRef<HTMLDivElement>(null)
   const topFade = useRef<HTMLSpanElement>(null)
   const edgeRow = useRef<HTMLDivElement>(null)
+  const windowed = exchanges.length > 200
   const pinned = useRef(true)
   const userScrolling = useRef(false)
   const lastScrollTop = useRef(0)
@@ -302,23 +340,6 @@ export function ConversationTimeline({
   const readingAnchor = useRef<ScrollAnchor | null>(null)
   const restoringReader = useRef<ScrollAnchor | null>(null)
   const pendingJump = useRef<string | null>(null)
-  /** Keep the reading position where it was, unless the reader is moving it. */
-  const holdReader = useCallback(
-    (node: HTMLDivElement) => {
-      const snapshot = restore.current ?? readingAnchor.current
-      if (
-        userScrolling.current ||
-        !snapshot?.exchangeId ||
-        !node.querySelector(
-          `[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`
-        )
-      )
-        return
-      preserveScrollAnchor(node, snapshot)
-      owned(node)
-    },
-    [owned]
-  )
   /**
    * One request for earlier history at a time, from the moment it is asked
    * for until the turns are on screen and the reading position is restored.
@@ -352,33 +373,6 @@ export function ConversationTimeline({
           exchanges,
           renamed
         )
-  useLayoutEffect(() => {
-    const before = named.current
-    named.current = { identity, exchanges, keys }
-    if (renamed.size === 0) return
-    const follow = (id: string) => {
-      const next = renamed.get(id)
-      if (next) return next
-      if (exchanges.some((exchange) => exchange.id === id)) return id
-      // Gone without a match: the turn as far from the end stands in, so the
-      // reader stays among the same turns rather than wherever the offset lands.
-      const at = before.exchanges.findIndex((exchange) => exchange.id === id)
-      if (at < 0 || exchanges.length === 0) return id
-      const index = exchanges.length - (before.exchanges.length - at)
-      return exchanges[Math.max(0, Math.min(exchanges.length - 1, index))]!.id
-    }
-    const moved = (anchor: ScrollAnchor | null) =>
-      anchor?.exchangeId
-        ? { ...anchor, exchangeId: follow(anchor.exchangeId) }
-        : anchor
-    restore.current = moved(restore.current)
-    readingAnchor.current = moved(readingAnchor.current)
-    restoringReader.current = moved(restoringReader.current)
-    if (pendingJump.current) pendingJump.current = follow(pendingJump.current)
-    setActiveTurn((current) => (current ? follow(current) : current))
-    // Turns can trade places at the same total height, which no resize reports.
-    if (viewport.current && !pinned.current) holdReader(viewport.current)
-  }, [identity, exchanges, keys, renamed, holdReader])
   /**
    * How many of the newest turns are mounted, and the newest turn it was
    * counted against. Turns arriving below the first mounted one raise the
@@ -417,7 +411,6 @@ export function ConversationTimeline({
     setTail({ limit: Math.max(INITIAL_TURNS, tail.limit + arrived), last: newest })
   }
   const [everMore, setEverMore] = useState(false)
-  const windowed = exchanges.length > 200
   const hidden = windowed ? 0 : Math.max(0, exchanges.length - tail.limit)
   const shown = hidden > 0 ? exchanges.slice(hidden) : exchanges
   const isEmpty = exchanges.length === 0
@@ -442,6 +435,54 @@ export function ConversationTimeline({
       if (viewport.current) owned(viewport.current)
     },
   })
+  /** Virtual rows and page insertion need explicit anchoring; normal flow uses the browser. */
+  const holdReader = useCallback(
+    (node: HTMLDivElement) => {
+      if (!windowed && !awaitingEarlier.current) return
+      const snapshot = restore.current ?? readingAnchor.current
+      if (
+        userScrolling.current ||
+        !snapshot?.exchangeId ||
+        !node.querySelector(
+          `[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`
+        )
+      )
+        return
+      preserveScrollAnchor(node, snapshot)
+      // Replace the virtualizer's outstanding target so it cannot undo the
+      // offset just restored inside the answer.
+      if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
+      owned(node)
+    },
+    [owned, windowed, rows]
+  )
+  useLayoutEffect(() => {
+    const before = named.current
+    named.current = { identity, exchanges, keys }
+    if (renamed.size === 0) return
+    const follow = (id: string) => {
+      const next = renamed.get(id)
+      if (next) return next
+      if (exchanges.some((exchange) => exchange.id === id)) return id
+      // Gone without a match: the turn as far from the end stands in, so the
+      // reader stays among the same turns rather than wherever the offset lands.
+      const at = before.exchanges.findIndex((exchange) => exchange.id === id)
+      if (at < 0 || exchanges.length === 0) return id
+      const index = exchanges.length - (before.exchanges.length - at)
+      return exchanges[Math.max(0, Math.min(exchanges.length - 1, index))]!.id
+    }
+    const moved = (anchor: ScrollAnchor | null) =>
+      anchor?.exchangeId
+        ? { ...anchor, exchangeId: follow(anchor.exchangeId) }
+        : anchor
+    restore.current = moved(restore.current)
+    readingAnchor.current = moved(readingAnchor.current)
+    restoringReader.current = moved(restoringReader.current)
+    if (pendingJump.current) pendingJump.current = follow(pendingJump.current)
+    setActiveTurn((current) => (current ? follow(current) : current))
+    // Turns can trade places at the same total height, which no resize reports.
+    if (viewport.current && !pinned.current) holdReader(viewport.current)
+  }, [identity, exchanges, keys, renamed, holdReader])
   const previousWindowed = useRef(windowed)
   useLayoutEffect(() => {
     if (previousWindowed.current === windowed) return
@@ -530,7 +571,6 @@ export function ConversationTimeline({
     const movingUp = node.scrollTop < lastScrollTop.current - 0.5
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
     const atBottom = distance < NEAR_BOTTOM
-    if (userScrolling.current) pinned.current = !movingUp && atBottom
     // Layout/virtualizer adjustments are not reader intent. Keyboard input
     // participates through the same explicit input handlers below.
     lastScrollTop.current = node.scrollTop
@@ -538,6 +578,7 @@ export function ConversationTimeline({
       ownScrollTop.current !== null &&
       Math.abs(node.scrollTop - ownScrollTop.current) < 1
     ownScrollTop.current = null
+    if (userScrolling.current && !ours) pinned.current = !movingUp && atBottom
     // A reader who keeps scrolling while a page is on its way moves the
     // position that page must be placed around.
     if (awaitingEarlier.current && restore.current && !pinned.current) {
@@ -679,7 +720,12 @@ export function ConversationTimeline({
     if (!progressed) stalled.current = true
     const node = viewport.current
     if (node)
-      requestAnimationFrame(() => node.removeAttribute("data-preserve-scroll"))
+      requestAnimationFrame(() => {
+        if (viewport.current !== node || awaitingEarlier.current) return
+        node.removeAttribute("data-preserve-scroll")
+        restore.current = null
+        if (!pinned.current) readingAnchor.current = captureAnchor(node, [], false)
+      })
   }, [])
 
   useLayoutEffect(() => {
@@ -720,6 +766,7 @@ export function ConversationTimeline({
       requestAnimationFrame(() => {
         if (restore.current !== snapshot || viewport.current !== node) return
         preserveScrollAnchor(node, snapshot)
+        rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
         owned(node)
         restore.current = settled
       })
@@ -933,6 +980,7 @@ export function ConversationTimeline({
           tabIndex={0}
           role="region"
           aria-label="Conversation transcript"
+          data-virtualized={windowed ? "" : undefined}
           onPointerDown={onPointerDown}
           onPointerUp={(event) => {
             if (event.pointerType === "mouse") userScrolling.current = false
@@ -943,6 +991,7 @@ export function ConversationTimeline({
             userScrolling.current = false
           }}
           onKeyUp={() => {
+            if (userScrolling.current) onScroll()
             userScrolling.current = false
           }}
           onKeyDown={(event) => {
@@ -961,6 +1010,11 @@ export function ConversationTimeline({
                 "button,input,textarea,[contenteditable=true]"
               )
             ) {
+              if (event.key === "End") {
+                event.preventDefault()
+                scrollToEnd()
+                return
+              }
               if (windowed && viewport.current)
                 rows.scrollToOffset(viewport.current.scrollTop, {
                   behavior: "auto",
@@ -969,7 +1023,11 @@ export function ConversationTimeline({
               restoringReader.current = null
               userScrolling.current = true
               stalled.current = false
-              pinned.current = false
+              if (
+                ["PageUp", "Home", "ArrowUp"].includes(event.key) ||
+                (event.key === " " && event.shiftKey)
+              )
+                pinned.current = false
             }
           }}
           onWheel={onWheel}
