@@ -214,9 +214,12 @@ export interface UnreadRecord {
   kind: string
   reason: "unknown" | "unreadable"
   count: number
-  /** The first such record, as the store holds it. */
+  /** The first such record, as the store holds it, or its first `UNREAD_SAMPLE` characters as JSON. */
   sample?: z.infer<ReturnType<typeof z.json>>
 }
+
+/** Enough of a record to decide on its kind, without one large record weighing on every page. */
+export const UNREAD_SAMPLE = 16 * 1024
 
 export interface ThreadPage {
   checkpoint?: number
@@ -604,8 +607,16 @@ export class EntrySink {
   unread(kind: string, reason: UnreadRecord["reason"], sample?: UnreadRecord["sample"]): void {
     const key = `${reason}\0${kind}`
     const known = this.unreadKinds.get(key)
-    if (known) known.count++
-    else this.unreadKinds.set(key, sample === undefined ? { kind, reason, count: 1 } : { kind, reason, count: 1, sample })
+    if (known) {
+      known.count++
+      return
+    }
+    const record: UnreadRecord = { kind, reason, count: 1 }
+    if (sample !== undefined) {
+      const text = JSON.stringify(sample)
+      record.sample = text.length > UNREAD_SAMPLE ? `${text.slice(0, UNREAD_SAMPLE)}… (${text.length} characters)` : sample
+    }
+    this.unreadKinds.set(key, record)
   }
 
   /** What `unread` counted, in the order each kind first came; undefined when every record was read. */

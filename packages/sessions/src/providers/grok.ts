@@ -249,6 +249,8 @@ type GrokToolBlock = EntryBlock & { type: "tool" }
 
 interface GrokTranslator extends LineTranslator {
   done(): ThreadEntry[]
+  /** The records it couldn't draw, by kind. */
+  unread(): UnreadRecord[] | undefined
 }
 
 function isString(value: JsonValue | undefined): value is string {
@@ -915,6 +917,9 @@ function updatesTranslator(): GrokTranslator {
       }
       case "update":
         turns.update(line.notification, line.at)
+        return
+      case "unread":
+        turns.sink.unread(line.type, line.reason, line.raw)
         return
       case "marker":
         if (line.marker.label === TURN_FAILED) failed = true
