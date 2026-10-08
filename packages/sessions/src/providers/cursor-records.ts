@@ -457,9 +457,9 @@ export function cursorToolResults(
     const hash = hashes[index]
     const row = hash === undefined ? null : parseBlobDataRow(blobs.get(hash))
     if (!row) continue
-    const raw = Buffer.from(row.data).toString("utf8")
-    if (![...missing].some((id) => raw.includes(id))) continue
-    const message = parseCursorMessage(raw)
+    const data = Buffer.from(row.data.buffer, row.data.byteOffset, row.data.byteLength)
+    if (![...missing].some((id) => data.includes(id))) continue
+    const message = parseCursorMessage(data.toString("utf8"))
     if (message?.role !== "tool") continue
     for (const part of message.content) {
       if (part.type !== "tool-result" || !missing.delete(part.toolCallId)) continue

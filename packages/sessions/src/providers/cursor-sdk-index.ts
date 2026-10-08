@@ -289,9 +289,10 @@ export function readCursorSdkRunEvents(indexPath: string, runId: string): Cursor
         streamed++
         continue
       }
-      if (RunRequestSchema.safeParse(payload).success) continue
-      const index = streamed++
+      // A failed parse builds its issues, so the rare request row is told from the parsed message, not by a check every row fails.
       const event = RunEventSchema.safeParse(payload)
+      if (event.success ? event.data.message.type === "request" : RunRequestSchema.safeParse(payload).success) continue
+      const index = streamed++
       if (!event.success) continue
       events.push(created ? { message: event.data.message, index, at: created } : { message: event.data.message, index })
     }

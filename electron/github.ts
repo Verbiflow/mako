@@ -51,6 +51,7 @@ type GitHubParser<TResult> = (value: JsonValue) => TResult | null
 
 interface GitHubUser {
   login?: string
+  id?: string
 }
 
 interface GitHubRepository {
@@ -77,7 +78,7 @@ async function ghJson<TResult>(
 
 function parseGitHubUser(value: JsonValue): GitHubUser | null {
   if (!isJsonObject(value)) return null
-  return { login: stringValue(value.login) }
+  return { login: stringValue(value.login), id: Number.isSafeInteger(value.id) ? String(value.id) : undefined }
 }
 
 function parseGitHubRepository(value: JsonValue): GitHubRepository | null {
@@ -108,7 +109,7 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
 
   const who = await ghJson(
     cwd,
-    ["api", "user", "--jq", "{login: .login}"],
+    ["api", "user", "--jq", "{login: .login, id: .id}"],
     parseGitHubUser
   )
   const login = who?.login
@@ -124,6 +125,7 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
     installed: true,
     authenticated: true,
     login,
+    userId: who?.id,
     repo: repo?.nameWithOwner,
     defaultBranch: repo?.defaultBranch,
   }

@@ -17,6 +17,7 @@ export {
   clip,
   entryChars,
   trimToolOutput,
+  VIEWER_PAGE,
   type BlockAddress,
   type EntryBlock,
   type Harness,

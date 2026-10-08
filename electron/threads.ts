@@ -1,4 +1,4 @@
-import { threadIdentity } from "@mako/sessions"
+import { threadIdentity, VIEWER_PAGE } from "@mako/sessions"
 import {
   nativeSessionPath,
   type NativeSourceIdentity,
@@ -1037,33 +1037,13 @@ export async function pageThread(
   return { ...shown, ref: annotate(page.ref) }
 }
 
-/**
- * How much of a tool's output a viewer page carries. Tool rows are
- * collapsed until opened, and the largest sessions are almost entirely
- * tool output — 7.0 of a 7.1 MB Codex thread was shell output — so a page
- * carries what the collapsed row needs and the row fetches the whole block
- * (`threadBlock`) when it opens; the head paints until it lands.
- */
-export const VIEWER_TOOL_OUTPUT_CHARS = 1_024
-
-/**
- * How much content one viewer page holds. A hundred entries of a
- * tool-heavy Codex session still weighed 2.6 MB with outputs trimmed (943
- * tool calls); the viewer pages earlier history on scroll, so the first
- * page is the tail that fits and no larger.
- */
-export const VIEWER_PAGE_CHARS = 384 * 1024
-
-/** A page for the viewer: tool outputs cut to their head, bounded in size. */
+/** A page for the viewer; a tool row fetches its whole output (`threadBlock`) when it opens. */
 export function viewThreadPage(
   path: string,
   before?: number,
   limit?: number
 ): Promise<ThreadPage | null> {
-  return pageThread(path, before, limit, {
-    toolOutputChars: VIEWER_TOOL_OUTPUT_CHARS,
-    maxChars: VIEWER_PAGE_CHARS,
-  })
+  return pageThread(path, before, limit, VIEWER_PAGE)
 }
 
 /**
@@ -1072,11 +1052,7 @@ export function viewThreadPage(
  * over the full page.
  */
 export function viewThreadPreview(path: string): Promise<ThreadPage | null> {
-  return pageThread(path, undefined, undefined, {
-    toolOutputChars: VIEWER_TOOL_OUTPUT_CHARS,
-    maxChars: VIEWER_PAGE_CHARS,
-    preview: true,
-  })
+  return pageThread(path, undefined, undefined, { ...VIEWER_PAGE, preview: true })
 }
 
 export async function threadBlock(

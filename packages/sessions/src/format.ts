@@ -266,6 +266,16 @@ export interface ThreadPageOptions {
   maxChars?: number
 }
 
+/**
+ * A page for the viewer. Tool rows are collapsed until opened, and the
+ * largest sessions are almost entirely tool output — 7.0 of a 7.1 MB Codex
+ * thread was shell output — so a page carries what the collapsed row needs
+ * and the row fetches the whole block when it opens. A hundred entries of a
+ * tool-heavy Codex session still weighed 2.6 MB with outputs trimmed (943
+ * tool calls), so the first page is the tail that fits and no larger.
+ */
+export const VIEWER_PAGE = { toolOutputChars: 1_024, maxChars: 384 * 1024 } as const satisfies ThreadPageOptions
+
 type Attachments = Extract<ThreadEntry, { kind: "user" }>["attachments"]
 
 /** Inline images are most of a screenshot-heavy page; a flat 256 once let one weigh 10 MB. */

@@ -15,8 +15,14 @@ import type { CursorToolResult } from "./providers/cursor-records.js"
  * projection (`CursorSdkProjection`, `cursorRunEntries`).
  */
 
-const JsonSchema = z.json()
-type JsonValue = z.infer<typeof JsonSchema>
+type JsonValue = z.infer<ReturnType<typeof z.json>>
+/**
+ * A value inside a message, which reaches this vocabulary through
+ * `JSON.parse` (a `run_events` row, a line from the SDK child) and so is JSON
+ * already. Walking it again with `z.json()` took 5.4 s of a 10 s open for an
+ * agent whose tool calls kept 196 MB of arguments and results.
+ */
+const JsonSchema = z.custom<JsonValue>((value) => value !== undefined)
 
 export const CursorSdkModelParamSchema = z.object({ id: z.string(), value: z.string() })
 export const CursorSdkModelSelectionSchema = z.object({
