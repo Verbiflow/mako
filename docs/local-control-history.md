@@ -828,8 +828,8 @@ execution evidence, and less repeated context. Preserve one provider-neutral
 oversized output.
 
 This map owns Local Control progress. The [meta-harness map](meta-harness-map.md)
-owns provider/runtime work; the [remote-control map](remote-control-map.md) owns
-remote channels. Neither is a Local Control implementation ledger.
+owns provider/runtime work; the remote-control map (since removed with the
+Slack relay) owned remote channels. Neither is a Local Control implementation ledger.
 
 Writer: current Local Control refactor conversation, working in
 `/Users/kashyab/makomono/mako`. Existing unrelated changes are present. Keep

@@ -30,8 +30,7 @@ parity has not been established.
 This file owns current workstream status. The issue ledger owns individual agent
 complaints. Other documents hold contracts, recipes or evidence; they should link
 here for progress rather than maintain another backlog. Provider execution belongs
-to the [meta-harness map](meta-harness-map.md); remote channels belong to the
-[remote-control map](remote-control-map.md).
+to the [meta-harness map](meta-harness-map.md).
 
 ## Current state and release boundary
 

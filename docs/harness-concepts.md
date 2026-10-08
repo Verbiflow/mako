@@ -8,7 +8,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 | --- | --- | --- | --- |
 | Claude Code | 2026-10-06 | 2.1.290 | its own listing (MCP) |
 | Codex | 2026-10-06 | 0.159.3 | its own listing (skills) |
-| Cursor | 2026-10-06 | SDK 1.0.31 | the SDK's skill-root table (skills) |
+| Cursor | 2026-10-06 | SDK 1.0.31 | its own listing (skills, MCP) |
 | OpenCode | 2026-10-06 | 2.0.1 | its own listing (skills, MCP) |
 | Grok | 2026-10-06 | 1.0.46 | its own listing (skills, MCP) |
 | Devin | 2026-10-06 | 3000.10.23 | its own listing (skills, MCP) |
@@ -35,7 +35,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 
 - **Claude Code**: `~/.claude/skills`, `.claude/skills`
 - **Codex**: `~/.codex/skills`, `~/.agents/skills`, `.codex/skills`, `.agents/skills`
-- **Cursor**: `.cursor/skills`, `.agents/skills`, `.claude/skills`, `.codex/skills`, `.grok/skills`, `~/.cursor/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.grok/skills`, `~/.cursor/skills-cursor`
+- **Cursor**: `.cursor/skills`, `.agents/skills`, `.claude/skills`, `.codex/skills`, `.grok/skills`, `~/.cursor/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.grok/skills`
 - **OpenCode**: `~/.config/opencode/skills`, `~/.config/opencode/skill`, `.opencode/skills`, `.opencode/skill`, `~/.claude/skills`, `.claude/skills`, `~/.agents/skills`, `.agents/skills`
 - **Grok**: `.grok/skills`, `.claude/skills`, `.cursor/skills`, `.agents/skills`, `~/.grok/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.cursor/skills`
 - **Devin**: `.agents/skills`, `.devin/skills`, `.cognition/skills`, `.windsurf/skills`, `.claude/skills`, `~/.agents/skills`, `~/.config/devin/skills`, `~/.config/cognition/skills`
@@ -104,8 +104,8 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | Codex | 0.159.3 | 2026-10-06 | 22 (9 called from a script) | 16 | 15 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan |
 | Cursor | 1.0.31 | 2026-10-06 | 16 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
 | OpenCode | 2.0.1 | 2026-10-06 | 13 | 4 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model |
-| Grok | 1.0.46 | 2026-10-06 | 26 | 4 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode |
-| Devin | none | | | | | Its requests are protobuf to the Windsurf API, and it sends none to its model until GetUserStatus and GetCliModelConfigs are answered, so a capture would have to answer them in Windsurf's own messages. |
+| Grok | 1.0.46 | 2026-10-08 | 26 | 4 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode |
+| Devin | 3000.10.23 | 2026-10-08 | 24 | 4 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode; not smart, which Devin offers only to an account whose settings allow it |
 
 ## Plan, questions and subagents
 

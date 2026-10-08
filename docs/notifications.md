@@ -185,23 +185,18 @@ for the desk.
 
 ### Phase 3 — the outbox and the first remote channel (Slack)
 
-`@mako/relay` already owns jobs, cursors, workers, and a storage contract,
-and the backend has `RelayDeliveryAdapter` per gateway. Notifications ride
-the same road in the other direction:
-
 - `outbox(id, subject, marker, kind, body, channel, state, attempts,
   next_at, hold_until)` on the host. States: `held → due → sent | cancelled
   | dead`. At-least-once delivery with exponential backoff to 10 minutes and
   a 24-hour dead line; idempotency key `subject:marker:channel` so a retry
   after a crash cannot double-send.
-- The desktop relay worker (`relay-worker.ts`) drains due rows to the
-  backend as a new `notify` request with the same short-lived device tokens
-  it already uses. The backend's Slack adapter posts into the thread that
-  the subject is mapped to (`relay-conversations.ts` already keeps that
-  mapping), or a DM when it has none, with an **Open in Mako** deep link
-  and, for `ask`, the same allow/deny controls the Slack ingress already
-  understands. A permission answered from Slack flows back through the
-  existing control path and retires the outbox row.
+- The host drains due rows to the hosted service, which posts into the
+  Slack thread the subject is mapped to, or a DM when it has none, with an
+  **Open in Mako** deep link and, for `ask`, allow/deny controls. A
+  permission answered from Slack flows back through the existing control
+  path and retires the outbox row. The earlier Slack relay
+  (`packages/relay`, `packages/backend`) was removed; this channel waits on
+  the hosted service's Slack gateway.
 - The Slack message is edited, not re-sent, when the subject moves on:
   "needs you" becomes "answered", "ready" becomes "read" once a seen
   receipt lands. That is the remote equivalent of replacing the banner.
@@ -234,8 +229,8 @@ either cancels the rest.
    profile; the existing notification test keeps covering the policy.
 2. Presence heartbeats and the plan function, pure and unit-tested like
    `agent-attention-policy` in Paseo.
-3. Outbox with hold and receipts; Slack adapter; `packages/relay/test`
-   covers state transitions, idempotency, and cancellation on receipt.
+3. Outbox with hold and receipts; Slack adapter; tests cover state
+   transitions, idempotency, and cancellation on receipt.
 4. Push adapter.
 
 Each step ships on its own and none of them changes what the desk does
