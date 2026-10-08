@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { lstat, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { GitError } from "./errors.js"
+import { withIndexWriteLock } from "./index-lock.js"
 import { untrackedLines, worktreeLines, type LineCount } from "./lines.js"
 import { ObjectReader } from "./objects.js"
 import { previewBytes, readPreview, type Comparison, type Preview } from "./preview.js"
@@ -435,7 +436,8 @@ export class Repository {
   /** Runs `action` after every write before it, alone among this repository's writes. */
   write<T>(action: () => Promise<T>): Promise<T> {
     this.writing += 1
-    const next = this.writes.then(() => action(), () => action()).finally(() => {
+    const start = () => withIndexWriteLock(this.gitDir, action)
+    const next = this.writes.then(start, start).finally(() => {
       this.writing -= 1
     })
     this.writes = next.catch(() => undefined)
