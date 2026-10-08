@@ -1,5 +1,7 @@
 import type { SQLOutputValue, StatementSync } from "node:sqlite"
 import { attachmentFromUrl, type AttachmentContent } from "../content.js"
+import type { UnreadRecord } from "../format.js"
+import { cursorMessagePart } from "../harnesses/cursor.js"
 import { readPromptAttachments } from "../prompt-attachments.js"
 import { normalizeToolOutput } from "../tool-output.js"
 
@@ -50,8 +52,16 @@ export interface CursorToolResultPart {
   attachments: AttachmentContent[]
 }
 
+/** A record history can't draw, kept for the thread to name. */
+export interface CursorUnread {
+  kind: string
+  reason: UnreadRecord["reason"]
+  record: JsonValue
+}
+
 export interface CursorOtherPart {
   type: "other"
+  unread?: CursorUnread
 }
 
 export type CursorAssistantPart =
@@ -67,6 +77,8 @@ export interface CursorUserMessage {
   role: "user"
   attachments: AttachmentContent[]
   content: CursorTextContent
+  /** Parts of a kind no Cursor message holds. */
+  unread: CursorUnread[]
   /** The summary a compaction left the model in place of what came before. */
   summary: boolean
 }
@@ -85,6 +97,7 @@ export interface CursorToolMessage {
 
 export interface CursorOtherMessage {
   role: "other"
+  unread?: CursorUnread
 }
 
 export type CursorMessage =
@@ -244,6 +257,7 @@ function parseCursorMessage(raw: string): CursorMessage | null {
         content: prompt.text,
         attachments: [...cursorAttachments(value["content"]), ...prompt.attachments],
         summary: cursorOption(value["providerOptions"], "isSummary") === true,
+        unread: Array.isArray(value["content"]) ? value["content"].flatMap((part) => unknownPart("user", part) ?? []) : [],
       }
     }
     case "assistant":
@@ -258,9 +272,20 @@ function parseCursorMessage(raw: string): CursorMessage | null {
         content: parseToolContent(value["content"]),
         isError: cursorToolError(value["providerOptions"]),
       }
-    default:
+    case "system":
       return { role: "other" }
+    default: {
+      const role = stringValue(value["role"])
+      return { role: "other", unread: { kind: `message ${role ?? "(no role)"}`, reason: role === undefined ? "unreadable" : "unknown", record: value } }
+    }
   }
+}
+
+/** A part of a kind no Cursor `role` message holds; undefined for one it does. */
+function unknownPart(role: string, part: JsonValue): CursorUnread | undefined {
+  const type = isJsonObject(part) ? stringValue(part["type"]) : undefined
+  if (type === undefined) return { kind: `${role} part`, reason: "unreadable", record: part }
+  return cursorMessagePart(role, type) ? undefined : { kind: `${role} ${type}`, reason: "unknown", record: part }
 }
 
 function parseTextContent(value: JsonValue | undefined): CursorTextContent {
@@ -284,19 +309,19 @@ function parseAssistantContent(
 }
 
 function parseAssistantPart(value: JsonValue): CursorAssistantPart {
-  if (!isJsonObject(value)) return { type: "other" }
+  const unknown = unknownPart("assistant", value)
+  if (unknown || !isJsonObject(value)) return { type: "other", unread: unknown }
   const attachment = cursorAttachments([value])[0]
   if (attachment) return { type: "attachment", value: attachment }
+  const unreadable = (kind: string): CursorOtherPart => ({ type: "other", unread: { kind: `assistant ${kind}`, reason: "unreadable", record: value } })
   switch (stringValue(value["type"])) {
     case "text": {
       const text = stringValue(value["text"])
-      return text === undefined ? { type: "other" } : { type: "text", text }
+      return text === undefined ? unreadable("text") : { type: "text", text }
     }
     case "reasoning": {
       const text = stringValue(value["text"])
-      return text === undefined
-        ? { type: "other" }
-        : { type: "reasoning", text }
+      return text === undefined ? unreadable("reasoning") : { type: "reasoning", text }
     }
     case "tool-call":
       return {
@@ -328,9 +353,8 @@ function parseToolContent(value: JsonValue | undefined): CursorToolPart[] {
 }
 
 function parseToolPart(value: JsonValue): CursorToolPart {
-  if (!isJsonObject(value) || stringValue(value["type"]) !== "tool-result") {
-    return { type: "other" }
-  }
+  const unknown = unknownPart("tool", value)
+  if (unknown || !isJsonObject(value)) return { type: "other", unread: unknown }
   return {
     type: "tool-result",
     toolCallId: stringValue(value["toolCallId"]) ?? "",

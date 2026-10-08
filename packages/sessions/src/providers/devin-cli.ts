@@ -6,8 +6,8 @@ import {
 } from "./devin-presentation.js"
 import { attachmentFromUrl, type AttachmentContent } from "../content.js"
 import { acpToolFields, AcpToolUpdateSchema, mergeAcpTool, type AcpToolFields } from "../acp-tool-details.js"
-import { AcpSavedTurns, acpSavedNotification } from "../acp-saved-turns.js"
-import { DEVIN_ACP_HOOKS, DEVIN_TOOL_READING, DevinCallMetrics, devinCompactionRecord, devinStoredTokens } from "../harnesses/devin.js"
+import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal } from "../acp-saved-turns.js"
+import { DEVIN_ACP_HOOKS, DEVIN_TOOL_READING, DevinCallMetrics, devinCompactionRecord, devinStoredTokens, DevinTodoWrite, devinAnswersShown, devinQuietExitShown } from "../harnesses/devin.js"
 import { tokenSum } from "../harnesses/tokens.js"
 import { devinCliDirectory } from "./devin-location.js"
 /**
@@ -32,6 +32,7 @@ import { createHash } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { nativeStoreVersion, openNativeStore } from "../read-only-sqlite.js"
+import { ownedRows, type SessionRecords } from "../harness-records.js"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
@@ -41,6 +42,7 @@ import {
   titleFrom,
   type Thread,
   type ThreadEntry,
+  type UnreadRecord,
   type ThreadRef,
   type TurnUsage,
 } from "../format.js"
@@ -119,6 +121,8 @@ interface MessageRow {
 interface MessageTranslator {
   push(row: MessageRow): void
   snapshot(): ThreadEntry[]
+  /** The rows it couldn't draw, by kind. */
+  unread(): UnreadRecord[] | undefined
 }
 
 let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
@@ -266,6 +270,14 @@ export class DevinCliProvider implements SessionProvider {
   }
 
   /** Remove a session and every row that names it; the read connection is reset so it cannot serve the ghost. */
+  /** The session's row, its rows in every table keyed by `session_id`, and the migration history the CLI checks on open. */
+  async records(path: string): Promise<SessionRecords | null> {
+    const id = idOf(path)
+    if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath()) return null
+    const database = ownedRows(this.dbPath(), [id], { owner: "session_id", keyed: { sessions: "id" }, shared: ["refinery_schema_history"] })
+    return database && { files: [], databases: [database] }
+  }
+
   async remove(path: string): Promise<boolean> {
     const id = idOf(path)
     if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath())
@@ -334,7 +346,10 @@ export class DevinCliProvider implements SessionProvider {
     try {
       const cursor = mainChainId(db, id)
       ref.bytes = cursor
-      return { ref, entries: translatedMainChain(db, id, cursor) }
+      const { entries, unread } = translatedMainChain(db, id, cursor)
+      const thread: Thread = { ref, entries }
+      if (unread) thread.unread = unread
+      return thread
     } catch {
       this.resetConnection()
       return null
@@ -356,11 +371,11 @@ export class DevinCliProvider implements SessionProvider {
         if (!db) return unchangedUpdate(cursor)
         try {
           if (previous === null) {
-            previous = translatedMainChain(db, id, cursor).map(entryDigest)
+            previous = translatedMainChain(db, id, cursor).entries.map(entryDigest)
           }
           const nextCursor = mainChainId(db, id)
           if (nextCursor === cursor) return unchangedUpdate(cursor)
-          const current = translatedMainChain(db, id, nextCursor)
+          const current = translatedMainChain(db, id, nextCursor).entries
           const signatures = current.map(entryDigest)
           let shared = 0
           while (
@@ -459,15 +474,17 @@ function chainRows(
   return stored.map(parseMessageRow)
 }
 
-function translatedMainChain(
-  db: DatabaseSync,
-  sessionId: string,
-  leafId: number
-): ThreadEntry[] {
+/** A session's main chain, drawn, with the records the translator couldn't draw. */
+interface TranslatedChain {
+  entries: ThreadEntry[]
+  unread: UnreadRecord[] | undefined
+}
+
+function translatedMainChain(db: DatabaseSync, sessionId: string, leafId: number): TranslatedChain {
   const cwd = sqliteText(db.prepare("SELECT working_directory AS cwd FROM sessions WHERE id = ?").get(sessionId)?.cwd)
   const into = translator(sessionId, storedAcpCalls(db, sessionId), cwd)
   for (const row of mainChainRows(db, sessionId, leafId)) into.push(row)
-  return into.snapshot()
+  return { entries: into.snapshot(), unread: into.unread() }
 }
 
 /** A call as `tool_call_state` kept it: the `tool_call` Devin sent and its final `tool_call_update`. */
@@ -591,17 +608,18 @@ function devinClientResult(output: string, input: string | undefined): string {
   return `${end - start + 1} lines${end < Math.min(total, askedEnd) ? " (truncated)" : ""}`
 }
 
-/**
- * A question's picks (devin 3000.10.23), which its client was shown as the
- * call's result: "Friday" for one question answered with one option. The
- * model read them as JSON in the result's text.
- */
+/** A question's picks (devin 3000.10.23); the model read them as JSON in the result's text. */
 const DEVIN_QUESTION_ANSWERS = "chisel/user_question_answers"
-const DevinQuestionAnswers = z.object({ answers: z.array(z.object({ selected: z.array(z.string()) }).loose()) }).loose()
+const DevinQuestionAnswers = z.object({
+  answers: z.array(z.object({ question_index: z.number().int().nonnegative().nullish(), selected: z.array(z.string()) }).loose()),
+}).loose()
+const DevinQuestions = z.object({ questions: z.array(z.object({ header: z.string().nullish() }).loose()) }).loose()
 
-function devinPicks(answers: JsonValue | undefined): string | undefined {
+function devinPicks(answers: JsonValue | undefined, input: string | undefined): string | undefined {
   const picked = DevinQuestionAnswers.safeParse(answers).data
-  return picked && picked.answers.map((answer) => answer.selected.join(", ")).join("\n")
+  if (!picked) return undefined
+  const questions = DevinQuestions.safeParse(input === undefined ? undefined : jsonObject(input)).data?.questions ?? []
+  return devinAnswersShown(picked.answers.map((answer, index) => ({ index: answer.question_index ?? index, picks: answer.selected })), questions.map((question) => question.header))
 }
 
 const ImageSize = z.object({ width: z.number(), height: z.number() }).loose()
@@ -657,7 +675,14 @@ const DevinToolFailure = z.object({ reason: z.string() }).loose()
  * missing file is kept `success: true` with exit code 1.
  */
 const DEVIN_TERMINAL_OUTPUT = "chisel/terminal_output"
-const DevinTerminalOutput = z.object({ exit: z.object({ exit_code: z.number().nullish() }).loose().nullish() }).loose()
+const DevinTerminalOutput = z.object({ text: z.string().nullish(), exit: z.object({ exit_code: z.number().nullish() }).loose().nullish() }).loose()
+
+/** A command that printed nothing, whose exit code the store keeps without the line Devin's client was shown. */
+function devinQuietExit(terminal: JsonValue | undefined): string | undefined {
+  const output = DevinTerminalOutput.safeParse(terminal).data
+  const code = output?.exit?.exit_code
+  return code != null && !output?.text ? devinQuietExitShown(code) : undefined
+}
 
 /** The summary a compaction message holds, after the preamble that names where the full history went. */
 function compactionSummary(text: string): string {
@@ -666,7 +691,6 @@ function compactionSummary(text: string): string {
 }
 
 /** A todo list's call, which Devin sends its client as a plan instead. */
-const TodoWriteSchema = z.object({ todos: z.array(z.object({ content: z.string(), status: z.string() }).loose()) }).loose()
 
 type SentUpdate = JsonObject & { sessionUpdate: string }
 
@@ -694,7 +718,12 @@ function translator(
   const turns = new AcpSavedTurns(DEVIN_ACP_HOOKS)
   const send = (update: SentUpdate, at: string | undefined): void => {
     const notification = acpSavedNotification({ sessionId, update })
-    if (notification) turns.update(notification, at)
+    if (notification) {
+      turns.update(notification, at)
+      return
+    }
+    const reason = acpSavedRefusal(update.sessionUpdate)
+    if (reason) turns.sink.unread(`session/update/${update.sessionUpdate}`, reason, update)
   }
   const calls = new Map<string, MadeCall>()
   /** What the open turn's model calls spent. */
@@ -716,7 +745,10 @@ function translator(
     push(row) {
       if (!row.chatMessage) return
       const message = parseChatMessage(row.chatMessage)
-      if (!message) return
+      if (!message) {
+        turns.sink.unread("message_nodes row", "unreadable", row.chatMessage)
+        return
+      }
       const at = isoOf(row.createdAt)
       const source = { harness: "devin" as const, record: String(row.rowId) }
       const written = Date.parse(message.writtenAt ?? "")
@@ -798,7 +830,7 @@ function translator(
           const name = call.name ?? call.function?.name ?? "tool"
           const rawInput = call.arguments ?? call.function?.arguments
           if (name === "todo_write") {
-            const todos = TodoWriteSchema.safeParse(isTextValue(rawInput) ? jsonObject(rawInput) : rawInput).data?.todos ?? []
+            const todos = DevinTodoWrite.safeParse(isTextValue(rawInput) ? jsonObject(rawInput) : rawInput).data?.todos ?? []
             send({ sessionUpdate: "plan", entries: todos.map(({ content, status }) => ({ content, status })) }, at)
             continue
           }
@@ -826,12 +858,15 @@ function translator(
         send(toolEnd(id, call, acp.get(id), message, output, cwd), at)
         const attachments = devinAttachments(message.content)
         if (attachments.length) turns.queue({ kind: "tool-update", id, attachments }, at)
+        return
       }
+      turns.sink.unread(`message ${message.role ?? "(no role)"}`, "unknown", JSON.parse(row.chatMessage))
     },
     snapshot() {
       commit()
       return turns.done()
     },
+    unread: () => turns.sink.unreadRecords,
   }
 }
 
@@ -877,7 +912,8 @@ function toolEnd(id: string, call: MadeCall, stored: StoredAcpCall | undefined, 
   if (shown.output === undefined) {
     const input = call.input === undefined || isTextValue(call.input) ? call.input : JSON.stringify(call.input)
     const said = (call.name === "read" ? viewedImage(input, message.images, cwd) : undefined) ??
-      devinPicks(message.extensions?.[DEVIN_QUESTION_ANSWERS]) ??
+      devinPicks(message.extensions?.[DEVIN_QUESTION_ANSWERS], input) ??
+      (call.name === "exec" ? devinQuietExit(message.extensions?.[DEVIN_TERMINAL_OUTPUT]) : undefined) ??
       devinClientResult(output, input)
     if (said) content.push(textPart(said))
   }

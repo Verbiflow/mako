@@ -9,6 +9,9 @@ import {
   type TranscriptEvent,
 } from "../events.js"
 
+/** A value of Codex's wire or rollout, parsed as JSON, before its schema reads it. */
+type CodexJson = string | number | boolean | null | CodexJson[] | { [key: string]: CodexJson | undefined }
+
 const QuestionReplies = z
   .array(z.object({ question: z.string(), answer: z.string() }))
   .min(1)
@@ -171,19 +174,34 @@ function readableError(text: string): string {
   }
 }
 
+function imageFile(path: string): AttachmentContent {
+  const extension = extname(path).slice(1).toLowerCase()
+  return {
+    type: "attachment",
+    name: basename(path),
+    mimeType: `image/${/jpe?g/.test(extension) ? "jpeg" : extension || "png"}`,
+    source: { kind: "file", path },
+  }
+}
+
 export function codexPromptImages(text: string): AttachmentContent[] {
   const appendix = IMAGE_APPENDIX.exec(text)?.[0]
   if (!appendix) return []
-  return [...appendix.matchAll(/path="([^"\n]+)"/g)].map((match) => {
-    const path = match[1]!
-    const extension = extname(path).slice(1).toLowerCase()
-    return {
-      type: "attachment",
-      name: basename(path),
-      mimeType: `image/${/jpe?g/.test(extension) ? "jpeg" : extension || "png"}`,
-      source: { kind: "file", path },
-    }
-  })
+  return [...appendix.matchAll(/path="([^"\n]+)"/g)].map((match) => imageFile(match[1]!))
+}
+
+const GeneratedImageSchema = z.object({ savedPath: z.string().min(1).nullish(), result: z.string().nullish() })
+
+/** An image Codex generated: the file it saved, else the PNG it returned. */
+export function codexGeneratedImage(item: CodexJson | undefined): AttachmentContent {
+  const image = GeneratedImageSchema.safeParse(item).data
+  if (image?.savedPath) return imageFile(image.savedPath)
+  return {
+    type: "attachment",
+    name: "Generated image",
+    mimeType: "image/png",
+    source: image?.result ? { kind: "inline", data: image.result } : { kind: "unavailable", reason: "Codex kept no image from this generation" },
+  }
 }
 
 /**
@@ -264,6 +282,42 @@ export function codexCellResult(texts: readonly string[]): { failed: boolean; ou
   const header = CELL_HEADER.exec(text)
   if (!header) return undefined
   return { failed: header[1] === "failed", output: text.slice(header[0].length).replace(/(^|\n)Script error:\n/, "$1").trim() }
+}
+
+const FUNCTION_OUTPUT_PLACEHOLDERS = { input_image: "[image]", input_audio: "[audio]", encrypted_content: "[encrypted content]" } as const
+
+/** A `FunctionCallOutput` item's body: one text, or content parts read as text. */
+export const CodexFunctionOutputSchema = z.union([z.string(), z.array(z.discriminatedUnion("type", [
+  z.object({ type: z.literal("input_text"), text: z.string() }),
+  z.object({ type: z.literal("input_image") }).loose(),
+  z.object({ type: z.literal("input_audio") }).loose(),
+  z.object({ type: z.literal("encrypted_content") }).loose(),
+])).transform((parts) => parts.map((part) => part.type === "input_text" ? part.text : FUNCTION_OUTPUT_PLACEHOLDERS[part.type]).join("\n"))])
+
+const SearchActionSchema = z.object({
+  query: z.string().nullish(),
+  queries: z.array(z.string()).nullish(),
+  url: z.string().nullish(),
+})
+const SearchResultSchema = z.object({ title: z.string().optional(), url: z.string().min(1) })
+
+/** What a web search looked for: its query, its queries, or the page it opened. */
+export function codexSearchTarget(action: CodexJson | undefined): string | undefined {
+  const target = SearchActionSchema.safeParse(action)
+  if (!target.success) return undefined
+  const { query, queries, url } = target.data
+  return query || queries?.join(" · ") || url || undefined
+}
+
+/** Standalone search returns its results on the item; hosted search returns none. */
+export function codexSearchResults(results: CodexJson | undefined): string | undefined {
+  const lines = (Array.isArray(results) ? results : []).flatMap((result) => {
+    const parsed = SearchResultSchema.safeParse(result)
+    if (!parsed.success) return []
+    const { title, url } = parsed.data
+    return [title ? `${title}\n${url}` : url]
+  })
+  return lines.length ? lines.join("\n\n") : undefined
 }
 
 /**

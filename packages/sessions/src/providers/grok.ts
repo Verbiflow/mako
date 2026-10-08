@@ -1,7 +1,7 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { backgroundReminderLabel, GROK_ACP_HOOKS, grokCost, grokTokens, GrokTurnUsage } from "../harnesses/grok.js"
+import { backgroundReminderLabel, GROK_ACP_HOOKS, grokCost, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
 import type { LiveBlock } from "../live-content.js"
 import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
@@ -43,6 +43,7 @@ import {
   type ThreadEntry,
   type ThreadRef,
   type TurnUsage,
+  type UnreadRecord,
 } from "../format.js"
 import {
   createJsonlFollower,
@@ -51,6 +52,7 @@ import {
 } from "../jsonl.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import type { NativeFile, SessionProvider } from "./types.js"
+import { filesUnder, type SessionRecords } from "../harness-records.js"
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
 const UPDATE_METHODS = new Set(["session/update", "_x.ai/session/update"])
@@ -575,6 +577,13 @@ export class GrokProvider implements SessionProvider {
   }
 
   /** Remove a session directory (`<root>/<workspace>/<session>/`). */
+  /** The session's folder, every file in it: the transcripts and what Grok keeps beside them. */
+  async records(path: string): Promise<SessionRecords | null> {
+    const directory = dirname(path)
+    if (dirname(dirname(directory)) !== this.root || !(await stat(path).catch(() => null))?.isFile()) return null
+    return { files: await filesUnder(directory), databases: [] }
+  }
+
   async remove(path: string): Promise<boolean> {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root) return false
@@ -699,7 +708,10 @@ export class GrokProvider implements SessionProvider {
     if (!ref) return null
     const into = createTranslator(path)()
     const checkpoint = await readLines(path, 0, into.push)
-    return { ref, checkpoint, entries: into.done() }
+    const thread: Thread = { ref, checkpoint, entries: into.done() }
+    const unread = into.unread()
+    if (unread) thread.unread = unread
+    return thread
   }
 
   createFollower(path: string, fromByte: number) {

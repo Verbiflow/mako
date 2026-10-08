@@ -25,6 +25,7 @@ import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { openNativeStore } from "../read-only-sqlite.js"
 import type { NativeFile, SessionFollower, SessionUpdate } from "./types.js"
+import type { SessionRecords } from "../harness-records.js"
 
 const MAX_RECORD = 16 * 1024 * 1024
 const MAX_BUBBLE = 2 * 1024 * 1024
@@ -211,6 +212,16 @@ export class CursorDesktopStore {
 
   owns(path: string): boolean {
     return path.startsWith(`${this.databasePath}#composer:`)
+  }
+
+  /** A chat's rows in the editor's database: its composer and every key that names it (bubbles, checkpoints). */
+  records(path: string): SessionRecords | null {
+    const id = this.id(path)
+    if (!id) return null
+    return {
+      files: [],
+      databases: [{ path: this.databasePath, tables: [{ table: "cursorDiskKV", where: "key = ? OR instr(key, ?) > 0", params: [`composerData:${id}`, `:${id}:`] }] }],
+    }
   }
   private id(path: string): string | undefined {
     if (!this.owns(path)) return undefined

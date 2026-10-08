@@ -19,7 +19,7 @@ import {
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import { claudeAttachment, ClaudeProjection } from "../claude-projection.js"
-import { claudeTokens, ClaudeUsage } from "../harnesses/claude.js"
+import { CLAUDE_ATTACHMENT_TYPES, CLAUDE_RECORD_TYPES, CLAUDE_SYSTEM_SUBTYPES, claudeTokens, ClaudeUsage } from "../harnesses/claude.js"
 import type { HarnessTokens } from "../harnesses/tokens.js"
 import type { AttachmentContent } from "../content.js"
 import { reduceLiveUpdates, type LiveBlock } from "../live-content.js"
@@ -47,6 +47,7 @@ import {
   type Thread,
   type ThreadEntry,
   type ThreadRef,
+  type UnreadRecord,
 } from "../format.js"
 import {
   createJsonlFollower,
@@ -59,7 +60,13 @@ import {
 import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
+import { filesUnder, type SessionRecords } from "../harness-records.js"
+import { basename, dirname, join } from "node:path"
 import { followCurrentCwd } from "./current-cwd.js"
+
+const RECORD_TYPES = new Set(CLAUDE_RECORD_TYPES)
+const SYSTEM_SUBTYPES = new Set(CLAUDE_SYSTEM_SUBTYPES)
+const ATTACHMENT_TYPES = new Set(CLAUDE_ATTACHMENT_TYPES)
 
 type ClaudeJsonScalar = boolean | number | string | null
 type ClaudeJsonValue = ClaudeJsonScalar | ClaudeJsonObject | ClaudeJsonValue[]
@@ -140,6 +147,8 @@ interface ClaudeLine {
   system?: ClaudeJsonObject
   /** An `attachment` record's attachment. */
   attachment?: ClaudeJsonObject
+  /** The record as saved. */
+  record: ClaudeJsonObject
 }
 
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
@@ -149,6 +158,8 @@ type ClaudeToolBlock = EntryBlock & { type: "tool" }
 
 interface ClaudeTranslator extends LineTranslator {
   done(): ThreadEntry[]
+  /** The records it couldn't draw, by kind. */
+  unread(): UnreadRecord[] | undefined
 }
 
 /** Text a user line starts with when the harness, not the user, wrote it. */
@@ -204,46 +215,69 @@ const SourceSchema = z.object({ type: z.string(), media_type: z.string().optiona
 const AttachmentBlockSchema = z.object({ type: z.enum(["image", "document"]), title: z.string().nullish(), source: SourceSchema })
 const TextBlockSchema = z.object({ type: z.literal("text"), text: z.string() })
 const Dropped = z.unknown().transform(() => null)
-/** The reply blocks `ClaudeProjection` decodes, with every field it reads of each; others are left out. */
-const ReplyContentSchema = z.array(z.union([
-  TextBlockSchema,
-  z.object({ type: z.literal("thinking"), thinking: z.string() }),
-  z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string().transform((name) => name.trim() || "tool"), input: z.unknown() }),
-  Dropped,
-])).transform((blocks) => blocks.filter((block) => block !== null))
-/** A user line's tool results, which `ClaudeProjection` decodes into their calls. */
-const ResultContentSchema = z.array(z.union([
-  z.object({
-    type: z.literal("tool_result"),
-    tool_use_id: z.string(),
-    is_error: z.boolean().optional(),
-    content: z.union([
-      z.string(),
-      z.array(z.union([TextBlockSchema, AttachmentBlockSchema, Dropped])).transform((parts) => parts.filter((part) => part !== null)),
-    ]).optional(),
-  }),
-  Dropped,
-])).transform((blocks) => blocks.filter((block) => block !== null))
+const ToolResultBlockSchema = z.object({
+  type: z.literal("tool_result"),
+  tool_use_id: z.string(),
+  is_error: z.boolean().optional(),
+  content: z.union([
+    z.string(),
+    z.array(z.union([TextBlockSchema, AttachmentBlockSchema, Dropped])).transform((parts) => parts.filter((part) => part !== null)),
+  ]).optional(),
+})
+/**
+ * The blocks history reads of each role, with every field it reads of each:
+ * the reply's for `ClaudeProjection`, and the person's, whose tool results
+ * it decodes into their calls.
+ */
+const READ_BLOCKS = {
+  assistant: {
+    text: TextBlockSchema,
+    thinking: z.object({ type: z.literal("thinking"), thinking: z.string() }),
+    tool_use: z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string().transform((name) => name.trim() || "tool"), input: z.unknown() }),
+  },
+  user: { text: TextBlockSchema, image: AttachmentBlockSchema, document: AttachmentBlockSchema, tool_result: ToolResultBlockSchema },
+} satisfies Record<"assistant" | "user", Record<string, z.ZodType>>
+/** Blocks history leaves out: thinking the API sent encrypted, and Claude Code's `fallback`, which a marker draws. */
+const LEFT_OUT_BLOCKS = new Set(["redacted_thinking", "fallback"])
+
+interface ScreenedBlocks {
+  /** The blocks history reads, as their screen left them. */
+  read: { type: string; block: unknown }[]
+  unread: { kind: string; reason: UnreadRecord["reason"]; block: ClaudeJsonValue }[]
+}
+
+/** A message's content, each block read by its type's screen, left out, or kept as unread. */
+function screenedBlocks(role: "assistant" | "user", content: ClaudeJsonValue | undefined): ScreenedBlocks | undefined {
+  if (!Array.isArray(content)) return undefined
+  const screens: Record<string, z.ZodType> = READ_BLOCKS[role]
+  const screened: ScreenedBlocks = { read: [], unread: [] }
+  for (const block of content) {
+    const type = isJsonObject(block) ? stringValue(block["type"]) : undefined
+    if (type !== undefined && LEFT_OUT_BLOCKS.has(type)) continue
+    const screen = type !== undefined && Object.hasOwn(screens, type) ? screens[type] : undefined
+    const parsed = screen?.safeParse(block)
+    if (type !== undefined && parsed?.success) screened.read.push({ type, block: parsed.data })
+    else screened.unread.push({ kind: `${role} ${type ?? "(no type)"}`, reason: screen ? "unreadable" : "unknown", block })
+  }
+  return screened
+}
 
 /**
  * A transcript line as the SDK message it saved, for the decoder the live
  * session runs: Claude Code writes the SDK's assistant and user messages
  * to its transcript, one content block a line.
  */
-function savedMessage(line: ClaudeLine): SDKMessage | undefined {
+function savedMessage(line: ClaudeLine, content: ScreenedBlocks | undefined): SDKMessage | undefined {
   const saved = line.saved
-  if (!saved || !line.uuid) return undefined
+  if (!saved || !line.uuid || !content) return undefined
   const base = { uuid: line.uuid, session_id: line.sessionId ?? "", parent_tool_use_id: null }
   if (line.type === "assistant") {
-    const content = ReplyContentSchema.safeParse(saved["content"])
-    if (!content.success) return undefined
-    const message = { ...base, type: "assistant", message: { id: stringValue(saved["id"]) ?? line.uuid, model: stringValue(saved["model"]) ?? "", content: content.data }, ...line.apiError !== undefined && { error: line.apiError } }
+    const message = { ...base, type: "assistant", message: { id: stringValue(saved["id"]) ?? line.uuid, model: stringValue(saved["model"]) ?? "", content: content.read.map((read) => read.block) }, ...line.apiError !== undefined && { error: line.apiError } }
     // SAFETY: the screen kept every field `ClaudeProjection` reads of an assistant message, and only blocks it decodes.
     return message as SDKMessage
   }
-  const content = ResultContentSchema.safeParse(saved["content"])
-  if (!content.success) return undefined
-  const message = { ...base, type: "user", message: { role: "user", content: content.data } }
+  const results = content.read.flatMap((read) => read.type === "tool_result" ? [read.block] : [])
+  const message = { ...base, type: "user", message: { role: "user", content: results } }
   // SAFETY: the screen kept every field `ClaudeProjection` reads of a user message, and only its tool results.
   return message as SDKMessage
 }
@@ -312,6 +346,7 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
   if (!type) return null
   return {
     type,
+    record: root,
     title: stringValue(root["aiTitle"]) ?? stringValue(root["summary"]),
     customTitle:
       type === "custom-title" ? stringValue(root["customTitle"]) : undefined,
@@ -495,6 +530,25 @@ export class ClaudeProvider implements SessionProvider {
     return ref.nativeId && (ref.cwd || spoke) ? ref : null
   }
 
+  /**
+   * The transcript, the folder beside it (subagent transcripts, tool results
+   * too large to inline), and what Claude Code keeps under the session's id
+   * in its config folder: the file snapshots its rewind restores, and todo
+   * lists.
+   */
+  async records(path: string): Promise<SessionRecords | null> {
+    const root = this.roots().find((candidate) => path.startsWith(`${candidate}/`))
+    if (!root || !path.endsWith(".jsonl") || !(await stat(path).catch(() => null))?.isFile()) return null
+    const id = basename(path, ".jsonl")
+    const files = [path, ...await filesUnder(path.slice(0, -".jsonl".length))]
+    if (basename(root) === "projects") {
+      const config = dirname(root)
+      files.push(...await filesUnder(join(config, "file-history", id)))
+      files.push(...(await filesUnder(join(config, "todos"))).filter((file) => basename(file).startsWith(`${id}-`)))
+    }
+    return { files, databases: [] }
+  }
+
   /** Remove a session file; Claude Code keeps no index that names it. */
   async remove(path: string): Promise<boolean> {
     if (
@@ -555,7 +609,10 @@ export class ClaudeProvider implements SessionProvider {
     if (!ref) return null
     const into = translator()
     const checkpoint = await readLines(path, 0, into.push)
-    return { ref, checkpoint, entries: into.done() }
+    const thread: Thread = { ref, checkpoint, entries: into.done() }
+    const unread = into.unread()
+    if (unread) thread.unread = unread
+    return thread
   }
 
   createFollower(path: string, fromByte: number) {
@@ -647,7 +704,10 @@ function translator(): ClaudeTranslator {
       case "model_refusal_fallback": {
         const from = stringValue(record["originalModel"])
         const to = stringValue(record["fallbackModel"])
-        if (!from || !to) return
+        if (!from || !to) {
+          sink.unread(`system ${line.subtype}`, "unreadable", record)
+          return
+        }
         const marker = modelChangedEvent(
           from,
           to,
@@ -704,11 +764,16 @@ function translator(): ClaudeTranslator {
         return
       }
     }
+    if (!SYSTEM_SUBTYPES.has(line.subtype ?? "")) sink.unread(`system ${line.subtype ?? "(no subtype)"}`, "unknown", record)
   }
 
   /** A prompt or background result Claude took in while a turn ran, recorded only as a queued command. */
   const queued = (line: ClaudeLine, attachment: ClaudeJsonObject): void => {
-    if (attachment["type"] !== "queued_command") return
+    const type = stringValue(attachment["type"])
+    if (type !== "queued_command") {
+      if (!ATTACHMENT_TYPES.has(type ?? "")) sink.unread(`attachment ${type ?? "(no type)"}`, "unknown", line.record)
+      return
+    }
     const prompt = parseContent(attachment["prompt"])
     const projected = userContent(prompt)
     const text = claudeCommandPrompt(projected.text)
@@ -737,9 +802,23 @@ function translator(): ClaudeTranslator {
     sink.push(entry)
   }
 
+  const unread = (screened: ScreenedBlocks | undefined): ScreenedBlocks | undefined => {
+    for (const { kind, reason, block } of screened?.unread ?? []) sink.unread(kind, reason, block)
+    return screened
+  }
+
   const push = (raw: string): void => {
     const line = parseClaudeLine(raw)
-    if (!line || line.isSidechain) return
+    if (!line) {
+      const record = parseLine(raw)
+      if (record) sink.unread("record (no type)", "unreadable", record)
+      return
+    }
+    if (line.isSidechain) return
+    if (!RECORD_TYPES.has(line.type)) {
+      sink.unread(`record ${line.type}`, "unknown", line.record)
+      return
+    }
 
     // Session-level records: a title Claude Code wrote, and its bookkeeping.
     if (
@@ -753,6 +832,7 @@ function translator(): ClaudeTranslator {
     if (line.attachment) return queued(line, line.attachment)
 
     if (line.type === "user") {
+      const screened = unread(screenedBlocks("user", line.saved?.["content"]))
       const content = line.message?.content
       // Tool results ride user-role messages; attach them to their calls
       // rather than showing them as turns the user took.
@@ -763,7 +843,7 @@ function translator(): ClaudeTranslator {
           results++
           if (part.toolUseId && !tools.has(part.toolUseId)) needsReset = true
         }
-        const saved = results ? savedMessage(line) : undefined
+        const saved = results ? savedMessage(line, screened) : undefined
         for (const update of saved ? projection.project(saved) : []) {
           const call = update.kind === "tool-update" ? tools.get(update.id) : undefined
           if (!call) continue
@@ -839,7 +919,7 @@ function translator(): ClaudeTranslator {
     const message = line.message
     if (line.isAbortedMidStream || line.apiError !== undefined) running = false
     else if (message?.stopReason) running = message.stopReason === "tool_use"
-    const saved = savedMessage(line)
+    const saved = savedMessage(line, unread(screenedBlocks("assistant", line.saved?.["content"])))
     if (!message || !Array.isArray(message.content) || !saved) {
       if (line.isAbortedMidStream) {
         mark({ label: "Interrupted" }, line.timestamp, line.uuid)
@@ -912,6 +992,7 @@ function translator(): ClaudeTranslator {
     push,
     snapshot: () => sink.snapshot(),
     done: () => sink.snapshot(),
+    unread: () => sink.unreadRecords,
     get needsReset() {
       return needsReset
     },

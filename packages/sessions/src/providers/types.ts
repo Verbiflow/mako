@@ -10,6 +10,7 @@
  */
 
 import type { Harness, Thread, ThreadEntry, ThreadRef } from "../format.js"
+import type { SessionRecords } from "../harness-records.js"
 
 /**
  * A session store that exists but could not be read just now, because a
@@ -138,6 +139,15 @@ export interface SessionProvider {
    * resources from the path, never from a prior discover() side effect.
    */
   read(path: string): Promise<Thread | null>
+
+  /**
+   * Where the harness keeps this session's own records, for
+   * `captureRecords`: every file and database row the session is, beside
+   * nothing another session owns, so restoring them under a fresh home gives
+   * this reader and the harness the same session. Null when `path` names
+   * no session of this store.
+   */
+  records(path: string): Promise<SessionRecords | null>
 
   /**
    * Cheap metadata refresh for a session whose file grew. A provider with an

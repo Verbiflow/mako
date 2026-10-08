@@ -59,6 +59,7 @@ import {
   titleFrom,
   type EntryBlock,
   type Thread,
+  type UnreadRecord,
   type ThreadEntry,
   type ThreadRef,
 } from "../format.js"
@@ -88,6 +89,7 @@ import { todoDetails } from "../tool-plan.js"
 import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import { openNativeStore } from "../read-only-sqlite.js"
+import { filesUnder, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
 import {
   SessionUnreadable,
   type NativeFile,
@@ -193,6 +195,7 @@ interface StoreFold {
   hashes: string[]
   entries: ThreadEntry[]
   exchanges: ExchangeStart[]
+  unread: UnreadRecord[] | undefined
 }
 
 /** A fold plus the entry index from which a listener must replace. */
@@ -207,6 +210,23 @@ interface FoldedHashes {
   exchanges: ExchangeStart[]
   /** The sink dropped history: indices no longer line up with the hash list. */
   dropped: boolean
+  unread: UnreadRecord[] | undefined
+}
+
+/**
+ * The unread records of a fold that went on from `earlier`'s. Appended
+ * messages add to its counts; messages folded again were counted in both,
+ * so each kind keeps the larger count, never fewer than it found.
+ */
+function laterUnread(earlier: UnreadRecord[] | undefined, later: UnreadRecord[] | undefined, refolded: boolean): UnreadRecord[] | undefined {
+  if (!earlier || !later) return earlier ?? later
+  const records = new Map(earlier.map((record) => [`${record.reason}\0${record.kind}`, { ...record }]))
+  for (const record of later) {
+    const known = records.get(`${record.reason}\0${record.kind}`)
+    if (!known) records.set(`${record.reason}\0${record.kind}`, record)
+    else known.count = refolded ? Math.max(known.count, record.count) : known.count + record.count
+  }
+  return [...records.values()]
 }
 
 /**
@@ -736,6 +756,33 @@ export class CursorProvider implements SessionProvider {
   }
 
   /**
+   * A desktop chat's rows in the editor's database; any other session's
+   * folder: `store.db`, whose blobs are content-addressed and never
+   * rewritten, and what Cursor keeps beside it (`meta.json`). An SDK agent's
+   * runs and their events sit in `index.db` under its id.
+   */
+  async records(path: string): Promise<SessionRecords | null> {
+    if (this.desktop.owns(path)) return this.desktop.records(path)
+    const directory = dirname(path)
+    const chats = dirname(dirname(directory)) === this.chatRoot
+    if (basename(path) !== "store.db" || !(chats || [this.acpRoot, this.sdkRoot].includes(dirname(directory)))) return null
+    const tables = [...tableColumns(path).keys()]
+    if (!tables.length) return null
+    const databases: RecordDatabase[] = [{ path, tables: tables.map((table) => (table === "blobs" ? { table, immutable: true } : { table })) }]
+    if (this.isSdkStore(path)) {
+      const index = cursorSdkIndexPath(this.sdkStateRoot)
+      const agentId = cursorSdkAgentIdForDirectory(index, basename(directory))
+      if (agentId) databases.push({ path: index, tables: [
+        { table: "agents", where: "agent_id = ?", params: [agentId] },
+        { table: "runs", where: "agent_id = ?", params: [agentId] },
+        { table: "run_events", where: "run_id IN (SELECT run_id FROM runs WHERE agent_id = ?)", params: [agentId] },
+      ] })
+    }
+    const files = (await filesUnder(directory)).filter((file) => !/^store\.db(?:-wal|-shm|-journal)?$/.test(basename(file)))
+    return { files, databases }
+  }
+
+  /**
    * Remove an ACP session or SDK agent directory. Cursor Desktop's own chats
    * are not ours to delete. An SDK agent is also forgotten in `index.db`, or
    * the SDK would still list it and the index's newest row could name a
@@ -944,11 +991,13 @@ export class CursorProvider implements SessionProvider {
       const input = this.foldInput(database, path)
       if (!input) return { ref, entries: [] }
       const held = this.lastFold
-      if (held && held.path === path && held.rootId === input.rootId && held.stopKey === stopKey(input.stops) && sameSpans(held.spans, spanKeys(input.spans)))
-        return { ref, entries: held.entries }
-      const { fold } = this.foldStore(database, input)
+      const fold = held && held.path === path && held.rootId === input.rootId && held.stopKey === stopKey(input.stops) && sameSpans(held.spans, spanKeys(input.spans))
+        ? held
+        : this.foldStore(database, input).fold
       this.lastFold = { ...fold, path }
-      return { ref, entries: fold.entries }
+      const thread: Thread = { ref, entries: fold.entries }
+      if (fold.unread) thread.unread = fold.unread
+      return thread
     } finally {
       database.close()
     }
@@ -1005,6 +1054,7 @@ export class CursorProvider implements SessionProvider {
         entries: folded.entries,
         // Dropped history shifts every index; no exchange is a safe restart.
         exchanges: folded.dropped ? [] : folded.exchanges,
+        unread: folded.unread,
       },
       replaceFrom: 0,
     }
@@ -1063,6 +1113,7 @@ export class CursorProvider implements SessionProvider {
                 entry: previous.entries.length + item.entry,
               })),
             ],
+            unread: laterUnread(previous.unread, appended.unread, false),
           },
           replaceFrom: previous.entries.length,
         }
@@ -1091,6 +1142,7 @@ export class CursorProvider implements SessionProvider {
             entry: exchange.entry + item.entry,
           })),
         ],
+        unread: laterUnread(previous.unread, tail.unread, true),
       },
       replaceFrom: exchange.entry,
     }
@@ -1170,6 +1222,7 @@ export class CursorProvider implements SessionProvider {
       if (!message) continue
       switch (message.role) {
         case "user": {
+          for (const part of message.unread) sink.unread(part.kind, part.reason, part.record)
           if (message.summary) {
             const summary = plainText(message.content).replace(SUMMARY_PREFIX, "")
             // A root that kept no window for this summary still marks it.
@@ -1206,7 +1259,10 @@ export class CursorProvider implements SessionProvider {
         }
         case "tool":
           for (const part of message.content) {
-            if (part.type !== "tool-result") continue
+            if (part.type !== "tool-result") {
+              if (part.unread) sink.unread(part.unread.kind, part.unread.reason, part.unread.record)
+              continue
+            }
             const block = toolsById.get(part.toolCallId)
             if (block) {
               block.output = clip(formatToolResult(part.result))
@@ -1270,11 +1326,13 @@ export class CursorProvider implements SessionProvider {
                 break
               }
               case "other":
+                if (part.unread) sink.unread(part.unread.kind, part.unread.reason, part.unread.record)
                 break
             }
           }
           continue
         case "other":
+          if (message.unread) sink.unread(message.unread.kind, message.unread.reason, message.unread.record)
           continue
       }
     }
@@ -1283,7 +1341,7 @@ export class CursorProvider implements SessionProvider {
     // The sink prepends one event when it dropped history; indices past it
     // no longer match the hash list, so the caller re-folds from the start.
     const dropped = entries.length > 0 && entries.length !== sink.entries.length
-    return { entries, exchanges, dropped }
+    return { entries, exchanges, dropped, unread: sink.unreadRecords }
   }
 
   /* ------------------------------------------------------------ sqlite */

@@ -1,10 +1,12 @@
 import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "../content.js"
 import { stat } from "node:fs/promises"
 import { OPENCODE_IMPORTED_MODEL } from "../emit.js"
-import { OpenCodeSavedTokens, openCodeTokens } from "../harnesses/opencode.js"
+import { OPENCODE_ASSISTANT_CONTENT, OPENCODE_LEGACY_PARTS, OPENCODE_MESSAGES, OpenCodeSavedTokens, openCodeTokens } from "../harnesses/opencode.js"
 import { tokenSum } from "../harnesses/tokens.js"
 import { removeSessionRows } from "../sqlite-removal.js"
-import { openNativeStore } from "../read-only-sqlite.js"
+import { openNativeStore, openReadOnly } from "../read-only-sqlite.js"
+import { ownedRows, placeholders, type SessionRecords } from "../harness-records.js"
+import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { reduceLiveUpdates, type LiveUpdate } from "../live-content.js"
@@ -26,6 +28,7 @@ import {
   type ThreadEntry,
   type ThreadRef,
   type TurnUsage,
+  type UnreadRecord,
 } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import type {
@@ -244,7 +247,7 @@ export class OpenCodeProvider implements SessionProvider {
         database.exec("COMMIT")
         return null
       }
-      const entries =
+      const { entries, unread } =
         kind === "current"
           ? currentEntries(database, row.id, row.directory ?? row.projectWorktree ?? "")
           : legacyEntries(database, row.id, row.directory ?? row.projectWorktree ?? "")
@@ -260,7 +263,9 @@ export class OpenCodeProvider implements SessionProvider {
         entries: structuredClone(entries),
         values: entries.map((entry) => JSON.stringify(entry)),
       })
-      return { ref, entries }
+      const thread: Thread = { ref, entries }
+      if (unread) thread.unread = unread
+      return thread
     } catch {
       try {
         database.exec("ROLLBACK")
@@ -337,6 +342,39 @@ export class OpenCodeProvider implements SessionProvider {
   }
 
   /** Remove a session and its messages, parts, and child sessions from the store it lives in. */
+  /**
+   * The session's rows and its subagents' (the sessions under it by
+   * `parent_id`), in every table keyed by `session_id`; the session, project
+   * and event log rows; the instruction blobs its instruction state names;
+   * and the migration list OpenCode checks before it opens the database.
+   */
+  async records(path: string): Promise<SessionRecords | null> {
+    const target = parseSessionPath(path, this.databasePaths())
+    if (!target) return null
+    const sessions = target.v2 ? "session_v2" : "session"
+    const ids = sessionTree(target.database, sessions, target.id)
+    if (!ids.length) return null
+    const listed = placeholders(ids)
+    const named = (column: string) => `SELECT j.value FROM instruction_state s, json_each(s.${column}) j WHERE s.session_id IN (${listed}) AND json_valid(s.${column})`
+    const database = ownedRows(target.database, ids, {
+      owner: "session_id",
+      keyed: { [sessions]: "id" },
+      shared: ["migration", "__drizzle_migrations"],
+      extra: [
+        { table: "project", where: `id IN (SELECT project_id FROM ${sessions} WHERE id IN (${listed}))`, params: ids },
+        { table: "event", where: `aggregate_id IN (${listed})`, params: ids },
+        { table: "event_sequence", where: `aggregate_id IN (${listed})`, params: ids },
+        {
+          table: "instruction_blob",
+          where: `hash IN (${named("initial_values")} UNION ${named("current_values")} UNION SELECT value FROM instruction_entry WHERE session_id IN (${listed}))`,
+          params: [...ids, ...ids, ...ids],
+          immutable: true,
+        },
+      ],
+    })
+    return database && { files: [], databases: [database] }
+  }
+
   async remove(path: string): Promise<boolean> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return false
@@ -607,11 +645,17 @@ function latestModel(
   return null
 }
 
+/** A thread's entries, and the records it couldn't draw. */
+interface ReadEntries {
+  entries: ThreadEntry[]
+  unread: UnreadRecord[] | undefined
+}
+
 function currentEntries(
   database: DatabaseSync,
   sessionId: string,
   cwd: string
-): ThreadEntry[] {
+): ReadEntries {
   const stored = database
     .prepare(
       `SELECT id, type, time_created, time_updated, data FROM (
@@ -626,14 +670,14 @@ function currentEntries(
     const row = parseStoredRow(fields)
     if (row) pushCurrent(sink, row, execution, sessionId, cwd)
   }
-  return sink.done()
+  return { entries: sink.done(), unread: sink.unreadRecords }
 }
 
 function legacyEntries(
   database: DatabaseSync,
   sessionId: string,
   cwd: string
-): ThreadEntry[] {
+): ReadEntries {
   const messages = database
     .prepare(
       `SELECT id, time_created, data FROM (
@@ -644,7 +688,7 @@ function legacyEntries(
     .all(sessionId, MAX_MESSAGES)
     .map(parseStoredRow)
     .filter((row): row is StoredRow => row !== null)
-  if (messages.length === 0) return []
+  if (messages.length === 0) return { entries: [], unread: undefined }
   const parts = database
     .prepare(
       `SELECT id, message_id, time_created, data FROM (
@@ -669,7 +713,7 @@ function legacyEntries(
   const sink = new EntrySink()
   for (const message of messages)
     pushLegacy(sink, message, byMessage.get(message.id) ?? [], cwd)
-  return sink.done()
+  return { entries: sink.done(), unread: sink.unreadRecords }
 }
 
 interface Execution {
@@ -726,7 +770,7 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, sess
     return
   }
   if (type === "assistant") {
-    const blocks = storedReply(sessionId, row.id, row.data, cwd)
+    const blocks = storedReply(sink, sessionId, row.id, row.data, cwd)
     const usage = usageFrom(row.data)
     const model = modelFromData(row.data)
     if (blocks.length > 0 || usage)
@@ -774,8 +818,8 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, sess
       }), row.id)
     return
   }
-  // `model-switched` and `agent-switched` are the person's own picks, which the
-  // composer shows as its model and mode; the live session draws neither.
+  if (type === undefined) sink.unread("session_message (no type)", "unreadable", row.data)
+  else if (!Object.hasOwn(OPENCODE_MESSAGES, type)) sink.unread(`session_message ${type}`, "unknown", row.data)
 }
 
 function pushLegacy(
@@ -786,6 +830,11 @@ function pushLegacy(
 ): void {
   const role = jsonText(message.data.role)
   const at = isoOf(timeCreated(message.data) ?? message.timeCreated)
+  for (const part of parts) {
+    const type = jsonText(part.data.type)
+    if (type === undefined || !Object.hasOwn(OPENCODE_LEGACY_PARTS, type))
+      sink.unread(`part ${type ?? "(no type)"}`, type === undefined ? "unreadable" : "unknown", part.data)
+  }
   const compaction = parts.find(
     (part) => jsonText(part.data.type) === "compaction"
   )
@@ -809,7 +858,10 @@ function pushLegacy(
       sink.push({ kind: "user", id: message.id, at, text, attachments })
     return
   }
-  if (role !== "assistant") return
+  if (role !== "assistant") {
+    sink.unread(`message ${role ?? "(no role)"}`, role === undefined ? "unreadable" : "unknown", message.data)
+    return
+  }
   const blocks: EntryBlock[] = []
   const retries: { marker: TranscriptEvent; record: string }[] = []
   let usage = usageFrom(message.data)
@@ -909,7 +961,7 @@ const StoredPart = z.discriminatedUnion("type", [
  * keeps goes in as the event that streamed it (`OpenCodeContent`). A tool
  * keeps the call id it is saved under.
  */
-function storedReply(sessionId: string, messageId: string, data: JsonObject, cwd: string): EntryBlock[] {
+function storedReply(sink: EntrySink, sessionId: string, messageId: string, data: JsonObject, cwd: string): EntryBlock[] {
   const projection = new OpenCodeContent(sessionId, cwd)
   const updates: LiveUpdate[] = []
   projection.stepStarted(sessionId, messageId, jsonText(data.agent) ?? "")
@@ -923,7 +975,12 @@ function storedReply(sessionId: string, messageId: string, data: JsonObject, cwd
     }
     if (read?.type === "reasoning") return void updates.push(...projection.reasoning(sessionId, messageId, ordinal, read.text))
     if (!read) {
-      for (const attachment of fileParts([part])) updates.push({ kind: "attachment", attachment })
+      const attachments = fileParts([part])
+      for (const attachment of attachments) updates.push({ kind: "attachment", attachment })
+      if (attachments.length) return
+      const type = jsonText(jsonObject(part)?.type)
+      if (type === undefined || OPENCODE_ASSISTANT_CONTENT.has(type)) sink.unread(`assistant ${type ?? "part"}`, "unreadable", part)
+      else sink.unread(`assistant ${type}`, "unknown", part)
       return
     }
     const tool = read
@@ -1143,6 +1200,24 @@ function revisionOf(timestamp: number, count: number): number {
   const safeTimestamp = Math.max(0, Math.floor(timestamp))
   const safeCount = Math.max(0, Math.floor(count)) % 1000
   return safeTimestamp * 1000 + safeCount
+}
+
+/** The session and every session under it by `parent_id`, or none when it isn't in `table`. */
+function sessionTree(database: string, table: "session" | "session_v2", id: string): string[] {
+  const { database: db } = openReadOnly(database, { timeout: READ_BUSY_TIMEOUT_MS })
+  try {
+    if (!db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(id)) return []
+    const children = db.prepare(`SELECT id FROM ${table} WHERE parent_id = ?`)
+    const ids = [id]
+    for (let at = 0; at < ids.length; at++)
+      for (const row of children.all(ids[at]!)) {
+        const child = String(row["id"])
+        if (!ids.includes(child)) ids.push(child)
+      }
+    return ids
+  } finally {
+    db.close()
+  }
 }
 
 function isoOf(value: number | undefined): string | undefined {

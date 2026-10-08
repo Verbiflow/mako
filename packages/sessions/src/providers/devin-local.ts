@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { AcpSavedTurns, acpSavedNotification, SavedAcpUpdateSchema } from "../acp-saved-turns.js"
+import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpUpdateSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
 import { DEVIN_ACP_HOOKS } from "../harnesses/devin.js"
 /**
@@ -8,20 +8,25 @@ import { DEVIN_ACP_HOOKS } from "../harnesses/devin.js"
  * as a locator through the hooks the live client runs (`DEVIN_ACP_HOOKS`).
  * Native session identity comes from the editor's message-store index, never
  * the database's random filename. SQLite snapshots are replaceable, not
- * byte-tail journals.
+ * byte-tail journals. Devin.app 3.10 deletes `acp-events` when it starts,
+ * without moving those sessions into the SQLite store, so one session never
+ * has both and an NDJSON session lives on only in the catalog's archive.
  */
 
+import { existsSync } from "node:fs"
 import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
-import { openNativeStore } from "../read-only-sqlite.js"
+import { openNativeStore, openReadOnly } from "../read-only-sqlite.js"
+import { placeholders, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
 import {
   agentTitleFrom,
   titleFrom,
   type Thread,
   type ThreadEntry,
   type ThreadRef,
+  type UnreadRecord,
 } from "../format.js"
 import {
   createJsonlFollower,
@@ -142,8 +147,10 @@ interface SessionCache {
 interface DevinTranslator extends LineTranslator {
   done(): ThreadEntry[]
   readonly title?: string
-  /** A record history leaves out: past the read limit, or of a `kind` it can't read. */
-  unavailable(position: number, kind?: string): void
+  /** A record history leaves out: past the read limit, or of a `kind` it can't read, kept as `sample`. */
+  unavailable(position: number, kind?: string, sample?: JsonRecord): void
+  /** The records it couldn't draw, by kind. */
+  unread(): UnreadRecord[] | undefined
 }
 
 export class DevinLocalProvider implements SessionProvider {
@@ -197,6 +204,22 @@ export class DevinLocalProvider implements SessionProvider {
       }
     }
     return files
+  }
+
+  /**
+   * The journal (a session's own database, or its NDJSON event log before
+   * 3.10) and the two keys Devin.app keeps for it in its state database: the
+   * message store entry naming the journal and the session's info.
+   */
+  async records(path: string): Promise<SessionRecords | null> {
+    if (!this.roots().includes(dirname(path)) || !(await stat(path).catch(() => null))?.isFile()) return null
+    const databases: RecordDatabase[] = []
+    if (path.endsWith(".db")) databases.push({ path, tables: [...tableColumns(path).keys()].map((table) => ({ table })) })
+    else if (!path.endsWith(".ndjson")) return null
+    const state = join(this.userDir, "globalStorage", "state.vscdb")
+    const keys = stateKeysOf(state, journalOf(path))
+    if (keys.length) databases.push({ path: state, tables: [{ table: "ItemTable", where: `key IN (${placeholders(keys)})`, params: keys }] })
+    return { files: path.endsWith(".ndjson") ? [path] : [], databases }
   }
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {
@@ -257,9 +280,11 @@ export class DevinLocalProvider implements SessionProvider {
     const checkpoint = path.endsWith(".db")
       ? await this.readMessages(path, into.push, false, into.unavailable)
       : await readLines(path, 0, into.push)
-    const entries = into.done()
+    const thread: Thread = { ref, checkpoint, entries: into.done() }
     if (!ref.title && into.title) ref.title = agentTitleFrom(into.title)
-    return { ref, checkpoint, entries }
+    const unread = into.unread()
+    if (unread) thread.unread = unread
+    return thread
   }
 
   createFollower(path: string, fromByte: number) {
@@ -300,7 +325,7 @@ export class DevinLocalProvider implements SessionProvider {
           if (push(JSON.stringify({ notification })) === false) { stopped = true; break }
         }
         if (stopped) break
-        if (stored.unread) unavailable?.(row.position, stored.unread)
+        if (stored.unread) unavailable?.(row.position, stored.unread, payload)
       }
       return next
     } catch (cause) {
@@ -338,12 +363,12 @@ export class DevinLocalProvider implements SessionProvider {
       const metaRaw = row("windsurf.acp.metadataCache")?.value
       const index = (indexRaw && parseEventLogIndex(indexRaw)) || new Map<string, EventLogEntry>()
       const cache = (metaRaw && parseSessionCache(metaRaw)) || { sessions: [] }
-      for (const candidate of db.prepare("SELECT key, value FROM ItemTable WHERE key LIKE 'windsurf.acp.messageStore.session.%'").iterate()) {
+      for (const candidate of db.prepare(`SELECT key, value FROM ItemTable WHERE key LIKE '${MESSAGE_STORE_KEY}%'`).iterate()) {
         const fields = StoredIndex.parse(candidate)
         const entry = parseJson(fields.value)
         if (!isJsonRecord(entry)) continue
         const uuid = readString(entry, "uuid")
-        const sessionId = fields.key.slice("windsurf.acp.messageStore.session.".length)
+        const sessionId = fields.key.slice(MESSAGE_STORE_KEY.length)
         if (uuid) index.set(sessionId, { uuid, lastUpdated: readNumber(entry, "lastUpdated") })
         const current = row(`windsurf.acp.sessioninfo.session.${sessionId}`)?.value
         const record = current && parseJson(current)
@@ -389,6 +414,26 @@ function journalOf(path: string): string {
   return basename(path).replace(/\.(?:ndjson|db)$/, "")
 }
 
+const MESSAGE_STORE_KEY = "windsurf.acp.messageStore.session."
+
+/** The state keys of the session whose message store names journal `uuid`. */
+function stateKeysOf(state: string, uuid: string): string[] {
+  if (!existsSync(state)) return []
+  const { database } = openReadOnly(state, { timeout: 5_000 })
+  try {
+    for (const candidate of database.prepare(`SELECT key, value FROM ItemTable WHERE key LIKE '${MESSAGE_STORE_KEY}%'`).iterate()) {
+      const fields = StoredIndex.parse(candidate)
+      const entry = parseJson(fields.value)
+      if (!isJsonRecord(entry) || readString(entry, "uuid") !== uuid) continue
+      const sessionId = fields.key.slice(MESSAGE_STORE_KEY.length)
+      return [fields.key, `windsurf.acp.sessioninfo.session.${sessionId}`]
+    }
+    return []
+  } finally {
+    database.close()
+  }
+}
+
 /** A saved line: `{ notification }`, as the NDJSON journal keeps it and `readMessages` passes a row on. */
 const SavedLineSchema = z.object({ notification: SavedAcpUpdateSchema.extend({ content: z.json().optional(), _meta: z.looseObject({}).optional() }) })
 const StampSchema = z.looseObject({ "cognition.ai/timestamp": z.string().optional(), "cognition.ai/clientMessageId": z.string().optional() })
@@ -406,14 +451,22 @@ function translator(journal: string): DevinTranslator {
   let message: string | undefined
 
   const push = (raw: string): void => {
-    const notification = SavedLineSchema.safeParse(parseJson(raw)).data?.notification
-    if (!notification) return
+    const line = parseJson(raw)
+    const notification = SavedLineSchema.safeParse(line).data?.notification
+    if (!notification) {
+      if (isJsonRecord(line)) turns.sink.unread("saved line", "unreadable", line)
+      return
+    }
     const stamp = StampSchema.safeParse(notification._meta).data
     const at = stamp?.["cognition.ai/timestamp"]
     if (notification.sessionUpdate !== "user_message_chunk") {
       turns.close()
       const saved = acpSavedNotification({ sessionId: journal, update: notification })
       if (saved) for (const patch of turns.update(saved, at)) title = patch.title ?? title
+      else {
+        const reason = acpSavedRefusal(notification.sessionUpdate)
+        if (reason) turns.sink.unread(`session/update/${notification.sessionUpdate}`, reason, line)
+      }
       return
     }
     const text = acpText(notification.content)
@@ -433,8 +486,9 @@ function translator(journal: string): DevinTranslator {
 
   return {
     push,
-    unavailable: (position, kind) => {
+    unavailable: (position, kind, sample) => {
       turns.close()
+      if (kind) turns.sink.unread(`messages/${kind}`, "unknown", sample)
       const detail = kind
         ? `Mako can't read Devin's "${kind}" records yet. The original remains in the IDE store.`
         : "This native record exceeds the history read limit. The original remains in the IDE store."
@@ -442,6 +496,7 @@ function translator(journal: string): DevinTranslator {
     },
     snapshot: () => turns.snapshot(),
     done: () => turns.done(),
+    unread: () => turns.sink.unreadRecords,
     get title() {
       return title
     },
