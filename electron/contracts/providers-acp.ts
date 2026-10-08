@@ -28,6 +28,8 @@ export interface HarnessDescriptor {
   live: boolean
   /** What a live conversation with this harness can do, each with how or why not, as the harness declares it. */
   capabilities: import("./harness-capabilities.js").LiveCapabilities
+  /** What the harness reports about usage, each with where or why not; the meter and account rows read it. */
+  usage: import("./harness-usage.js").HarnessUsage
   /**
    * The access ladder a new session with this provider offers, known before
    * any process starts so the desk can take the choice with the first prompt.

@@ -313,7 +313,7 @@ export const hostCallInputs = {
       z.object({
         kind: z.literal("choice"),
         optionId: z.union([z.null(), z.string()]),
-        feedback: z.string().trim().min(1).optional(),
+        feedback: z.string().optional(),
       }),
       z.object({
         kind: z.literal("answers"),
@@ -361,6 +361,12 @@ export const hostCallInputs = {
         kind: z.literal("earlier"),
         token: z.string(),
         before: z.object({ blocks: z.number(), base: z.number() }),
+      }),
+      z.object({
+        kind: z.literal("range"),
+        token: z.string(),
+        from: z.object({ blocks: z.number(), base: z.number() }),
+        to: z.object({ blocks: z.number(), base: z.number() }),
       }),
       z.object({
         kind: z.literal("detail"),
@@ -792,7 +798,9 @@ export const hostCallInputs = {
   "mako:stage-file": z.tuple([z.string(), z.string()]),
   "mako:stage-file-path": z.tuple([z.string()]),
   "mako:telemetry": z.tuple([]),
-  "mako:telemetry-choose": z.tuple([z.object({ usage: z.boolean().optional(), errors: z.boolean().optional() }).strict()]),
+  "mako:telemetry-choose": z.tuple([
+    z.object({ usage: z.boolean().optional(), errors: z.boolean().optional() }),
+  ]),
   "mako:terminal-acknowledge": z.tuple([z.string(), z.number()]),
   "mako:terminal-attach": z.tuple([z.string()]),
   "mako:terminal-create": z.tuple([

@@ -23,8 +23,15 @@ export interface ModelPick {
  * before it.
  */
 export interface HarnessDefaults {
-  /** What a new conversation and a project's setup start on. Without a match, the harness's own default. */
+  /**
+   * What a new conversation and a project's setup start on. Without a match,
+   * the harness's own default. The first pick is held to the harness's
+   * recorded catalog (`scripts/fixtures/model-catalogs`), so a renamed model
+   * fails a test before it reaches a session.
+   */
   work: readonly ModelPick[]
+  /** Why Mako names no model for this harness, when `work` is empty. */
+  none?: string
 }
 
 /** A model's option values by the catalog's option ids. */
@@ -58,6 +65,23 @@ export function isDefaultOrder(order: readonly string[], known: readonly string[
 export function workDefault(defaults: HarnessDefaults | undefined, models: readonly SessionModel[]): SessionSettings | undefined {
   const pick = firstPick(defaults?.work ?? [], models)
   return pick ? { model: pick.model.id, options: pick.options } : undefined
+}
+
+/**
+ * Why `models` can't start Mako's first pick as declared: a model it doesn't
+ * offer, or an option value the model doesn't accept. Later picks are for
+ * older catalogs and aren't held to this one.
+ */
+export function workDefaultProblems(defaults: HarnessDefaults, models: readonly SessionModel[]): string[] {
+  const [pick] = defaults.work
+  if (!pick) return []
+  const model = catalogModel(models, pick.model)
+  if (!model) return [`${pick.model} isn't in the catalog`]
+  return Object.entries(pick.options ?? {}).flatMap(([id, value]) => {
+    const option = model.options.find((entry) => entry.id === id)
+    if (!option) return [`${model.id} has no ${id} option`]
+    return optionAccepts(option, value) ? [] : [`${model.id} doesn't accept ${id} ${String(value)}`]
+  })
 }
 
 function firstPick(picks: readonly ModelPick[], models: readonly SessionModel[]): HarnessPick | undefined {

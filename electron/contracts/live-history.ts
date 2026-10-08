@@ -19,6 +19,7 @@ export const LiveHistoryReadSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("snapshot"), from: LiveHistoryCursorSchema.optional(), epoch: z.string().optional(),
     ifCurrent: z.object({ token: z.string().uuid(), revision: z.number().int().nonnegative() }).optional() }),
   z.object({ kind: z.literal("earlier"), token: z.string().uuid(), before: LiveHistoryCursorSchema }),
+  z.object({ kind: z.literal("range"), token: z.string().uuid(), from: LiveHistoryCursorSchema, to: LiveHistoryCursorSchema }),
   z.object({ kind: z.literal("detail"), token: z.string().uuid(), at: LiveHistoryAddressSchema }),
   z.object({ kind: z.literal("part"), record: z.string().uuid(), offset: z.number().int().nonnegative() }),
 ])
@@ -29,6 +30,8 @@ export type LiveHistorySnapshot = LiveSnapshot | { kind: "unchanged"; token: str
  * renderer arrays are windows, never journal indexes. */
 export interface LiveHistoryWindow {
   token: string
+  /** Old hosts page earlier history but cannot reload arbitrary released turns. */
+  ranges?: true
   blockStart: number
   blockEnd: number
   turnStart: number

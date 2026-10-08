@@ -3,7 +3,7 @@ import type {
   NativeAgentObservation,
   NativeAgentRoster,
 } from "./native-agents.js"
-import type { SessionSettings } from "@mako/sessions/settings"
+import type { ModelOption, SessionSettings, SettingValue } from "@mako/sessions/settings"
 import type {
   ContextManifest,
   ConversationControl,
@@ -281,6 +281,13 @@ export interface LiveBatch {
   sessionChanges?: Partial<LiveSessionState>
   /** The session fields that went away. */
   sessionCleared?: (keyof LiveSessionState)[]
+  /**
+   * New current values for the option list the receiver holds, by option id;
+   * `null` where one no longer has a value. A harness's list can carry
+   * hundreds of kilobytes of model choices, and choosing a mode moves one
+   * value in it.
+   */
+  configCurrents?: Record<string, SettingValue | null>
   permissions?: LivePermissionRequest[]
   /** Every request, when one went away or they changed order; see `requestChanges`. */
   requests?: LiveRequest[]
@@ -306,16 +313,25 @@ function copyField<Key extends keyof LiveSessionState>(target: Partial<LiveSessi
   target[key] = source[key]
 }
 
+type SessionDelta = Pick<LiveBatch, "sessionChanges" | "sessionCleared" | "configCurrents">
+
 /** How a batch carries `next`: only the fields whose values are not `previous`'s; see `sharedSession`. */
-export function sessionDelta(previous: LiveSessionState, next: LiveSessionState): Pick<LiveBatch, "sessionChanges" | "sessionCleared"> {
-  const delta: Pick<LiveBatch, "sessionChanges" | "sessionCleared"> = {}
+export function sessionDelta(previous: LiveSessionState, next: LiveSessionState): SessionDelta {
+  const delta: SessionDelta = {}
   if (previous === next) return delta
   const changes: Partial<LiveSessionState> = {}
   const cleared: (keyof LiveSessionState)[] = []
   let changed = false
-  for (const key of sessionKeys(next))
-    if (next[key] === undefined) { if (previous[key] !== undefined) cleared.push(key) }
-    else if (next[key] !== previous[key]) { copyField(changes, next, key); changed = true }
+  for (const key of sessionKeys(next)) {
+    if (next[key] === undefined) {
+      if (previous[key] !== undefined) cleared.push(key)
+      continue
+    }
+    if (next[key] === previous[key]) continue
+    const currents = key === "configOptions" ? currentsMoved(previous.configOptions, next.configOptions) : undefined
+    if (currents) delta.configCurrents = currents
+    else { copyField(changes, next, key); changed = true }
+  }
   for (const key of sessionKeys(previous))
     if (!(key in next) && previous[key] !== undefined) cleared.push(key)
   if (changed) delta.sessionChanges = changes
@@ -323,18 +339,54 @@ export function sessionDelta(previous: LiveSessionState, next: LiveSessionState)
   return delta
 }
 
+/** The current values that moved, when they are all that differs between two option lists. */
+function currentsMoved(previous: readonly ModelOption[] | undefined, next: readonly ModelOption[]): Record<string, SettingValue | null> | undefined {
+  if (!previous?.length || previous.length !== next.length) return undefined
+  const moved: Record<string, SettingValue | null> = {}
+  let any = false
+  for (const [index, option] of next.entries()) {
+    const held = previous[index]!
+    if (held === option) continue
+    if (held.id !== option.id || canonicalJson(withoutCurrent(held)) !== canonicalJson(withoutCurrent(option))) return undefined
+    if (held.current === option.current) continue
+    moved[option.id] = option.current ?? null
+    any = true
+  }
+  return any ? moved : undefined
+}
+
+function withoutCurrent<Option extends ModelOption>(option: Option): Option {
+  const next = { ...option }
+  delete next.current
+  return next
+}
+
+function withCurrent(option: ModelOption, value: SettingValue | null): ModelOption {
+  if (option.kind === "boolean") return value === true || value === false ? { ...option, current: value } : withoutCurrent(option)
+  return value === null || value === true || value === false ? withoutCurrent(option) : { ...option, current: value }
+}
+
+/** `options` with `currents` applied, each by option id. */
+function withCurrents(options: readonly ModelOption[], currents: Record<string, SettingValue | null>): ModelOption[] {
+  return options.map((option) => {
+    const value = currents[option.id]
+    return value === undefined ? option : withCurrent(option, value)
+  })
+}
+
 /** The session after `batch`, from the one the receiver held. */
-export function sessionAfter(current: LiveSessionState, batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared">): LiveSessionState {
+export function sessionAfter(current: LiveSessionState, batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared" | "configCurrents">): LiveSessionState {
   if (batch.session) return batch.session
-  if (!batch.sessionChanges && !batch.sessionCleared) return current
+  if (!batch.sessionChanges && !batch.sessionCleared && !batch.configCurrents) return current
   const next = { ...current, ...batch.sessionChanges }
+  if (batch.configCurrents) next.configOptions = withCurrents(next.configOptions, batch.configCurrents)
   for (const key of batch.sessionCleared ?? []) delete next[key]
   return next
 }
 
 /** Whether `batch` changed the session at all. */
-export function changesSession(batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared">): boolean {
-  return Boolean(batch.session || batch.sessionChanges || batch.sessionCleared)
+export function changesSession(batch: Pick<LiveBatch, "session" | "sessionChanges" | "sessionCleared" | "configCurrents">): boolean {
+  return Boolean(batch.session || batch.sessionChanges || batch.sessionCleared || batch.configCurrents)
 }
 
 /**
@@ -345,9 +397,17 @@ export function changesSession(batch: Pick<LiveBatch, "session" | "sessionChange
 export function sharedSession(previous: LiveSessionState, next: LiveSessionState): LiveSessionState {
   let shared: LiveSessionState | undefined
   for (const key of sessionKeys(next))
-    if (next[key] !== previous[key] && JSON.stringify(next[key]) === JSON.stringify(previous[key]))
+    if (next[key] !== previous[key] && canonicalJson(next[key]) === canonicalJson(previous[key]))
       copyField(shared ??= { ...next }, previous, key)
   return shared ?? next
+}
+
+/** JSON text whatever order its producer wrote each object's keys in: a list restored from storage equals the one a harness reports again. */
+function canonicalJson<Value>(value: Value): string | undefined {
+  return JSON.stringify(value, (_key, field) =>
+    field instanceof Object && !Array.isArray(field)
+      ? Object.fromEntries(Object.entries(field).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : field)
 }
 
 /** The requests after `batch`, from those the receiver held; `undefined` when the batch changed none. */

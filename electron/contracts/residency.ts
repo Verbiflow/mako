@@ -83,14 +83,21 @@ const measures = new WeakMap<Measured, number>()
  * stand-in for the strings plus the objects holding them. Blocks, entries
  * and requests are immutable and shared from one revision to the next, so
  * each is measured once; a later call walks only what changed.
+ * A capture cache supplies `shared` to count immutable payload once across
+ * views. `retain` commits that view's objects after deciding to keep it.
  */
-export function liveContentWeight(content: LiveContent): number {
-  let bytes = 1024
-  for (const block of content.blocks) bytes += measured(block)
-  for (const entry of content.base?.entries ?? []) bytes += measured(entry)
-  for (const request of content.requests ?? []) bytes += measured(request)
-  if (content.control) bytes += measured(content.control)
-  if (content.configOptions) bytes += measured(content.configOptions)
+export function liveContentWeight(content: LiveContent, shared?: WeakSet<object>, retain = false): number {
+  let bytes = 1024 + 8 * (content.blocks.length + (content.base?.entries.length ?? 0) + (content.requests?.length ?? 0))
+  const weight = (value: Measured) => {
+    if (shared?.has(value)) return 0
+    if (retain) shared?.add(value)
+    return measured(value)
+  }
+  for (const block of content.blocks) bytes += weight(block)
+  for (const entry of content.base?.entries ?? []) bytes += weight(entry)
+  for (const request of content.requests ?? []) bytes += weight(request)
+  if (content.control) bytes += weight(content.control)
+  if (content.configOptions) bytes += weight(content.configOptions)
   return bytes
 }
 

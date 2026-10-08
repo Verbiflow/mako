@@ -102,6 +102,8 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     carried: z.enum(["native", "transcript"]).optional(),
     /** Why a requested native carry went as transcript instead. */
     fallback: z.string().optional(),
+    /** Why the harness could not fork this session itself, so the fork was carried into a new session instead. */
+    nativeForkDeclined: z.string().optional(),
   }),
   z.object({
     kind: z.literal("failed"),
@@ -177,6 +179,10 @@ export const ConversationControlSchema = z.object({
           provider: z.string(),
           nativeId: z.string(),
           runId: z.string(),
+          /** The source session's native store, for a harness that checks whether it can fork it (`NativeFork.declines`). */
+          path: z.string().optional(),
+          /** Messages sent into the run while it ran (`NativeForkSource.steers`). */
+          steers: z.number().int().positive().optional(),
         })
         .optional(),
       provider: z.string().optional(),

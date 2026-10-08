@@ -19,6 +19,7 @@ export const SERVICE_ACTORS = [
   "migration",
   "catalog",
   "auto-continue",
+  /** The removed Slack relay; older journals still name it. */
   "relay",
   /** The transport that carries a Thread's handoff between environments. */
   "handoff",

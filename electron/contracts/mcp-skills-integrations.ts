@@ -67,6 +67,8 @@ export interface SkillProviderStatus {
    * in the prompt rather than trusted to find it.
    */
   readsUniversalRoot: boolean
+  /** Whether it loads this snapshot's project skills; Grok doesn't in a folder its person hasn't trusted. */
+  readsWorkspace: boolean
 }
 
 /**
@@ -220,7 +222,6 @@ export interface IntegrationRecord {
     | "provider-cli"
     | "local-browser"
     | "local-permission"
-    | "mako-backend"
   capabilities: string[]
   events: string[]
   connection: IntegrationConnection

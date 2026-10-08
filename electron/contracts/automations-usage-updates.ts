@@ -50,8 +50,8 @@ export interface UsageSummary {
   days: Array<{ date: string } & UsageTotals>
   models: Array<{ model: string } & UsageTotals>
   projects: Array<{ cwd: string } & UsageTotals>
-  /** `recordedByMako` when the harness's own store keeps no counts and Mako measured the spend. */
-  sources?: Array<{ source: string; recordedByMako?: true } & UsageTotals>
+  /** `harness` names the harness a source counts, whose `usage.outsideMako` says whether its sessions outside Mako are in it. */
+  sources?: Array<{ source: string; harness?: string } & UsageTotals>
   sessions: number
   /** True when some records in the window could not be read, so the totals may be low; the host log names them. */
   truncated: boolean

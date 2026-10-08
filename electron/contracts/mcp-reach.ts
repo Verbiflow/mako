@@ -6,20 +6,6 @@ import type {
 } from "./mcp-skills-integrations.js"
 import type { HarnessProfile } from "./providers-acp.js"
 
-/**
- * Which MCP servers a provider has when Mako launches it.
- *
- * A provider loads its own configuration natively. On top of that the host
- * projects portable definitions from other providers and Mako's managed
- * runtime servers into every launch (`acpMcpServers`, `codexMcpConfig`,
- * Claude's SDK options). The composer's `/` and `$` menu lists the union, so
- * both the launch and the menu read this one predicate. Conflicts and servers
- * observed unavailable are never projected.
- */
-export const MAKO_RUNTIME_SERVERS: ReadonlySet<string> = new Set([
-  "mako-backend",
-])
-
 /** The per-conversation server for browser and computer use. */
 export const MAKO_COMPUTER_SERVER = "mako-computer"
 /** The per-conversation server for the Thread's worktree, app and recipe. */
@@ -76,7 +62,16 @@ function ownServerNames(
   )
 }
 
-/** Servers the host adds to a launch beyond the provider's own configuration. */
+/**
+ * Servers the host adds to a launch beyond the provider's own configuration.
+ *
+ * A provider loads its own configuration natively. On top of that the host
+ * projects portable definitions from other providers into every launch
+ * (`acpMcpServers`, `codexMcpConfig`, Claude's SDK options). The composer's
+ * `/` and `$` menu lists the union, so both the launch and the menu read this
+ * one predicate. Conflicts and servers observed unavailable are never
+ * projected.
+ */
 export function projectedMcpServers(
   snapshot: McpRegistrySnapshot,
   provider: McpProvider,
@@ -84,17 +79,14 @@ export function projectedMcpServers(
 ): McpServerRecord[] {
   const own = ownServerNames(snapshot, provider)
   return snapshot.servers.filter((server) => {
-    const managed = isMakoManagedServer(server)
-    const managedRuntime =
-      MAKO_RUNTIME_SERVERS.has(server.name) && !server.blockReason
     return (
-      (server.portable || managedRuntime) &&
+      server.portable &&
       !server.conflict &&
       server.availability !== "unavailable" &&
       enabledSomewhere(server) &&
       transports.includes(server.transport) &&
       !own.has(server.name) &&
-      (!managed || managedRuntime)
+      !isMakoManagedServer(server)
     )
   })
 }

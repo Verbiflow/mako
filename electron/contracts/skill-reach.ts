@@ -12,7 +12,9 @@ import type {
  * Mako points at it and stays out of the way. A skill found only under
  * another provider's roots, or under `.agents/skills` for a provider not
  * verified to read that root, is handed over: its instructions ride in the
- * prompt and its directory is named for the supporting files. The composer's
+ * prompt and its directory is named for the supporting files. So is a
+ * project skill in a folder whose provider won't load the project's skills
+ * (Grok's untrusted folder). The composer's
  * chip, the menu's badge and the send all read this one rule, so what the
  * user sees before sending is what the provider receives.
  */
@@ -21,23 +23,15 @@ export const UNIVERSAL_SKILL_PROVIDER = "agents"
 /** The largest SKILL.md body carried inside a prompt; above it the prompt points at the file. */
 export const SKILL_HANDOVER_LIMIT = 24 * 1024
 
-function readsUniversal(
-  providers: readonly SkillProviderStatus[],
-  harness: string
-): boolean {
-  return providers.some(
-    (provider) => provider.id === harness && provider.readsUniversalRoot
-  )
-}
-
 function isNative(
   origin: SkillOrigin,
   harness: string,
-  universal: boolean
+  provider: SkillProviderStatus | undefined
 ): boolean {
+  if (origin.scope === "workspace" && provider?.readsWorkspace === false) return false
   return (
     origin.provider === harness ||
-    (universal && origin.provider === UNIVERSAL_SKILL_PROVIDER)
+    (provider?.readsUniversalRoot === true && origin.provider === UNIVERSAL_SKILL_PROVIDER)
   )
 }
 
@@ -61,9 +55,9 @@ export function skillDeliveryOrigin(
   harness: string,
   providers: readonly SkillProviderStatus[]
 ): { origin: SkillOrigin; native: boolean } | undefined {
-  const universal = readsUniversal(providers, harness)
+  const provider = providers.find((candidate) => candidate.id === harness)
   const own = skill.origins.filter((origin) =>
-    isNative(origin, harness, universal)
+    isNative(origin, harness, provider)
   )
   const native = preferred(own)
   if (native) return { origin: native, native: true }
