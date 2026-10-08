@@ -94,3 +94,48 @@ export function openCodeTokens(tokens: OpenCodeTokens): HarnessTokens {
     reasoning: tokens.reasoning,
   })
 }
+
+/**
+ * The `session_message` rows OpenCode 2.0.1 writes, by `type`, from the
+ * `Session.Message.*` schemas in its build, and whether history draws them.
+ * System rows are instructions OpenCode tells the model, and skill rows the
+ * skills it loaded into context. The switches are the person's own picks of
+ * agent, model and working location, which the composer shows and the live
+ * session doesn't draw. `scripts/test-harness-records.ts` holds these
+ * tables to the installed OpenCode.
+ */
+export const OPENCODE_MESSAGES = {
+  user: "read",
+  assistant: "read",
+  synthetic: "read",
+  shell: "read",
+  compaction: "read",
+  system: "skipped",
+  skill: "skipped",
+  "agent-switched": "skipped",
+  "model-switched": "skipped",
+  "location-switched": "skipped",
+} as const satisfies Record<string, "read" | "skipped">
+
+/** An assistant row's `content` parts by `type`. */
+export const OPENCODE_ASSISTANT_CONTENT: ReadonlySet<string> = new Set(["text", "reasoning", "tool"])
+
+/**
+ * The `part` rows OpenCode 1.x wrote, by `type` (its `SessionV1.*Part` schemas).
+ * Snapshots, patches and step starts are its own bookkeeping; an agent or
+ * subtask part's work is drawn from the tool call that ran it.
+ */
+export const OPENCODE_LEGACY_PARTS = {
+  text: "read",
+  reasoning: "read",
+  file: "read",
+  tool: "read",
+  retry: "read",
+  "step-finish": "read",
+  compaction: "read",
+  "step-start": "skipped",
+  snapshot: "skipped",
+  patch: "skipped",
+  agent: "skipped",
+  subtask: "skipped",
+} as const satisfies Record<string, "read" | "skipped">

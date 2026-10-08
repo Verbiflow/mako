@@ -11,6 +11,78 @@ export const CLAUDE_HOOK_EVENTS = [
   "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay",
 ] as const
 
+/**
+ * The record types Claude Code 2.1.283 writes to a session transcript, from
+ * its own loader's table of them. History draws `user`, `assistant`,
+ * `system` and `attachment` records and reads the titles; the rest is
+ * Claude Code's bookkeeping. `scripts/test-harness-records.ts` holds these
+ * lists to the Claude Code the SDK bundles, naming what an upgrade adds.
+ */
+export const CLAUDE_RECORD_TYPES: readonly string[] = [
+  "user", "assistant", "system", "attachment", "progress", "file-history-snapshot",
+  "file-history-delta", "last-prompt", "continued-in", "content-replacement", "api-request-shape", "api-request-blob",
+  "api-request", "fork-context-ref", "frame-link", "summary", "custom-title", "ended-by-model",
+  "ai-title", "tag", "relocated", "agent-name", "agent-color", "agent-setting",
+  "pr-link", "artifact-comment-monitor", "artifact-autoreact-ledger", "bridge-session", "history-suppression", "attribution-snapshot",
+  "mode", "permission-mode", "isolation-latch", "dev-mods", "memory-mode", "atis-latch",
+  "worktree-state", "cost-state", "queue-operation", "observer-ref",
+]
+
+/**
+ * The `system` records Claude Code 2.1.278 to 2.1.293 makes; history draws
+ * compactions, refusals and local commands. 2.1.293's additions are signals
+ * for a host's UI and its bridge, and a title the transcript's title
+ * records also hold.
+ */
+export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
+  "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
+  "bridge_state", "bridge_status", "cloud_session_delta", "cloud_session_status", "code_change_published",
+  "commands_changed", "compact_boundary", "control_request_progress", "dev_intent", "elicitation_complete",
+  "feedback_draft_queued", "file_attachments_missing", "file_snapshot", "hook_progress", "hook_response",
+  "hook_started", "informational", "init", "instruction_size_warning", "local_command",
+  "memory_recall", "memory_saved", "mirror_error", "model_consent_fallback", "model_fallback",
+  "model_refusal_fallback", "model_refusal_no_fallback", "notification", "peer_message_hold", "per_turn_effort_changed",
+  "permission_check_status", "permission_denied", "permission_retry", "plugin_install", "post_turn_summary",
+  "scheduled_task_fire", "session_metadata", "session_state_changed", "session_title_changed", "status",
+  "stop_hook_summary", "task_notification", "task_progress", "task_started", "task_summary",
+  "task_updated", "thinking_tokens", "tool_host_result", "turn_duration", "turn_handoff_available",
+  "turn_preempted", "turn_starting", "ui_focus", "ui_invalidate", "ui_log",
+  "ui_panes", "ui_scroll", "ui_status", "ui_toast", "vcs_state_changed",
+  "worker_shutting_down",
+]
+
+/**
+ * The attachments Claude Code 2.1.278 to 2.1.293 names: context it gives the model
+ * beside a prompt. History reads only `queued_command`, a prompt the person
+ * sent while a turn ran.
+ */
+export const CLAUDE_ATTACHMENT_TYPES: readonly string[] = [
+  "account_memory_recall", "advisor_stripped", "advisor_tool", "agent_listing_delta", "agent_mention",
+  "already_read_file", "artifact_opening_prefetch", "async_hook_response", "async_hook_response_batch", "at_mention_reference",
+  "attention_budget", "audio_transcript", "auto_mode", "auto_mode_exit", "bash_output_audience_note",
+  "batching_reminder", "batching_reminder_sent", "budget_usd", "command_permissions", "compact_file_reference",
+  "context_efficiency", "context_sections", "coordinator_context", "cowork_memory_context", "credential_org",
+  "critical_system_reminder", "date", "date_change", "deferred_tools_delta", "deferred_tools_record",
+  "diagnostics", "dir_sync_notice", "directory", "dynamic_skill", "edited_image_file",
+  "edited_text_file", "elapsed_time_reminder", "environment", "file", "fork_briefing",
+  "goal_status", "hook_additional_context", "hook_blocking_error", "hook_cancelled", "hook_deferred_tool",
+  "hook_error_during_execution", "hook_non_blocking_error", "hook_permission_decision", "hook_plugin_listing", "hook_stopped_continuation",
+  "hook_success", "hook_system_message", "inlined_image_paths", "instructions", "invoked_skills",
+  "language", "max_turns_reached", "mcp_dropped_tools_delta", "mcp_instructions_delta", "mcp_resource",
+  "memory_update", "model", "nested_memory", "opened_file_in_ide", "output_style",
+  "output_style_instructions", "output_token_usage", "pdf_reference", "peer_mention", "plan_file_reference",
+  "plan_mode", "plan_mode_exit", "plan_mode_reentry", "poll_events", "prefix_delta",
+  "proactivity", "prompt_render_point", "prompt_snapshot", "queued_command", "read_truncation_notice",
+  "relevant_memories", "remote_session_change", "repl_mcp_needs_auth", "sandbox_instructions", "secondary_reminder", "secondary_reminder_sent",
+  "selected_lines_in_diff", "selected_lines_in_ide", "session_context", "session_cron_carry", "session_settings",
+  "silent_turn_reminder", "skill_listing", "skill_mention", "structured_output", "task_reminder",
+  "task_status", "team_context", "teammate_mailbox", "teammate_shutdown_batch", "thinking_drop",
+  "thinking_stripped", "thread_state", "todo_reminder", "token_usage", "tool_host_result_lines",
+  "tool_hosts_correction", "tool_hosts_notice", "tool_search_usage_reminder", "total_tokens_reminder", "ultra_effort_enter",
+  "ultra_effort_exit", "ultrathink_effort", "unknown_command_fallback", "withheld_memory", "workflow_keyword_request",
+  "workflow_size_guideline_change",
+]
+
 const MCP_RESOURCES = "Defined only beside an MCP server that offers resources; the capture runs with none."
 const NATIVE_SEARCH = "The native build Mako runs searches through Bash with its bundled bfs and defines no such tool in any mode; saved sessions still record it."
 const TODO_TOOLS = "Defined only with CLAUDE_CODE_ENABLE_TODO_TOOLS set, which Mako doesn't set; the 2.1.290 CLI's print run defines it."

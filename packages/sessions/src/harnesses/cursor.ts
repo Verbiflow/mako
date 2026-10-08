@@ -86,3 +86,25 @@ export const CURSOR_VOCABULARY = defineVocabulary({
 
 /** Every name Cursor records for writing its todo list, whose arguments hold the list. */
 export const CURSOR_TODO_WRITES: ReadonlySet<string> = new Set(["updateTodos", ...CURSOR_VOCABULARY.tools.updateTodos.aliases ?? []])
+
+/**
+ * The content parts a Cursor store message holds, by role: the AI SDK's
+ * `ModelMessage` parts Cursor's agent writes, as the SDK's own transcript
+ * reader (1.0.31) names them. A `system` message is the prompt Cursor
+ * sends, never drawn; `redacted-reasoning` is thinking the provider
+ * withheld, which history leaves out as Claude's is. 207 local stores on
+ * 2026-10-07 held no other role or part.
+ */
+export const CURSOR_MESSAGE_PARTS = {
+  system: [],
+  user: ["text", "image", "file"],
+  assistant: ["text", "reasoning", "redacted-reasoning", "tool-call", "image", "file"],
+  tool: ["tool-result"],
+} as const satisfies Record<string, readonly string[]>
+
+const MESSAGE_PARTS = new Map(Object.entries(CURSOR_MESSAGE_PARTS).map(([role, parts]) => [role, new Set<string>(parts)]))
+
+/** Whether a Cursor `role` message holds parts of `type`. */
+export function cursorMessagePart(role: string, type: string): boolean {
+  return MESSAGE_PARTS.get(role)?.has(type) ?? false
+}

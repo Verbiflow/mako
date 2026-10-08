@@ -222,7 +222,9 @@ const GrokDisplayText = z.looseObject({ displayText: z.string() })
  * - `ignored`: Grok's own bookkeeping and streaming detail, already shown
  *   through ACP's updates or not about the conversation.
  */
-export const GROK_UPDATES: Record<string, "marker" | "activity" | "observed" | "ignored"> = {
+export type GrokUpdateReading = "marker" | "activity" | "observed" | "ignored"
+
+export const GROK_UPDATES = {
   auto_compact_completed: "marker",
   auto_compact_failed: "marker",
   model_auto_switched: "marker",
@@ -277,14 +279,16 @@ export const GROK_UPDATES: Record<string, "marker" | "activity" | "observed" | "
   monitor_event: "ignored",
   // `session/set_config_option` answers with the model, and `config_option_update` shows it.
   model_changed: "ignored",
-}
+} as const satisfies Record<string, GrokUpdateReading>
+
+const UPDATE_READINGS: ReadonlyMap<string, GrokUpdateReading> = new Map(Object.entries(GROK_UPDATES))
 
 /** Grok's memory and response streaming detail, every kind of which is `ignored`. */
 const GROK_IGNORED_PREFIXES = ["memory_", "response_"]
 
 /** How Mako reads a Grok session update kind; undefined for one it doesn't know. */
-export function grokUpdateReading(kind: string): (typeof GROK_UPDATES)[string] | undefined {
-  return Object.hasOwn(GROK_UPDATES, kind) ? GROK_UPDATES[kind] : GROK_IGNORED_PREFIXES.some((prefix) => kind.startsWith(prefix)) ? "ignored" : undefined
+export function grokUpdateReading(kind: string): GrokUpdateReading | undefined {
+  return UPDATE_READINGS.get(kind) ?? (GROK_IGNORED_PREFIXES.some((prefix) => kind.startsWith(prefix)) ? "ignored" : undefined)
 }
 
 export const GROK_ACP_HOOKS = {

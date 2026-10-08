@@ -151,3 +151,145 @@ export function codexTokens(usage: CodexTokenUsage): HarnessTokens {
     reasoning: usage.reasoning,
   })
 }
+
+/**
+ * How saved history takes a kind of rollout record: it reads it, skips it
+ * as bookkeeping or a copy of another record, or holds content it doesn't
+ * draw yet, which a saved thread reports as `undrawn`.
+ */
+export type CodexRecordReading = "read" | "skipped" | "undrawn"
+
+/**
+ * Every record Codex 0.159 persists to a rollout, from its rollout policy
+ * (`codex-rs/rollout/src/policy.rs`), by serialized name. Codex's own
+ * history builder (`thread_history.rs`) skips the same bookkeeping.
+ * `scripts/test-harness-records.ts` holds these to the Codex Mako runs.
+ */
+export const CODEX_ROLLOUT_ITEMS = {
+  session_meta: "read",
+  turn_context: "read",
+  compacted: "read",
+  response_item: "read",
+  event_msg: "read",
+  token_usage_record: "skipped",
+  world_state: "skipped",
+  retained_context: "skipped",
+  security_risk_score: "skipped",
+  inter_agent_communication_metadata: "skipped",
+  // Realtime voice, and messages between agents, which neither Codex's own history nor the live decoder draws.
+  realtime_item: "skipped",
+  inter_agent_communication: "skipped",
+} as const satisfies Record<string, CodexRecordReading>
+
+/** `response_item` payloads by `type`. */
+export const CODEX_RESPONSE_ITEMS = {
+  message: "read",
+  reasoning: "read",
+  local_shell_call: "read",
+  function_call: "read",
+  function_call_output: "read",
+  custom_tool_call: "read",
+  custom_tool_call_output: "read",
+  tool_search_call: "read",
+  tool_search_output: "read",
+  web_search_call: "read",
+  // Encrypted context for the model; the `compacted` record draws the boundary.
+  compaction: "skipped",
+  context_compaction: "skipped",
+  configuration_update: "skipped",
+  // A message between agents; each agent call is drawn from its own call.
+  agent_message: "skipped",
+  image_generation_call: "undrawn",
+} as const satisfies Record<string, CodexRecordReading>
+
+/** Response items older Codex builds wrote that 0.159 no longer defines, or reads only as another's alias. */
+export const CODEX_RETIRED_RESPONSE_ITEMS = {
+  web_search_output: "read",
+  // `compaction`'s earlier name.
+  compaction_summary: "skipped",
+  // Undo checkpoints, which never held conversation.
+  ghost_snapshot: "skipped",
+} as const satisfies Record<string, CodexRecordReading>
+
+/** `event_msg` payloads by `type`. Legacy rollouts write the message events; paginated ones the `item_completed` items instead. */
+export const CODEX_EVENTS = {
+  task_started: "read",
+  turn_started: "read",
+  task_complete: "read",
+  turn_complete: "read",
+  turn_aborted: "read",
+  thread_rolled_back: "read",
+  thread_settings_applied: "read",
+  token_count: "read",
+  context_compacted: "read",
+  entered_review_mode: "read",
+  exited_review_mode: "read",
+  item_completed: "read",
+  // A legacy rollout's patch result: the FileChange item paginated ones write.
+  patch_apply_end: "read",
+  // Copies of the response items, which history reads instead.
+  user_message: "skipped",
+  agent_message: "skipped",
+  agent_reasoning: "skipped",
+  agent_reasoning_raw_content: "skipped",
+  mcp_tool_call_end: "skipped",
+  web_search_end: "skipped",
+  // The live decoder is silent on goals too.
+  thread_goal_updated: "skipped",
+  // Each but an agent's end has its agent call, which history reads; live draws no end either.
+  sub_agent_activity: "skipped",
+  image_generation_end: "undrawn",
+} as const satisfies Record<string, CodexRecordReading>
+
+/** `item_completed` items by `type`: Codex's `TurnItem`. */
+export const CODEX_TURN_ITEMS = {
+  CommandExecution: "read",
+  FileChange: "read",
+  ContextCompaction: "read",
+  Plan: "read",
+  EnteredReviewMode: "read",
+  ExitedReviewMode: "read",
+  // Each has its response item, which history reads instead.
+  UserMessage: "skipped",
+  AgentMessage: "skipped",
+  Reasoning: "skipped",
+  WebSearch: "skipped",
+  McpToolCall: "skipped",
+  DynamicToolCall: "skipped",
+  CollabAgentToolCall: "skipped",
+  ImageView: "skipped",
+  HookPrompt: "skipped",
+  SubAgentActivity: "skipped",
+  // No response item holds these.
+  FunctionCallOutput: "read",
+  Extension: "read",
+  ImageGeneration: "undrawn",
+} as const satisfies Record<string, CodexRecordReading>
+
+/** `Extension` items by `kind` (`codex-rs/ext/items`). */
+export const CODEX_EXTENSIONS = {
+  "web.search": "read",
+  "image_gen.generation": "read",
+  // Its `sleep` call and output, which history reads, say the same.
+  "clock.sleep": "skipped",
+} as const satisfies Record<string, CodexRecordReading>
+
+const readings = (...tables: Record<string, CodexRecordReading>[]) => new Map(tables.flatMap((table) => Object.entries(table)))
+const ROLLOUT_READINGS = readings(CODEX_ROLLOUT_ITEMS)
+const RESPONSE_READINGS = readings(CODEX_RESPONSE_ITEMS, CODEX_RETIRED_RESPONSE_ITEMS)
+const EVENT_READINGS = readings(CODEX_EVENTS)
+const TURN_ITEM_READINGS = readings(CODEX_TURN_ITEMS)
+const EXTENSION_READINGS = readings(CODEX_EXTENSIONS)
+
+/**
+ * How saved history takes one rollout record, by its `type`, its payload's
+ * and, for `item_completed`, its item's and an extension item's `kind`;
+ * undefined for a kind Codex doesn't write.
+ */
+export function codexRecordReading(type: string, payload?: string, item?: string, extension?: string): CodexRecordReading | undefined {
+  if (type === "response_item") return payload === undefined ? undefined : RESPONSE_READINGS.get(payload)
+  if (type !== "event_msg") return ROLLOUT_READINGS.get(type)
+  if (payload !== "item_completed") return payload === undefined ? undefined : EVENT_READINGS.get(payload)
+  if (item !== "Extension") return item === undefined ? undefined : TURN_ITEM_READINGS.get(item)
+  return extension === undefined ? undefined : EXTENSION_READINGS.get(extension)
+}
