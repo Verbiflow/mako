@@ -7,7 +7,6 @@ import type { JsonValue } from "./codex-app-json.js"
 
 export {
   discoverMcpRegistry,
-  managedMcpDefinitions,
   mergeMcpDefinitions,
   parseProviderJson,
   projectPortableDefinitions,

@@ -299,12 +299,19 @@ export class LiveTransfers {
       const movedByOwnTurn = moved && source.blocks
         .slice(prior?.coveredBlocks ?? 0)
         .some((block) => block.type === "user" && block.requestId !== undefined)
-      const nativeFork =
+      const forksNatively = this.host.dependencies.driver(transfer.input.provider)?.fork
+      const forkSource =
         !bindings.length &&
         control.ancestry?.nativeFork?.provider === transfer.input.provider &&
-        this.host.dependencies.driver(transfer.input.provider)?.fork.kind === "native"
+        forksNatively?.kind === "native"
           ? control.ancestry.nativeFork
           : undefined
+      const nativeForkDeclined = forkSource && forksNatively?.kind === "native"
+        ? await forksNatively.declines?.(forkSource)
+        : undefined
+      if (resident.generation !== generation) return
+      if (nativeForkDeclined) hostLog("transfer", "native fork declined", { conversation: source.session.id, provider: transfer.input.provider, reason: nativeForkDeclined })
+      const nativeFork = nativeForkDeclined ? undefined : forkSource
       const manifest = await prepareLiveContext({
         snapshot: source,
         root: join(this.host.dependencies.root, "context"),
@@ -512,6 +519,7 @@ export class LiveTransfers {
           manifest,
           carried: imported ? "native" : "transcript",
           fallback,
+          ...nativeForkDeclined && { nativeForkDeclined },
         },
       }
       const previous = resident.snapshot

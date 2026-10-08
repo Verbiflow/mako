@@ -1,18 +1,8 @@
 import type { ThreadPage } from "@mako/sessions"
+import { nativeHistoryRevision } from "./contracts/native-history.js"
+export { nativeHistoryRevision } from "./contracts/native-history.js"
 
 type ReadPage = (path: string, before?: number) => Promise<ThreadPage | null>
-
-export function nativeHistoryRevision(page: ThreadPage): string {
-  return JSON.stringify([
-    page.ref.path,
-    page.ref.nativeId,
-    page.checkpoint,
-    page.ref.revision,
-    page.ref.bytes,
-    page.ref.updatedAt,
-    page.total,
-  ])
-}
 
 /** Gather pages from one stable native snapshot, concatenating only once. */
 export async function captureNativeHistory(

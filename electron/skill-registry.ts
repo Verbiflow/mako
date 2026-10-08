@@ -308,7 +308,7 @@ function mergeSkills(skills: DiscoveredSkill[]): SkillRecord[] {
     .sort((left, right) => left.name.localeCompare(right.name))
 }
 
-async function providerStatuses(): Promise<SkillProviderStatus[]> {
+async function providerStatuses(cwd: string): Promise<SkillProviderStatus[]> {
   return Promise.all(
     providerHost.skillSources.list().map(async (source) => {
       const account = await selectedAccount(source.provider)
@@ -337,6 +337,7 @@ async function providerStatuses(): Promise<SkillProviderStatus[]> {
         account: account.name,
         available,
         readsUniversalRoot: source.readsUniversalRoot,
+        readsWorkspace: source.readsWorkspace?.(cwd) ?? true,
       }
     })
   )
@@ -367,7 +368,7 @@ export async function discoverSkillRegistry(
     cwd,
     generatedAt: Date.now(),
     skills: await discoverSkillRecords(await skillRoots(cwd)),
-    providers: await providerStatuses(),
+    providers: await providerStatuses(cwd),
   }
 }
 

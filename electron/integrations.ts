@@ -1,9 +1,3 @@
-import type { BackendConnectionStatus } from "./backend-connection.js"
-import {
-  describeRelayPresence,
-  relayIsFailing,
-  type RelayPresence,
-} from "./relay-status.js"
 import type {
   IntegrationCatalogSnapshot,
   IntegrationCategory,
@@ -58,11 +52,10 @@ const DEFINITIONS: Definition[] = [
   {
     id: "slack",
     label: "Slack",
-    description:
-      "Read and send messages through your authenticated Mako backend.",
+    description: "Read and send channel and thread messages.",
     category: "Communication",
-    trust: "mako",
-    auth: "mako-backend",
+    trust: "official",
+    auth: "provider-oauth",
     capabilities: ["Channels", "Messages", "Threads", "Send"],
     events: [],
     patterns: [/slack/i],
@@ -211,62 +204,21 @@ function localConnection(
   }
 }
 
-/**
- * The health endpoint answering is necessary, not sufficient: a request from
- * Slack only runs if this Mac's relay worker is leasing work. Report both.
- */
-function backendConnection(
-  status: BackendConnectionStatus,
-  relay?: RelayPresence
-): IntegrationConnection {
-  if (status.kind === "connected") {
-    const relayDetail = relay ? describeRelayPresence(relay) : null
-    if (relay && relayIsFailing(relay))
-      return { kind: "unavailable", detail: relayDetail ?? "Relay failing" }
-    return {
-      kind: "ready",
-      detail: [`${status.environment} · ${status.version}`, relayDetail]
-        .filter((part) => part !== null)
-        .join(" · "),
-    }
-  }
-  if (status.kind === "missing-token") {
-    return { kind: "setup", detail: "Backend access is not paired" }
-  }
-  return { kind: "unavailable", detail: status.detail }
-}
-
 export function integrationCatalog(
   snapshot: McpRegistrySnapshot,
   permissions: MakoComputerPermissions,
   githubConnected: boolean,
-  backendStatus: BackendConnectionStatus,
   browsers: BrowserControlStatus[] = [],
-  driver?: CuaDriverStatus,
-  relay?: RelayPresence
+  driver?: CuaDriverStatus
 ): IntegrationCatalogSnapshot {
   const services: IntegrationRecord[] = DEFINITIONS.map((definition) => ({
     ...definition,
     connection:
-      definition.auth === "mako-backend"
-        ? backendConnection(backendStatus, relay)
-        : definition.auth === "local-browser"
-          ? localBrowserConnection(browsers)
-          : serviceConnection(definition, snapshot.servers, githubConnected),
+      definition.auth === "local-browser"
+        ? localBrowserConnection(browsers)
+        : serviceConnection(definition, snapshot.servers, githubConnected),
   }))
   const local: IntegrationRecord[] = [
-    {
-      id: "mako-backend",
-      label: "Mako Backend",
-      description:
-        "Remote MCP, skills, integrations, and communication channels.",
-      category: "Development",
-      trust: "mako",
-      auth: "mako-backend",
-      capabilities: ["MCP", "Skills", "Slack", "Durable agent"],
-      events: [],
-      connection: backendConnection(backendStatus, relay),
-    },
     {
       id: "local-browser",
       label: "Browser Use",

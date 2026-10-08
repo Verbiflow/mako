@@ -18,6 +18,7 @@ import {
 import { dirname, join, relative } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
+import { openRepository } from "@mako/git"
 import {
   RewindPlanSchema,
   WorkspaceSnapshotSchema,
@@ -54,6 +55,8 @@ interface ActiveRun {
   scope: string
   snapshotId?: string
   error?: string
+  /** The turn is over and its closing checkpoint is being written. */
+  ending?: boolean
 }
 const LockSchema = z.object({
   owner: z.literal("mako-snapshots"),
@@ -61,19 +64,8 @@ const LockSchema = z.object({
   token: z.string().uuid(),
 })
 
-/** Only remove our own abandoned locks. A Git/user lock is never guessed stale. */
+/** The repository coordinator recovers abandoned ownership before this runs. */
 function acquireLock(path: string): () => void {
-  if (existsSync(path)) {
-    const previous = parseLock(path)
-    if (previous) {
-      try {
-        process.kill(previous.pid, 0)
-      } catch (error) {
-        if (error instanceof Error && "code" in error && error.code === "ESRCH")
-          unlinkSync(path)
-      }
-    }
-  }
   const value = {
     owner: "mako-snapshots",
     pid: process.pid,
@@ -115,7 +107,10 @@ export interface CheckpointTrees {
 
 export class WorkspaceSnapshots {
   private readonly db: DatabaseSync
-  private readonly busy = new Set<string>()
+  /** Each workspace's checkpoint operations, run one after another. */
+  private readonly queues = new Map<string, Promise<unknown>>()
+  /** Workspaces whose files a rewind is rewriting. */
+  private readonly restoring = new Set<string>()
   private readonly runs = new Map<string, ActiveRun>()
   private readonly orphanBytes = new Map<string, number>()
   private readonly root: string
@@ -151,7 +146,7 @@ export class WorkspaceSnapshots {
   async assertAvailable(cwd: string): Promise<void> {
     const path = await realpath(cwd)
     const scopes = [
-      ...this.busy,
+      ...this.restoring,
       ...this.pending().map((plan) => this.get(plan.targetId).scope),
     ]
     if (
@@ -161,7 +156,7 @@ export class WorkspaceSnapshots {
       })
     )
       throw new Error(
-        "A workspace checkpoint or rewind is unfinished. Wait for it to finish before starting another turn."
+        "A rewind of this workspace is unfinished. Wait for it to finish before starting another turn."
       )
   }
 
@@ -169,7 +164,7 @@ export class WorkspaceSnapshots {
     const scope = await this.scope(cwd)
     const run: ActiveRun = { scope }
     for (const other of this.runs.values()) {
-      if (other.scope !== scope) continue
+      if (other.scope !== scope || other.ending) continue
       other.error =
         "Another agent used this workspace during the turn. A coordinated checkpoint is unavailable."
       run.error = other.error
@@ -190,6 +185,7 @@ export class WorkspaceSnapshots {
     const run = this.runs.get(id)
     if (!run)
       throw new Error("No workspace checkpoint was captured before this turn")
+    run.ending = true
     try {
       if (run.error) throw new Error(run.error)
       return await this.capture(run.scope)
@@ -345,7 +341,18 @@ export class WorkspaceSnapshots {
     }
     const target = this.get(plan.targetId)
     this.assertIdle(target.scope)
-    await this.locked(target.scope, async (gitDir) => {
+    if (this.restoring.has(target.scope))
+      throw new Error("Another rewind of this workspace is running")
+    this.restoring.add(target.scope)
+    try {
+      await this.restoreLocked(plan, target, complete)
+    } finally {
+      this.restoring.delete(target.scope)
+    }
+  }
+
+  private restoreLocked(plan: RewindPlan, target: SnapshotRecord, complete: () => void): Promise<void> {
+    return this.locked(target.scope, async (gitDir) => {
       let operation = this.operation(plan)
       if (operation?.state === "completed") {
         complete()
@@ -472,18 +479,32 @@ export class WorkspaceSnapshots {
       )
     }
   }
-  private async locked<T>(
+  /** Runs `work` once the workspace's earlier checkpoint operations here have finished. */
+  private locked<T>(
     scope: string,
     work: (gitDir: string) => Promise<T>
   ): Promise<T> {
-    if (this.busy.has(scope))
-      throw new Error("Another checkpoint operation is using this workspace")
-    this.busy.add(scope)
+    const run = (this.queues.get(scope) ?? Promise.resolve()).then(() => this.lockedNow(scope, work))
+    const settled = run.catch(() => undefined)
+    this.queues.set(scope, settled)
+    void settled.then(() => {
+      if (this.queues.get(scope) === settled) this.queues.delete(scope)
+    })
+    return run
+  }
+
+  private async lockedNow<T>(
+    scope: string,
+    work: (gitDir: string) => Promise<T>
+  ): Promise<T> {
+    const repository = await openRepository(scope)
+    if (!repository) throw new Error("Workspace checkpoints currently require a Git repository.")
+    return repository.write(() => this.lockedIndex(scope, repository.gitDir, work))
+  }
+
+  private async lockedIndex<T>(scope: string, gitDir: string, work: (gitDir: string) => Promise<T>): Promise<T> {
     const releases: (() => void)[] = []
     try {
-      const gitDir = (
-        await git(scope, ["rev-parse", "--absolute-git-dir"])
-      ).trim()
       releases.push(acquireLock(join(gitDir, "mako-snapshots.lock")))
       releases.push(acquireLock(join(gitDir, "index.lock")))
       if (!this.orphanBytes.has(scope)) {
@@ -502,7 +523,6 @@ export class WorkspaceSnapshots {
       return await work(gitDir)
     } finally {
       for (const release of releases.reverse()) release()
-      this.busy.delete(scope)
     }
   }
   private async head(scope: string): Promise<string> {

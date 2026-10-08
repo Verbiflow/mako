@@ -43,6 +43,17 @@ export class LiveApprovals {
     return origin
   }
 
+  /**
+   * Whether an approval is still pending on the connection that raised it,
+   * in the same turn. One raised between turns, as Grok asks to trust a
+   * folder when its session opens, stays answerable once the next turn starts.
+   */
+  private pendingHere(resident: Resident, origin: ApprovalOrigin): boolean {
+    const current = this.origin(resident, origin.nativeRequestId, origin.observationId, origin.native)
+    if (origin.runId === undefined) current.runId = undefined
+    return isDeepStrictEqual(origin, current)
+  }
+
   observe(resident: Resident, request: LivePermissionRequest): void {
     const origin = this.origin(resident, request.id, request.observationId, request.native)
     const control = this.host.control(resident)
@@ -166,7 +177,7 @@ export class LiveApprovals {
     const request = resident.snapshot.permissions.find(item => item.id === requestId)
     const driver = resident.driver
     if (!request?.origin || !driver || resident.closing || resident.opening || resident.transferring || resident.storageFault ||
-      !isDeepStrictEqual(request.origin, this.origin(resident, request.origin.nativeRequestId, request.origin.observationId, request.origin.native)))
+      !this.pendingHere(resident, request.origin))
       throw new Error("That approval is no longer pending on this connection")
     if (response.kind === "choice") {
       if (response.optionId !== null && !request.options.some(option => option.optionId === response.optionId))
@@ -193,7 +204,7 @@ export class LiveApprovals {
         assertCurrent: () => {
           if (resident.driver !== driver || resident.closing || resident.storageFault ||
             !resident.snapshot.permissions.some(item => item.id === requestId) ||
-            !isDeepStrictEqual(request.origin, this.origin(resident, receipt.origin.nativeRequestId, receipt.origin.observationId, receipt.origin.native)))
+            !this.pendingHere(resident, receipt.origin))
             throw new Error("That approval is no longer pending on this connection")
         },
       })

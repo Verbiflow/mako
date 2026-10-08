@@ -110,7 +110,8 @@ async function summarize(
   ledger.forgetBefore(since)
   for (const { source, path, reason } of unread.slice(0, 20)) hostWarn("usage", "Usage record unread", { source, path, reason })
   if (unread.length > 20) hostWarn("usage", "More usage records unread", { count: unread.length - 20 })
-  return aggregate(ledger.events(since), ledger.sessions(since), unread.length > 0 || ledger.unreadFiles() > 0, new Set(recorded.values()), now)
+  const harnessOf = new Map(harnesses.map(({ provider, label }) => [label, provider]))
+  return aggregate(ledger.events(since), ledger.sessions(since), unread.length > 0 || ledger.unreadFiles() > 0, harnessOf, now)
 }
 
 /** UTC midnight of the summary's first day, so the total covers exactly the days it charts. */
@@ -318,7 +319,8 @@ function aggregate(
   events: Iterable<UsageEvent>,
   sessions: number,
   truncated: boolean,
-  recordedByMako: ReadonlySet<string>,
+  /** Each harness's id by the label its events carry as their source. */
+  harnessOf: ReadonlyMap<string, string>,
   now: number
 ): UsageSummary {
   const total = empty("total")
@@ -350,7 +352,8 @@ function aggregate(
     })),
     sources: rank(sources).map((bucket) => {
       const source: NonNullable<UsageSummary["sources"]>[number] = { source: bucket.key, ...totalsOf(bucket) }
-      if (recordedByMako.has(bucket.key)) source.recordedByMako = true
+      const harness = harnessOf.get(bucket.key)
+      if (harness) source.harness = harness
       return source
     }),
     sessions,

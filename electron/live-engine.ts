@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { isDeepStrictEqual } from "node:util"
 import type {
   ApprovalSubmission,
   ApprovalEndSource,
@@ -200,11 +201,21 @@ export function createLiveEngine<
     event(live, compactionEvent(measured), id)
     activity(live, null)
   }
-  /** Patch the session's state and report the new whole. */
+  /**
+   * Patch the session's state and report the new whole. A field restated
+   * with what it already holds keeps its value: the window is sent only
+   * fields whose values changed (`sessionDelta`), and an agent restates its
+   * whole option list every turn (Devin's is tens of kilobytes).
+   */
   const patch = (live: Live, change: Partial<LiveSessionState>): void => {
     if (change.status !== undefined && change.status !== "running")
       stopCompacting(live)
-    live.state = { ...live.state, ...change }
+    const next: Partial<LiveSessionState> = { ...change }
+    // SAFETY: `next` is a copy of a Partial<LiveSessionState>, so its own keys are LiveSessionState's.
+    for (const key of Object.keys(next) as (keyof LiveSessionState)[])
+      if (next[key] !== live.state[key] && isDeepStrictEqual(next[key], live.state[key]))
+        delete next[key]
+    live.state = { ...live.state, ...next }
     live.emit({ type: "live-session", session: live.state })
   }
   const emitUpdate = (live: Live, update: LiveUpdate): void => {

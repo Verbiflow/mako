@@ -3,6 +3,7 @@ import { mkdir, writeFile, rename } from "node:fs/promises"
 import { join } from "node:path"
 import { attachmentFiles, renderTranscriptBundle, withContext } from "@mako/sessions"
 import { persistThreadAttachments } from "@mako/sessions/attachment-storage"
+import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
 import type { ThreadEntry, Thread } from "@mako/sessions"
 import type { LiveSnapshot, LiveBlock, ContextManifest } from "./shared.js"
 
@@ -45,7 +46,7 @@ export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
         blocks: [
           {
             type: "tool",
-            name: "Plan",
+            name: AGENT_PLAN_TOOL,
             output: "",
             details: [{ type: "plan", entries: block.entries }],
           },

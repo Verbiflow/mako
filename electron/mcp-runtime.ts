@@ -7,21 +7,6 @@ import type {
   McpTransport,
 } from "./shared.js"
 import type { JsonObject } from "./codex-app-json.js"
-import { backendConnectionCredentials } from "./backend-connection.js"
-
-function backendHeaders(definition: McpServerDefinition): Array<{
-  name: string
-  value: string
-}> {
-  const credentials = backendConnectionCredentials()
-  if (definition.name !== "mako-backend" || !credentials) return []
-  return [
-    {
-      name: "Authorization",
-      value: `Bearer ${credentials.token}`,
-    },
-  ]
-}
 
 export function acpMcpServers(
   snapshot: McpRegistrySnapshot,
@@ -44,14 +29,13 @@ export function acpMcpServers(
         (definition.transport === "http" || definition.transport === "sse") &&
         definition.url
       ) {
-        const headers = backendHeaders(definition)
-        if (definition.headerNames.length > 0 && headers.length === 0) return []
+        if (definition.headerNames.length > 0) return []
         return [
           {
             type: definition.transport,
             name: definition.name,
             url: definition.url,
-            headers,
+            headers: [],
           },
         ]
       }
@@ -71,15 +55,8 @@ function codexDefinition(
     return result
   }
   if (definition.transport === "http" && definition.url) {
-    const headers = backendHeaders(definition)
-    if (definition.headerNames.length > 0 && headers.length === 0) return null
-    const result: JsonObject = { url: definition.url }
-    if (headers.length > 0) {
-      result.http_headers = Object.fromEntries(
-        headers.map(({ name, value }) => [name, value])
-      )
-    }
-    return result
+    if (definition.headerNames.length > 0) return null
+    return { url: definition.url }
   }
   return null
 }

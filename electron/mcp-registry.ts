@@ -7,7 +7,6 @@ import { resolveAccountLaunch } from "./accounts.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
-import { backendConnectionCredentials } from "./backend-connection.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
 import { projectedMcpServers } from "./contracts/mcp-reach.js"
@@ -461,47 +460,6 @@ async function readCliDefinitions(
   }
 }
 
-function managedRuntimeEnvironment(): NodeJS.ProcessEnv {
-  const backend = backendConnectionCredentials()
-  return backend ? { MAKO_BACKEND_URL: backend.url, MAKO_BACKEND_TOKEN: backend.token } : {}
-}
-
-export async function managedMcpDefinitions(env?: NodeJS.ProcessEnv): Promise<McpDiscoveredDefinition[]> {
-  const runtimeEnv = env ?? managedRuntimeEnvironment()
-  const backendUrl = runtimeEnv.MAKO_BACKEND_URL
-  const backend = Boolean(backendUrl && runtimeEnv.MAKO_BACKEND_TOKEN)
-  const definitions: Array<
-    McpInternalDefinition & { availability: boolean; detail: string }
-  > = [
-    {
-      name: "mako-backend",
-      transport: "http",
-      url: backendUrl ?? "https://mako-pearl.vercel.app/api/mcp",
-      envNames: [],
-      headerNames: ["Authorization"],
-      portable: false,
-      availability: backend,
-      detail: backend
-        ? "Authenticated Mako MCP, skills, and integration control plane"
-        : "Mako backend token is not configured",
-    },
-  ]
-  return definitions.map(({ availability, detail, ...definition }) => {
-    if (!availability) definition.blockReason = detail
-    return {
-      definition,
-      origin: {
-        provider: "mako",
-        account: "local",
-        scope: "managed",
-        provenance: availability
-          ? `Mako managed (${detail})`
-          : `Mako managed (unavailable: ${detail})`,
-      },
-    }
-  })
-}
-
 function providerStatus(
   provider: McpProvider,
   route: McpDiscoveryRoute,
@@ -541,27 +499,11 @@ async function discoverProviderDefinitions(cwd: string) {
 export async function discoverMcpRegistry(
   cwd: string
 ): Promise<McpRegistrySnapshot> {
-  const [{ routes, available, discovered }, managed] = await Promise.all([
-    discoverProviderDefinitions(cwd),
-    managedMcpDefinitions(),
-  ])
-  const servers = mergeMcpDefinitions([...discovered, ...managed])
+  const { routes, available, discovered } =
+    await discoverProviderDefinitions(cwd)
+  const servers = mergeMcpDefinitions(discovered)
   await Promise.all(
     servers.map(async (server) => {
-      const managedOrigin = server.origins.find(
-        (origin) => origin.provider === "mako"
-      )
-      if (managedOrigin) {
-        server.managed = true
-        server.availability = managedOrigin.provenance.includes("(unavailable:")
-          ? "unavailable"
-          : "available"
-        server.detail = managedOrigin.provenance.replace(
-          /^Mako managed \(|\)$/g,
-          ""
-        )
-        return
-      }
       if (server.transport === "stdio" && server.command) {
         server.availability = (await canExecute(server.command, process.env))
           ? "available"

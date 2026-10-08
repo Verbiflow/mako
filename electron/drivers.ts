@@ -155,7 +155,7 @@ export async function waitForNativeRun(
           state: {
             ...result.state,
             status: "failed",
-            error: "The local harness exceeded its two hour Slack limit",
+            error: "The local harness ran past its two-hour limit",
           },
           text: result.text,
         }

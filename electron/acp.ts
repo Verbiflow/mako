@@ -74,14 +74,14 @@ import { basename, join } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
-import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord } from "./acp-decoder.js"
+import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord, type AcpResponseRecord } from "./acp-decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { deliverDecoded } from "./contracts/native-decoding.js"
 import { normalizeAcpOptions } from "./harnesses.js"
 import { providerHost } from "./providers/index.js"
 import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpTuning } from "./providers/acp-source.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
-import { acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
+import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import type { JsonObject } from "./codex-app-json.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
@@ -101,6 +101,8 @@ interface OpenedAcpSession {
   modes: SessionModeState | null
   model?: string
   configOptions: SessionConfigOption[]
+  /** The reply itself, for what a source reads from it beyond ACP's fields (`modelWindow`). */
+  reply: JsonObject
 }
 
 interface LegacySessionModelRequest {
@@ -112,6 +114,8 @@ interface Live {
   agents?: AcpAgentObserver
   compaction?: AcpCompaction
   usage: SessionUsage
+  /** The model list the window is read from, for a source that declares `modelWindow`. */
+  models: AcpModelWindow
   id: string
   harness: string
   cwd: string
@@ -341,6 +345,7 @@ async function startAcp(
     },
     pendingPermissions: new Map(),
     usage: new SessionUsage(),
+    models: new AcpModelWindow(source),
     settling: [],
     startup: new AbortController(),
     promptCapabilities: {},
@@ -408,8 +413,11 @@ async function startAcp(
   const decoder = new AcpDecoder(source, () => live.state.settings)
   const capture = nativeCapture(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }))
   if (capture) live.capture = capture
-  /** Records a message as `acpDecoderSource` reads it: `{ method, params }`, or `{ request, params }` for one the agent waits on. */
-  const record = (message: AcpNotificationRecord | AcpRequestRecord) => {
+  /**
+   * Records a message as `acpDecoderSource` reads it: `{ method, params }`, `{ request, params }`
+   * for one the agent waits on, or `{ response, result }` for the reply that opened the session.
+   */
+  const record = (message: AcpNotificationRecord | AcpRequestRecord | AcpResponseRecord) => {
     if (capture) capture.record(JSON.parse(JSON.stringify(message)))
   }
   // A state patch goes through `update`, which settles waiters once the turn ends.
@@ -522,7 +530,7 @@ async function startAcp(
     const marked = live.compaction ? notices?.map(asManualCompaction) : notices
     engine.observe(live, kind, marked, source)
     if (notices && state) update(live, state)
-    const observations = notices ? acpNotificationUsage(decoded) : []
+    const observations = notices ? [...acpNotificationUsage(decoded), ...decoded.models ? live.models.relisted(decoded.models) : []] : []
     if (observations.length) observeUsage(observations)
     const outcome = live.compaction && notices ? compactionOutcome(notices, decoded.usage) : undefined
     if (outcome) live.compaction?.confirm(outcome)
@@ -644,24 +652,25 @@ async function startAcp(
         await trace.step("human-sign-in", () => connection.authenticate({ methodId }))
       },
       open: async () => {
-        if (!resume) return parseNewAcpSession(
-          await trace.step("session-open", () => watch.step("session/new", connection.newSession(
+        if (!resume) {
+          const created = await trace.step("session-open", () => watch.step("session/new", connection.newSession(
             newSessionRequest(workingDir, harness, options.tuning, live.mcpServers)
           )))
-        )
+          record({ response: "session/new", result: created })
+          return parseNewAcpSession(created)
+        }
         capture?.opening()
-        const loaded = parseLoadedAcpSession(
-          await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
-            loadSessionRequest(resume, workingDir, harness, options.tuning, live.mcpServers)
-          ))),
-          resume
-        )
+        const reply = await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
+          loadSessionRequest(resume, workingDir, harness, options.tuning, live.mcpServers)
+        )))
+        record({ response: "session/load", result: reply })
         capture?.opened()
-        return loaded
+        return parseLoadedAcpSession(reply, resume)
       },
     })
     live.sessionId = session.sessionId
     open(session.sessionId)
+    observeUsage(live.models.opened(session.reply))
     for (const decoded of opening.splice(0))
       if ((decoded.sessionId ?? session.sessionId) === session.sessionId)
         applyNotification({ ...decoded, sessionId: session.sessionId, usage: decoded.usage?.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") })
@@ -780,6 +789,12 @@ function loadSessionRequest(
 
 const LegacyAcpModelsSchema = z.object({ models: z.object({ currentModelId: z.string() }).nullish() })
 
+const ReplySchema = z.record(z.string(), z.json())
+
+function replyJson(response: NewSessionResponse | LoadSessionResponse): JsonObject {
+  return ReplySchema.parse(JSON.parse(JSON.stringify(response)))
+}
+
 function legacyAcpModel(response: NewSessionResponse | LoadSessionResponse): string | undefined {
   const parsed = LegacyAcpModelsSchema.safeParse(response)
   return parsed.success ? parsed.data.models?.currentModelId : undefined
@@ -791,6 +806,7 @@ function parseNewAcpSession(response: NewSessionResponse): OpenedAcpSession {
     modes: response.modes ?? null,
     model: legacyAcpModel(response),
     configOptions: response.configOptions ?? [],
+    reply: replyJson(response),
   }
 }
 
@@ -803,6 +819,7 @@ function parseLoadedAcpSession(
     modes: response.modes ?? null,
     model: legacyAcpModel(response),
     configOptions: response.configOptions ?? [],
+    reply: replyJson(response),
   }
 }
 
@@ -842,6 +859,8 @@ async function setLegacySessionModel(
       modelId,
     }
   )
+  const usage = live.usage.observe(...live.models.switched(modelId))
+  if (usage) update(live, { usage })
 }
 
 /** Begin dispatch; the correlated ACP response reports delivery asynchronously. */

@@ -19,6 +19,12 @@ export interface AcpRequestRecord {
   params: object
 }
 
+/** The agent's reply to a request that opens a session (`session/new`, `session/load`), as captured for the decoder. */
+export interface AcpResponseRecord {
+  response: "session/new" | "session/load"
+  result: object
+}
+
 /**
  * One ACP session's messages from the agent: its updates, decoded as a
  * store that saved them decodes them (`AcpUpdateDecoder`), and the requests

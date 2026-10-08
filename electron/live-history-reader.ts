@@ -6,11 +6,13 @@ import type { LiveSnapshot } from "./contracts/live-conversations.js"
 import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "./contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
+import { liveContentWeight } from "./contracts/residency.js"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
 const TOOL_PREVIEW = 2048
 const MAX_VIEWS = 32
+const VIEW_BYTES = 128 * 1024 * 1024
 const MAX_RECORDS = 8
 const MAX_ACTIVE_READS = 32
 const IDLE_MS = 10 * 60_000
@@ -80,7 +82,7 @@ export class LiveHistoryReader {
     const held = [...this.views].find(([, view]) => view.id === snapshot.session.id &&
       view.snapshot.epoch === snapshot.epoch && view.snapshot.revision === snapshot.revision)
     const token = held?.[0] ?? randomUUID()
-    if (held) { held[1].used = Date.now(); snapshot = held[1].snapshot }
+    if (held) { this.touchView(held[0], held[1]); snapshot = held[1].snapshot }
     else this.views.set(token, { id: snapshot.session.id, snapshot, used: Date.now() })
     this.pruneViews()
     const tail = this.page(token, snapshot, { blocks: snapshot.blocks.length,
@@ -121,24 +123,26 @@ export class LiveHistoryReader {
         const held = input.ifCurrent && this.views.get(input.ifCurrent.token)
         if (held?.id === id && input.epoch !== undefined && held.snapshot.epoch === input.epoch && captured.epoch === input.epoch &&
             captured.revision === input.ifCurrent?.revision) {
-          held.used = Date.now()
+          this.touchView(input.ifCurrent.token, held)
           value = { kind: "unchanged", token: input.ifCurrent.token, revision: captured.revision, epoch: captured.epoch }
         } else value = this.capture(captured, input.epoch !== undefined && input.epoch === captured.epoch ? input.from : undefined)
       }
     } else {
       const view = this.views.get(input.token)
       if (!view || view.id !== id) throw new Error("This history view expired. Open the conversation again to refresh it.")
-      view.used = Date.now()
-      if (input.kind === "earlier") {
+      this.touchView(input.token, view)
+      if (input.kind === "earlier" || input.kind === "range") {
+        const before = input.kind === "earlier" ? input.before : input.to
         const base = view.snapshot.base
-        if (base?.hasEarlier && input.before.base === base.start && input.before.blocks === (view.snapshot.baseCoveredBlocks ?? 0)) {
+        if (base?.hasEarlier && before.base === base.start && before.blocks === (view.snapshot.baseCoveredBlocks ?? 0)) {
           const earlier = await this.nativePage?.(base.ref.path, base.start)
           if (!earlier || earlier.start + earlier.entries.length !== base.start ||
               nativeHistoryRevision(earlier) !== nativeHistoryRevision(base))
             throw new Error("The native history changed since this capture. Open the current conversation before loading earlier messages.")
           view.snapshot = { ...view.snapshot, base: { ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier } }
         }
-        value = this.page(input.token, view.snapshot, input.before)
+        value = input.kind === "range" ? this.range(input.token, view.snapshot, input.from, input.to)
+          : this.page(input.token, view.snapshot, input.before)
       }
       else if (input.at.kind === "live") {
         value = view.snapshot.blocks[input.at.index]
@@ -203,12 +207,58 @@ export class LiveHistoryReader {
     const now = Date.now()
     for (const [key, value] of this.records) if (now - value.used > IDLE_MS) this.records.delete(key)
     const completed = [...this.records].filter(([, value]) => value.next.done).sort((a, b) => a[1].used - b[1].used)
-    for (const [key] of completed.slice(0, Math.max(0, completed.length - MAX_RECORDS))) this.records.delete(key)
+    let bytes = 0
+    for (const [index, [key, record]] of completed.reverse().entries()) {
+      const weight = record.offset * 2
+      if (index > 0 && (index >= MAX_RECORDS || bytes + weight > 32 * 1024 * 1024)) this.records.delete(key)
+      else bytes += weight
+    }
   }
 
   private pruneViews(): void {
-    if (this.views.size > MAX_VIEWS)
-      for (const [key] of [...this.views].sort((a, b) => a[1].used - b[1].used).slice(0, this.views.size - MAX_VIEWS)) this.views.delete(key)
+    const now = Date.now()
+    const views = [...this.views].reverse().sort((a, b) => b[1].used - a[1].used)
+    let bytes = 0
+    const shared = new WeakSet<object>()
+    for (const [index, [key, view]] of views.entries()) {
+      const weight = liveContentWeight(view.snapshot, shared)
+      // The current capture can exceed the target. Older immutable tokens
+      // expire rather than keeping 32 complete copies of a giant transcript.
+      if (index > 0 && (index >= MAX_VIEWS || bytes + weight > VIEW_BYTES || now - view.used > IDLE_MS)) this.views.delete(key)
+      else { bytes += weight; liveContentWeight(view.snapshot, shared, true) }
+    }
+  }
+
+  private touchView(token: string, view: View): void {
+    view.used = Date.now()
+    this.views.delete(token)
+    this.views.set(token, view)
+  }
+
+  private range(token: string, source: LiveSnapshot, from: LiveHistoryCursor, to: LiveHistoryCursor): LiveHistoryPage {
+    if (from.blocks > to.blocks || from.base > to.base) throw new Error("Invalid retained history range")
+    const parts: LiveHistoryPage[] = []
+    let cursor = to
+    while (cursor.blocks > from.blocks || cursor.base > from.base) {
+      const page = this.page(token, source, cursor)
+      parts.push(page)
+      const next = { blocks: page.history.blockStart, base: page.base?.start ?? 0 }
+      if (next.blocks === cursor.blocks && next.base === cursor.base) throw new Error("That retained history range is unavailable.")
+      cursor = next
+    }
+    if (!parts.length) throw new Error("Invalid empty history range")
+    parts.reverse()
+    const first = parts[0]!, last = parts.at(-1)!
+    const allBlocks = parts.flatMap(part => part.blocks)
+    const allEntries = parts.flatMap(part => part.base?.entries ?? [])
+    const base = last.base ? { ...last.base, entries: allEntries.slice(from.base - (first.base?.start ?? 0)), start: from.base,
+      hasEarlier: from.base > 0 || Boolean(source.base?.hasEarlier) } : null
+    // Recompute the prefix's turn numbering from a page ending at `from`.
+    const prefix = this.page(token, source, from)
+    const turnStart = prefix.history.turnStart + prefix.blocks.filter(isTurnStart).length
+    return { blocks: allBlocks.slice(from.blocks - first.history.blockStart), base,
+      history: { ...last.history, blockStart: from.blocks, blockEnd: to.blocks, turnStart,
+        before: from.blocks > (source.baseCoveredBlocks ?? 0) || base?.hasEarlier ? from : null } }
   }
 
   private page(token: string, source: LiveSnapshot, before: LiveHistoryCursor): LiveHistoryPage {
@@ -259,7 +309,7 @@ export class LiveHistoryReader {
     } : null
     return {
       blocks: blocks.reverse(), base,
-      history: { token, blockStart, blockEnd: before.blocks, turnStart, earlierRequests,
+      history: { token, ranges: true, blockStart, blockEnd: before.blocks, turnStart, earlierRequests,
         before: blockStart > covered || baseStart > baseOrigin || source.base?.hasEarlier ? { blocks: blockStart, base: baseStart } : null },
     }
   }

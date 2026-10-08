@@ -69,7 +69,6 @@ export async function credentialFileFingerprint(path: string): Promise<string> {
  * app's host instead of starting one.
  */
 const MAKO_RUNTIME_ENV = [
-  "MAKO_BACKEND_TOKEN",
   "MAKO_CUA_SOCKET",
   "MAKO_DATA_ROOT",
   "MAKO_PROFILE",

@@ -1942,6 +1942,7 @@ export class LiveConversations {
           ...event.session,
           title: event.session.title ?? resident.snapshot.session.title,
           usage: carriedUsage(resident.snapshot.session, event.session),
+          configOptions: carriedOptions(resident.snapshot.session, event.session),
         },
         nativeActivity: event.session.status === "running" ? resident.snapshot.nativeActivity : undefined,
       }
@@ -2512,6 +2513,7 @@ export class LiveConversations {
           provider: binding.provider,
           nativeId: binding.nativeId,
           runId: nativePoint,
+          ...binding.path && { path: binding.path },
         }
       const start = source.blocks.findIndex(
         (block) => block.type === "user" && block.requestId === requestId
@@ -2521,6 +2523,10 @@ export class LiveConversations {
       const next = source.blocks.findIndex(
         (block, index) => index > start && isTurnStart(block)
       )
+      const steers = source.blocks
+        .slice(start + 1, next < 0 ? undefined : next)
+        .filter((block) => block.type === "user" && block.steeringFor === requestId).length
+      if (nativeFork && steers) nativeFork = { ...nativeFork, steers }
       const covered = source.baseCoveredBlocks ?? 0
       // The native history read after a checkpoint replaced the blocks it
       // covers. It ends where they end, so it still ends at this answer when
@@ -4166,6 +4172,17 @@ export class LiveConversations {
     this.scheduleSweep()
     return resident
   }
+}
+
+/**
+ * A process still starting has reported no options; the list the last one
+ * reported stands until it does, so the composer keeps its choices and an
+ * unchanged list is not sent to the window again.
+ */
+function carriedOptions(previous: LiveSessionState, next: LiveSessionState): LiveSessionState["configOptions"] {
+  return next.connection === "starting" && !next.configOptions.length && next.harness === previous.harness
+    ? previous.configOptions
+    : next.configOptions
 }
 
 function residentWeight({ snapshot }: Resident): number {

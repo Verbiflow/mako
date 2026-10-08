@@ -716,6 +716,7 @@ async function runCatalogWorker(signal: AbortSignal): Promise<boolean> {
     await stopCatalogWorker(worker)
     return false
   }
+  const startedAt = performance.now()
   const lost = (reason: string) => {
     if (daemon !== client && catalogWorker !== worker) return
     if (daemon === client) {
@@ -725,19 +726,33 @@ async function runCatalogWorker(signal: AbortSignal): Promise<boolean> {
     client.close()
     void stopCatalogWorker(worker)
     if (stopping) return
-    hostWarn("threads", "catalog worker lost", { reason })
-    void recoverCatalogWorker(signal)
+    const livedMs = Math.round(performance.now() - startedAt)
+    hostWarn("threads", "catalog worker lost", { reason, livedMs })
+    void recoverCatalogWorker(signal, livedMs)
   }
-  worker.once("error", (error) => lost(error.message))
-  worker.once("exit", (code) => lost(`exit ${code}`))
+  // The port usually closes first, so these are the only record of why it died.
+  worker.once("error", (error) => {
+    if (!stopping) hostWarn("threads", "catalog worker error", { error: error.message })
+    lost(error.message)
+  })
+  worker.once("exit", (code) => {
+    if (!stopping) hostLog("threads", "catalog worker exited", { code })
+    lost(`exit ${code}`)
+  })
   client.onClose(() => lost("port closed"))
   return true
 }
 
+/**
+ * A worker that ran this long is replaced again when it dies. The in-process
+ * catalog parses every session write on the host's own thread, which stalls
+ * each RPC behind it, so it is only for a worker that keeps dying young.
+ */
+const CATALOG_WORKER_STEADY_MS = 10 * 60_000
 let catalogWorkerRestarts = 0
 
-/** One restart, then the in-process catalog: a worker that keeps dying is not a strategy. */
-function recoverCatalogWorker(signal: AbortSignal): Promise<void> {
+function recoverCatalogWorker(signal: AbortSignal, livedMs: number): Promise<void> {
+  if (livedMs >= CATALOG_WORKER_STEADY_MS) catalogWorkerRestarts = 0
   return recoverCatalog(signal, async () => {
     if (catalogWorkerRestarts < 1) {
       catalogWorkerRestarts += 1

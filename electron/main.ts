@@ -17,7 +17,6 @@ import { imageSize } from "image-size"
 import { ControlPreviews } from "./control-previews.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import type { DesktopNotification } from "./contracts/notifications.js"
-import { RelayConversations } from "./relay-conversations.js"
 import { assessProviderResume } from "./provider-recovery.js"
 import { randomUUID } from "node:crypto"
 import type { ProviderBinding, ResumeVerdict } from "./contracts/conversation-control.js"
@@ -107,7 +106,7 @@ import {
 } from "electron"
 import { spawn } from "node:child_process"
 import { watch } from "node:fs"
-import { homedir, hostname } from "node:os"
+import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 import { ThreadIdSchema } from "./contracts/thread-identity.js"
@@ -258,17 +257,6 @@ import {
 } from "./plugins.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { integrationCatalog } from "./integrations.js"
-import {
-  backendConnectionStatus,
-  ensureBackendConnectionEnvironment,
-} from "./backend-connection.js"
-import {
-  disableRelayWorker,
-  relayPresence,
-  startRelayWorker,
-  stopRelayWorker,
-} from "./relay-worker.js"
-import type { RelayWorkspaceCandidate } from "./relay-workspace.js"
 import { applyMcpSync, previewMcpSync } from "./mcp-sync.js"
 import { nativeAuthoringCatalog, listNativeAuthoring, readNativeAuthoring, writeNativeAuthoring, removeNativeAuthoring } from "./native-authoring.js"
 import type { NativeAuthoringTarget, NativeAuthoringWrite, NativeAuthoringRemove } from "./contracts/native-authoring.js"
@@ -1021,64 +1009,6 @@ async function ready(): Promise<HostPool> {
 }
 
 /**
- * Why the relay worker is not running here, or `null` when it should be.
- *
- * Every profile used to register itself with the backend and poll the same
- * queue: thirty-odd review and test profiles heartbeating as workers, any of
- * which could lease a request meant for the installed app. Only the default
- * profile serves remote work unless `MAKO_RELAY=1` says otherwise.
- */
-function relayDisabledReason(): string | null {
-  if (fixtureDesk) return "the fixture desk"
-  if (process.env.MAKO_RELAY === "0") return "MAKO_RELAY=0"
-  if (process.env.MAKO_RELAY === "1") return null
-  if (instanceProfile)
-    return `the ${instanceProfile} profile; set MAKO_RELAY=1 to serve remote work`
-  // The desktop launcher hands the installed app its own directory as
-  // MAKO_DATA_ROOT, so the variable alone means nothing; a different root is a
-  // packaged test host.
-  if (resolve(app.getPath("userData")) !== resolve(defaultUserData))
-    return "a separate data root; set MAKO_RELAY=1 to serve remote work"
-  return null
-}
-
-/** Directories the user has actually worked in, for remote requests. */
-function recentRelayWorkspaces(): RelayWorkspaceCandidate[] {
-  const candidates: RelayWorkspaceCandidate[] = liveConversations
-    .summaries()
-    .map((summary) => ({
-      cwd: summary.session.cwd,
-      at: new Date(summary.createdAt).toISOString(),
-    }))
-  for (const ref of listThreads())
-    candidates.push({ cwd: ref.workspace ?? ref.cwd, at: ref.updatedAt })
-  return candidates
-}
-
-async function startRelay(): Promise<void> {
-  const disabled = relayDisabledReason()
-  if (disabled) {
-    disableRelayWorker(disabled)
-    return
-  }
-  const userData = app.getPath("userData")
-  await startRelayWorker({
-    conversations: new RelayConversations(
-      liveConversations,
-      join(userData, "conversations", "remote-assets")
-    ),
-    assetRoot: join(userData, "conversations", "remote-assets"),
-    deviceFile: join(userData, "slack-relay", "device-id"),
-    deviceName: instanceProfile
-      ? `${hostname()} (${instanceProfile})`
-      : hostname(),
-    logFile: join(userData, "logs", "relay.log"),
-    recentWorkspaces: recentRelayWorkspaces,
-    version: app.getVersion(),
-  })
-}
-
-/**
  * Run against the tab in front.
  *
  * Every command from the UI is aimed at the conversation on screen — that is
@@ -1677,20 +1607,17 @@ function bindIpc() {
   handle("mako:integrations", () =>
     withHost(async (host) => {
       await ensureMakoLocalControl().catch(() => null)
-      const [snapshot, github, backend, driver] = await Promise.all([
+      const [snapshot, github, driver] = await Promise.all([
         discoverMcpRegistry(host.workspace),
         githubStatus(host.workspace),
-        backendConnectionStatus(),
         cuaDriverStatus(resolveExecutable("cua-driver")),
       ])
       return integrationCatalog(
         snapshot,
         computerPermissions(),
         github.authenticated,
-        backend,
         browserControl.status(),
-        driver,
-        relayPresence()
+        driver
       )
     })
   )
@@ -2265,8 +2192,6 @@ app.whenReady().then(async () => {
     credits:
       "Desktop app for Claude Code, Codex, Cursor, Grok, Devin, and OpenCode.",
   })
-  await ensureBackendConnectionEnvironment()
-  trace("backend configured")
   protocol.handle("mako-file", readFilePreview)
   if (!isDev) {
     serveDesk(rendererBundle, readFilePreview)
@@ -2652,7 +2577,6 @@ app.whenReady().then(async () => {
   })
   void ready().then((live) => {
     watchWorkspace(live.active.workspace)
-    return startRelay()
   })
   app.on("activate", () => {
     void reopenWindow()
@@ -2712,7 +2636,6 @@ const quitLifecycle = backgroundLifecycle({
       stopWorkspaceIpc()
       stopWatching()
       runtimeUpdates.stop()
-      void stopRelayWorker()
       stopThreads()
       await Promise.all([callsDrained, providersDrained, hostTelemetry?.close()])
       await liveConversations?.stop()
