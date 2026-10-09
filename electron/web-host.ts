@@ -13,6 +13,7 @@ import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRunti
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import type { SecretKeyHandover } from "./host-secrets.js"
+import { DESKTOP_PATH } from "./contracts/desktop-channel.js"
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
 
 /** How the host runs one call: the encoded reply for `channel(...args)`, on behalf of `client`. */
@@ -52,8 +53,9 @@ async function readSecretKeyOffer(request: IncomingMessage): Promise<Buffer> {
 
 /**
  * Host transport shared by desktop and browser gateways on a private Unix socket.
- * `/secret-key` is the desktop app's alone: browser gateways forward only
- * `/rpc`, `/events` and `/file/`, and the cloud gateway calls the host in-process.
+ * `/secret-key` and `/desktop` are the desktop app's alone: browser gateways
+ * forward only `/rpc`, `/events` and `/file/`, and the cloud gateway calls the
+ * host in-process.
  */
 export async function startWebHost(
   socket: string,
@@ -62,7 +64,8 @@ export async function startWebHost(
   disconnected?: (client: string) => void,
   runtime?: RuntimeInfo,
   preview?: (args: unknown[], client: string) => Promise<ControlPreview | null>,
-  secretKey?: SecretKeyHandover
+  secretKey?: SecretKeyHandover,
+  desktop?: (request: IncomingMessage, response: ServerResponse) => void
 ) {
   const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
@@ -134,6 +137,12 @@ export async function startWebHost(
         if (!response.headersSent) response.writeHead(500)
         response.end()
       })
+      return
+    }
+    if (request.url === DESKTOP_PATH) {
+      if (!desktop) response.writeHead(404).end()
+      else if (request.method !== "POST") response.writeHead(405).end()
+      else desktop(request, response)
       return
     }
     const client = z.string().uuid().optional().safeParse(request.headers["x-mako-window"] ?? new URL(request.url ?? "/", "http://localhost").searchParams.get("client") ?? undefined)
@@ -245,6 +254,8 @@ export async function startWebHost(
           response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(runtimeFailure(error)))
       })
   })
+  // The desktop's `/desktop` request stays open for the host's life; nothing on this private socket needs a deadline.
+  server.requestTimeout = 0
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
     server.listen(socket, resolve)
