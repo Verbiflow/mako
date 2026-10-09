@@ -5,6 +5,7 @@ import { nativeToolNames } from "@mako/sessions/tool-identity"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../electron/contracts/harness-capabilities.js"
 import { harnessLabel } from "../electron/providers/harness-descriptors.js"
 import { providerHost } from "../electron/providers/index.js"
+import { uniqueCell } from "./harness-checklist.ts"
 import { NO_SOURCE, storedDefinitions, toolsAcross } from "./native-tools.ts"
 
 /**
@@ -75,7 +76,15 @@ export function renderHarnessConcepts(): string {
     ...section("MCP configuration", ({ concepts }) => code(concepts.mcpConfig)),
     ...section("Output", ({ concepts: { output } }) => `live: ${output.live}; one-shot: ${code(output.headless)}; sessions: ${output.store}`),
     ...section("Models", ({ concepts }) => concepts.models),
-    ...section("Only this harness", ({ concepts }) => concepts.distinct.map(({ name, via }) => `${name} (${via})`).join("; ") || "nothing"),
+    "## Only this harness",
+    "",
+    "From each harness definition's `unique`: what carries it natively, and the declaration that shows it in Mako, or why none does.",
+    "",
+    "| Harness | Feature | Native | In Mako |",
+    "| --- | --- | --- | --- |",
+    ...harnesses.flatMap((harness) => (providerHost.harnesses.get(harness)?.unique ?? []).map((feature) =>
+      `| ${label(harness)} | ${feature.name} | ${feature.native.replaceAll("|", "\\|")} | ${uniqueCell(feature).replaceAll("|", "\\|")} |`)),
+    "",
     "## Tool definitions",
     "",
     "Each harness's tools as it defines them, recorded per version by `npm run harness:native-tools -- <harness>` into `scripts/fixtures/native-tools`. `scripts/test-native-tools.ts` fails when the newest defines a tool the vocabulary doesn't declare, when a declared tool is neither defined nor `unlisted` with a reason, or when a declared argument key isn't a parameter. `--diff <harness> <a> <b>` names what changed between two versions.",

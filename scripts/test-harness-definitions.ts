@@ -6,6 +6,7 @@ import { createProviderHost, type ProviderHost } from "../electron/providers/hos
 import {
   installHarness,
   lacks,
+  unlistedOwnDeclarations,
   type HarnessDefinition,
   type HarnessFamily,
 } from "../electron/providers/harness-definition.ts"
@@ -118,6 +119,7 @@ const definition: HarnessDefinition = {
   updates: lacks("test"),
   usageHistory: lacks("test"),
   artifactPreview: lacks("test"),
+  unique: [],
 }
 assert.throws(() => installHarness(host, definition), /example's live capability is filed under codex/)
 assert.throws(() => installHarness(host, { ...definition, diagnostics: { runsInSdk: true } }), /runs in an SDK it does not name/)
@@ -195,6 +197,14 @@ for (const harness of harnesses) {
     assert.ok(capabilityText(harness.usage[key]).trim(), `${harness.provider} says what it reports for usage ${key}, or why it reports none`)
   assert.deepEqual(harness.usage.contextBreakdown, harness.capabilities.contextBreakdown, `${harness.provider}'s context breakdown is its live driver's`)
   assert.equal(harness.usage.outsideMako.state === "implemented", !harness.absent.usageHistory, `${harness.provider}'s spend outside Mako is its usage history`)
+}
+
+// A declaration only one harness implements shows one of its own features, and its list says so.
+assert.deepEqual(unlistedOwnDeclarations(harnesses), [], "a declaration only one harness implements is listed in its unique")
+for (const harness of harnesses) {
+  for (const { name, mako } of harness.unique)
+    assert.ok(mako.state !== "implemented" || mako.field === "tools" || mako.via.length > 0, `${harness.provider}'s ${name} says where it shows`)
+  assert.equal(harness.artifacts.state === "implemented", !harness.absent.artifactPreview, `${harness.provider}'s artifact previews are its artifactPreview family`)
 }
 
 // The new-harness checklist is generated from the code, and every installed harness passes its checked steps.

@@ -4,7 +4,9 @@ import { providerHost } from "../electron/providers/index.ts"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../electron/providers/live-capabilities.ts"
 import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "../electron/contracts/harness-usage.ts"
 import { workDefaultProblems } from "../electron/contracts/harness-defaults.ts"
+import { unlistedOwnDeclarations } from "../electron/providers/harness-definition.ts"
 import { recordedCatalog } from "./model-catalogs.ts"
+import { uniqueCell } from "./harness-checklist.ts"
 
 /**
  * What each installed harness declares about access, plans, approvals,
@@ -102,18 +104,22 @@ const labelWidth = Math.max(...LIVE_CAPABILITY_KEYS.map((key) => LIVE_CAPABILITY
 const columnWidth = Math.max(8, ...records.map(({ provider }) => provider.length))
 console.log(`\n${"".padEnd(labelWidth)}  ${records.map(({ provider }) => provider.padEnd(columnWidth)).join("  ")}`)
 for (const key of LIVE_CAPABILITY_KEYS)
-  console.log(`${LIVE_CAPABILITY_LABELS[key].padEnd(labelWidth)}  ${records.map(({ capabilities }) => mark(capabilities[key]).padEnd(columnWidth)).join("  ")}`)
-console.log("✓ Mako drives it · no-op: accepted, nothing to do · default: the harness's own behaviour · —: the harness has none · GAP: the harness has it, Mako doesn't drive it")
+  console.log(`${LIVE_CAPABILITY_LABELS[key].padEnd(labelWidth)}  ${records.map(({ capabilities }) => {
+    const capability = capabilities[key]
+    return (capability.state === "implemented" && "asks" in capability ? capability.asks : mark(capability)).padEnd(columnWidth)
+  }).join("  ")}`)
+console.log(`${"Artifact previews".padEnd(labelWidth)}  ${records.map(({ artifacts }) => mark(artifacts).padEnd(columnWidth)).join("  ")}`)
+console.log("✓ Mako drives it · request/session: questions wait on the turn, or stay in the conversation · no-op: accepted, nothing to do · default: the harness's own behaviour · —: the harness has none · GAP: the harness has it, Mako doesn't drive it")
 const gaps = records.flatMap(({ provider, capabilities }) => LIVE_CAPABILITY_KEYS.filter((key) => {
   const capability = capabilities[key]
   return capability.state === "absent" && capability.by === "mako"
 }).map((key) => `${provider} ${LIVE_CAPABILITY_LABELS[key]}`))
 if (gaps.length) console.log(`Gaps: ${gaps.join(", ")}`)
-for (const { provider, capabilities } of records)
+for (const { provider, capabilities, artifacts } of records)
   details.push(`${provider} capabilities`, ...LIVE_CAPABILITY_KEYS.map((key) => {
     const capability = capabilities[key]
     return `  ${LIVE_CAPABILITY_LABELS[key]}: ${capability.state}${capability.state === "absent" ? ` (${capability.by})` : ""} — ${capability.state === "implemented" ? capability.via : capability.reason}`
-  }))
+  }), `  Artifact previews: ${artifacts.state === "implemented" ? `${artifacts.name} (${artifacts.files.join(", ")}) — ${artifacts.via}` : `${artifacts.state}${artifacts.state === "absent" ? ` (${artifacts.by})` : ""} — ${artifacts.reason}`}`)
 
 // What each harness reports about usage: one row per harness, one column per reading.
 const usageWidth = (key: (typeof HARNESS_USAGE_KEYS)[number]) => Math.max(HARNESS_USAGE_LABELS[key].length, 7)
@@ -126,6 +132,14 @@ for (const { provider, usage } of records)
     const capability = usage[key]
     return `  ${HARNESS_USAGE_LABELS[key]}: ${capability.state}${capability.state === "absent" ? ` (${capability.by})` : ""} — ${capability.state === "implemented" ? capability.via : capability.reason}`
   }))
+
+// What only each harness has, and the declaration that shows it in Mako.
+const uniqueRows = records.flatMap(({ provider, unique }) => unique.map((feature) => [provider, feature.name, uniqueCell(feature).replaceAll("`", "").replaceAll("**", "")]))
+const uniqueWidths = [0, 1].map((index) => Math.max(index ? 7 : columnWidth, ...uniqueRows.map((row) => row[index]!.length)))
+console.log(`\n${"only".padEnd(uniqueWidths[0]!)}  ${"feature".padEnd(uniqueWidths[1]!)}  in Mako`)
+for (const row of uniqueRows) console.log(`${row[0]!.padEnd(uniqueWidths[0]!)}  ${row[1]!.padEnd(uniqueWidths[1]!)}  ${row[2]}`)
+for (const { provider, key } of unlistedOwnDeclarations(providerHost.harnesses.list()))
+  if (!options.harness || provider === options.harness) problems.push(`${provider}: is the only harness implementing ${key}, which its \`unique\` doesn't list`)
 
 // Each harness's default model against the catalog it was last recorded with.
 const modelRows = records.map(({ provider }) => {
@@ -163,4 +177,4 @@ if (problems.length) {
   console.log(`\n${problems.length} contradiction${problems.length === 1 ? "" : "s"}:`)
   for (const problem of problems) console.log(`  ${problem}`)
   process.exitCode = 1
-} else console.log("\nPASS: every harness declares a consistent ladder, plan mode, approvals and sign-in, and its default model is in its recorded catalog")
+} else console.log("\nPASS: every harness declares a consistent ladder, plan mode, approvals and sign-in, lists what only it has, and its default model is in its recorded catalog")

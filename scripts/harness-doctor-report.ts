@@ -14,6 +14,8 @@ import { NATIVE_UNKNOWN_FILE } from "../electron/native-unknown.ts"
 import type { HarnessFamily } from "../electron/providers/harness-definition.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "../electron/contracts/harness-capabilities.ts"
+import type { UniqueCapability } from "../electron/contracts/harness-unique.ts"
+import { uniqueCell } from "./harness-checklist.ts"
 import { readRuntimeVersion } from "../electron/runtime-updates.ts"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 
@@ -145,6 +147,8 @@ export interface HarnessReport {
   families: FamilyStatus[]
   /** Every live capability as the window shows it; null without a live driver. */
   live: LiveCapabilities | null
+  /** What only this harness has, with where Mako shows it or why it doesn't. */
+  unique: readonly UniqueCapability[]
   version: VersionReport
   decoder: DecoderReport
   tools: ToolReport
@@ -202,6 +206,7 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
       harness,
       families: familyStatus(harness),
       live: providerHost.harnesses.get(harness)?.capabilities ?? null,
+      unique: providerHost.harnesses.get(harness)?.unique ?? [],
       version: versionReport(await installed(harness), files),
       decoder: decoderReport(harness, files, fixtures.invalid.filter((file) => file.name.startsWith(`${harness}/`)).map((file) => file.name)),
       tools: toolReport(harness),
@@ -494,6 +499,8 @@ function formatHarness(report: HarnessReport): string {
       ;(index ? more : (text: string) => row("live", text))(`${LIVE_CAPABILITY_LABELS[key]}: ${state} · ${capabilityText(capability)}`)
     })
   } else row("live", "no live driver")
+  report.unique.forEach((feature, index) =>
+    (index ? more : (text: string) => row("only", text))(`${feature.name}: ${uniqueCell(feature).replaceAll("`", "").replaceAll("**", "")}`))
 
   const { installed, newestFixture, newestCaptured, verdict, sdk } = report.version
   const reading = installed.version ? `installed ${installed.version}${installed.from ? ` (${installed.from})` : ""}` : `installed: no version readable${installed.problem ? ` (${installed.problem})` : ""}`

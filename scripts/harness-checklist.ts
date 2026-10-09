@@ -4,6 +4,7 @@ import { readableHarnesses } from "@mako/sessions"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability, type LiveCapabilityKey } from "../electron/contracts/harness-capabilities.js"
 import { HARNESS_USAGE_ASKS, HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "../electron/contracts/harness-usage.js"
+import { DECLARATION_SHOWS, type UniqueCapability } from "../electron/contracts/harness-unique.js"
 import { HARNESS_FAMILIES, type HarnessFamily } from "../electron/providers/harness-definition.js"
 import { harnessLabel } from "../electron/providers/harness-descriptors.js"
 import { providerHost } from "../electron/providers/index.js"
@@ -78,7 +79,7 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   },
   {
     title: "Vocabulary",
-    what: "A module in `packages/sessions/src/harnesses/`, added to `VOCABULARIES`: every tool with its kind, keys, aliases and MCP names, its usage field map, and its concepts (instructions, hooks, skills, commands, agents, MCP files, output, models, what only it has).",
+    what: "A module in `packages/sessions/src/harnesses/`, added to `VOCABULARIES`: every tool with its kind, keys, aliases and MCP names, its usage field map, and its concepts (instructions, hooks, skills, commands, agents, MCP files, output, models).",
     enforcedBy: "`test-harness-vocabulary.ts`, `test-tool-identity.ts`, `audit:tools -- --unresolved`",
     check: (harness) => VOCABULARIES.some((vocabulary) => vocabulary.harness === harness) ? done : missing("no vocabulary module"),
   },
@@ -142,11 +143,6 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
     what: "Its modes and plan approval in `src/dev/mock-bridge.ts` (`MOCK_MODES`, `MOCK_PLAN_APPROVALS`), copied from the real wire, so `?mock` shows what the harness shows.",
     enforcedBy: "review",
   },
-  {
-    title: "Only this harness",
-    what: "A capability only this harness has is a field the others declare absent with a reason, and its UI registers against the field.",
-    enforcedBy: "`mako/no-harness-names`",
-  },
 ]
 
 const label = (harness: string) => harnessLabel(providerHost, harness)
@@ -161,6 +157,14 @@ function capabilityCell(capability: Capability | undefined): string {
   if (!capability) return "?"
   if (capability.state === "absent") return capability.by === "mako" ? "Mako gap" : "harness has none"
   return capability.state === "default" ? "by default" : capability.state
+}
+
+/** Where one of a harness's own features stands in Mako, in a table cell. */
+export function uniqueCell({ mako }: UniqueCapability): string {
+  if (mako.state === "implemented") return mako.field === "tools" ? `tool rows: ${mako.tools.map((tool) => `\`${tool}\``).join(", ")}` : `\`${mako.field}\``
+  if (mako.state === "default") return `the harness's own: ${mako.reason}`
+  if (mako.state === "no-op") return `nothing to show: ${mako.reason}`
+  return `**Mako gap**: ${mako.reason}`
 }
 
 function stepCell(step: Step, harness: string): string {
@@ -200,17 +204,26 @@ export function renderHarnessChecklist(): string {
     "",
     "Each is a field of the live driver: implemented with what implements it, or absent as `unavailable` (the harness has none) or `not-built` (a Mako gap), with the reason the window shows. Enforced by the types and `validateLiveDriver`. `npm run harness:doctor -- <harness>` prints the reasons, and the session flows run each declared capability on the real CLI.",
     "",
-    ...header(["Capability", "Driver field", "What it asks"]),
-    ...LIVE_CAPABILITY_KEYS.map((key) => `| ${LIVE_CAPABILITY_LABELS[key]} | \`${CAPABILITY_ASKS[key].field}\` | ${cell(CAPABILITY_ASKS[key].asks)} | ${harnesses.map((harness) => capabilityCell(providerHost.harnesses.get(harness)?.capabilities[key])).join(" | ")} |`),
+    ...header(["Capability", "Driver field", "What it asks", "In the window"]),
+    ...LIVE_CAPABILITY_KEYS.map((key) => `| ${LIVE_CAPABILITY_LABELS[key]} | \`${CAPABILITY_ASKS[key].field}\` | ${cell(CAPABILITY_ASKS[key].asks)} | ${cell(DECLARATION_SHOWS[`capabilities.${key}`])} | ${harnesses.map((harness) => capabilityCell(providerHost.harnesses.get(harness)?.capabilities[key])).join(" | ")} |`),
     "",
     "## 3. Usage",
     "",
     "Each is a field of the definition's `usage`: `implemented` with where the harness reports it, `harnessLacks(reason)` when it reports none, or `makoLacks(reason)` when Mako doesn't read it yet; after compaction, `byDefault(reason)` when the meter keeps its reading until the next reply. The composer's meter, Settings › Usage and the account rows read these, never whether data happened to arrive. Context breakdown and spend outside Mako come from the live driver and `usageHistory`. Enforced by `installHarness` and `test-usage-declarations.ts`, which replays every recording and fails on a reading a declaration rules out, or a declared one no recording shows.",
     "",
-    ...header(["Reading", "What it asks"]),
-    ...HARNESS_USAGE_KEYS.map((key) => `| ${HARNESS_USAGE_LABELS[key]} | ${cell(HARNESS_USAGE_ASKS[key])} | ${harnesses.map((harness) => capabilityCell(providerHost.harnesses.get(harness)?.usage[key])).join(" | ")} |`),
+    ...header(["Reading", "What it asks", "In the window"]),
+    ...HARNESS_USAGE_KEYS.map((key) => `| ${HARNESS_USAGE_LABELS[key]} | ${cell(HARNESS_USAGE_ASKS[key])} | ${cell(DECLARATION_SHOWS[`usage.${key}`])} | ${harnesses.map((harness) => capabilityCell(providerHost.harnesses.get(harness)?.usage[key])).join(" | ")} |`),
     "",
-    "## 4. Beside the definition",
+    "## 4. Only this harness",
+    "",
+    `List what only the harness has in the definition's \`unique\`: its name, what carries it natively, and where it stands in Mako. \`shownBy(key)\` names the declaration whose UI carries it, which the harness must implement or leave to its own behaviour; \`shownInTools(names)\`, its tool rows, each name in its vocabulary; \`byDefault(reason)\`, it works in Mako's sessions with nothing to show; \`noOp(reason)\`, there is nothing in it to show; \`makoLacks(reason)\`, a gap. A declaration only one harness implements must be listed there, and an artifact preview names its files (\`artifactPreview\`: ${cell(DECLARATION_SHOWS.artifacts).toLowerCase()}). Settings › Agents lists each harness's capabilities and own features with where they show, or why they don't. Enforced by \`installHarness\` and \`test-harness-definitions.ts\`; \`npm run audit:capabilities\` prints them.`,
+    "",
+    "| Harness | Feature | Native | In Mako |",
+    "| --- | --- | --- | --- |",
+    ...harnesses.flatMap((harness) => (providerHost.harnesses.get(harness)?.unique ?? []).map((feature) =>
+      `| ${label(harness)} | ${feature.name} | ${cell(feature.native)} | ${cell(uniqueCell(feature))} |`)),
+    "",
+    "## 5. Beside the definition",
     "",
     ...header(["Step", "What to add", "Enforced by"]),
     ...BESIDE_THE_DEFINITION.map((step) => `| ${step.title} | ${cell(step.what)} | ${step.enforcedBy} | ${harnesses.map((harness) => stepCell(step, harness)).join(" | ")} |`),

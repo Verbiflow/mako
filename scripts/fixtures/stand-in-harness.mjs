@@ -151,6 +151,7 @@ export async function installStandIn({ load, providerHost, store }) {
     updates: none,
     usageHistory: none,
     artifactPreview: none,
+    unique: [],
   })
 
   /**

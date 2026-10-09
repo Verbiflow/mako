@@ -15,7 +15,7 @@ Object.assign(globalThis, {
 const { chooseProviderMode, providerAccessModes, providerDefaultMode, savedProviderMode } =
   await import("../src/state/provider-access.ts")
 const { prefsStore } = await import("../src/state/prefs.ts")
-const { fixtureCapabilities, fixtureUsage } = await import("../src/dev/harness-fixtures.ts")
+const { fixtureDeclarations } = await import("../src/dev/harness-fixtures.ts")
 type LiveSessionMode = import("../src/lib/types.ts").LiveSessionMode
 
 const modes: LiveSessionMode[] = [
@@ -25,8 +25,8 @@ const modes: LiveSessionMode[] = [
 ]
 const state = {
   descriptors: [
-    { provider: "cursor", displayName: "Cursor", resumable: true, live: true, capabilities: fixtureCapabilities("cursor"), usage: fixtureUsage("cursor"), modes, defaultMode: "agent" },
-    { provider: "grok", displayName: "Grok", resumable: true, live: true, capabilities: fixtureCapabilities("grok"), usage: fixtureUsage("grok") },
+    { provider: "cursor", displayName: "Cursor", resumable: true, live: true, ...fixtureDeclarations("cursor"), modes, defaultMode: "agent" },
+    { provider: "grok", displayName: "Grok", resumable: true, live: true, ...fixtureDeclarations("grok") },
   ],
 }
 

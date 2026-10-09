@@ -9,7 +9,10 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { z } from "zod"
 import { harnessOrder, workDefault } from "../electron/contracts/harness-defaults.ts"
 import { installClaude } from "../electron/providers/claude/index.ts"
-import { installHarness, lacks, type HarnessDefinition } from "../electron/providers/harness-definition.ts"
+import { installHarness, lacks, unlistedOwnDeclarations, type HarnessDefinition } from "../electron/providers/harness-definition.ts"
+import { previewsFile, type ProviderArtifactPreview } from "../electron/providers/artifact-preview.ts"
+import { shownBy, shownInTools } from "../electron/contracts/harness-unique.ts"
+import { HarnessCapabilityList } from "../src/components/settings/harness-capabilities.tsx"
 import { byDefault, harnessLacks, implemented } from "../electron/providers/live-capabilities.ts"
 import { describeHarnesses, harnessLabel } from "../electron/providers/harness-descriptors.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
@@ -39,6 +42,7 @@ const mark = {
   gradient: [{ offset: 0, color: "#2F6F4E" }, { offset: 1, color: "#9BD3B5" }],
 }
 const defaults = { work: [{ model: "seven-large", options: { effort: "high" } }] }
+const boards: ProviderArtifactPreview = { provider: "seventh", name: "Board", files: [".board.html"], via: "Seven writes a board as one HTML file.", render: async (source) => source }
 const seventh: HarnessDefinition = {
   provider: "seventh",
   presentation: { mark },
@@ -70,7 +74,11 @@ const seventh: HarnessDefinition = {
   connection: lacks("synthetic"),
   updates: lacks("synthetic"),
   usageHistory: lacks("Its store keeps no token counts"),
-  artifactPreview: lacks("synthetic"),
+  artifactPreview: boards,
+  unique: [
+    { name: "Boards", native: "`.board.html` files", mako: shownBy("artifacts") },
+    { name: "Session questions", native: "Codex's `request_user_input`, which Seven speaks", mako: shownBy("capabilities.questions") },
+  ],
 }
 
 const host = createProviderHost()
@@ -95,6 +103,22 @@ assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { 
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, cost: byDefault("later") } }), /only after compaction/)
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, profile: { ...seventh.profile, defaults: { work: [] } } }), /picks no model for new conversations and doesn't say why/)
 
+// What only it has: each entry names a declaration it makes, and an artifact preview names its files.
+const own = (unique: HarnessDefinition["unique"]) => () => installHarness(createProviderHost(), { ...seventh, unique })
+assert.throws(own([{ name: "Breakdown", native: "Seven's report", mako: shownBy("capabilities.contextBreakdown") }]), /shows Breakdown through capabilities.contextBreakdown, which it declares absent/)
+assert.throws(own([{ name: "Tools", native: "Seven's own tools", mako: shownInTools(["seven_search"]) }]), /tool rows for seven_search, which its vocabulary doesn't declare/)
+assert.throws(own([seventh.unique[0]!, seventh.unique[0]!]), /lists its own feature Boards twice/)
+assert.throws(own([{ name: "Teleport", native: "none", mako: harnessLacks("Seven can't") }]), /as its own feature and as one it lacks/)
+assert.throws(() => installHarness(createProviderHost(), { ...seventh, artifactPreview: { ...boards, files: [] } }), /must name its artifacts/)
+assert.equal(host.harnesses.list().length, 2, "a refused declaration installs nothing")
+assert.ok(previewsFile(host.artifactPreviews.get("seventh")!, "plans/q3.board.html"))
+assert.ok(!previewsFile(host.artifactPreviews.get("seventh")!, "plans/q3.html"))
+assert.deepEqual(unlistedOwnDeclarations(host.harnesses.list()).filter(({ provider }) => provider === "seventh"), [],
+  "the only harness here with artifacts and session questions lists both")
+const unlisted = { ...host.harnesses.get("seventh")!, unique: [] }
+assert.deepEqual(unlistedOwnDeclarations([host.harnesses.get("claude")!, unlisted]).filter(({ provider }) => provider === "seventh").map(({ key }) => key),
+  ["artifacts", "capabilities.questions"], "a declaration only it makes must be among its own features")
+
 // Mako's order is the order harnesses install in; a new one follows the rest.
 const installed = host.harnesses.list().map(({ provider }) => provider)
 assert.deepEqual(harnessOrder(undefined, installed), ["claude", "seventh"])
@@ -107,6 +131,30 @@ assert.equal(described.displayName, "Seventh Agent")
 assert.deepEqual(described.presentation, { mark })
 assert.deepEqual(described.defaults, defaults)
 assert.deepEqual(described.usage, reported, "the window reads the same usage declaration")
+assert.deepEqual(described.artifacts, { state: "implemented", via: "Seven writes a board as one HTML file.", name: "Board", files: [".board.html"] })
+assert.deepEqual(described.unique, seventh.unique)
+assert.equal(described.capabilities.questions.state === "implemented" && described.capabilities.questions.asks, "session")
+
+// Settings › Agents draws what it declares, and where a declaration is absent, its reason in the same place.
+const declared = renderToStaticMarkup(createElement(HarnessCapabilityList, { descriptor: described }))
+assert.match(declared, /data-capability="artifacts" data-standing="works"/)
+assert.match(declared, /for Board files \(\.board\.html\)/)
+assert.match(declared, /kept after the turn and through a restart/)
+assert.match(declared, /Only in Seventh Agent/)
+assert.match(declared, /data-capability="unique\.Boards" data-standing="works" title="`\.board\.html` files"/)
+assert.match(declared, /data-capability="contextBreakdown" data-standing="gap".*?Not in Mako yet\. .*?Seven itemizes its context; Mako does not read it yet/s)
+const bare = createProviderHost()
+installHarness(bare, {
+  ...seventh,
+  live: { ...seventh.live, questions: { kind: "unavailable", reason: "Seven never asks you anything." } },
+  artifactPreview: lacks("Seven writes no artifacts"),
+  unique: [],
+})
+const plain = describeHarnesses(bare, { live: () => true, resumable: new Set() })[0]!
+const reasons = renderToStaticMarkup(createElement(HarnessCapabilityList, { descriptor: plain }))
+assert.match(reasons, /data-capability="artifacts" data-standing="lacks".*?Seven writes no artifacts/s)
+assert.match(reasons, /data-capability="questions" data-standing="lacks".*?Seven never asks you anything\./s)
+assert.doesNotMatch(reasons, /Only in Seventh Agent/)
 assert.equal(described.live, true)
 const catalog = [{ id: "seven-large", label: "Seven Large", options: [{ id: "effort", label: "Effort", role: "reasoning" as const, kind: "select" as const, values: [{ value: "low", label: "Low" }, { value: "high", label: "High" }] }] }]
 assert.deepEqual(workDefault(described.defaults, catalog), { model: "seven-large", options: { effort: "high" } })
@@ -139,7 +187,7 @@ const snapshot = renderHarnessDescriptors(host)
 assert.match(snapshot, /"provider": "seventh"/)
 assert.match(snapshot, /"displayName": "Seventh Agent"/)
 
-console.log("Seventh harness: one definition reaches its name, mark, defaults, order, Settings search, usage and the dev snapshot")
+console.log("Seventh harness: one definition reaches its name, mark, defaults, order, Settings search, usage, its own features, artifact previews, session questions and the dev snapshot; a harness without them shows its reasons")
 
 // The session flows, against a seventh definition whose ACP agent is scripted
 // (`fixtures/stand-in-harness.mjs`): each flow it declares passes, and each
