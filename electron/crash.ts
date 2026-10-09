@@ -1,9 +1,9 @@
-import { app, crashReporter } from "electron"
 import { randomUUID } from "node:crypto"
 import { hostError, hostLogPath } from "./host-log.js"
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { hostEnvironment } from "./host-environment.js"
+import { nodePlatform, systemVersion } from "./platform.js"
 
 /**
  * Crash reporting: a failure leaves a trace you can find, read, and hand over.
@@ -135,7 +135,7 @@ export function record(kind: CrashKind, cause: unknown, source?: string): CrashR
       chrome: process.versions.chrome ?? "",
       node: process.versions.node ?? "",
     },
-    os: { platform: process.platform, arch: process.arch, release: process.getSystemVersion?.() ?? "" },
+    os: { platform: nodePlatform(), arch: process.arch, release: systemVersion() },
     breadcrumbs: [...trail],
   }
   write(report)
@@ -351,6 +351,27 @@ export function clearCrashes() {
 }
 
 /**
+ * Where a process's native failures go, which no JavaScript handler sees: Electron's
+ * Crashpad in an Electron process (`crash-electron.ts`), Node's diagnostic report otherwise.
+ */
+export type NativeCrashes = (root: string) => void
+
+/**
+ * Node's own record of a fatal error, such as running out of memory, kept
+ * beside the reports as a JSON diagnostic report: the stack of every thread,
+ * the heap and the libraries loaded. A host under Node has no Crashpad.
+ */
+export const diagnosticReports: NativeCrashes = (root) => {
+  const directory = join(root, "diagnostic-reports")
+  mkdirSync(directory, { recursive: true })
+  process.report.directory = directory
+  process.report.reportOnFatalError = true
+  process.report.compact = true
+  // Not in @types/node yet; a report that resolves every socket's peer can hang a dying process.
+  Object.assign(process.report, { excludeNetwork: true })
+}
+
+/**
  * Arm the main process.
  *
  * `uncaughtException` is handled rather than left to kill the process: in a
@@ -364,6 +385,7 @@ export function installCrashReporting(options: {
   /** Where reports are kept, when not `<root>/crashes`; every window shares the host's list. */
   directory?: string
   source?: string
+  native?: NativeCrashes
 }) {
   if (installed) return
   installed = true
@@ -372,10 +394,7 @@ export function installCrashReporting(options: {
   // Native failures cannot run a JavaScript exception handler. Keep their dumps
   // on this machine, including when the desktop was launched with no terminal.
   try {
-    const dumps = join(options.root, "Crashpad")
-    mkdirSync(dumps, { recursive: true })
-    app.setPath("crashDumps", dumps)
-    crashReporter.start({ uploadToServer: false })
+    ;(options.native ?? diagnosticReports)(options.root)
   } catch (error) {
     record("main-uncaught", error, "native crash reporter startup")
   }
@@ -384,9 +403,5 @@ export function installCrashReporting(options: {
   })
   process.on("unhandledRejection", (reason) => {
     record("main-rejection", reason)
-  })
-  app.on("child-process-gone", (_event, details) => {
-    if (details.reason === "clean-exit") return
-    record("child-gone", new Error(`${details.type} exited: ${details.reason} (exit ${details.exitCode})`))
   })
 }
