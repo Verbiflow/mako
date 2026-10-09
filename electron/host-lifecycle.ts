@@ -122,7 +122,8 @@ export function nodeHostExit(): HostLifecycleOptions["exit"] {
   return (code, restart) => {
     if (restart) {
       const successor = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
-        env: { ...process.env, [SUCCEEDS_ENV]: String(process.pid) },
+        // Electron's Helper runs as Node again; the host took the flag out of its own environment.
+        env: { ...process.env, [SUCCEEDS_ENV]: String(process.pid), ...(process.versions.electron && { ELECTRON_RUN_AS_NODE: "1" }) },
         detached: true,
         stdio: "ignore",
       })
