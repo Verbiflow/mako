@@ -18,46 +18,33 @@ export function installConversationRouting(route: NonNullable<typeof routeConver
   routeConversation = route
 }
 
-const calls = new Map<string, (args: unknown[], transport: "page" | "socket") => Promise<string>>()
+const calls = new Map<string, (args: unknown[]) => Promise<string>>()
 let previewCall: ((args: unknown[]) => Promise<ControlPreview | null>) | undefined
 const lifetime = new HostCallLifetime()
 export const stopHostCalls = () => lifetime.close()
 let fixtureDesk = false
-/**
- * How a window the host draws itself reaches its calls; only an Electron host
- * has one. Each reply is encoded as on the socket, so a standalone window
- * sees exactly what the desktop's windows see.
- */
-type PageBinding = (channel: string, call: (args: unknown[]) => Promise<string>) => void
-let bindPage: PageBinding | undefined
-
-/** Give every call, registered or still to come, to the windows this host draws (Electron's `ipcMain`). */
-export function installPageTransport(bind: PageBinding): void {
-  bindPage = bind
-  for (const [channel, call] of calls) bind(channel, (args) => call(args, "page"))
-}
 
 /**
- * From now on every transport refuses calls outside the fixture allowlist
- * before their arguments are parsed. There is no way back for this process.
+ * From now on the socket refuses calls outside the fixture allowlist before
+ * their arguments are parsed. There is no way back for this process.
  */
 export function enforceFixtureDesk(): void {
   fixtureDesk = true
 }
 
-function refuseOutsideFixture(channel: string, transport: "page" | "socket" = "page"): void {
-  const refusal = fixtureDesk ? fixtureDeskRefusal(channel, transport) : undefined
+function refuseOutsideFixture(channel: string): void {
+  const refusal = fixtureDesk ? fixtureDeskRefusal(channel, "socket") : undefined
   if (refusal) throw new FixtureDeskRefusedError(refusal)
 }
 
-/** Web replies are encoded here so Electron keeps its original structured values. */
+/** Every reply is encoded here: the socket carries JSON to every client. */
 export async function invokeHost(channel: string, args: unknown[], client = "web", history = hostHistoryPaging(), correlationId?: string): Promise<string> {
   if (isClientCall(channel)) throw new Error(CLIENT_CALL_ON_SOCKET)
-  refuseOutsideFixture(channel, "socket")
+  refuseOutsideFixture(channel)
   if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
   const call = calls.get(channel)
   if (!call) throw new Error("Unknown Mako host method")
-  return withHostClient(client, () => call(args, "socket"), history, correlationId)
+  return withHostClient(client, () => call(args), history, correlationId)
 }
 
 /** The same validated handler and client authority, without serializing pixels. */
@@ -68,13 +55,14 @@ export async function invokeHostPreview(args: unknown[], client = "web") {
   return withHostClient(client, () => call(args), false)
 }
 
-/** Both transports validate arguments against the generated handler contract. */
+/** Every call validates its arguments against the generated handler contract. */
 export function registerIpc<Channel extends HostChannel, Result>(
   channel: Channel,
   listener: (_event: undefined, ...args: HostArguments<Channel>) => Result
 ): void {
-  const call = (args: unknown[], transport: "page" | "socket" = "page") => lifetime.run(async () => {
-    refuseOutsideFixture(channel, transport)
+  if (isClientCall(channel)) throw new Error(`${channel} is a client call; each client answers it itself`)
+  const call = (args: unknown[]) => lifetime.run(async () => {
+    refuseOutsideFixture(channel)
     // SAFETY: the schema is selected by this exact Channel and parses every argument; TypeScript loses that key/output correlation when indexing the heterogeneous table.
     const parsed = hostCallInput(channel).parse(args) as HostArguments<Channel>
     breadcrumb(channel)
@@ -85,9 +73,7 @@ export function registerIpc<Channel extends HostChannel, Result>(
     const value = routed?.handled ? routed.value : await listener(undefined, ...parsed)
     return hostHistoryPaging() && presentHistory ? presentHistory(value) : value
   })
-  const encoded = async (args: unknown[], transport: "page" | "socket") => JSON.stringify({ ok: true, value: await call(args, transport) })
-  calls.set(channel, encoded)
+  calls.set(channel, async (args) => JSON.stringify({ ok: true, value: await call(args) }))
   if (channel === "mako:control-preview")
     previewCall = async (args) => ControlPreviewSchema.nullable().parse(await call(args))
-  bindPage?.(channel, (args) => encoded(args, "page"))
 }

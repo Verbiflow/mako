@@ -30,7 +30,6 @@ interface ApplicationDependencies {
   emit(event: HostEvent): void
   clients(): string[]
   finish(action: LifecycleAction, install?: () => void): void
-  quitClient(): void
 }
 
 export function installApplicationIpc(dependencies: ApplicationDependencies) {
@@ -104,7 +103,6 @@ export function installApplicationIpc(dependencies: ApplicationDependencies) {
     if (!shutdown.acknowledge(requestId, hostClient()))
       throw new Error("The shutdown request is no longer active.")
   })
-  handle("mako:quit-client", () => dependencies.quitClient())
   handle("mako:installation-state", () => installationState())
   handle("mako:select-update-source", (_event, path: string) => {
     if (
