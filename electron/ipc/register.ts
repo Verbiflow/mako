@@ -1,5 +1,4 @@
 import type { ConversationRoutingResult } from "../shared-conversations.js"
-import { ipcMain } from "electron"
 import { withHostClient, hostHistoryPaging } from "../host-client.js"
 import { breadcrumb } from "../crash.js"
 import { hostCallInput, type HostArguments, type HostChannel } from "../contracts/host-call-inputs.js"
@@ -24,6 +23,19 @@ let previewCall: ((args: unknown[]) => Promise<ControlPreview | null>) | undefin
 const lifetime = new HostCallLifetime()
 export const stopHostCalls = () => lifetime.close()
 let fixtureDesk = false
+/**
+ * How a window the host draws itself reaches its calls; only an Electron host
+ * has one. Each reply is encoded as on the socket, so a standalone window
+ * sees exactly what the desktop's windows see.
+ */
+type PageBinding = (channel: string, call: (args: unknown[]) => Promise<string>) => void
+let bindPage: PageBinding | undefined
+
+/** Give every call, registered or still to come, to the windows this host draws (Electron's `ipcMain`). */
+export function installPageTransport(bind: PageBinding): void {
+  bindPage = bind
+  for (const [channel, call] of calls) bind(channel, (args) => call(args, "page"))
+}
 
 /**
  * From now on every transport refuses calls outside the fixture allowlist
@@ -73,8 +85,9 @@ export function registerIpc<Channel extends HostChannel, Result>(
     const value = routed?.handled ? routed.value : await listener(undefined, ...parsed)
     return hostHistoryPaging() && presentHistory ? presentHistory(value) : value
   })
-  calls.set(channel, async (args, transport) => JSON.stringify({ ok: true, value: await call(args, transport) }))
+  const encoded = async (args: unknown[], transport: "page" | "socket") => JSON.stringify({ ok: true, value: await call(args, transport) })
+  calls.set(channel, encoded)
   if (channel === "mako:control-preview")
     previewCall = async (args) => ControlPreviewSchema.nullable().parse(await call(args))
-  ipcMain.handle(channel, (event, ...args) => withHostClient(`renderer:${event.sender.id}`, () => call(args), true))
+  bindPage?.(channel, (args) => encoded(args, "page"))
 }
