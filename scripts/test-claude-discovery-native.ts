@@ -103,6 +103,9 @@ try {
       profile.models.map((model) => native(model.id))
     )
     for (const [index, model] of profile.models.entries()) {
+      // A launch on a model Claude Code won't switch to only warns, so its
+      // defaults there say nothing about the catalog's.
+      if (model.unavailable) continue
       const effort = model.options.find((option) => option.id === "effort")
       if (effort)
         assert.equal(effort.current, reference[index].effort, model.id)
@@ -152,7 +155,7 @@ try {
         await control({
           subtype: "set_model",
           model: model.resolvedModel ?? model.value,
-        })
+        }).catch(() => {})
     }
   )
   await access(sentinel)

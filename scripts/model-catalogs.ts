@@ -36,6 +36,10 @@ export function recordable(models: readonly SessionModel[]): SessionModel[] {
 }
 
 function unchosen(option: ModelOption): ModelOption {
+  if (option.kind === "select") {
+    const { current: _current, ...rest } = option
+    return rest
+  }
   const { current: _current, ...rest } = option
-  return rest.kind === "select" ? { ...rest, values: rest.values.map(({ default: _default, ...value }) => value) } : rest
+  return rest
 }

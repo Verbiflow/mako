@@ -16,7 +16,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { importSnapshotObjects } from "../electron/workspace-snapshot-git.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
-import { TreeComparison } from "@mako/git"
+import { openRepository, TreeComparison } from "@mako/git"
 import {
   RewindPlanSchema,
   type RewindPlan,
@@ -179,6 +179,24 @@ try {
   console.log(
     "PASS: a turn starts while another conversation's checkpoint of the workspace is still being written, and its checkpoint waits for that one"
   )
+
+  const repository = await openRepository(cwd)
+  assert.ok(repository)
+  for (let iteration = 0; iteration < 6; iteration++) {
+    file("tracked", `concurrent checkpoint ${iteration}\n`)
+    const captures = await Promise.all([
+      store.capture(cwd),
+      repository.stage(["tracked"]),
+      store.capture(cwd),
+      repository.unstage(["tracked"]),
+      store.capture(cwd),
+    ])
+    assert.notEqual(captures[0].id, captures[2].id)
+    assert.equal(git("show", ":tracked"), "committed")
+    for (const name of ["index.lock", "mako-snapshots.lock", "mako-index-write.lock"])
+      assert.equal(existsSync(join(cwd, ".git", name)), false)
+  }
+  console.log("PASS: checkpoints, staging and unstaging share one queue without lock failures or lost index writes")
 
   symlinkSync("tracked", join(cwd, "link"))
   const linked = await store.capture(cwd)

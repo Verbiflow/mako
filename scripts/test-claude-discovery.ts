@@ -35,10 +35,16 @@ createInterface({input:process.stdin}).on('line', line => {
     {value:'other-model',supportsEffort:true,supportedEffortLevels:['low','high'],supportsFastMode:true}
   ]});
   else if (request === 'set_model') {
+    if (process.env.UNCONFIRMED_MODEL === message.request.model) {
+      process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'error',request_id:message.request_id,error:'Couldn\\'t confirm model "' + message.request.model + '" with the API. Try again, or run /model to see available models.'}})+'\\n'); return;
+    }
     if (process.env.REJECT_MODEL === message.request.model) {
-      process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'error',request_id:message.request_id}})+'\\n'); return;
+      process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'error',request_id:message.request_id,error:'"' + message.request.model + '" isn\\'t described by this version\\'s model catalog; update Claude Code, or map it with behavesAs on a modelPicker row.'}})+'\\n'); return;
     }
     model=message.request.model; respond({});
+  }
+  else if (process.env.FAIL_SETTINGS === model) {
+    process.stdout.write(JSON.stringify({type:'control_response',response:{subtype:'error',request_id:message.request_id}})+'\\n');
   }
   else {
     const timer = setInterval(() => {
@@ -175,7 +181,20 @@ try {
     { ...env, REJECT_MODEL: "other-model" },
     root
   )
-  assert.ok(rejected.configurationError)
+  assert.equal(rejected.configurationError, undefined, "a model Claude Code refuses is that model's state, not a failed discovery")
+  assert.equal(
+    rejected.models[1].unavailable,
+    "This version of Claude Code doesn't support it yet. Update Claude Code to use it."
+  )
+  assert.equal(rejected.models[0].unavailable, undefined)
+  assert.equal(rejected.settings?.model, "fixture-model", "the defaults still read for the models Claude Code accepts")
+  const unconfirmed = await claudeProfileLoader.load({ ...env, UNCONFIRMED_MODEL: "other-model" }, root)
+  assert.equal(unconfirmed.models[1].unavailable, undefined, "a failed check with the API says nothing about the model")
+  assert.equal(unconfirmed.configurationError, undefined)
+  assert.equal(unconfirmed.models[1].options.find((option) => option.id === "effort")?.current, undefined, "its defaults stay unread")
+  const unread = await claudeProfileLoader.load({ ...env, FAIL_SETTINGS: "other-model" }, root)
+  assert.ok(unread.configurationError, "a model whose defaults can't be read leaves the catalog incomplete")
+  assert.equal(unread.models[1].unavailable, undefined)
   assert.equal(
     rejected.models[1].options.find((option) => option.id === "effort")
       ?.current,

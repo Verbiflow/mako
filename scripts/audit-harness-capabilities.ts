@@ -2,10 +2,14 @@ import { parseArgs } from "node:util"
 import { accessTierOfModeId, ACCESS_TIER_NAMES } from "../electron/contracts/access.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../electron/providers/live-capabilities.ts"
+import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "../electron/contracts/harness-usage.ts"
+import { workDefaultProblems } from "../electron/contracts/harness-defaults.ts"
+import { recordedCatalog } from "./model-catalogs.ts"
 
 /**
- * What each installed harness declares about access, plans, approvals and
- * sign-in, read from its `HarnessDefinition` without starting anything.
+ * What each installed harness declares about access, plans, approvals,
+ * sign-in, usage and models, read from its `HarnessDefinition`, its profile
+ * loader and its recorded model catalog without starting anything.
  *
  *   npm run audit:capabilities -- [--harness grok] [--detail]
  *
@@ -110,9 +114,53 @@ for (const { provider, capabilities } of records)
     const capability = capabilities[key]
     return `  ${LIVE_CAPABILITY_LABELS[key]}: ${capability.state}${capability.state === "absent" ? ` (${capability.by})` : ""} — ${capability.state === "implemented" ? capability.via : capability.reason}`
   }))
+
+// What each harness reports about usage: one row per harness, one column per reading.
+const usageWidth = (key: (typeof HARNESS_USAGE_KEYS)[number]) => Math.max(HARNESS_USAGE_LABELS[key].length, 7)
+console.log(`\n${"usage".padEnd(columnWidth)}  ${HARNESS_USAGE_KEYS.map((key) => HARNESS_USAGE_LABELS[key].padEnd(usageWidth(key))).join("  ")}`)
+for (const { provider, usage } of records)
+  console.log(`${provider.padEnd(columnWidth)}  ${HARNESS_USAGE_KEYS.map((key) => mark(usage[key]).padEnd(usageWidth(key))).join("  ")}`)
+console.log("✓ reported · default: kept until the next reply · —: the harness reports none · GAP: reported, Mako doesn't read it")
+for (const { provider, usage } of records)
+  details.push(`${provider} usage`, ...HARNESS_USAGE_KEYS.map((key) => {
+    const capability = usage[key]
+    return `  ${HARNESS_USAGE_LABELS[key]}: ${capability.state}${capability.state === "absent" ? ` (${capability.by})` : ""} — ${capability.state === "implemented" ? capability.via : capability.reason}`
+  }))
+
+// Each harness's default model against the catalog it was last recorded with.
+const modelRows = records.map(({ provider }) => {
+  const defaults = providerHost.profiles.get(provider)?.defaults
+  const catalog = recordedCatalog(provider)
+  const [pick] = defaults?.work ?? []
+  const fail = (problem: string) => problems.push(`${provider}: ${problem}`)
+  if (!defaults) {
+    fail("has no profile loader, so nothing lists its models")
+    return [provider, "none", "none", "GAP"]
+  }
+  if (!pick) return [provider, "its own", "not recorded", defaults.none ?? "names no model and gives no reason"]
+  if (!catalog) {
+    fail(`has no recorded model catalog; run \`npm run harness:catalogs -- --harness ${provider}\``)
+    return [provider, pick.model, "none", "GAP"]
+  }
+  const found = workDefaultProblems(defaults, catalog.models)
+  for (const problem of found) fail(problem)
+  const refused = catalog.models.filter((model) => model.unavailable).length
+  const options = Object.entries(pick.options ?? {}).map(([id, value]) => `${id} ${String(value)}`).join(", ")
+  return [
+    provider,
+    options ? `${pick.model} (${options})` : pick.model,
+    `${catalog.models.length} models${refused ? `, ${refused} refused` : ""} · ${catalog.version ?? "no version"} · ${catalog.recorded}`,
+    found.length ? found.join("; ") : "✓ offered",
+  ]
+})
+const modelHeads = ["models", "default", "recorded catalog", "default in catalog"]
+const modelWidths = modelHeads.map((head, index) => Math.max(head.length, ...modelRows.map((row) => row[index]!.length)))
+console.log(`\n${modelHeads.map((head, index) => head.padEnd(modelWidths[index]!)).join("  ")}`)
+for (const row of modelRows) console.log(row.map((cell, index) => cell.padEnd(modelWidths[index]!)).join("  ").trimEnd())
+
 if (options.detail) console.log(`\n${details.join("\n")}`)
 if (problems.length) {
   console.log(`\n${problems.length} contradiction${problems.length === 1 ? "" : "s"}:`)
   for (const problem of problems) console.log(`  ${problem}`)
   process.exitCode = 1
-} else console.log("\nPASS: every harness declares a consistent ladder, plan mode, approvals and sign-in")
+} else console.log("\nPASS: every harness declares a consistent ladder, plan mode, approvals and sign-in, and its default model is in its recorded catalog")

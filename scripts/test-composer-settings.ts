@@ -402,6 +402,9 @@ console.log("composer settings: choosing the recommended default keeps following
     assert.equal(loadoutAvailability(entry, ready).kind, "ready")
     assert.equal(loadoutAvailability(entry, { ...ready, pending: true }).kind, "loading")
     assert.equal(loadoutAvailability(entry, { ...ready, available: false }).kind, "unavailable")
+    assert.equal(loadoutAvailability(entry, { ...ready, configurationError: "Defaults unreported." }).kind, "ready", "a catalog that sends also switches")
+    const refusing = { ...ready, models: ready.models.map((model) => ({ ...model, unavailable: "Needs an update." })) }
+    assert.deepEqual(loadoutAvailability(entry, refusing), { kind: "unavailable", label: "Current model", reason: "Needs an update." })
     const missing = { ...ready, models: [] }
     providerStore.set({ profiles: { [harness]: ready }, contexts: { [providerProfileKey(harness, "")]: missing } })
     assert.equal(availableLoadoutModel(entry, ""), undefined, "workspace discovery wins over a stale global list")

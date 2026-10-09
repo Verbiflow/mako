@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 // Plan feedback against the real grok binary in a sealed HOME. A stand-in
 // model calls `exit_plan_mode` over a written plan; Mako's Grok source keeps
 // planning with the person's words, and the stand-in's next request carries

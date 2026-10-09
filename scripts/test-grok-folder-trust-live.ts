@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 // Grok's folder trust against the real grok binary in a sealed HOME, with no
 // account and no model call. A project with an `.mcp.json` and an
 // `AGENTS.md` is gated: a client that doesn't advertise

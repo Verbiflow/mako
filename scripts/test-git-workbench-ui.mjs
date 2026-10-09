@@ -15,11 +15,13 @@ if (process.versions.electron) {
   const { createServer } = await import("vite")
   const { default: electronPath } = await import("electron")
   const root = await mkdtemp(join(tmpdir(), "mako-git-workbench-"))
-  const server = await createServer({
+  // A Thread already has its supervised Vite app on its own address.
+  const threadUrl = process.env.MAKO_THREAD_URL
+  const server = threadUrl ? undefined : await createServer({
     cacheDir: join(root, "cache"),
     server: { host: "127.0.0.1", port: 0, watch: null },
   })
-  await server.listen()
+  if (server) await server.listen()
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({
@@ -30,7 +32,7 @@ if (process.versions.electron) {
   const env = {
     ...process.env,
     MAKO_GIT_CHECK_ROOT: root,
-    MAKO_GIT_CHECK_URL: server.resolvedUrls.local[0],
+    MAKO_GIT_CHECK_URL: `${threadUrl ?? server.resolvedUrls.local[0]}/`.replace(/\/\/$/, "/"),
     MAKO_GIT_REAL_URL: process.argv[2] ?? "",
     MAKO_GIT_REAL_CWD: process.argv[3] ?? "",
   }
@@ -42,7 +44,7 @@ if (process.versions.electron) {
       child.once("exit", (code) => resolve(code ?? 1))
     })
   } finally {
-    await server.close()
+    if (server) await server.close()
   }
   console.log(`Git workbench evidence: ${root}`)
 }
@@ -125,6 +127,24 @@ async function check() {
       0,
       "Opening Changes must not eagerly load a file"
     )
+    const rendering = await fixture(`return (async () => {
+      const results = [];
+      for (const count of [610, 13000]) {
+        const start = performance.now();
+        m.selectProject('/fixture/performance-' + count, count);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        results.push({ files: count, paintMs: Math.round(performance.now() - start), rows: Number(document.querySelector('[data-change-list]').dataset.rowCount), mountedRows: document.querySelectorAll('[data-change-row]').length, diffs: m.calls.diffs });
+      }
+      m.selectProject('/fixture/large');
+      return results;
+    })()`)
+    for (const result of rendering) {
+      assert.equal(result.rows, result.files)
+      assert.ok(result.mountedRows < 80, "the file count must not expand the mounted list")
+      assert.equal(result.diffs, 0, "a large list must not fetch diffs before one is selected")
+    }
+    console.log(`Changes rendering: ${JSON.stringify(rendering)}`)
+    await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '13000'")
     await capture("large-changes.png")
     await evaluate(
       "document.querySelector('[data-change-list]').scrollTop = 13000 * 24"
@@ -296,7 +316,7 @@ async function check() {
     assert.equal(await evaluate("(() => { const box=document.querySelector('[data-git-remote-notice]'); return box.scrollWidth <= box.clientWidth })()"), true)
     await evaluate("document.querySelector('aside').style.width=''")
 
-    await evaluate("import('/src/state/git-push.ts').then(m => m.runGitRemote('fetch'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.runGitRemote('fetch'))")
     window.setContentSize(1200, 360)
     await fixture("return m.showMergeConflict('/fixture/commit')")
     await until("document.body.textContent.includes('Continue merge')")
@@ -313,7 +333,7 @@ async function check() {
     await until("!document.querySelector('[data-git-details]')")
 
     assert.equal(await evaluate("Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Continue merge').disabled"), true)
-    await evaluate("import('/src/state/drafts.ts').then(m => m.rememberDraft(m.projectDraftKey('/fixture/commit'), 'Keep my existing draft.'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.rememberDraft(m.projectDraftKey('/fixture/commit'), 'Keep my existing draft.'))")
     await evaluate("document.querySelector('[aria-label=\"Copy Git context\"]').click()")
     await until("import('/src/dev/git-workbench-check.tsx').then(m => m.calls.context.includes('shared.ts') && m.calls.copied.includes('Saved at'))")
     const copied = await fixture("return m.calls.copied")
@@ -329,7 +349,7 @@ async function check() {
     assert.equal(identity.head, 'c'.repeat(40))
     assert.equal(identity.upstream, 'origin/main')
     assert.deepEqual(identity.conflictedPaths, ['shared.ts'])
-    assert.equal(await evaluate("import('/src/state/drafts.ts').then(m => m.draftText(m.projectDraftKey('/fixture/commit')))"), 'Keep my existing draft.')
+    assert.equal(await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.draftText(m.projectDraftKey('/fixture/commit')))"), 'Keep my existing draft.')
     await capture("merge-conflicts.png", true)
     await captureElement("conflict-footer.png", "[data-commit-box]")
     window.setContentSize(1200, 560)
@@ -352,7 +372,7 @@ async function check() {
     assert.equal(await evaluate("document.querySelector('[data-git-actions]').dataset.repository"), '/fixture/mono/mako-backend')
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Changes in mako-backend\"] [data-push-control]')"), null)
     await captureElement("focused-repository-actions.png", "[data-git-footer]")
-    assert.equal(await evaluate("import('/src/state/session.ts').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
+    assert.equal(await evaluate("import('/src/dev/git-workbench-check.tsx').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
     assert.equal(await evaluate("document.querySelector('button[aria-label=mako-backend]').getAttribute('aria-expanded') === 'true'"), true)
     assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)
     await capture("repositories-backend.png", true)
@@ -360,20 +380,20 @@ async function check() {
     await until("Boolean(document.querySelector('[aria-label=\"Copy Git context\"]'))")
     await evaluate("document.querySelector('[aria-label=\"Copy Git context\"]').click()")
     await until("import('/src/dev/git-workbench-check.tsx').then(m => m.calls.context.includes('/fixture/mono/mako-backend'))")
-    assert.equal(await evaluate("import('/src/state/drafts.ts').then(m => m.draftText(m.projectDraftKey('/fixture/mono')))"), '')
-    await evaluate("import('/src/state/session.ts').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map(file => ({...file, status: 'modified', staged: true}))}}))")
+    assert.equal(await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.draftText(m.projectDraftKey('/fixture/mono')))"), '')
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map(file => ({...file, status: 'modified', staged: true}))}}))")
     await until("Array.from(document.querySelectorAll('button')).some(b => b.textContent === 'Continue merge' && !b.disabled)")
     await capture("merge-ready.png", true)
-    await evaluate("import('/src/state/session.ts').then(m => m.store.set({git: {...m.store.get().git, operation: undefined}}))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.store.set({git: {...m.store.get().git, operation: undefined}}))")
     await until("Boolean(document.querySelector('[aria-label=\"Commit message\"]'))")
     assert.equal(await evaluate("document.body.textContent.includes('Continue merge')"), false)
 
     await click('button[aria-label="mako"]')
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '12'")
-    assert.equal(await evaluate("import('/src/state/session.ts').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
+    assert.equal(await evaluate("import('/src/dev/git-workbench-check.tsx').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
     console.log("Repository selection: switches both ways, keeps the workspace, and shows one shared commit box")
 
-    await evaluate("import('/src/state/session.ts').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map((file, index) => ({...file, path: `src/${index % 2 ? 'a' : 'b/c'}/${file.path}`}))}}))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map((file, index) => ({...file, path: `src/${index % 2 ? 'a' : 'b/c'}/${file.path}`}))}}))")
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '15'")
     await evaluate("document.querySelector('[aria-label=\"List by folder\"]').click()")
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '14'")
@@ -390,7 +410,7 @@ async function check() {
     window.setContentSize(1200, 900)
     await fixture("m.selectProject('/fixture/review', 5000)")
     const diffsBefore = await fixture("return m.calls.diffs")
-    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('changesLayout', 'review'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesLayout', 'review'))")
     await until("document.querySelector('[data-review-stream]')?.dataset.fileCount === '5000'")
     await until(`import('/src/dev/git-workbench-check.tsx').then(m => m.calls.diffs > ${diffsBefore}) && document.querySelectorAll('[data-review-stream] diffs-container').length > 0`)
     await new Promise((resolve) => setTimeout(resolve, 400))
@@ -422,9 +442,9 @@ async function check() {
     await click('[role=menuitem][data-ask]')
     await until("window.reviewMention !== undefined")
     assert.equal(await evaluate("window.reviewMention"), "@file-04999.ts ", "Ask the agent mentions the file the way the file palette does")
-    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('theme', 'light'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('theme', 'light'))")
     await capture("review-stream-light.png", true)
-    await evaluate("import('/src/state/prefs.ts').then(m => { m.setPref('theme', 'dark'); m.setPref('changesLayout', 'files') })")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => { m.setPref('theme', 'dark'); m.setPref('changesLayout', 'files') })")
     console.log(`Review: 5,000 files in one stream, ${screenDiffs} diffs read for the first screen and ${endDiffs} after jumping to the end, j moves between files, worst frame ${Math.round(reviewFrames)}ms`)
 
     const escape = async () => {
@@ -448,13 +468,13 @@ async function check() {
     await until("!document.querySelector('[aria-label=\"Pull request base branch\"]')")
     console.log("Git control: a feature branch opens its pull request, with Publish behind the chevron; the form opens from the control")
 
-    await evaluate("import('/src/state/commit-drafts.ts').then(m => m.commitDrafts.edit('/fixture/media', 'Refresh the logo'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.commitDrafts.edit('/fixture/media', 'Refresh the logo'))")
     await until("document.querySelector('[aria-label=\"More ways to commit\"]')?.disabled === false")
     await click('[aria-label="More ways to commit"]')
     await until(`Boolean(${menuItem("Commit and open pull request")}) && Boolean(${menuItem("Commit and push")})`)
     await capture("commit-menu.png", true)
     await escape()
-    await evaluate("import('/src/state/commit-drafts.ts').then(m => m.commitDrafts.edit('/fixture/media', ''))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.commitDrafts.edit('/fixture/media', ''))")
 
     await evaluate("document.querySelector('[aria-label^=\"Discard changes to\"][aria-label$=\"app.ts\"]').click()")
     await until("document.querySelector('[data-confirm-dialog]')?.textContent.includes('Discard changes to app.ts?')")
@@ -470,7 +490,7 @@ async function check() {
     await until("!document.querySelector('[data-sonner-toast]')")
     console.log("Discard: confirms with the files and where they go, stashes exactly those, and Undo restores that stash")
 
-    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('changesLayout', 'review'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesLayout', 'review'))")
     await until("Boolean(document.querySelector('[data-review-file=\"assets/logo.png\"] img'))")
     assert.ok(await evaluate("document.querySelector('[data-review-file=\"assets/logo.png\"]').textContent.includes('→')"), "An image's header shows both sizes")
     await capture("review-image.png", true)
@@ -483,11 +503,11 @@ async function check() {
     await click("[data-pick]")
     await until("Boolean(document.querySelector('[aria-label^=\"Showing: commit bbbbbbb\"]')) && document.querySelectorAll('[data-review-file]').length > 0")
     await capture("review-commit-scope.png", true)
-    await evaluate("import('/src/state/prefs.ts').then(m => m.setPref('changesLayout', 'files'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('changesLayout', 'files'))")
     console.log("Review: image thumbnails and sizes in the header; the scope picker lists Since main and recent commits and shows one commit")
     // A pull request is the harness's to write by default; the form is the override.
     await evaluate("window.__attached = []; window.addEventListener('mako:attach', (event) => window.__attached.push(event.detail.text('')))")
-    await evaluate("import('/src/state/github.ts').then(m => m.pullComposer.open('/fixture/media'))")
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.pullComposer.open('/fixture/media'))")
     await until("Boolean(document.querySelector('section[aria-label=\"Open a pull request\"]'))")
     const card = "document.querySelector('section[aria-label=\"Open a pull request\"]')"
     assert.equal(await evaluate(`Boolean(${card}.querySelector('[aria-label="Pull request title"]'))`), false, "The harness writes the pull request unless you choose to")
@@ -509,7 +529,7 @@ async function check() {
     window.setContentSize(1200, 800)
     await window.loadURL(`${process.env.MAKO_GIT_CHECK_URL}scripts/live-workflow.html`)
     await until("Boolean(document.querySelector('.composer-input'))")
-    await evaluate("import('/src/state/session.ts').then(m => m.store.set({git: {cwd:'/fixture/mono',root:'/fixture/mono/mako-backend',branch:'main',head:'abc123',ahead:0,behind:0,operation:'merge',files:[{path:'shared.ts',status:'conflicted',staged:false,insertions:null,deletions:null,binary:false}]}}))")
+    await evaluate("import('/src/dev/live-workflow-check.tsx').then(m => m.store.set({git: {cwd:'/fixture/mono',root:'/fixture/mono/mako-backend',branch:'main',head:'abc123',ahead:0,behind:0,operation:'merge',files:[{path:'shared.ts',status:'conflicted',staged:false,insertions:null,deletions:null,binary:false}]}}))")
     await evaluate("window.dispatchEvent(new CustomEvent('mako:compose', {detail:{text:'Please inspect @git'}}))")
     await until("Array.from(document.querySelectorAll('[role=option]')).some(b => b.textContent.includes('Git conflicts'))")
     await capture("conflict-mention-menu.png")
@@ -524,23 +544,24 @@ async function check() {
     assert.ok(await evaluate("document.querySelector('.composer-input').value.includes('Git conflicts · mako-backend')"))
     await capture("conflict-contexts-in-chat.png")
     await captureElement("conflict-context-chips.png", "[data-composer]")
-    await evaluate("(async () => { const {store}=await import('/src/state/session.ts'); const status={...store.get().git,operation:undefined,files:[{path:'report.md',status:'untracked',staged:false,insertions:null,deletions:null,binary:false}]}; store.set({git:status}); window.mako.gitStatus=async()=>status; window.mako.gitRemote=async()=>({status,problem:{kind:'untracked',message:'A local file conflicts with incoming changes.',detail:'report.md would be overwritten'}}); await (await import('/src/state/git-push.ts')).runGitRemote('merge'); window.dispatchEvent(new CustomEvent('mako:compose',{detail:{text:'Inspect @git'}})); })()")
+    await evaluate("(async () => { const {store}=await import('/src/dev/live-workflow-check.tsx'); const status={...store.get().git,operation:undefined,files:[{path:'report.md',status:'untracked',staged:false,insertions:null,deletions:null,binary:false}]}; store.set({git:status}); window.mako.gitStatus=async()=>status; window.mako.gitRemote=async()=>({status,problem:{kind:'untracked',message:'A local file conflicts with incoming changes.',detail:'report.md would be overwritten'}}); await (await import('/src/dev/live-workflow-check.tsx')).runGitRemote('merge'); window.dispatchEvent(new CustomEvent('mako:compose',{detail:{text:'Inspect @git'}})); })()")
     await until("Array.from(document.querySelectorAll('[role=option]')).some(b => b.textContent.includes('Git conflicts') && b.textContent.includes('incoming changes'))")
     await capture('untracked-conflict-reference.png')
     await evaluate("Array.from(document.querySelectorAll('[role=option]')).find(b => b.textContent.includes('Git conflicts')).click()")
     await until("document.querySelector('.composer-input').value.includes('Git conflicts · mako-backend')")
-    await evaluate("(async () => { const {store}=await import('/src/state/session.ts'); const status={...store.get().git,files:[{path:'local-edit.ts',status:'modified',staged:false,insertions:null,deletions:null,binary:false}]}; store.set({git:status}); window.mako.gitStatus=async()=>status; window.mako.gitRemote=async()=>({status,problem:{kind:'dirty',message:'Local edits overlap incoming changes.',detail:'local-edit.ts would be overwritten'}}); await (await import('/src/state/git-push.ts')).runGitRemote('merge'); window.dispatchEvent(new CustomEvent('mako:compose',{detail:{text:'Inspect @git'}})); })()")
+    await evaluate("(async () => { const {store}=await import('/src/dev/live-workflow-check.tsx'); const status={...store.get().git,files:[{path:'local-edit.ts',status:'modified',staged:false,insertions:null,deletions:null,binary:false}]}; store.set({git:status}); window.mako.gitStatus=async()=>status; window.mako.gitRemote=async()=>({status,problem:{kind:'dirty',message:'Local edits overlap incoming changes.',detail:'local-edit.ts would be overwritten'}}); await (await import('/src/dev/live-workflow-check.tsx')).runGitRemote('merge'); window.dispatchEvent(new CustomEvent('mako:compose',{detail:{text:'Inspect @git'}})); })()")
     await until("Array.from(document.querySelectorAll('[role=option]')).some(b => b.textContent.includes('Git conflicts') && b.textContent.includes('incoming changes'))")
-    assert.ok(await evaluate("import('/src/state/git-conflicts.ts').then(async m => (await m.gitConflictAttachment().file.text()).includes('local-edit.ts'))"))
+    assert.ok(await evaluate("import('/src/dev/live-workflow-check.tsx').then(async m => (await m.gitConflictAttachment().file.text()).includes('local-edit.ts'))"))
     console.log("Conflict context: copying preserves drafts; nested repository remains explicit; @ menu inserts a removable attachment without sending")
     const pull = { number: 42, title: "Keep drafts across reloads", body: "## Summary\n- Drafts survive", state: "open", draft: false, url: "https://github.com/fixture/project/pull/42", head: "main", base: "release", additions: 12, deletions: 3, files: 2, mergeable: "clean", reviewDecision: "none", checks: [{ name: "build", state: "failed" }, { name: "lint", state: "passed" }], reviews: [] }
-    await evaluate(`import('/src/state/github.ts').then(m => m.githubStore.set({ root: '/fixture/mono/mako-backend', statusRoot: '/fixture/mono/mako-backend', branch: 'main', loading: false, pull: ${JSON.stringify(pull)}, status: { installed: true, authenticated: true, repo: 'fixture/project', defaultBranch: 'main' } }))`)
-    await evaluate("(async () => { const {store}=await import('/src/state/session.ts'); store.set({git:{...store.get().git,root:'/fixture/mono/mako-backend',branch:'main',operation:undefined,files:[]}}); window.dispatchEvent(new CustomEvent('mako:compose',{detail:{text:'Why does @42'}})); })()")
+    await evaluate(`import('/src/dev/live-workflow-check.tsx').then(m => m.githubStore.set({ root: '/fixture/mono/mako-backend', statusRoot: '/fixture/mono/mako-backend', branch: 'main', loading: false, pull: ${JSON.stringify(pull)}, status: { installed: true, authenticated: true, repo: 'fixture/project', defaultBranch: 'main' } }))`)
+    await evaluate("(async () => { const {store}=await import('/src/dev/live-workflow-check.tsx'); store.set({git:{...store.get().git,root:'/fixture/mono/mako-backend',branch:'main',operation:undefined,files:[]}}); window.dispatchEvent(new CustomEvent('mako:compose',{detail:{text:'Why does @42'}})); })()")
     await until("Array.from(document.querySelectorAll('[role=option]')).some(b => b.textContent.includes('Pull request #42'))")
     await capture("pull-request-mention-menu.png")
     await evaluate("Array.from(document.querySelectorAll('[role=option]')).find(b => b.textContent.includes('Pull request #42')).click()")
     await until("Boolean(document.querySelector('[aria-label=\"Remove mako-backend-pull-42.md\"]'))")
     assert.equal(await evaluate("document.querySelector('.composer-input').value.includes('mako:pull-request')"), false)
+    await until("document.querySelector('[data-composer]').textContent.includes('open · main → release · 1 failing')")
     assert.match(await evaluate("document.querySelector('[data-composer]').textContent"), /open · main → release · 1 failing/)
     await captureElement("pull-request-attachment.png", "[data-composer]")
     console.log("Pull request context: the @ menu attaches the branch's pull request as a snapshot, with its state and failing checks")
@@ -549,7 +570,7 @@ async function check() {
       await until("Boolean(document.querySelector('.composer-input'))")
       const started = Date.now()
       await evaluate(
-        `import('/src/state/session.ts').then(({actions}) => actions.openWorkspace(${JSON.stringify(process.env.MAKO_GIT_REAL_CWD)}))`
+        `import('/src/dev/live-workflow-check.tsx').then(({actions}) => actions.openWorkspace(${JSON.stringify(process.env.MAKO_GIT_REAL_CWD)}))`
       )
       if (
         await evaluate(
@@ -577,12 +598,12 @@ async function check() {
         )
       )
       await capture("real-project-last-files.png")
-      const repositories = await evaluate("import('/src/state/session.ts').then(m => m.store.get().git?.repositories ?? [])")
+      const repositories = await evaluate("import('/src/dev/live-workflow-check.tsx').then(m => m.store.get().git?.repositories ?? [])")
       for (const repository of [...repositories].reverse()) {
         const selector = `button[aria-label=${JSON.stringify(repository.label)}]`
         await click(selector)
-        await until(`import('/src/state/session.ts').then(m => m.store.get().git?.root === ${JSON.stringify(repository.root)} && Boolean(document.querySelector('[data-change-list]')))`)
-        const selected = await evaluate("import('/src/state/session.ts').then(m => ({cwd:m.store.get().git?.cwd,root:m.store.get().git?.root,files:m.store.get().git?.files.length}))")
+        await until(`import('/src/dev/live-workflow-check.tsx').then(m => m.store.get().git?.root === ${JSON.stringify(repository.root)} && Boolean(document.querySelector('[data-change-list]')))`)
+        const selected = await evaluate("import('/src/dev/live-workflow-check.tsx').then(m => ({cwd:m.store.get().git?.cwd,root:m.store.get().git?.root,files:m.store.get().git?.files.length}))")
         assert.equal(selected.root, repository.root)
         assert.equal(selected.cwd, process.env.MAKO_GIT_REAL_CWD)
         assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)

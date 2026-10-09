@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 // Grok's native fork against the real grok binary in a sealed HOME, with a
 // stand-in model. Each turn's checkpoint is Grok's own count of the turns
 // its saved updates hold. A fork after the second of three turns, made while

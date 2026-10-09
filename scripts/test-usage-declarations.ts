@@ -63,13 +63,9 @@ async function shownBy(harness: string): Promise<Shown> {
 }
 
 /** The fields a recording can show, each with the count that shows it. */
-const READINGS = {
-  context: "context",
-  window: "context",
-  tokens: "tokens",
-  cost: "cost",
-  missedCalls: "missedCalls",
-} as const satisfies Partial<Record<HarnessUsageKey, keyof Shown>>
+const READINGS = [
+  ["context", "context"], ["window", "context"], ["tokens", "tokens"], ["cost", "cost"], ["missedCalls", "missedCalls"],
+] as const satisfies readonly (readonly [HarnessUsageKey, keyof Shown])[]
 /** Shown only through a case no recording reaches; its absence is still held. */
 const UNRECORDED = new Set<HarnessUsageKey>(["missedCalls"])
 
@@ -78,7 +74,7 @@ const rows: string[] = []
 for (const { provider, usage } of providerHost.harnesses.list()) {
   const shown = await shownBy(provider)
   const fail = (problem: string) => failures.push(`${provider}: ${problem}`)
-  for (const [key, count] of Object.entries(READINGS) as [keyof typeof READINGS, keyof Shown][]) {
+  for (const [key, count] of READINGS) {
     const declared = usage[key].state === "implemented"
     const label = HARNESS_USAGE_LABELS[key].toLowerCase()
     if (!declared && shown[count] > 0) fail(`declares no ${label} (${usage[key].state === "absent" ? usage[key].reason : usage[key].state}), yet ${shown[count]} of ${shown.recordings} recordings show one`)

@@ -3,11 +3,13 @@ import { join } from "node:path"
 import { readableHarnesses } from "@mako/sessions"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability, type LiveCapabilityKey } from "../electron/contracts/harness-capabilities.js"
+import { HARNESS_USAGE_ASKS, HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "../electron/contracts/harness-usage.js"
 import { HARNESS_FAMILIES, type HarnessFamily } from "../electron/providers/harness-definition.js"
 import { harnessLabel } from "../electron/providers/harness-descriptors.js"
 import { providerHost } from "../electron/providers/index.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { PAIRS_FOLDER } from "./decode-compare.ts"
+import { recordedCatalog } from "./model-catalogs.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
 import { NO_SOURCE, storedDefinitions } from "./native-tools.ts"
 
@@ -95,8 +97,19 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   },
   {
     title: "Usage",
-    what: "One field map in the vocabulary module, built on `inclusiveTokens` or `exclusiveTokens` as the harness counts cache, called by the live decoder, the history reader and the `usageHistory` scanner. The scanner reads the store where the harness's own variable moved it (`UsageScan.env`), and a record the harness marks incomplete says so.",
-    enforcedBy: "`test-session-usage.ts`, `test-harness-usage.ts`, `audit:capabilities`",
+    what: "One field map in the vocabulary module, built on `inclusiveTokens` or `exclusiveTokens` as the harness counts cache, called by the live decoder, the history reader and the `usageHistory` scanner. The scanner reads the store where the harness's own variable moved it (`UsageScan.env`), and a record the harness marks incomplete says so. An ACP harness whose window comes from its model list gives its source `modelWindow`, and its recorder captures the `session/new` and `session/load` replies as `{response, result}` lines.",
+    enforcedBy: "`test-session-usage.ts`, `test-harness-usage.ts`, `test-usage-declarations.ts`, `audit:capabilities`",
+  },
+  {
+    title: "Models",
+    what: "A profile loader listing the harness's models through its own discovery, with `defaults.work` naming the model Mako starts on, or `defaults.none` saying why it names none. A model the harness lists but refuses to start carries `unavailable` with the reason the picker shows. Then `npm run harness:catalogs -- --harness <harness>` records the catalog the default is held to.",
+    enforcedBy: "`test-model-defaults.ts`, `audit:capabilities`",
+    check: (harness) => {
+      const defaults = providerHost.profiles.get(harness)?.defaults
+      if (!defaults) return missing("no profile loader")
+      if (!defaults.work.length) return { done: true, reason: `no default model: ${defaults.none}` }
+      return recordedCatalog(harness) ? done : missing("no recorded model catalog")
+    },
   },
   {
     title: "Opening saved history",
@@ -190,7 +203,14 @@ export function renderHarnessChecklist(): string {
     ...header(["Capability", "Driver field", "What it asks"]),
     ...LIVE_CAPABILITY_KEYS.map((key) => `| ${LIVE_CAPABILITY_LABELS[key]} | \`${CAPABILITY_ASKS[key].field}\` | ${cell(CAPABILITY_ASKS[key].asks)} | ${harnesses.map((harness) => capabilityCell(providerHost.harnesses.get(harness)?.capabilities[key])).join(" | ")} |`),
     "",
-    "## 3. Beside the definition",
+    "## 3. Usage",
+    "",
+    "Each is a field of the definition's `usage`: `implemented` with where the harness reports it, `harnessLacks(reason)` when it reports none, or `makoLacks(reason)` when Mako doesn't read it yet; after compaction, `byDefault(reason)` when the meter keeps its reading until the next reply. The composer's meter, Settings › Usage and the account rows read these, never whether data happened to arrive. Context breakdown and spend outside Mako come from the live driver and `usageHistory`. Enforced by `installHarness` and `test-usage-declarations.ts`, which replays every recording and fails on a reading a declaration rules out, or a declared one no recording shows.",
+    "",
+    ...header(["Reading", "What it asks"]),
+    ...HARNESS_USAGE_KEYS.map((key) => `| ${HARNESS_USAGE_LABELS[key]} | ${cell(HARNESS_USAGE_ASKS[key])} | ${harnesses.map((harness) => capabilityCell(providerHost.harnesses.get(harness)?.usage[key])).join(" | ")} |`),
+    "",
+    "## 4. Beside the definition",
     "",
     ...header(["Step", "What to add", "Enforced by"]),
     ...BESIDE_THE_DEFINITION.map((step) => `| ${step.title} | ${cell(step.what)} | ${step.enforcedBy} | ${harnesses.map((harness) => stepCell(step, harness)).join(" | ")} |`),

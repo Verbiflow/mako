@@ -56,7 +56,7 @@ execFileSync("git", ["config", "user.name", "Fixture"], { cwd })
     .filter((name) => /\.(ts|mjs|js)$/.test(name))
     .filter((name) => {
       const source = readFileSync(join(scripts, name), "utf8")
-      const initializes = /(?<!subtype:\s*)(?<!"-q?m",\s*)"init"/.test(source)
+      const initializes = /(?<!subtype:\s*)(?<!subtype\s*===\s*)(?<!z\.literal\()(?<!"-q?m",\s*)"init"/.test(source)
       return initializes && !source.replace(/^#!.*\n/, "").startsWith('import "./lib/scratch-git.mjs"\n')
     })
   assert.deepEqual(unguarded, [], "scripts that run git init import ./lib/scratch-git.mjs first")
