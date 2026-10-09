@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { closeSync, constants, ftruncateSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs"
 import { connect, createServer } from "node:net"
 import { join, resolve } from "node:path"
+import { nodePlatform } from "./platform.js"
 
 /**
  * One host per data root.
@@ -36,7 +37,7 @@ export interface HostLockOptions {
 }
 
 export async function acquireHostLock(dataRoot: string, options: HostLockOptions = {}): Promise<HostLock> {
-  const platform = options.platform ?? process.platform
+  const platform = options.platform ?? nodePlatform()
   const attempt = () => (platform === "darwin" ? fileLock(dataRoot) : nameLock(dataRoot, platform))
   const until = Date.now() + (options.waitMs ?? 30_000)
   for (;;) {
@@ -48,7 +49,7 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
 }
 
 /** Where the lock lives, for messages and tests. */
-export function hostLockName(dataRoot: string, platform: NodeJS.Platform = process.platform): string {
+export function hostLockName(dataRoot: string, platform: NodeJS.Platform = nodePlatform()): string {
   if (platform === "darwin") return join(resolve(dataRoot), "host.lock")
   const id = createHash("sha256").update(resolve(dataRoot)).digest("hex").slice(0, 32)
   return platform === "win32" ? `\\\\.\\pipe\\mako-host-${id}` : `\0mako-host-${id}`

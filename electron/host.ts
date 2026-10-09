@@ -25,6 +25,7 @@ import type {
   ThinkingLevel,
   WorkspaceFile,
 } from "./shared.js"
+import { onLinux } from "./platform.js"
 
 const EMPTY_CAPABILITIES: Capabilities = { tools: [], commands: [], skills: [] }
 
@@ -41,7 +42,7 @@ function unavailable(operation: string): never {
  * stream that starts without reading anything, and a stream nobody reads is
  * better closed.
  */
-const BACKGROUND_WATCH_MS = process.platform === "linux" ? 5 * 60_000 : 0
+const BACKGROUND_WATCH_MS = onLinux() ? 5 * 60_000 : 0
 
 export class AgentHost {
   readonly id: string

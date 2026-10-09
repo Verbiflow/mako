@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
+import { nodePlatform } from "./platform.js"
 
 /**
  * Where the host runs and what it is, from its files and environment alone, so
@@ -99,7 +100,7 @@ export function hostEnvironment(): HostEnvironment {
   resolved ??= Object.freeze(resolveHostEnvironment({
     env: process.env,
     appRoot: appRootOf(dirname(fileURLToPath(import.meta.url))),
-    platform: process.platform,
+    platform: nodePlatform(),
     home: homedir(),
   }))
   return resolved
