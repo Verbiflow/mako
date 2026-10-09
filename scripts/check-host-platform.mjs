@@ -9,7 +9,7 @@ import { hostGraph } from "./lib/host-graph.mjs"
  * still needs the answer imports it from there, so a Linux host is one module
  * to read, not fifty.
  *
- * This lists every source file the host loads, the Electron shell included,
+ * This lists every source file the host loads
  * that reads `process.platform` itself, and holds it to the list recorded in
  * host-platform-reads.json: a file may leave it, never join it.
  *
