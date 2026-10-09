@@ -560,8 +560,46 @@ const ENV_TEMPLATE = /^\.env\.(example|sample|template|defaults|dist)$/
 export function holdsCredentials(entry: string): boolean {
   const name = basename(entry).toLowerCase()
   if (ENV_TEMPLATE.test(name)) return false
-  return name === ".env" || name.startsWith(".env.") || [".envrc", ".npmrc", ".netrc", ".pgpass"].includes(name)
-    || /\.(pem|key|p12|pfx|jks|keystore)$/.test(name) || /credential|secret/.test(name)
+  return name === ".env" || name.startsWith(".env.") || name === ".dev.vars" || name.startsWith(".dev.vars.")
+    || [".envrc", ".npmrc", ".netrc", ".pgpass", "local.settings.json"].includes(name)
+    || /\.(pem|key|p12|pfx|jks|keystore)$/.test(name) || /credential|secret|service-account/.test(name)
+}
+
+/** Folders a project's own install fills with its packages, by name, whatever the language. */
+const DEPENDENCY_FOLDERS = new Set(["node_modules", "bower_components", "jspm_packages", "vendor", "Pods", "Carthage", ".bundle", "elm-stuff", "deps"])
+
+/** What a checkout lacks that the main checkout has and Git ignores: the files it needs that no checkout gets from Git. */
+export interface MissingEntries {
+  credentials: string[]
+  dependencies: string[]
+}
+
+/**
+ * The main checkout's ignored credentials files (by name) and dependency
+ * folders that a new checkout wouldn't get from `recipe`, or, with
+ * `checkout`, that this checkout doesn't have; less what the recipe leaves
+ * to the main checkout. A Python virtual environment is left out: each
+ * checkout's install makes its own.
+ */
+export async function missingEntries(main: string, recipe: Pick<Recipe, "carry" | "prepare" | "leave"> | undefined, checkout?: string): Promise<MissingEntries> {
+  const ignored = await ignoredEntries(main).catch((): string[] => [])
+  const patterns = [...(recipe?.leave ?? []), ...(checkout ? [] : [...(recipe?.carry ?? []).map((entry) => entry.path), ...(recipe?.prepare ?? []).flatMap((step) => step.outputs ?? [])])]
+  const covered = (entry: string) => patterns.some((pattern) => entry === pattern || entry.startsWith(`${pattern}/`) || matchesGlob(entry, pattern))
+  const missing = (entry: string) => !covered(entry) && !(checkout && existsSync(join(checkout, entry)))
+  const credentials = ignored.filter((entry) => holdsCredentials(entry) && missing(entry))
+  const dependencies = ignored.filter((entry) => DEPENDENCY_FOLDERS.has(basename(entry)) && !virtualEnvironment(join(main, entry)) && missing(entry))
+  // A dependency folder inside another names the same install once.
+  return { credentials, dependencies: dependencies.filter((entry) => !dependencies.some((outer) => entry.startsWith(`${outer}/`))) }
+}
+
+/** The missing entries as a phrase, or nothing when none are. */
+export function missingText(missing: MissingEntries): string | undefined {
+  const listed = (entries: string[]) => entries.length > 6 ? `${entries.slice(0, 6).join(", ")} and ${entries.length - 6} more` : entries.join(", ")
+  const parts = [
+    missing.credentials.length ? `${listed(missing.credentials)} (credentials, by ${missing.credentials.length === 1 ? "its name" : "their names"})` : undefined,
+    missing.dependencies.length ? `${listed(missing.dependencies)} (installed packages)` : undefined,
+  ].filter(Boolean)
+  return parts.length ? parts.join(" and ") : undefined
 }
 
 /** What `clonefile` manages (85,331 files in 1.4 s, above): what a cloned folder costs each new worktree. */
@@ -682,6 +720,9 @@ export async function carryReport(recipe: Recipe, repoRoot: string): Promise<str
       lines.push(`${step.command}: ${listed(entries)}${size ? ` (${sizeText(size)})` : ""} ${isAre(entries)} cloned into a new worktree ${when}${size ? `, ${cloneText(size)} each time` : ""}.`)
     }
   }
+  const missing = missingText(await missingEntries(repoRoot, recipe))
+  if (missing)
+    lines.push(`A new worktree won't get ${missing}, which the main checkout has and Git ignores. Decide each one: carry a file the app, its checks or an agent reads (copied, so a Thread's change stays its own); a prepare step whose outputs name a dependency folder, so a new worktree links the main checkout's instead of installing; or leave, for one that stays the main checkout's on purpose, such as production keys. recipe_publish proves the recipe in this Thread's checkout, which may have these already, so it can't tell. worktree_status lists every ignored path.`)
   return lines
 }
 

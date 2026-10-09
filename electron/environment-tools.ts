@@ -2063,7 +2063,7 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     if (value !== undefined) found.set(path, JSON.stringify(value))
   }
   // A field added to the recipe fails to compile here until it's listed below.
-  const { $schema, values, processes, targets, checks, prepare, carry, oneAtATime, verify, cleanup, ...unlisted } = recipe
+  const { $schema, values, processes, targets, checks, prepare, carry, leave, oneAtATime, verify, cleanup, ...unlisted } = recipe
   const none: Record<string, never> = unlisted
   void none
   put("$schema", $schema)
@@ -2111,6 +2111,7 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     put(`prepare[${index}].link`, link)
   })
   for (const entry of carry ?? []) put(`carry[${JSON.stringify(entry.path)}]`, entry.link ? "linked" : "copied")
+  put("leave", leave)
   put("oneAtATime", oneAtATime)
   putVerify("verify", verify)
   put("cleanup", cleanup)

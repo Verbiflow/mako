@@ -179,6 +179,12 @@ export const RecipeSchema = z.object({
    * `link`, shared with the main checkout's.
    */
   carry: z.array(carryEntrySchema).max(20).optional(),
+  /**
+   * Credentials and dependency folders Git ignores that a new checkout
+   * leaves to the main checkout on purpose, such as production keys: Mako
+   * stops pointing them out as missing.
+   */
+  leave: z.array(checkoutPattern).max(20).optional(),
   /** Read into `carry`: recipes saved before credentials files were carried like any other listed them here. */
   secrets: z.array(copiedPath).max(20).optional(),
   /**
