@@ -11,6 +11,7 @@ import { telemetryMachineId } from "../machine-id.js"
 import { cloudAccountId, cloudConnectionToken } from "./cloud-account.js"
 import { registerIpc } from "./register.js"
 import { hostEnvironment } from "../host-environment.js"
+import { systemName, systemVersion } from "../platform.js"
 
 /**
  * Telemetry for this host's profile, and Settings → Privacy's two channels.
@@ -37,12 +38,12 @@ export async function installTelemetry({
 function describeApp(): TelemetryApp {
   const version = hostEnvironment().version
   const build = buildIdentity()?.id
-  const osVersion = process.getSystemVersion?.().match(/^[\w.]{1,24}/)?.[0]
+  const osVersion = systemVersion().match(/^[\w.]{1,24}/)?.[0]
   return {
     version: /^[\w.+-]{1,40}$/.test(version) ? version : "unknown",
     ...(build && { build }),
     distribution: hostEnvironment().packaged ? packagedDistribution(hostEnvironment().appRoot) : "development",
-    os: process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : process.platform === "linux" ? "Linux" : "other",
+    os: systemName(),
     ...(osVersion && { osVersion }),
     arch: process.arch === "arm64" || process.arch === "x64" ? process.arch : "other",
   }

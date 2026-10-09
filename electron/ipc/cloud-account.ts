@@ -11,6 +11,7 @@ import { memorySecrets } from "../secrets.js"
 import type { HostEvent } from "../shared.js"
 import { registerIpc } from "./register.js"
 import { presentMachine } from "../machine.js"
+import { onMac, systemName, systemVersion } from "../platform.js"
 
 let accounts: CloudAccounts | undefined
 
@@ -85,15 +86,13 @@ function describeThisMac() {
   described ??= (async () => {
     const fallback = hostname().replace(/\.local$/, "")
     const name =
-      process.platform === "darwin"
+      onMac()
         ? await promisify(execFile)("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 }).then(
             ({ stdout }) => stdout.trim() || fallback,
             () => fallback
           )
         : fallback
-    const system =
-      process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : process.platform === "linux" ? "Linux" : process.platform
-    return { name, platform: `${system} ${process.getSystemVersion()}`.trim(), appVersion: hostEnvironment().version }
+    return { name, platform: `${systemName()} ${systemVersion()}`.trim(), appVersion: hostEnvironment().version }
   })()
   return described
 }
