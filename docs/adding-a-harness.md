@@ -34,46 +34,78 @@ Create `electron/providers/<harness>/index.ts` calling `installHarness(host, def
 
 Each is a field of the live driver: implemented with what implements it, or absent as `unavailable` (the harness has none) or `not-built` (a Mako gap), with the reason the window shows. Enforced by the types and `validateLiveDriver`. `npm run harness:doctor -- <harness>` prints the reasons, and the session flows run each declared capability on the real CLI.
 
-| Capability | Driver field | What it asks | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Resume | `resume` | Reopening a session in a new process: how, what the next message does after Mako closes the process, a checkpoint of the session's source, and who else holds it. | implemented | implemented | implemented | implemented | implemented | implemented |
-| Idle process | `resume` | Follows resume: Mako closes an idle conversation's process only when its session can be reopened. | implemented | implemented | implemented | implemented | implemented | implemented |
-| Process death mid-turn | `turnRecovery` | When a prompt counts as accepted and how a process death reaches the host, with the tests that kill the process mid-turn. | implemented | implemented | implemented | implemented | implemented | implemented |
-| Fork | `fork` | A fork that is the harness's own copy of the session, or one Mako imports through the session emitter. | implemented | implemented | implemented | implemented | implemented | implemented |
-| Steering | `steering` | A message sent into a running turn, and whether it lands at the next step or interrupts. | implemented | implemented | implemented | implemented | implemented | implemented |
-| Compaction | `compaction` | Compaction Mako starts, or the harness's own automatic compaction. | implemented | implemented | by default | implemented | implemented | implemented |
-| Planning | `planning` | How the harness plans (a mode or a setting), how the plan reaches the plan card, and how a reply to it reaches the harness. | implemented | implemented | implemented | implemented | implemented | implemented |
-| Approvals | `approvalEvidence` | Whether the harness asks before acting, and whether it reports the decision it applied. | implemented | implemented | harness has none | implemented | implemented | implemented |
-| Questions | `questions` | How the agent asks the person a question: a blocking request or a session question. | implemented | implemented | harness has none | implemented | implemented | implemented |
-| Modes | `modeSwitching` | Switching the session's mode natively, with the modes it offers. | implemented | implemented | no-op | implemented | implemented | implemented |
-| Subagents | `nativeAgents` | Observing the subagents the harness starts. | implemented | implemented | implemented | implemented | implemented | implemented |
-| Background work on Stop | `backgroundStop` | How Stop ends background work, or the evidence that none outlives its turn. | implemented | implemented | by default | implemented | implemented | implemented |
-| Context breakdown | `contextBreakdown` | An itemized account of what fills the context window. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
+| Capability | Driver field | What it asks | In the window | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Resume | `resume` | Reopening a session in a new process: how, what the next message does after Mako closes the process, a checkpoint of the session's source, and who else holds it. | Conversations reopen where they left off after their process closes. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Idle process | `resume` | Follows resume: Mako closes an idle conversation's process only when its session can be reopened. | An idle conversation's process closes, and the next message wakes it. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Process death mid-turn | `turnRecovery` | When a prompt counts as accepted and how a process death reaches the host, with the tests that kill the process mid-turn. | A turn whose process dies ends as failed, keeping what it did. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Fork | `fork` | A fork that is the harness's own copy of the session, or one Mako imports through the session emitter. | Fork a conversation from any turn. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Steering | `steering` | A message sent into a running turn, and whether it lands at the next step or interrupts. | Messages sent during a turn reach it. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Compaction | `compaction` | Compaction Mako starts, or the harness's own automatic compaction. | Compact conversation, in the composer's menu. | implemented | implemented | by default | implemented | implemented | implemented |
+| Planning | `planning` | How the harness plans (a mode or a setting), how the plan reaches the plan card, and how a reply to it reaches the harness. | Plan mode, with the plan card. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Approvals | `approvalEvidence` | Whether the harness asks before acting, and whether it reports the decision it applied. | Approval cards before the agent acts. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| Questions | `questions` | How the agent asks the person a question: a blocking request or a session question. | Question cards above the composer. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| Modes | `modeSwitching` | Switching the session's mode natively, with the modes it offers. | The access menu changes mode mid-conversation. | implemented | implemented | no-op | implemented | implemented | implemented |
+| Subagents | `nativeAgents` | Observing the subagents the harness starts. | The Agents panel. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Background work on Stop | `backgroundStop` | How Stop ends background work, or the evidence that none outlives its turn. | Stop ends background commands too. | implemented | implemented | by default | implemented | implemented | implemented |
+| Context breakdown | `contextBreakdown` | An itemized account of what fills the context window. | What fills the context, in the meter's popover. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
 
 ## 3. Usage
 
 Each is a field of the definition's `usage`: `implemented` with where the harness reports it, `harnessLacks(reason)` when it reports none, or `makoLacks(reason)` when Mako doesn't read it yet; after compaction, `byDefault(reason)` when the meter keeps its reading until the next reply. The composer's meter, Settings › Usage and the account rows read these, never whether data happened to arrive. Context breakdown and spend outside Mako come from the live driver and `usageHistory`. Enforced by `installHarness` and `test-usage-declarations.ts`, which replays every recording and fails on a reading a declaration rules out, or a declared one no recording shows.
 
-| Reading | What it asks | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Context fill | Where the context fill comes from: the harness's own reading (`context` observations), or the main agent's last call (`call`). | implemented | implemented | harness has none | implemented | implemented | implemented |
-| Window size | Where the window size comes from: the harness's reports (`window`, or a reading's `size`), or its model catalog. | implemented | implemented | harness has none | implemented | implemented | implemented |
-| After compaction | After a compaction, whether the harness says what is left (`compacted` with `after`) or the meter waits for the next reply. | implemented | implemented | harness has none | by default | implemented | by default |
-| Context breakdown | The live driver's `contextBreakdown`. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
-| Tokens spent | Tokens the session spent (`spent` or `total` observations). | implemented | implemented | implemented | implemented | implemented | implemented |
-| Cost | What the session cost (`cost` or `costSpent`). | implemented | harness has none | harness has none | implemented | implemented | harness has none |
-| Missed calls | Whether the harness says a report left calls out (`unrecorded`). | harness has none | harness has none | harness has none | harness has none | implemented | harness has none |
-| Spend outside Mako | The `usageHistory` family. | implemented | implemented | harness has none | implemented | implemented | implemented |
-| Reset credits | The accounts' `useResetCredit`, offered on the account's row. | harness has none | implemented | harness has none | harness has none | harness has none | harness has none |
+| Reading | What it asks | In the window | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Context fill | Where the context fill comes from: the harness's own reading (`context` observations), or the main agent's last call (`call`). | The context meter in the composer. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| Window size | Where the window size comes from: the harness's reports (`window`, or a reading's `size`), or its model catalog. | The meter's window size. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| After compaction | After a compaction, whether the harness says what is left (`compacted` with `after`) or the meter waits for the next reply. | The meter after a compaction. | implemented | implemented | harness has none | by default | implemented | by default |
+| Context breakdown | The live driver's `contextBreakdown`. | What fills the context, in the meter's popover. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
+| Tokens spent | Tokens the session spent (`spent` or `total` observations). | Tokens in the meter's popover and Settings › Usage. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Cost | What the session cost (`cost` or `costSpent`). | Cost in the meter's popover and Settings › Usage. | implemented | harness has none | harness has none | implemented | implemented | harness has none |
+| Missed calls | Whether the harness says a report left calls out (`unrecorded`). | A note when its totals leave calls out. | harness has none | harness has none | harness has none | harness has none | implemented | harness has none |
+| Spend outside Mako | The `usageHistory` family. | Settings › Usage counts its sessions outside Mako. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| Reset credits | The accounts' `useResetCredit`, offered on the account's row. | Use a reset credit, on the account's row. | harness has none | implemented | harness has none | harness has none | harness has none | harness has none |
 
-## 4. Beside the definition
+## 4. Only this harness
+
+List what only the harness has in the definition's `unique`: its name, what carries it natively, and where it stands in Mako. `shownBy(key)` names the declaration whose UI carries it, which the harness must implement or leave to its own behaviour; `shownInTools(names)`, its tool rows, each name in its vocabulary; `byDefault(reason)`, it works in Mako's sessions with nothing to show; `noOp(reason)`, there is nothing in it to show; `makoLacks(reason)`, a gap. A declaration only one harness implements must be listed there, and an artifact preview names its files (`artifactPreview`: interactive previews in the file viewer.). Settings › Agents lists each harness's capabilities and own features with where they show, or why they don't. Enforced by `installHarness` and `test-harness-definitions.ts`; `npm run audit:capabilities` prints them.
+
+| Harness | Feature | Native | In Mako |
+| --- | --- | --- | --- |
+| Claude Code | Context breakdown | `getContextUsage`: categories, memory files, MCP tools, messages | `capabilities.contextBreakdown` |
+| Claude Code | Checkpoints | `rewindFiles(userMessageId)`, `/rewind` | nothing to show: Mako's own workspace checkpoints rewind files for every harness, so Mako doesn't use Claude's. |
+| Claude Code | Output styles | `~/.claude/output-styles`, `.claude/output-styles`; `outputStyle` | the harness's own: Claude Code applies the output style its settings name in sessions Mako starts. |
+| Claude Code | Plugins | `.claude-plugin/plugin.json` and marketplaces | the harness's own: Claude Code loads the plugins its settings enable in sessions Mako starts. |
+| Claude Code | Background agents | `claude --bg`, `claude agents` | **Mako gap**: Mako doesn't list or attach to Claude's background agents. |
+| Codex | Rate-limit reset credits | `account/rateLimits/read` `rateLimitResetCredits`, `account/rateLimitResetCredit/consume` | `usage.resetCredits` |
+| Codex | Session questions | `item/tool/requestUserInput`, answered in the session | `capabilities.questions` |
+| Codex | Review mode | `review/start`; `enteredReviewMode` and `exitedReviewMode` items | **Mako gap**: A review the session runs shows as Review mode markers in the transcript; starting one isn't built. |
+| Codex | Goals | `thread/goal/*` | **Mako gap**: Mako doesn't show or set a thread's goal. |
+| Cursor | Artifact preview | Canvas files (`*.canvas.tsx`); `SDKArtifact`, though `listArtifacts` is empty in local runs | `artifacts` |
+| Cursor | Server-side summarization | a task message carrying the summary | the harness's own: Cursor summarizes on its server when the context fills, and the summary shows as a compaction in the transcript. |
+| Cursor | Image generation and screen recording | `generateImage`, `recordScreen` tools | tool rows: `generateImage`, `recordScreen` |
+| Cursor | Cloud agents | `AgentOptions.cloud`, `bc-` agent IDs | **Mako gap**: Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built. |
+| OpenCode | Staged revert | `revert/stage`, `commit`, `clear` | **Mako gap**: Mako follows a revert another client commits; staging one isn't built. |
+| OpenCode | Inbox | a prompt sent while busy is steered or queued (`inbox/:id/steer\|queue`) | `capabilities.steering` |
+| OpenCode | Code Mode MCP | MCP tools called from a script through the `execute` tool, on by default | tool rows: `execute` |
+| Grok | X search | `x_search`, a server-side xAI search reported by its title | tool rows: `x_search` |
+| Grok | Image and video generation | `image_gen`, `image_edit`, `image_to_video` and `reference_to_video` tools; `/imagine`, `/imagine-video` | tool rows: `image_gen`, `image_edit`, `image_to_video`, `reference_to_video` |
+| Grok | Incomplete usage reports | `usageIsIncomplete` and `costIsPartial` on a turn's usage | `usage.missedCalls` |
+| Grok | Announcements | `_x.ai/announcements/update` | nothing to show: They're xAI's product news for Grok's own pager, so Mako ignores them. |
+| Grok | Folder trust | `_x.ai/folder_trust/request` to a client that sets `x.ai/folderTrust.interactive`, saved in `~/.grok/trusted_folders.toml` | `capabilities.approvals` |
+| Devin | Step revert and fork | `cognition.ai/revert/*` | `capabilities.fork` |
+| Devin | Editable approvals | `cognition.ai/editableCommand`, `command/revise` | **Mako gap**: The approval card shows the command Devin proposes; editing it before it runs isn't built. |
+| Devin | Cloud handoff | `/handoff`, `/cloud-attach` | **Mako gap**: Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built. |
+| Devin | Credits and ACUs | `usage_update` `_meta` `totalCreditCost` and `totalAcuCost` on the reading that ends a turn, for an account billed in credits or ACUs | **Mako gap**: Every account recorded is billed by quota and reports 0, so Mako doesn't read them yet. |
+
+## 5. Beside the definition
 
 | Step | What to add | Enforced by | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Decoder fixtures | Real sessions recorded into `scripts/fixtures/native-decoding/<harness>`, until coverage lists no declared kind. | `test-harness-definitions.ts`, `test:decoders` | yes | yes | yes | yes | yes | yes |
 | Saved history | A `SessionProvider` in `@mako/sessions`, added to `SAVED_HISTORY_READERS` (`readers.ts`), which the catalog, the detached daemon and its sharing identity all read. If the store holds the live wire, it locates records and feeds the live decoder (`AcpSavedTurns` for ACP); otherwise it reads through the vocabulary module. A JSONL store gets a follower. A reader built outside the package goes to `defaultCatalog({ readers })`, as the stand-in's does. | `test-harness-definitions.ts`, `test-follow-convergence.ts`, the session flows' `import` | yes | yes | yes | yes | yes | yes |
 | Decode pairs | A recorder in `scripts/harness-decode-pairs.ts` (a scripted model, or the harness's own with the person's sign-in linked in), and every scenario recorded with `--write`. Each difference between live and saved that stays has its reason in `pair.json`. | `test-decode-pairs.ts`, `test-harness-usage.ts` | yes | yes | yes | yes | yes | yes |
-| Vocabulary | A module in `packages/sessions/src/harnesses/`, added to `VOCABULARIES`: every tool with its kind, keys, aliases and MCP names, its usage field map, and its concepts (instructions, hooks, skills, commands, agents, MCP files, output, models, what only it has). | `test-harness-vocabulary.ts`, `test-tool-identity.ts`, `audit:tools -- --unresolved` | yes | yes | yes | yes | yes | yes |
+| Vocabulary | A module in `packages/sessions/src/harnesses/`, added to `VOCABULARIES`: every tool with its kind, keys, aliases and MCP names, its usage field map, and its concepts (instructions, hooks, skills, commands, agents, MCP files, output, models). | `test-harness-vocabulary.ts`, `test-tool-identity.ts`, `audit:tools -- --unresolved` | yes | yes | yes | yes | yes | yes |
 | Concepts checked against the build | An entry in `scripts/harness-self-report.ts`, then `npm run harness:self-report -- <harness>` and `npm run harness:concepts`. | `test-harness-concepts.ts` | yes | yes | yes | yes | yes | yes |
 | Native tool definitions | `npm run harness:native-tools -- <harness>` records the tools the harness defines, per version, or `NO_SOURCE` in `scripts/native-tools.ts` says why they can't be recorded. | `test-native-tools.ts` | yes | yes | yes | yes | yes | yes |
 | Usage | One field map in the vocabulary module, built on `inclusiveTokens` or `exclusiveTokens` as the harness counts cache, called by the live decoder, the history reader and the `usageHistory` scanner. The scanner reads the store where the harness's own variable moved it (`UsageScan.env`), and a record the harness marks incomplete says so. An ACP harness whose window comes from its model list gives its source `modelWindow`, and its recorder captures the `session/new` and `session/load` replies as `{response, result}` lines. | `test-session-usage.ts`, `test-harness-usage.ts`, `test-usage-declarations.ts`, `audit:capabilities` | – | – | – | – | – | – |
@@ -84,6 +116,5 @@ Each is a field of the definition's `usage`: `implemented` with where the harnes
 | A real planning turn | One planning turn on the real CLI with `npm run probe:plan-turn`, then a review of the fixtures it records. | review | – | – | – | – | – | – |
 | Cloud sign-in | Where the sign-in lives on Linux, whether it rotates, which credential the cloud gets, how it is installed on a machine and who refreshes it. Not built; Wayfinder's secrets page has the plan. | not built: a run that resumes a laptop session on a fresh Linux machine and checks the laptop is still signed in | – | – | – | – | – | – |
 | Development desk | Its modes and plan approval in `src/dev/mock-bridge.ts` (`MOCK_MODES`, `MOCK_PLAN_APPROVALS`), copied from the real wire, so `?mock` shows what the harness shows. | review | – | – | – | – | – | – |
-| Only this harness | A capability only this harness has is a field the others declare absent with a reason, and its UI registers against the field. | `mako/no-harness-names` | – | – | – | – | – | – |
 
 - OpenCode, models: no default model: OpenCode's models are the person's own providers, so it starts on the model they configured.

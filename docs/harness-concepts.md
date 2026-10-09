@@ -87,12 +87,35 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 
 ## Only this harness
 
-- **Claude Code**: Context breakdown (getContextUsage: categories, memory files, MCP tools, messages); Checkpoints (rewindFiles(userMessageId), /rewind); Output styles (~/.claude/output-styles, .claude/output-styles; outputStyle); Plugins (.claude-plugin/plugin.json and marketplaces); Background agents (claude --bg, claude agents)
-- **Codex**: Rate-limit reset credits (account/rateLimits/read rateLimitResetCredits, account/rateLimitResetCredit/consume); Review mode (review/start; enteredReviewMode and exitedReviewMode items); Goals (thread/goal/*); Session questions (item/tool/requestUserInput, answered in the session)
-- **Cursor**: Artifact preview (SDKArtifact (listArtifacts is empty in local runs)); Server-side summarization (a task message carrying the summary); Image generation and screen recording (generateImage, recordScreen tools); Cloud agents (AgentOptions.cloud, bc- agent ids)
-- **OpenCode**: Staged revert (revert/stage, commit, clear); Inbox (a prompt sent while busy is steered or queued (inbox/:id/steer|queue)); Code Mode MCP (MCP tools through the code tool, on by default)
-- **Grok**: X search (x_keyword_search and x_semantic_search tools); Image and video generation (image_gen, /imagine, /imagine-video); Announcements (_x.ai/announcements/update); Folder trust (_x.ai/folder_trust/request to a client that sets x.ai/folderTrust.interactive, saved in ~/.grok/trusted_folders.toml)
-- **Devin**: Cloud handoff (/handoff, /cloud-attach); Step revert and fork (cognition.ai/revert/*); Editable approvals (cognition.ai/editableCommand, command/revise); Credits and ACUs (usage_update _meta totalCreditCost and totalAcuCost on the reading that ends a turn, for an account billed in credits or ACUs rather than quota; 0 on every quota account recorded, so unread)
+From each harness definition's `unique`: what carries it natively, and the declaration that shows it in Mako, or why none does.
+
+| Harness | Feature | Native | In Mako |
+| --- | --- | --- | --- |
+| Claude Code | Context breakdown | `getContextUsage`: categories, memory files, MCP tools, messages | `capabilities.contextBreakdown` |
+| Claude Code | Checkpoints | `rewindFiles(userMessageId)`, `/rewind` | nothing to show: Mako's own workspace checkpoints rewind files for every harness, so Mako doesn't use Claude's. |
+| Claude Code | Output styles | `~/.claude/output-styles`, `.claude/output-styles`; `outputStyle` | the harness's own: Claude Code applies the output style its settings name in sessions Mako starts. |
+| Claude Code | Plugins | `.claude-plugin/plugin.json` and marketplaces | the harness's own: Claude Code loads the plugins its settings enable in sessions Mako starts. |
+| Claude Code | Background agents | `claude --bg`, `claude agents` | **Mako gap**: Mako doesn't list or attach to Claude's background agents. |
+| Codex | Rate-limit reset credits | `account/rateLimits/read` `rateLimitResetCredits`, `account/rateLimitResetCredit/consume` | `usage.resetCredits` |
+| Codex | Session questions | `item/tool/requestUserInput`, answered in the session | `capabilities.questions` |
+| Codex | Review mode | `review/start`; `enteredReviewMode` and `exitedReviewMode` items | **Mako gap**: A review the session runs shows as Review mode markers in the transcript; starting one isn't built. |
+| Codex | Goals | `thread/goal/*` | **Mako gap**: Mako doesn't show or set a thread's goal. |
+| Cursor | Artifact preview | Canvas files (`*.canvas.tsx`); `SDKArtifact`, though `listArtifacts` is empty in local runs | `artifacts` |
+| Cursor | Server-side summarization | a task message carrying the summary | the harness's own: Cursor summarizes on its server when the context fills, and the summary shows as a compaction in the transcript. |
+| Cursor | Image generation and screen recording | `generateImage`, `recordScreen` tools | tool rows: `generateImage`, `recordScreen` |
+| Cursor | Cloud agents | `AgentOptions.cloud`, `bc-` agent IDs | **Mako gap**: Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built. |
+| OpenCode | Staged revert | `revert/stage`, `commit`, `clear` | **Mako gap**: Mako follows a revert another client commits; staging one isn't built. |
+| OpenCode | Inbox | a prompt sent while busy is steered or queued (`inbox/:id/steer\|queue`) | `capabilities.steering` |
+| OpenCode | Code Mode MCP | MCP tools called from a script through the `execute` tool, on by default | tool rows: `execute` |
+| Grok | X search | `x_search`, a server-side xAI search reported by its title | tool rows: `x_search` |
+| Grok | Image and video generation | `image_gen`, `image_edit`, `image_to_video` and `reference_to_video` tools; `/imagine`, `/imagine-video` | tool rows: `image_gen`, `image_edit`, `image_to_video`, `reference_to_video` |
+| Grok | Incomplete usage reports | `usageIsIncomplete` and `costIsPartial` on a turn's usage | `usage.missedCalls` |
+| Grok | Announcements | `_x.ai/announcements/update` | nothing to show: They're xAI's product news for Grok's own pager, so Mako ignores them. |
+| Grok | Folder trust | `_x.ai/folder_trust/request` to a client that sets `x.ai/folderTrust.interactive`, saved in `~/.grok/trusted_folders.toml` | `capabilities.approvals` |
+| Devin | Step revert and fork | `cognition.ai/revert/*` | `capabilities.fork` |
+| Devin | Editable approvals | `cognition.ai/editableCommand`, `command/revise` | **Mako gap**: The approval card shows the command Devin proposes; editing it before it runs isn't built. |
+| Devin | Cloud handoff | `/handoff`, `/cloud-attach` | **Mako gap**: Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built. |
+| Devin | Credits and ACUs | `usage_update` `_meta` `totalCreditCost` and `totalAcuCost` on the reading that ends a turn, for an account billed in credits or ACUs | **Mako gap**: Every account recorded is billed by quota and reports 0, so Mako doesn't read them yet. |
 
 ## Tool definitions
 
