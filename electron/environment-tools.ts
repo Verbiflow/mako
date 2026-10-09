@@ -19,7 +19,7 @@ import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type
 import { freeMemory, memoryPressure, runKey, type AppOverview, type Leftover, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import type { FileHistory } from "./watch-backend.js"
 import type { HistoryMark } from "./contracts/watcher-child.js"
-import { installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
+import { installCommand, installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
 import { installStatus, settleHanded } from "./spare-install.js"
 import {
   checkoutOf,
@@ -450,7 +450,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     // An install over the links would write into the main checkout's packages.
     if (due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
     await deps.processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((step) => [step.command, step.digest])) })
-    const command = due.map((step) => step.command).join(" && ")
+    const command = installCommand(due)
     const result = await deps.processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: env(current, current.recipe) }])
     if (result.refused.length) {
       await deps.processes.savePrepared(checkout, record)

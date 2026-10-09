@@ -4,13 +4,14 @@ import { execFileSync } from "node:child_process"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { installCommand } from "../electron/checkout-install.js"
 import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { perThreadValues, publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "../electron/thread-recipe.js"
 import { childHistory } from "../electron/watch-backend.js"
-import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, ownPackages } from "../electron/worktree-carry.js"
+import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, missingEntries, ownPackages } from "../electron/worktree-carry.js"
 import { parse as parseYaml } from "yaml"
 
 /**
@@ -52,6 +53,16 @@ const worktree = (name: string, ui: string) => {
 
 const install = { command: "npm install", inputs: ["package-lock.json"], outputs: ["**/node_modules"], link: true }
 try {
+  // Every install step starts in the checkout's root, whatever the one before it changed into.
+  const steps = join(root, "steps")
+  mkdirSync(join(steps, "app"), { recursive: true })
+  mkdirSync(join(steps, "api"))
+  const due = ["app", "api"].map((folder) => ({ step: { ...install, command: `cd ${folder} && pwd > ran` }, command: `cd ${folder} && pwd > ran`, digest: "" }))
+  execFileSync("/bin/sh", ["-c", installCommand(due)], { cwd: steps })
+  assert.equal(readFileSync(join(steps, "api", "ran"), "utf8").trim(), join(steps, "api"), "the second step changes into its folder from the root, not from the first step's")
+  assert.equal(installCommand(due.slice(0, 1)), "cd app && pwd > ran", "one step runs as written")
+  assert.throws(() => execFileSync("/bin/sh", ["-c", installCommand([{ ...due[0]!, command: "exit 3" }, due[1]!])], { cwd: steps, stdio: "ignore" }), "a failing step stops the rest")
+
   // link is for any outputs; a step without outputs has nothing to link.
   assert.ok(RecipeSchema.safeParse({ prepare: [install] }).success)
   assert.ok(RecipeSchema.safeParse({ prepare: [{ ...install, outputs: ["**/node_modules", "dist"] }] }).success)
@@ -75,6 +86,30 @@ try {
   )
   assert.deepEqual(perThreadValues(RecipeSchema.parse({ values: { PORT: "{port}" } })), [], "nothing named for the Thread")
   assert.match((await carryReport(RecipeSchema.parse({ prepare: [install] }), main)).join("\n"), /npm install: a new worktree's node_modules link each entry to the main checkout's when package-lock.json is the same there/)
+
+  // What a new worktree wouldn't get is named at every save, until each has a place: carried, installed, or left.
+  write(join(main, ".git", "info", "exclude"), ".env*\n")
+  write(join(main, ".env.local"), "")
+  write(join(main, "server", ".env.production"), "")
+  write(join(main, "dist", "app.js"), "")
+  const bareRecipe = RecipeSchema.parse({})
+  assert.deepEqual(await missingEntries(main, bareRecipe), { credentials: [".env.local", "server/.env.production"], dependencies: ["node_modules"] }, "build output isn't named")
+  const gaps = (await carryReport(bareRecipe, main)).join("\n")
+  assert.match(gaps, /A new worktree won't get \.env\.local, server\/\.env\.production \(credentials, by their names\) and node_modules \(installed packages\)/)
+  assert.match(gaps, /carry a file .*; a prepare step .*; or leave/)
+  const placed = RecipeSchema.parse({ prepare: [install], carry: [".env.local"], leave: ["server/.env.production"] })
+  assert.deepEqual(await missingEntries(main, placed), { credentials: [], dependencies: [] })
+  assert.doesNotMatch((await carryReport(placed, main)).join("\n"), /won't get/, "nothing more is said once each has a place")
+  // In a worktree, what's here counts: a brought file stops being named; leave still holds.
+  const lacking = worktree("lacking", "lacking ui")
+  assert.deepEqual(await missingEntries(main, bareRecipe, lacking), { credentials: [".env.local", "server/.env.production"], dependencies: ["node_modules"] })
+  write(join(lacking, ".env.local"), "")
+  assert.deepEqual(await missingEntries(main, placed, lacking), { credentials: [], dependencies: ["node_modules"] })
+  const lackingNote = threadEnvironmentInstructions({ host: "x.thread.localhost", port: 20010, ports: 10, dataDir: "/tmp/x", app: AppKeySchema.parse("00000000-0000-4000-8000-000000000000"), recipe: { kind: "none" }, missing: { main, credentials: [], dependencies: ["node_modules"] } })
+  assert.match(lackingNote, /it lacks node_modules \(installed packages\), which the main checkout \([^)]+\) has\. If your work needs one, call worktree_bring with it.*set up the project's recipe with recipe_guide/)
+  rmSync(join(main, "dist"), { recursive: true })
+  rmSync(join(main, "server"), { recursive: true })
+  rmSync(join(main, ".env.local"))
 
   // Other outputs link entry by entry: what's made in the folder later stays the checkout's own.
   const built = worktree("built", "built ui")
