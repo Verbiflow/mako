@@ -167,7 +167,7 @@
     "test:packaged-lifecycle": "node --max-old-space-size=256 scripts/test-packaged-lifecycle.mjs",
     "test:control-driver-install": "node scripts/test-control-driver-install.mjs",
     "prepare:control-media": "node scripts/build-control-media.mjs",
-    "build:control-runtime": "node scripts/prune-host-output.mjs && tsgo -b packages/control && tsgo -b packages/control-runtime",
+    "build:control-runtime": "node scripts/prune-host-output.mjs && tsgo -b packages/lazy && tsgo -b packages/control && tsgo -b packages/control-runtime",
     "test:control-packages": "npm run build:control-runtime && node packages/control-runtime/test/lifecycle.mjs && node packages/control-runtime/test/media.mjs && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node scripts/test-control-package-consumer.mjs && node scripts/test-control-runtime-package.mjs && node scripts/linux-control/test-acceptance-payload.mjs",
     "probe:plan-turn": "node scripts/probe-plan-turn.mjs",
     "test:file-previews": "tsx scripts/test-diagnostic-preview.ts && tsx scripts/test-file-open.ts && tsx scripts/test-file-response.ts && tsx scripts/test-office-preview.ts",
@@ -301,6 +301,14 @@
       {
         "from": "packages/sessions",
         "to": "node_modules/@mako/sessions",
+        "filter": [
+          "package.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "packages/lazy",
+        "to": "node_modules/@mako/lazy",
         "filter": [
           "package.json",
           "dist/**"

@@ -1,0 +1,18 @@
+{
+  "name": "@mako/lazy",
+  "version": "0.1.0",
+  "license": "Elastic-2.0",
+  "description": "Packages loaded the first time something needs them, and the record of what each process has loaded, for whom and at what cost.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsgo -b"
+  }
+}

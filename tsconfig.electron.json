@@ -37,6 +37,9 @@
     },
     {
       "path": "./packages/control-runtime"
+    },
+    {
+      "path": "./packages/lazy"
     }
   ]
 }
