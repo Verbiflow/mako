@@ -2,8 +2,8 @@ import { access } from "node:fs/promises"
 import { homedir } from "node:os"
 import { delimiter, join } from "node:path"
 import { spawn } from "node:child_process"
-import { shell } from "electron"
 import type { ExternalEditor } from "./shared.js"
+import { presentMachine } from "./machine.js"
 
 interface EditorDefinition {
   id: string
@@ -93,7 +93,7 @@ export async function openInExternalEditor(
       available.some((candidate) => candidate.id === editor.id)
     )
   if (!selected) {
-    shell.showItemInFolder(path)
+    await presentMachine().reveal(path)
     return
   }
 

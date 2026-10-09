@@ -314,7 +314,10 @@ async function start() {
       const result = await invokeWithRecovery(channel, (attempt) => invokeRuntime(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
       if (channel === "mako:boot") {
         if (pendingCommand) { event.sender.send("mako:event", { type: "app-command", command: pendingCommand }); pendingCommand = null }
-        return { ...z.record(z.string(), z.json()).parse(result), sourceRoot: isDev ? app.getAppPath() : undefined }
+        const boot = z.object({ machine: MachineOfferSchema.optional() }).catchall(z.json()).parse(result)
+        // This app answers the folder chooser with its own dialog, whatever the host's machine offers.
+        const machine: MachineOffer = { ...(boot.machine ?? UNSTATED_MACHINE_OFFER), chooseFolder: true }
+        return { ...boot, machine, sourceRoot: isDev ? app.getAppPath() : undefined }
       }
       return result
     })

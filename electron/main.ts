@@ -164,6 +164,7 @@ import { hostClient, withHostClient } from "./host-client.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
 import { workspacePreviewPath } from "./workspace-preview.js"
 import { revealAction } from "./reveal-policy.js"
+import { hostMachine, machineOffer, presentMachine } from "./machine.js"
 import {
   daemonStatus,
   emitThreadAs,
@@ -617,7 +618,7 @@ const deskBrowser = new DeskBrowser({
         hostWarn("browser", "blocked hidden desk navigation", { url })
     )
     hidden.webContents.setWindowOpenHandler(({ url }) => {
-      void shell.openExternal(url)
+      openLink(url)
       return { action: "deny" }
     })
     try {
@@ -633,16 +634,21 @@ let removeDeskBrowserRegistration: (() => void) | undefined
 let stopDevRendererWatch: (() => void) | undefined
 let defaultBrowserApplication: Promise<string | undefined> | undefined
 function preferredBrowserApplication() {
-  return (defaultBrowserApplication ??= app
-    .whenReady()
-    .then(() => app.getApplicationInfoForProtocol("https://example.com"))
-    .then((info) => info.path)
-    .catch(() => undefined))
+  const machine = hostMachine()
+  return (defaultBrowserApplication ??= machine.kind === "present" ? machine.defaultBrowser() : Promise.resolve(undefined))
+}
+/** A link from a window this host shows itself: a desk window, or the standalone window. */
+function openLink(url: string) {
+  const link = openableLink(url)
+  if (!link) return
+  void Promise.resolve()
+    .then(() => presentMachine().openUrl(link))
+    .catch((error: Error) => hostWarn("machine", "link not opened", { reason: error.message }))
 }
 // The application owns checkout resources; the reusable Node runtime does not
 // infer workspace paths. Child control servers receive the same explicit root.
-const developmentMedia = join(app.getAppPath(), "vendor/control-media", `${process.platform}-${process.arch}`)
-if (!app.isPackaged && existsSync(developmentMedia))
+const developmentMedia = join(environment.appRoot, "vendor/control-media", `${process.platform}-${process.arch}`)
+if (!environment.packaged && existsSync(developmentMedia))
   process.env.MAKO_CONTROL_MEDIA_ROOT ??= developmentMedia
 const browserControl = new BrowserService(
   async () => {
@@ -1143,7 +1149,7 @@ async function createWindow() {
     window = null
   })
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    openLink(url)
     return { action: "deny" }
   })
 
@@ -1203,7 +1209,7 @@ async function openPreviewWindow(): Promise<void> {
   })
   trackRenderer(preview)
   preview.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    openLink(url)
     return { action: "deny" }
   })
   const id = crypto.randomUUID()
@@ -1244,7 +1250,8 @@ function bindIpc() {
     ready,
     withHost,
     platform: process.platform,
-    sourceRoot: isDev ? app.getAppPath() : undefined,
+    machine: () => machineOffer(hostMachine()),
+    sourceRoot: isDev ? environment.appRoot : undefined,
     onWorkspaceChanged: watchWorkspace,
   })
 
@@ -1261,19 +1268,11 @@ function bindIpc() {
     writePlugin(id, source)
   )
   handle("mako:delete-plugin", (_e, id: string) => deletePlugin(id))
-  handle("mako:reveal-plugins", () => {
-    void shell.openPath(pluginsDir())
+  handle("mako:reveal-plugins", async () => {
+    await presentMachine().open(pluginsDir())
   })
 
-  handle("mako:pick-folder", async () => {
-    const options: Electron.OpenDialogOptions = {
-      properties: ["openDirectory", "createDirectory"],
-    }
-    const result = window
-      ? await dialog.showOpenDialog(window, options)
-      : await dialog.showOpenDialog(options)
-    return result.canceled ? null : result.filePaths[0]
-  })
+  handle("mako:pick-folder", () => presentMachine().chooseFolder("Choose a folder"))
   handle("mako:external-editors", () => listExternalEditors())
   handle("mako:open-in-editor", (_e, path: string, editor?: string) =>
     withHost(async (h) => {
@@ -1288,12 +1287,9 @@ function bindIpc() {
       // The path may come from anywhere, including an agent's answer.
       const absolute = await h.resolvePath(path)
       const info = await stat(absolute)
-      if (revealAction(absolute, info) === "reveal") {
-        shell.showItemInFolder(absolute)
-        return
-      }
-      const failure = await shell.openPath(absolute)
-      if (failure) shell.showItemInFolder(absolute)
+      const machine = presentMachine()
+      if (revealAction(absolute, info) === "open" && (await machine.open(absolute))) return
+      await machine.reveal(absolute)
     })
   )
   handle("mako:github-status", () => withHost((h) => githubStatus(h.gitWorkspace)))

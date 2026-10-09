@@ -3,10 +3,12 @@ import { unlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { app, shell, systemPreferences } from "electron"
+import { systemPreferences } from "electron"
 import { packagedDistribution } from "./distribution.js"
 import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "./local-update-installer.js"
 import type { MakoComputerPermissions } from "./shared.js"
+import { hostEnvironment } from "./host-environment.js"
+import { presentMachine } from "./machine.js"
 
 const execute = promisify(execFile)
 
@@ -24,7 +26,7 @@ export function computerPermissions(): MakoComputerPermissions {
   return {
     supported: true,
     persistentAcrossUpdates:
-      app.isPackaged && packagedDistribution(app.getAppPath()) !== "unsigned",
+      hostEnvironment().packaged && packagedDistribution(hostEnvironment().appRoot) !== "unsigned",
     accessibility: systemPreferences.isTrustedAccessibilityClient(false),
     screenRecording: systemPreferences.getMediaAccessStatus("screen"),
   }
@@ -33,9 +35,7 @@ export function computerPermissions(): MakoComputerPermissions {
 async function openPrivacyPane(
   pane: "Privacy_Accessibility" | "Privacy_ScreenCapture"
 ): Promise<void> {
-  await shell.openExternal(
-    `x-apple.systempreferences:com.apple.preference.security?${pane}`
-  )
+  await presentMachine().openUrl(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
 }
 
 /**
@@ -60,7 +60,7 @@ export async function resetMakoGrant(
   bundleId = MAKO_BUNDLE_ID,
   run: Run = (command, args) => execute(command, args, { timeout: 10_000 })
 ): Promise<boolean> {
-  if (process.platform !== "darwin" || !app.isPackaged) return false
+  if (process.platform !== "darwin" || !hostEnvironment().packaged) return false
   try {
     await run("tccutil", ["reset", service, bundleId])
     return true

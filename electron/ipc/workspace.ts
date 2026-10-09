@@ -1,8 +1,8 @@
-import { nativeImage } from "electron"
 import { watch, type FSWatcher } from "node:fs"
 import type { AgentHost } from "../host.js"
 import type { HostEvent, SearchOptions } from "../shared.js"
 import { registerIpc } from "./register.js"
+import { hostMachine } from "../machine.js"
 
 export interface WorkspaceIpcContext {
   withHost<TResult>(
@@ -33,16 +33,11 @@ export function installWorkspaceIpc(context: WorkspaceIpcContext): void {
     withHost(async (host) => {
       const file = await host.readWorkspaceFile(path)
       if (file.media !== "spreadsheet") return file
+      const machine = hostMachine()
+      if (machine.kind === "absent") return file
       const absolute = await host.resolvePath(path)
-      try {
-        const thumbnail = await nativeImage.createThumbnailFromPath(absolute, {
-          width: 1200,
-          height: 900,
-        })
-        if (!thumbnail.isEmpty()) file.thumbnailUrl = thumbnail.toDataURL()
-      } catch {
-        return file
-      }
+      const thumbnail = await machine.thumbnail(absolute, 1200).catch(() => null)
+      if (thumbnail) file.thumbnailUrl = `data:image/png;base64,${thumbnail.toString("base64")}`
       return file
     })
   )

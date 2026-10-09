@@ -7,6 +7,7 @@ import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { WorktreeStep } from "./thread-worktrees.js"
+import type { MachineOffer } from "./machine-offer.js"
 import {
   type ControlActivity,
   type BrowserControlStatus,
@@ -176,6 +177,8 @@ export interface BootPayload {
   activeTabId: string
   models: ModelInfo[]
   platform: NodeJS.Platform
+  /** What the host's machine does for a person at it; absent from a host that predates it. */
+  machine?: MachineOffer
   /**
    * Where Mako's own source lives, when it is editable.
    *
