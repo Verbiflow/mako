@@ -4,6 +4,7 @@ import { lstat, mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeF
 import { syncBuiltinESMExports } from "node:module"
 import os from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { createServer } from "node:http"
 import { mock } from "node:test"
 import { parse } from "smol-toml"
@@ -23,6 +24,8 @@ import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential }
 import { memorySecrets } from "../electron/secrets.ts"
 import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
 
+const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))
+
 /** The fake Cursor SDK child's reply per method; an unlisted method is a test failure. */
 type CursorAnswers = { [Method in SdkMethod]?: () => SdkResult<Method> }
 
@@ -41,13 +44,13 @@ try {
   await mkdir(bin)
   await saveStore()
   await writeFile(join(bin, "security"), `#!${process.execPath}
-const fs = require('node:fs'), args = process.argv.slice(2);
+const fs = require('node:fs'), security = require(${JSON.stringify(securityStandIn)}), args = security.command();
 const file = ${JSON.stringify(storePath)}, stores = JSON.parse(fs.readFileSync(file, 'utf8'));
 const get = key => args[args.indexOf(key)+1];
 const id = get('-s') === 'Codex Auth' ? get('-s')+'|'+get('-a') : get('-s');
-if (process.env.MAKO_FIXTURE_KEYCHAIN_DENIED === '1') { process.stdout.write('fixture-credential-must-stay-private'); process.exit(36); }
-if (args[0] === 'find-generic-password') { if (!stores[id]) process.exit(44); process.stdout.write(stores[id]); }
-else if (args[0] === 'add-generic-password') { stores[id] = get('-w'); fs.writeFileSync(file, JSON.stringify(stores)); }
+if (process.env.MAKO_FIXTURE_KEYCHAIN_DENIED === '1') { process.stderr.write(security.report('fixture-credential-must-stay-private')); process.exit(36); }
+if (args[0] === 'find-generic-password') { if (!stores[id]) process.exit(44); if (args.includes('-g')) process.stderr.write(security.report(stores[id])); }
+else if (args[0] === 'add-generic-password') { stores[id] = security.value(args); fs.writeFileSync(file, JSON.stringify(stores)); }
 else if (args[0] === 'delete-generic-password') { delete stores[id]; fs.writeFileSync(file, JSON.stringify(stores)); }
 else process.exit(1);
 `, { mode: 0o700 })
@@ -579,7 +582,7 @@ setInterval(() => {}, 1000);
     await assert.rejects(readCodexCredentials(nativeCodex), error => {
       assert.ok(error instanceof Error)
       assert.match(error.message, /Could not read macOS Keychain/)
-      assert.match(JSON.stringify(error.cause), /"code":36/)
+      assert.match(JSON.stringify(error.cause), /security exited 36/)
       assert.doesNotMatch(JSON.stringify(error, Object.getOwnPropertyNames(error)), /fixture-credential-must-stay-private/)
       return true
     }, "a denied authoritative store cannot fall back to stale file credentials or retain secret native output")
