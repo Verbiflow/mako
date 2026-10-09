@@ -272,13 +272,15 @@ import {
 import { installGitIpc, openUtilityModels } from "./ipc/git.js"
 import { fileResponse } from "./file-response.js"
 import { startWebHost } from "./web-host.js"
+import { hostSecretKeyHandover } from "./host-secrets.js"
 import { SharedConversations } from "./shared-conversations.js"
 import { registerIpc as handle, enforceFixtureDesk, invokeHost, invokeHostPreview, installConversationRouting, installHistoryPresentation, stopHostCalls } from "./ipc/register.js"
 import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "./contracts/live-history.js"
 import { installSessionIpc } from "./ipc/session.js"
 import { installWorkspaceIpc, stopWorkspaceIpc } from "./ipc/workspace.js"
-import { installCloudAccountIpc, stopCloudAccountIpc } from "./ipc/cloud-account.js"
+import { installCloudAccountIpc, stopCloudAccountIpc, wakeCloudAccount } from "./ipc/cloud-account.js"
+import { watchWake, type WakeWatch } from "./wake.js"
 import { installTelemetry } from "./ipc/telemetry.js"
 import type { HostTelemetry } from "./host-telemetry.js"
 import type {
@@ -2549,7 +2551,8 @@ app.whenReady().then(async () => {
         void workspaceClients.release(client)
       },
       runtime,
-      invokeHostPreview
+      invokeHostPreview,
+      fixtureDesk ? undefined : hostSecretKeyHandover()
     )
   }
   trace("host listening")

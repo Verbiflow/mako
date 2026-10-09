@@ -18,6 +18,10 @@ import { breadcrumb, clearCrashes, crashesDir, installCrashReporting, listCrashe
 import { flushHostLog, hostLog, installHostLog } from "./host-log.js"
 import { watchRendererHealth } from "./renderer-health.js"
 import { buildIdentity } from "./build-identity.js"
+import { userRootFor } from "./host-environment.js"
+import { dataKeyPath } from "./host-secrets.js"
+import { SecretKeyLink } from "./secret-key-link.js"
+import { electronSecretEncryption } from "./secure-storage.js"
 
 const directory = dirname(fileURLToPath(import.meta.url))
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
@@ -36,6 +40,7 @@ const launch = { dataRoot, executable: process.execPath, args: app.isPackaged ? 
 const clients = new Map<number, { id: string; connected: boolean; link: RecoveryLink; dispose(): void }>()
 const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
+let secretKeys: SecretKeyLink | undefined
 let shuttingDown = false
 let pendingCommand: "app.quit" | "app.updates" | null = null
 let shutdownAction: "quit" | "install" | "restart" | null = null
@@ -153,7 +158,7 @@ async function openWindow(preview = false) {
       if (closed || window.isDestroyed()) return
       const retry = () => {
         if (closed || shuttingDown || shutdownAction) return
-        void ensureRuntime(launch).then((next) => { runtime = next; connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
+        void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
     }, { history: true })
@@ -192,22 +197,35 @@ async function start() {
     }
   }
   await app.whenReady()
+  closeOnSignals()
+  // Before any window reads a secret: a host under the Helper in Node mode has no keychain of its own.
+  secretKeys = new SecretKeyLink(runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
+  await secretKeys.attached()
   powerMonitor.on("shutdown", () => { shuttingDown = true })
+  // The host also notices sleep from its clock; these make the wake immediate and add the screen unlock.
+  /** The desktop process's own calls, which belong to no window. */
+  const desktopClient = randomUUID()
+  const woke = (source: "resume" | "unlock-screen") => () => {
+    void invokeRuntime(runtime.socket, desktopClient, "mako:machine-woke", [source]).catch((error) =>
+      hostLog("desktop", "wake not delivered", { source, reason: error instanceof Error ? error.message : String(error) }))
+  }
+  powerMonitor.on("resume", woke("resume"))
+  powerMonitor.on("unlock-screen", woke("unlock-screen"))
   protocol.handle("mako-file", (request) => runtimeFile(runtime.socket, request))
   if (!isDev) {
     serveDesk(rendererBundle, (request) => runtimeFile(runtime.socket, request))
     const moved = await adoptDeskOrigin({ userData: uiRoot, dist: rendererBundle })
     if (moved.kind === "failed") console.warn(`[mako-client] renderer storage move failed: ${moved.error}`)
   }
-  for (const [channel, schema] of Object.entries(hostCallInputs)) {
+  for (const channel of hostChannels) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
-      const args = schema.parse(raw)
+      const args = hostCallInput(channel).parse(raw)
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
       breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
       // Reporting must work even when the shared host is unavailable.
       if (channel === "mako:report-crash") {
-        const [kind, payload] = hostCallInputs["mako:report-crash"].parse(args)
+        const [kind, payload] = hostCallInput("mako:report-crash").parse(args)
         const error = new Error(payload.message)
         error.stack = payload.stack
         record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
@@ -276,6 +294,7 @@ app.on("before-quit", (event) => {
     return
   }
   desktopNotifier.dispose()
+  secretKeys?.dispose()
   for (const client of clients.values()) client.dispose()
 })
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit() })

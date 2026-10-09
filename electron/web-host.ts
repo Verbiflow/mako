@@ -36,19 +36,74 @@ async function readRequest(request: IncomingMessage) {
   return RuntimeCallSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")))
 }
 
-/** Host transport shared by desktop and browser gateways on a private Unix socket. */
+const SecretKeyOfferSchema = z.object({ key: z.base64() }).strict()
+
+async function readSecretKeyOffer(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let bytes = 0
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    bytes += buffer.length
+    if (bytes > 1024) throw new Error("A data key offer is at most 1 KiB")
+    chunks.push(buffer)
+  }
+  return Buffer.from(SecretKeyOfferSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))).key, "base64")
+}
+
+/**
+ * Host transport shared by desktop and browser gateways on a private Unix socket.
+ * `/secret-key` is the desktop app's alone: browser gateways forward only
+ * `/rpc`, `/events` and `/file/`, and the cloud gateway calls the host in-process.
+ */
 export async function startWebHost(
   socket: string,
   invoke: HostInvoke,
   file: (request: Request, client?: string) => Promise<Response>,
   disconnected?: (client: string) => void,
   runtime?: RuntimeInfo,
-  preview?: (args: unknown[], client: string) => Promise<ControlPreview | null>
+  preview?: (args: unknown[], client: string) => Promise<ControlPreview | null>,
+  secretKey?: SecretKeyHandover
 ) {
   const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Set<ServerResponse>()
   const media = new Map<ServerResponse, string>()
+  /** Desktops waiting to be asked for the data key; held for this host's life when it never needs one. */
+  const keyWaiters = new Set<ServerResponse>()
+  const secretKeyRoute = async (request: IncomingMessage, response: ServerResponse, handover: SecretKeyHandover) => {
+    if (request.method === "GET") {
+      const wanted = await handover.wanted()
+      if (!wanted && new URL(request.url ?? "/", "http://localhost").searchParams.get("wait") === "1") {
+        keyWaiters.add(response)
+        response.once("close", () => keyWaiters.delete(response))
+        return
+      }
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ wanted }))
+      return
+    }
+    if (request.method !== "POST") {
+      response.writeHead(405).end()
+      return
+    }
+    let key: Buffer
+    try {
+      key = await readSecretKeyOffer(request)
+    } catch {
+      response.writeHead(400).end("A data key offer is {\"key\": base64}")
+      return
+    }
+    try {
+      await handover.offer(key)
+      hostLog("secrets", "data key handed over")
+      response.writeHead(204).end()
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      hostWarn("secrets", "data key refused", { reason })
+      response.writeHead(409).end(reason)
+    } finally {
+      key.fill(0)
+    }
+  }
   let closed = false
   const farewell = (response: ServerResponse, body = FAREWELL) => {
     if (response.destroyed || response.headersSent) return
@@ -247,6 +302,8 @@ export async function startWebHost(
       releases.clear()
       for (const response of pending) farewell(response)
       pending.clear()
+      for (const response of keyWaiters) response.destroy()
+      keyWaiters.clear()
       server.close()
       server.closeIdleConnections()
       const sweep = setTimeout(() => server.closeAllConnections(), 250)
