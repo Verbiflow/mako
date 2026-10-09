@@ -24,6 +24,7 @@ import {
   type LineOptions,
   type ViewDelta,
 } from "./projection.js"
+import { nodePlatform } from "../platform.js"
 
 /**
  * The step primitives a computer program composes with. They run inside
@@ -324,7 +325,7 @@ export function computerHelpers(
       : undefined
     const page = pages?.success ? pages.data[String(selected.pid)] : undefined
     return windowCapabilities({
-      platform: process.platform,
+      platform: nodePlatform(),
       target: selected,
       documentWindows: documents.length,
       onScreen: current?.is_on_screen ?? null,
