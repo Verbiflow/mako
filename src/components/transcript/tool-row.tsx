@@ -62,7 +62,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   }, [rest, threadPath, liveId, readAttempt])
 
   return (
-    <div>
+    <div data-transcript-tool={call.id}>
       <div className="group/tool -mx-1.5 flex min-w-0 items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
         <button
           type="button"

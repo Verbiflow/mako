@@ -16,6 +16,7 @@ import {
   ConnectionStatus,
 } from "./provider-connections"
 import { ProviderAccounts } from "./provider-accounts"
+import { HarnessCapabilities } from "./harness-capabilities"
 import { InstallRow, RuntimeRow, InstallationDetails } from "./harness-updates"
 import { runtimeBusy, runtimeRows } from "@/lib/runtime-updates"
 import { accountIdentity } from "@/lib/account-identity"
@@ -303,6 +304,9 @@ function ProviderRow({
               ))}
             </div>
           ) : null}
+          <div className="border-t border-hairline pt-3">
+            <HarnessCapabilities harness={agent.id} />
+          </div>
         </div>
       ) : null}
     </div>

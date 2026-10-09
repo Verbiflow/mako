@@ -94,6 +94,7 @@ export function FileView({
       <ArtifactPreview
         html={file.artifactPreview.html}
         name={file.path.split("/").at(-1) ?? "Artifact"}
+        kind={file.artifactPreview.name}
       />
     ) : (
       <p className="p-5 text-ui text-muted-foreground">

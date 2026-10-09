@@ -19,9 +19,12 @@ const TOKENS = [
 export function ArtifactPreview({
   html,
   name,
+  kind,
 }: {
   html: string
   name: string
+  /** What the harness calls this artifact, when one wrote it. */
+  kind?: string
 }) {
   const theme = usePrefs((prefs) => prefs.theme)
   const style = getComputedStyle(document.documentElement)
@@ -35,7 +38,8 @@ export function ArtifactPreview({
   return (
     <div className="flex h-full min-h-96 flex-col">
       <p className="border-b border-hairline px-4 py-2 text-label text-faint">
-        Interactive preview · changes stay in this preview
+        {kind ? `${kind} preview` : "Interactive preview"} · changes stay in
+        this preview
       </p>
       <iframe
         title={`Preview ${name}`}

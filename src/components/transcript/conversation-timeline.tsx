@@ -5,7 +5,7 @@ import {
   TranscriptSourceContext,
   type TranscriptSource,
 } from "./source-context"
-import type { ReactNode, Ref, WheelEvent as ReactWheelEvent } from "react"
+import type { ReactNode, Ref, WheelEvent as ReactWheelEvent, PointerEvent as ReactPointerEvent } from "react"
 import {
   useCallback,
   useContext,
@@ -30,13 +30,21 @@ import type { MakoPrompt, TurnStop } from "@/state/prompt-delivery"
 import { cn } from "@/lib/utils"
 import { ArrowDownIcon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
-import { liveReadingSource, nativeReadingSource, transcriptReaders, type TranscriptReading } from "@/state/transcript-reading"
+import { liveReadingSource, nativeReadingSource, transcriptReaders, type TranscriptReading, type TranscriptPreviewIdentity } from "@/state/transcript-reading"
 import { loadReleasedLiveTurn } from "@/state/live-history"
 import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
 
 const NEAR_BOTTOM = 96
+const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
+const PREVIEW_ATTRIBUTES = {
+  file: "data-inline-file-preview",
+  document: "data-inline-document",
+  code: "data-inline-code",
+  tool: "data-transcript-tool",
+} as const
+const INLINE_FLOW_BOXES = "[data-inline-file-preview],[data-inline-document],[data-inline-code],[data-transcript-tool],[data-asset-collection],.mako-prose,.plan-frame,[data-collapse]"
 
 /**
  * How far above the scrollport earlier history starts arriving. Far enough
@@ -84,8 +92,8 @@ function turnKeys(
 interface ScrollAnchor {
   exchangeId?: string
   exchangeOffset?: number
-  /** A mounted text block holds a position inside a turn, not just between turns. */
-  block?: { element: Element; offset: number }
+  /** Text and previews hold a position inside a turn, not just between turns. */
+  block?: { element: Element; offset: number; preview?: TranscriptPreviewIdentity }
   scrollHeight: number
   scrollTop: number
   shown: number
@@ -106,8 +114,33 @@ function headOf(shown: ExchangeData[]): string {
     : ""
 }
 
+function previewSelector(preview: TranscriptPreviewIdentity) {
+  return `[${PREVIEW_ATTRIBUTES[preview.type ?? "file"]}="${CSS.escape(preview.path)}"]`
+}
+
+function previewIdentity(element: Element): TranscriptPreviewIdentity | undefined {
+  const turn = element.closest("[data-exchange]")
+  if (!turn) return undefined
+  for (const type of ["file", "document", "code", "tool"] as const) {
+    const path = element.getAttribute(PREVIEW_ATTRIBUTES[type])
+    if (path === null) continue
+    const preview = { type, path, index: 0 }
+    const matches = turn.querySelectorAll(previewSelector(preview))
+    return { ...preview, index: Array.from(matches).indexOf(element) }
+  }
+  return undefined
+}
+
+function readingBlockAt(element: Element | null) {
+  // Loading/error paragraphs disappear when the preview body is replaced.
+  // The owner survives those states and gallery remounts.
+  return element?.closest("[data-inline-code]") ??
+    element?.closest("[data-inline-file-preview],[data-inline-document]") ??
+    element?.closest(TEXT_BLOCKS) ?? element?.closest("[data-transcript-tool]")
+}
+
 /**
- * The reading position, as a painted text block and its turn (or the turn
+ * The reading position, as painted text or media and its turn (or the turn
  * given), with their offsets from the scrollport. A lead exchange's top
  * moves when earlier history lands inside it; its painted paragraph can
  * still anchor the reader, including a bookmark in a partial answer.
@@ -125,11 +158,10 @@ function captureAnchor(
     viewport.top + viewport.height / 2
   )
   const blockAt = (y: number) =>
-    document.elementFromPoint(viewport.left + viewport.width / 2, y)
-      ?.closest("p,pre,li,td,h1,h2,h3,h4,h5,h6")
-  let block = painted?.closest("p,pre,li,td,h1,h2,h3,h4,h5,h6")
-  // The middle of the pane can land in a paragraph's margin. Nearby painted
-  // text is a better anchor than the container of an entire long answer.
+    readingBlockAt(document.elementFromPoint(viewport.left + viewport.width / 2, y))
+  let block = readingBlockAt(painted)
+  // The middle of the pane can land in a margin. Nearby painted content is
+  // a better anchor than the container of an entire long answer.
   for (
     let offset = 8;
     !block && offset <= Math.min(48, viewport.height / 2);
@@ -137,6 +169,22 @@ function captureAnchor(
   )
     block = blockAt(viewport.top + viewport.height / 2 + offset) ??
       blockAt(viewport.top + viewport.height / 2 - offset)
+  // Audio players and short prompt bubbles need not reach the center line.
+  // If that line hit whitespace, find the visible content at the same height
+  // within the painted turn rather than falling back to the whole turn.
+  const paintedTurn = painted?.closest("[data-exchange]")
+  if (!block && paintedTurn && node.contains(paintedTurn)) {
+    const x = viewport.left + viewport.width / 2
+    const y = viewport.top + viewport.height / 2
+    const selectors = [...Object.values(PREVIEW_ATTRIBUTES).map(attribute => `[${attribute}]`), TEXT_BLOCKS].join(",")
+    const candidates = Array.from(paintedTurn.querySelectorAll(selectors)).flatMap(element => {
+      if (element.closest("[inert]") || !element.checkVisibility({ contentVisibilityAuto: true })) return []
+      const rect = element.getBoundingClientRect()
+      return rect.width > 1 && rect.top <= y && rect.bottom > y && rect.right > viewport.left && rect.left < viewport.right
+        ? [{ element, distance: Math.max(rect.left - x, x - rect.right, 0) }] : []
+    }).sort((left, right) => left.distance - right.distance)
+    block = readingBlockAt(candidates[0]?.element ?? null)
+  }
   const visibleTurn = (block ?? painted)?.closest("[data-exchange]")
   const anchor =
     at ??
@@ -158,7 +206,11 @@ function captureAnchor(
       ? anchor.getBoundingClientRect().top - viewportTop
       : undefined,
     block: readingBlock
-      ? { element: readingBlock, offset: readingBlock.getBoundingClientRect().top - viewportTop }
+      ? {
+          element: readingBlock,
+          offset: readingBlock.getBoundingClientRect().top - viewportTop,
+          preview: previewIdentity(readingBlock),
+        }
       : undefined,
     scrollHeight: node.scrollHeight,
     scrollTop: node.scrollTop,
@@ -211,14 +263,18 @@ function holdPrependedHeights(node: HTMLDivElement, exchangeId?: string) {
 
 function preserveScrollAnchor(node: HTMLDivElement, snapshot: ScrollAnchor) {
   const block = snapshot.block
-  if (block?.element.isConnected && node.contains(block.element)) {
-    node.scrollTop += block.element.getBoundingClientRect().top -
-      node.getBoundingClientRect().top - block.offset
-    return
-  }
   const anchor = snapshot.exchangeId
     ? node.querySelector(`[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`)
     : null
+  // A preview can remount when a file resolves, reloads, or leaves its gallery.
+  // Its conversation path survives that replacement; the old DOM node doesn't.
+  const element = block?.element.isConnected && node.contains(block.element) ? block.element
+    : block?.preview ? anchor?.querySelectorAll(previewSelector(block.preview))[block.preview.index] : undefined
+  if (block && element) {
+    node.scrollTop += element.getBoundingClientRect().top - node.getBoundingClientRect().top - block.offset
+    block.element = element
+    return
+  }
   if (anchor && snapshot.exchangeOffset !== undefined) {
     const offset =
       anchor.getBoundingClientRect().top - node.getBoundingClientRect().top
@@ -488,20 +544,27 @@ export function ConversationTimeline({
       if (viewport.current) owned(viewport.current)
     },
   })
-  /** Virtual rows and page insertion need explicit anchoring; normal flow uses the browser. */
+  /** One owner preserves the captured content through every layout change. */
   const holdReader = useCallback(
     (node: HTMLDivElement) => {
-      if (!windowed && !awaitingEarlier.current && !bookmarkRestore.current) return
       const snapshot = restore.current ?? readingAnchor.current
       if (
-        userScrolling.current || scrollMotion.current ||
         !snapshot?.exchangeId ||
         !node.querySelector(
           `[data-exchange="${CSS.escape(snapshot.exchangeId)}"]`
         )
       )
         return
-      preserveScrollAnchor(node, snapshot)
+      // A resize can arrive before the scroll event for this frame. Preserve
+      // the reader's unreported movement as well as their place in the media.
+      const movement = userScrolling.current || scrollMotion.current
+        ? node.scrollTop - lastScrollTop.current : 0
+      const moved = movement === 0 ? snapshot : { ...snapshot,
+        exchangeOffset: snapshot.exchangeOffset === undefined ? undefined : snapshot.exchangeOffset - movement,
+        block: snapshot.block ? { ...snapshot.block, offset: snapshot.block.offset - movement } : undefined }
+      preserveScrollAnchor(node, moved)
+      if (restore.current === snapshot) restore.current = moved
+      if (readingAnchor.current === snapshot) readingAnchor.current = moved
       // Replace the virtualizer's outstanding target so it cannot undo the
       // offset just restored inside the answer.
       if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
@@ -603,6 +666,7 @@ export function ConversationTimeline({
       userScrolling.current = false
       scrollMotion.current = false
       readingAnchor.current = null
+      node.removeAttribute("data-reading-anchor")
       restoringReader.current = null
       pinned.current = true
       if (windowed) rows.scrollToEnd({ behavior: "auto" })
@@ -652,6 +716,7 @@ export function ConversationTimeline({
     )
       readingAnchor.current = captureAnchor(node, [], false)
     else if (pinned.current) readingAnchor.current = null
+    node.toggleAttribute("data-reading-anchor", !!readingAnchor.current?.exchangeId)
     const show = !pinned.current && !atBottom
     setShowJump((current) => (current === show ? current : show))
     // A reader scrolling again after a stalled request asks once more; the
@@ -668,13 +733,14 @@ export function ConversationTimeline({
       if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")
       pendingJump.current = null
       restoringReader.current = null
-      readingAnchor.current = null
+      readingAnchor.current = viewport.current ? captureAnchor(viewport.current, [], false) : null
       userScrolling.current = true
       direction.current = event.deltaY < 0 ? "up" : "down"
       stalled.current = false
       if (!awaitingEarlier.current) restore.current = null
       if (event.deltaY < 0) pinned.current = false
       const node = viewport.current
+      node?.toggleAttribute("data-reading-anchor", !pinned.current && !!readingAnchor.current?.exchangeId)
       if (
         node &&
         ((event.deltaY < 0 && node.scrollTop <= 0) ||
@@ -687,14 +753,42 @@ export function ConversationTimeline({
     [rows, windowed]
   )
 
-  const onPointerDown = useCallback(() => {
+  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    // Preview controls may change layout without scrolling. Keep the media
+    // anchor while a mouse click loads, folds, or starts a preview.
+    if (event.pointerType === "mouse" && event.target instanceof Element &&
+        event.target.closest("button,a,input,textarea,select,video,audio,[contenteditable=true]")) {
+      const preview = event.target.closest("video,audio")?.closest("[data-inline-file-preview]")
+      const turn = preview?.closest("[data-exchange]")
+      const node = viewport.current
+      if (node && preview && turn && !pinned.current) {
+        readingAnchor.current = { ...captureAnchor(node, [], false, turn), block: {
+          element: preview, offset: preview.getBoundingClientRect().top - node.getBoundingClientRect().top,
+          preview: previewIdentity(preview),
+        } }
+        node.setAttribute("data-reading-anchor", "")
+      }
+      reportReading.current()
+      return
+    }
     bookmarkRestore.current = undefined
     if (!awaitingEarlier.current) viewport.current?.removeAttribute("data-preserve-scroll")
     if (windowed && viewport.current)
       rows.scrollToOffset(viewport.current.scrollTop, { behavior: "auto" })
     pendingJump.current = null
     restoringReader.current = null
-    readingAnchor.current = null
+    // A selection or scrollbar press can precede any scroll event. Keep a
+    // position to correct in that interval; onScroll follows actual movement.
+    const node = viewport.current
+    const selected = event.target instanceof Element ? readingBlockAt(event.target) : undefined
+    const turn = selected?.closest("[data-exchange]")
+    readingAnchor.current = node ? selected && turn && node.contains(turn)
+      ? { ...captureAnchor(node, [], false, turn), block: {
+          element: selected, offset: selected.getBoundingClientRect().top - node.getBoundingClientRect().top,
+          preview: previewIdentity(selected),
+        } }
+      : captureAnchor(node, [], false) : null
+    node?.toggleAttribute("data-reading-anchor", !pinned.current && !!readingAnchor.current?.exchangeId)
     userScrolling.current = true
     stalled.current = false
     if (!awaitingEarlier.current) restore.current = null
@@ -749,14 +843,18 @@ export function ConversationTimeline({
         const id = element.getAttribute("data-exchange")
         return id ? [id] : []
       })
-      const snapshot = captureAnchor(node, [], false)
+      const held = readingAnchor.current
+      // Reporting and layout correction use the same reading position. A
+      // control click may have chosen a preview away from the pane's center.
+      const snapshot = held?.exchangeId && elements.some(element => element.getAttribute("data-exchange") === held.exchangeId)
+        ? held : captureAnchor(node, [], false)
       const anchorTurn = snapshot.exchangeId ?? ids[0]
       const anchorElement = anchorTurn ? elements.find(element => element.getAttribute("data-exchange") === anchorTurn) : undefined
-      const block = snapshot.block && anchorElement ? {
-        index: Array.from(anchorElement.querySelectorAll("p,pre,li,td,h1,h2,h3,h4,h5,h6")).indexOf(snapshot.block.element),
-        text: (snapshot.block.element.textContent ?? "").slice(0, 160),
-        offset: snapshot.block.offset,
-      } : undefined
+      const block = snapshot.block && anchorElement ? snapshot.block.preview !== undefined
+        ? { kind: "preview" as const, ...snapshot.block.preview, offset: snapshot.block.offset }
+        : { index: Array.from(anchorElement.querySelectorAll(TEXT_BLOCKS)).indexOf(snapshot.block.element),
+            text: (snapshot.block.element.textContent ?? "").slice(0, 160), offset: snapshot.block.offset }
+        : undefined
       const first = exchanges.findIndex(exchange => exchange.id === ids[0])
       const last = exchanges.findIndex(exchange => exchange.id === ids.at(-1))
       const neighboring = first < 0 || last < 0 ? [] : exchanges.slice(
@@ -820,6 +918,7 @@ export function ConversationTimeline({
     setEverMore(false)
     setShowJump(false)
     viewport.current?.removeAttribute("data-preserve-scroll")
+    viewport.current?.removeAttribute("data-reading-anchor")
   }, [identity, readingSource, paneKey])
 
   // Before the first paint of a conversation, and of its first turns when it
@@ -850,7 +949,29 @@ export function ConversationTimeline({
     const grown = new ResizeObserver(pin)
     grown.observe(node)
     if (node.firstElementChild) grown.observe(node.firstElementChild)
-    return () => grown.disconnect()
+    // Two inline bodies can resize in opposite directions while the column
+    // and even the turn keep the same height. Observe their actual flow boxes
+    // as well; total transcript height alone cannot describe reading geometry.
+    const boxes = new Set<Element>()
+    const observeBodies = (body: Element) => {
+      const next = [...body.querySelectorAll(INLINE_FLOW_BOXES)]
+      if (body.matches(INLINE_FLOW_BOXES)) next.push(body)
+      for (const box of next) if (!boxes.has(box)) { grown.observe(box); boxes.add(box) }
+    }
+    observeBodies(node)
+    const structure = new MutationObserver((mutations) => {
+      // Streaming/highlighting must not rescan the entire mounted transcript.
+      // Discover only added subtrees and release observations of removed boxes.
+      if (mutations.some(mutation => mutation.removedNodes.length > 0))
+        for (const box of boxes) if (!node.contains(box)) { grown.unobserve(box); boxes.delete(box) }
+      for (const mutation of mutations)
+        for (const added of mutation.addedNodes) if (added instanceof Element) observeBodies(added)
+      // Equal-height text replacements and body remounts can move content
+      // without resizing any existing box. React batches these mutations.
+      pin()
+    })
+    structure.observe(node, { childList: true, characterData: true, subtree: true })
+    return () => { structure.disconnect(); grown.disconnect() }
   }, [identity, isEmpty, owned, holdReader])
 
   const endEarlier = useCallback((progressed: boolean) => {
@@ -1021,6 +1142,7 @@ export function ConversationTimeline({
     // Measurement reconciliation must no longer own the old index target.
     if (windowed) rows.scrollToOffset(node.scrollTop, { behavior: "auto" })
     readingAnchor.current = captureAnchor(node, [], false, element)
+    node.setAttribute("data-reading-anchor", "")
     owned(node)
   }, [owned, windowed, rows])
 
@@ -1098,14 +1220,16 @@ export function ConversationTimeline({
     if (!exchange || exchange.unloaded !== undefined) return
     const element = node.querySelector(`[data-exchange="${CSS.escape(bookmark.turn)}"]`)
     if (!element) return
-    // Measure the saved paragraph after intrinsic placeholders have given
+    // Measure the saved content after intrinsic placeholders have given
     // way to real layout, before choosing any offset.
     node.setAttribute("data-preserve-scroll", "")
-    const blocks = Array.from(element.querySelectorAll("p,pre,li,td,h1,h2,h3,h4,h5,h6"))
+    const blocks = Array.from(element.querySelectorAll(TEXT_BLOCKS))
     const saved = bookmark.block
-    const candidate = saved ? blocks[saved.index] : undefined
-    const block = saved && (candidate?.textContent ?? "").slice(0, 160) === saved.text ? candidate
-      : saved ? blocks.find(item => (item.textContent ?? "").slice(0, 160) === saved.text) : undefined
+    const text = saved?.kind !== "preview" ? saved : undefined
+    const candidate = text ? blocks[text.index] : undefined
+    const block = saved?.kind === "preview" ? element.querySelectorAll(previewSelector(saved))[saved.index]
+      : text && (candidate?.textContent ?? "").slice(0, 160) === text.text ? candidate
+      : text ? blocks.find(item => (item.textContent ?? "").slice(0, 160) === text.text) : undefined
     const target = block ?? element
     node.scrollTop += target.getBoundingClientRect().top - node.getBoundingClientRect().top -
       (block && saved ? saved.offset : bookmark.offset)
@@ -1113,12 +1237,11 @@ export function ConversationTimeline({
     owned(node)
     readingAnchor.current = { ...captureAnchor(node, [], false), exchangeId: bookmark.turn,
       exchangeOffset: element.getBoundingClientRect().top - node.getBoundingClientRect().top,
-      block: block && saved ? { element: block, offset: saved.offset } : undefined }
-    // This is a structural replacement, just like a prepend. Keep the
-    // semantic block anchored through measurement before native anchoring
-    // takes over; releasing it in this layout pass let the browser choose
-    // a different paragraph while intrinsic heights settled.
-    node.setAttribute("data-preserve-scroll", "")
+      block: block && saved ? { element: block, offset: saved.offset,
+        preview: saved.kind === "preview" ? { type: saved.type, path: saved.path, index: saved.index } : undefined } : undefined }
+    node.setAttribute("data-reading-anchor", "")
+    // This is a structural replacement, just like a prepend. Keep the saved
+    // content anchored while intrinsic heights and row measurements settle.
     let remaining = 4
     const settle = () => {
       if (bookmarkRestore.current !== bookmark || viewport.current !== node) return

@@ -396,7 +396,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   const diagram = language === "mermaid"
 
   return (
-    <div className="mako-code group">
+    <div className="mako-code group" data-inline-code={language ?? "text"}>
       <div className="mako-code-head">
         <span className="font-mono text-label tracking-wide text-faint select-none">
           {language ?? "text"}

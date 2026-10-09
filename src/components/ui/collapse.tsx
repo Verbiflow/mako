@@ -21,6 +21,7 @@ export function Collapse({
   if (open && !opened) setOpened(true)
   return (
     <div
+      data-collapse
       inert={!open}
       className={cn(
         "grid motion-safe:transition-[grid-template-rows,opacity]",

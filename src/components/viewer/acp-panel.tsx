@@ -27,6 +27,7 @@ import { ConversationTimeline } from "@/components/transcript/conversation-timel
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { useThreads } from "@/state/threads"
+import { asksInSession, descriptorFor } from "@/state/descriptors"
 import { usePlanDecision } from "@/state/plan-mode"
 import { viewerHandedOff } from "@/state/thread-viewing"
 import { toast } from "sonner"
@@ -423,11 +424,14 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   )
 }
 
+/** Registered against `questions` asked in the session: the harness must declare that form for the card to draw. */
 function SessionQuestion() {
+  const harness = useAcp(state => activeLiveAcp(state)?.harness)
+  const inSession = useThreads(state => asksInSession(descriptorFor(state, harness)))
   const control = useAcp(state => activeLiveAcp(state)?.control)
   const requests = useAcp(state => activeLiveAcp(state)?.requests ?? EMPTY_QUEUE)
   const blocking = useAcp(state => activeLiveAcp(state)?.permission)
-  const question = useMemo(() => control && !blocking ? latestPendingQuestion(control, requests) : undefined, [control, requests, blocking])
+  const question = useMemo(() => inSession && control && !blocking ? latestPendingQuestion(control, requests) : undefined, [inSession, control, requests, blocking])
   if (!question) return null
   return <QuestionPermission key={question.id} permission={{
     id: question.id, sessionId: question.bindingId, title: "Question", options: [], questions: question.native.questions.filter(item => !question.answered?.includes(item.id)),
