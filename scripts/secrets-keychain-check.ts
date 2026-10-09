@@ -91,8 +91,9 @@ async function check(): Promise<void> {
     await rm(sealedByNode, { force: true })
   } else {
     const secrets = fileSecrets(join(root, "secrets"), aesSealer(wrappedKey(dataKeyPath(root), encryption)))
-    if (step === "write") report.wrote = Boolean(await secrets.write("saved-key", "proof", expected).catch(() => null))
-    else await readBack(secrets, expected, report)
+    const name = process.env.PROOF_SAVED_KEY ?? "proof"
+    if (step === "write") report.wrote = Boolean(await secrets.write("saved-key", name, expected).catch(() => null))
+    else await readBack(secrets, expected, report, name)
   }
   console.log(`PROOF ${JSON.stringify(report)}`)
   if (app) app.exit(0)
