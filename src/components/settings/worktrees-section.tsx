@@ -5,6 +5,7 @@ import { Action, Blank, Chip, IconAction, ListCard, ListCardRow, SettingRow, Tog
 import { Shimmer } from "@/components/ui/shimmer"
 import { formatBytes, formatRelative } from "@/lib/format"
 import { desktop } from "@/state/desktop"
+import { IfCanReveal } from "@/components/ui/machine-gate"
 import { togglePref, usePrefs } from "@/state/prefs"
 import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
 import { removable, worktreeCheckouts, type CheckoutDetail } from "@/lib/worktree-removal"
@@ -62,9 +63,11 @@ function WorktreeRow({ checkout, onRemove }: { checkout: CheckoutDetail; onRemov
           {checkout.bytes !== null ? ` · ${formatBytes(checkout.bytes)}` : ""}
         </div>
       </div>
-      <IconAction label="Show the folder" size="xs" onClick={() => void desktop.revealPath(checkout.path)}>
-        <FolderOpenIcon />
-      </IconAction>
+      <IfCanReveal>
+        <IconAction label="Show the folder" size="xs" onClick={() => void desktop.revealPath(checkout.path)}>
+          <FolderOpenIcon />
+        </IconAction>
+      </IfCanReveal>
       <IconAction
         label={removeHint(checkout)}
         size="xs"

@@ -275,6 +275,7 @@ const DESK_COMMANDS: DeskCommand[] = [
     title: "Open folder…",
     section: "Workspace",
     keys: "mod+o",
+    when: () => store.get().machine.chooseFolder,
     run: () => void actions.pickWorkspace(),
   },
   {

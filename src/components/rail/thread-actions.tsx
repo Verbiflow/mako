@@ -3,6 +3,7 @@ import { toast } from "sonner"
 import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, ScrollTextIcon, SquareIcon, Trash2Icon } from "lucide-react"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { desktop } from "@/state/desktop"
+import { IfCanReveal } from "@/components/ui/machine-gate"
 import { threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
 import { archivedWithWorktree, removeWorktree, useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
 import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
@@ -105,7 +106,9 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
         <MenuSeparator />
         <MenuLabel>Worktree on {worktree.branch}</MenuLabel>
         <MenuItem onSelect={() => { void navigator.clipboard.writeText(worktree.path).then(() => toast("Worktree path copied")) }}><CopyIcon className="size-3.5" />Copy its path</MenuItem>
-        <MenuItem onSelect={() => { void desktop.revealPath(worktree.path) }}><FolderOpenIcon className="size-3.5" />Show the folder</MenuItem>
+        <IfCanReveal>
+          <MenuItem onSelect={() => { void desktop.revealPath(worktree.path) }}><FolderOpenIcon className="size-3.5" />Show the folder</MenuItem>
+        </IfCanReveal>
         <MenuItem data-thread-action="remove-worktree" disabled={uncommitted > 0} onSelect={() => { void removeWorktree(worktree) }}>
           <Trash2Icon className="size-3.5" />
           <span className="min-w-0 flex-1">

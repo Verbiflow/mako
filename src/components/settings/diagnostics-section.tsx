@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Action } from "@/components/ui/kit"
 import { desktop } from "@/state/desktop"
+import { IfCanReveal } from "@/components/ui/machine-gate"
 import { diagnostics } from "@/state/diagnostics"
 import { formatBytes, formatRelative } from "@/lib/format"
 import type { CrashReport } from "../../../electron/crash.ts"
@@ -107,12 +108,14 @@ export function DiagnosticsSection() {
               each. Read it when a session says it did not start.
             </p>
           </div>
-          <Action
-            tone="ghost"
-            onClick={() => void desktop.revealPath(hostLog)}
-          >
-            Show the log
-          </Action>
+          <IfCanReveal>
+            <Action
+              tone="ghost"
+              onClick={() => void desktop.revealPath(hostLog)}
+            >
+              Show the log
+            </Action>
+          </IfCanReveal>
         </div>
       ) : null}
 
@@ -169,9 +172,11 @@ export function DiagnosticsSection() {
           Refresh
         </Action>
         {dir ? (
-          <Action tone="ghost" onClick={() => void desktop.revealPath(dir)}>
-            Show the folder
-          </Action>
+          <IfCanReveal>
+            <Action tone="ghost" onClick={() => void desktop.revealPath(dir)}>
+              Show the folder
+            </Action>
+          </IfCanReveal>
         ) : null}
         {crashes.length > 0 ? (
           <Action

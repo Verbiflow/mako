@@ -50,7 +50,8 @@ import {
 } from "@/state/threads"
 import type { ThreadRef } from "@/lib/types"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
-import { actions } from "@/state/session"
+import { actions, useCanChooseFolder } from "@/state/session"
+import { IfCanChooseFolder, IfCanReveal } from "@/components/ui/machine-gate"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { CheckoutLabel } from "@/components/rail/checkout-label"
 import { useAcp } from "@/state/acp"
@@ -156,6 +157,7 @@ function useLiveTime(): number {
 
 export function AgentThreads() {
   useHarnessIdentity()
+  const canChooseFolder = useCanChooseFolder()
   const rail = useRef<HTMLDivElement>(null)
   const topFade = useRef<HTMLSpanElement>(null)
   const [query, setQuery] = useState("")
@@ -559,11 +561,11 @@ export function AgentThreads() {
                         new CustomEvent("mako:focus-composer")
                       ),
                   },
-                  {
+                  ...(canChooseFolder ? [{
                     label: "Open a folder",
                     keys: formatChord("mod+o"),
                     onSelect: () => void actions.pickWorkspace(),
-                  },
+                  }] : []),
                 ]}
               />
             )
@@ -766,15 +768,17 @@ function RailHeader({
         <SearchIcon className="size-3.5" />
       </button>
       <HarnessFilter counts={counts} filter={filter} />
-      <button
-        type="button"
-        aria-label="Open a folder"
-        title="Open a folder"
-        onClick={() => void actions.pickWorkspace()}
-        className="pressable rounded-md p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-      >
-        <FolderPlusIcon className="size-3.5" />
-      </button>
+      <IfCanChooseFolder>
+        <button
+          type="button"
+          aria-label="Open a folder"
+          title="Open a folder"
+          onClick={() => void actions.pickWorkspace()}
+          className="pressable rounded-md p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+        >
+          <FolderPlusIcon className="size-3.5" />
+        </button>
+      </IfCanChooseFolder>
     </div>
   )
 }
@@ -912,6 +916,7 @@ function HarnessFilter({
           <button
             key={label}
             type="button"
+            data-rail-show={value ? "archived" : "current"}
             onClick={() => {
               if (value !== archived) setPref("railGrouping", value ? "archived" : "project")
               if (value) setOpen(false)
@@ -986,9 +991,11 @@ function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHid
       <MenuItem onSelect={() => { void desktop.openInEditor(folder.cwd, prefsStore.get().externalEditor) }}>
         <CodeIcon className="size-3.5" />Open in editor
       </MenuItem>
-      <MenuItem onSelect={() => { void desktop.revealPath(folder.cwd) }}>
-        <FolderOpenIcon className="size-3.5" />Show the folder
-      </MenuItem>
+      <IfCanReveal>
+        <MenuItem onSelect={() => { void desktop.revealPath(folder.cwd) }}>
+          <FolderOpenIcon className="size-3.5" />Show the folder
+        </MenuItem>
+      </IfCanReveal>
       <MenuItem onSelect={() => { void navigator.clipboard.writeText(folder.cwd).then(() => toast("Path copied")) }}>
         <CopyIcon className="size-3.5" />Copy path
       </MenuItem>

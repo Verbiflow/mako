@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { Action } from "@/components/ui/kit"
+import { IfCanReveal } from "@/components/ui/machine-gate"
 import { pluginFiles } from "@/state/plugins"
 import { plugins } from "@/extend/plugin-host"
 import { useRegistry } from "@/extend/registry"
@@ -178,10 +179,12 @@ export function PluginsSection() {
           <PlusIcon className="size-3" />
           New UI extension
         </Action>
-        <Action tone="outline" onClick={() => void pluginFiles.reveal()}>
-          <FolderOpenIcon className="size-3" />
-          Open folder
-        </Action>
+        <IfCanReveal>
+          <Action tone="outline" onClick={() => void pluginFiles.reveal()}>
+            <FolderOpenIcon className="size-3" />
+            Open folder
+          </Action>
+        </IfCanReveal>
       </div>
     </div>
   )
