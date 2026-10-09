@@ -114,7 +114,8 @@ async function launch() {
   const started = performance.now()
   const executable = join(app, "Contents/MacOS/Mako")
   const debugPort = await threadDebugPort()
-  const flags = ["--background", `--remote-debugging-port=${debugPort}`, "--remote-debugging-address=127.0.0.1"]
+  // The desktop hands its host the data key; a mock keychain keeps the person's items out of reach.
+  const flags = ["--background", "--use-mock-keychain", `--remote-debugging-port=${debugPort}`, "--remote-debugging-address=127.0.0.1"]
   // Finder/Dock launch through LaunchServices. Direct exec alone misses -600
   // from stale or hidden registrations. -W tracks the client's whole lifetime.
   const child = launchServices
