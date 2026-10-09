@@ -13,7 +13,7 @@
     "dev": "npm run web",
     "dev:hot": "npm run build:electron && node electron/start.mjs --web --hot",
     "test:dev-updates": "node scripts/test-dev-updates.mjs && node scripts/test-dev-host-replacement.mjs && tsx scripts/test-dev-host-build.ts",
-    "test:background-lifecycle": "npm run build:electron && tsx scripts/test-host-shutdown.ts && node scripts/test-background-lifecycle.mjs",
+    "test:host-shutdown": "npm run build:electron && tsx scripts/test-host-shutdown.ts && tsx scripts/test-provider-startup-gate.mjs",
     "test:provider-turns": "npm run build:electron && node scripts/test-acp-provider-turn.mjs",
     "test:acp-background-work": "npm run build:electron && node scripts/test-acp-background-work.mjs",
     "test:thread-environment-launch": "npm run build:electron && node scripts/test-thread-environment-launch.mjs",

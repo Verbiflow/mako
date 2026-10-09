@@ -1,20 +1,16 @@
 import { spawn } from "node:child_process"
 
 /**
- * How the host stops: one path for every reason, whatever runtime it's in.
+ * How the host stops: one path for every reason.
  *
  * The first stop runs cleanup once; a later one, for any reason, joins it and
  * changes nothing. Cleanup that fails still ends the process, with code 1.
- * Ending the process is the runtime's: Electron's app while Electron runs the
- * host (`app.quit`, `app.relaunch`), plain Node's process otherwise.
  */
 export type HostStopReason =
   | { kind: "signal"; signal: StopSignal }
   | { kind: "idle" }
   /** A client asked: quit, install an update and quit, or restart on the current build. */
   | { kind: "request"; action: "quit" | "install" | "restart" }
-  /** Electron's own quit, while it runs the host: the last window, Cmd+Q, the system logging out. */
-  | { kind: "desktop" }
 
 export type StopSignal = "SIGTERM" | "SIGINT" | "SIGHUP"
 
@@ -57,8 +53,6 @@ export function hostLifecycle(options: HostLifecycleOptions): HostLifecycle {
           await options.failed(error instanceof Error ? error : new Error(String(error)))
         }
         state = { kind: "stopped", reason, code }
-        // Electron must finish unwinding a prevented will-quit before it is asked to quit again.
-        await new Promise((done) => setImmediate(done))
         options.exit(code, code === 0 && reason.kind === "request" && reason.action === "restart")
       })()
       return stopped
@@ -69,7 +63,7 @@ export function hostLifecycle(options: HostLifecycleOptions): HostLifecycle {
 }
 
 /** What the log records of a stop. */
-export type StopFields = { signal: StopSignal } | { reason: "idle" | "desktop" | "quit" | "install" | "restart" }
+export type StopFields = { signal: StopSignal } | { reason: "idle" | "quit" | "install" | "restart" }
 
 function reasonFields(reason: HostStopReason): StopFields {
   if (reason.kind === "signal") return { signal: reason.signal }
@@ -79,22 +73,13 @@ function reasonFields(reason: HostStopReason): StopFields {
 
 /**
  * A termination signal stops the host through its lifecycle; a second one ends
- * the process at once, as Chromium's own handler would.
- *
- * Under Electron, call this after `ready`: Electron installs its own handlers
- * then, which call `app.quit()`, and a busy or persistent host answers that by
- * staying in the background. Node takes a signal back from Electron only when
- * the signal's first listener is added, and a library that listened while
- * modules loaded (proper-lockfile, through signal-exit) made that happen too
- * early, so every listener is removed and added again here. The host's
- * listener stays attached through the first signal: signal-exit re-raises a
- * signal it finds itself alone with, which would skip the cleanup.
+ * the process at once. The host's listener stays attached through the first
+ * signal: signal-exit (through proper-lockfile) re-raises a signal it finds
+ * itself alone with, which would skip the cleanup.
  */
 export function stopOnSignals(lifecycle: HostLifecycle): void {
   let signalled = false
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-    const earlier = process.listeners(signal)
-    process.removeAllListeners(signal)
     const stop = () => {
       if (signalled) {
         process.removeListener(signal, stop)
@@ -105,7 +90,6 @@ export function stopOnSignals(lifecycle: HostLifecycle): void {
       void lifecycle.stop({ kind: "signal", signal })
     }
     process.on(signal, stop)
-    for (const listener of earlier) process.on(signal, listener)
   }
 }
 
@@ -113,10 +97,9 @@ export function stopOnSignals(lifecycle: HostLifecycle): void {
 export const SUCCEEDS_ENV = "MAKO_HOST_SUCCEEDS"
 
 /**
- * Plain Node's way to end the host. A restart starts the same program again,
- * detached, before this one exits; the successor waits for this process's lock
- * (`acquireHostLock`'s `predecessor`), as Electron's relauncher waits for its
- * parent.
+ * How the host ends. A restart starts the same program again, detached,
+ * before this one exits; the successor waits for this process's lock
+ * (`acquireHostLock`'s `predecessor`).
  */
 export function nodeHostExit(): HostLifecycleOptions["exit"] {
   return (code, restart) => {

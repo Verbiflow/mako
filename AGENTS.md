@@ -2018,7 +2018,7 @@ registry. Each installer was proven against a scratch `HOME`.
 
 `test:message-queue` covers these boundaries with held discovery promises and real
 fixture subprocesses. ACP and app-server startup must consume the host-provided
-MCP snapshot, including its local-control readiness gate. `test:background-lifecycle`
+MCP snapshot, including its local-control readiness gate. `test:host-shutdown`
 checks that no provider process starts before that gate. `test:mcp` verifies provider
 discovery and managed diagnostics overlap without omitting either result.
 

@@ -4,7 +4,6 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { backgroundLifecycle } from "../electron/background-lifecycle.js"
 import { hostLifecycle } from "../electron/host-lifecycle.js"
 import { HostCallLifetime } from "../electron/host-call-lifetime.js"
 import { LiveConversations } from "../electron/live-conversations.js"
@@ -21,25 +20,20 @@ function deferred() {
 }
 const tick = () => new Promise<void>(done => setImmediate(done))
 
-// A window can cancel between before-quit and will-quit. No stores close then.
+// Every stop joins the first: cleanup runs once and the process ends once.
 const cleanup = deferred()
-let cleaned = 0, quits = 0, prevented = 0
+let cleaned = 0, quits = 0
 const host = hostLifecycle({
   cleanup: () => { cleaned++; return cleanup.promise },
   exit: () => { quits++ }, log() {}, failed: async error => { throw error },
 })
-const lifecycle = backgroundLifecycle({ lifecycle: host, keepInBackground: () => false, hide() {} })
-const event = { preventDefault() { prevented++ } }
-lifecycle.beforeQuit(event)
-await tick()
-assert.equal(cleaned, 0, "A cancelled window close must leave the host usable")
-lifecycle.willQuit(event); lifecycle.willQuit(event)
+const first = host.stop({ kind: "request", action: "quit" })
+assert.equal(host.stop({ kind: "signal", signal: "SIGTERM" }), first, "A later stop joins the first")
 await tick(); await tick()
-assert.equal(cleaned, 1); assert.equal(quits, 0)
-cleanup.resolve(); await tick(); await tick()
+assert.equal(cleaned, 1); assert.equal(quits, 0, "The process ends only after cleanup")
+cleanup.resolve(); await first
 assert.equal(quits, 1)
-lifecycle.willQuit(event)
-assert.equal(prevented, 2, "will-quit after the host stopped passes through")
+assert.deepEqual(host.state(), { kind: "stopped", reason: { kind: "request", action: "quit" }, code: 0 })
 
 // A boot/read started before shutdown can still use its store until it drains.
 const lifetime = new HostCallLifetime(), reading = deferred()
@@ -96,4 +90,4 @@ for (const provider of [...registeredHarnessIds(), "future"]) {
     console.log(`${provider}: provider close, ownership release and tool revocation drained before store close`)
   } finally { close.resolve(); revoke.resolve(); await owner.stop(); rmSync(root, { recursive: true, force: true }) }
 }
-console.log("Quit cancellation, repeated quit, in-flight calls and shutdown admission passed")
+console.log("Repeated stops, in-flight calls and shutdown admission passed")
