@@ -6,6 +6,7 @@ import {
 } from "./desktop-notifications.js"
 import { readNotificationAuthorization } from "./notification-authorization.js"
 import { hostEnvironment } from "./host-environment.js"
+import { nodePlatform, onMac } from "./platform.js"
 
 /**
  * The real platform behind `createDesktopNotifier`, shared by the desktop
@@ -23,7 +24,7 @@ export function electronDesktopNotifier(options: {
   activate: (windowId: number, activation: { id: string; subject: string }) => void
 }): DesktopNotifier {
   const platform: DesktopNotifierPlatform = {
-    platform: process.platform,
+    platform: nodePlatform(),
     signed: hostEnvironment().packaged,
     supported: () => Notification.isSupported(),
     create: (notification) => {
@@ -47,7 +48,7 @@ export function electronDesktopNotifier(options: {
     },
     activate: options.activate,
     setBadge: (count, label) => {
-      if (process.platform === "darwin") app.dock?.setBadge(label || options.idleBadge)
+      if (onMac()) app.dock?.setBadge(label || options.idleBadge)
       else app.setBadgeCount(count)
     },
     authorization: () => readNotificationAuthorization(),
@@ -64,6 +65,6 @@ export function surfaceWindow(window: BrowserWindow): void {
   if (window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
   window.show()
-  if (process.platform === "darwin") app.focus({ steal: true })
+  if (onMac()) app.focus({ steal: true })
   window.focus()
 }

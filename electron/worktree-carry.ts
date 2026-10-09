@@ -10,6 +10,7 @@ import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { discoverRepositories } from "./repository-discovery.js"
 import { git, succeeds } from "@mako/git"
+import { onLinux, onMac } from "./platform.js"
 
 const execute = promisify(execFile)
 
@@ -151,7 +152,7 @@ export function virtualEnvironment(path: string): boolean {
 }
 
 async function cloneTrees(pairs: Array<[string, string]>, background: boolean): Promise<boolean[]> {
-  if (process.platform === "darwin") {
+  if (onMac()) {
     const [command, args] = background
       ? belowAgents("/usr/bin/osascript", ["-l", "JavaScript", "-e", CLONE_TREES, ...pairs.flat()])
       : ["/usr/bin/osascript", ["-l", "JavaScript", "-e", CLONE_TREES, ...pairs.flat()]]
@@ -169,8 +170,8 @@ async function cloneTrees(pairs: Array<[string, string]>, background: boolean): 
 
 /** Whether this volume shares blocks between copies; Linux only has a per-file answer, so ask with one of Git's files. */
 async function sharesBlocks(repoRoot: string, checkout: string): Promise<boolean> {
-  if (process.platform === "darwin") return true
-  if (process.platform !== "linux") return false
+  if (onMac()) return true
+  if (!onLinux()) return false
   const probe = join(checkout, `.mako-clone-probe-${randomUUID()}`)
   try {
     await copyFile(join(repoRoot, ".git", "HEAD"), probe, constants.COPYFILE_FICLONE_FORCE)
@@ -393,7 +394,7 @@ export async function carryFiles(repoRoot: string, checkout: string, entries: re
     else if (info.isSymbolicLink()) await symlink(await readlink(from), to)
     else if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(from, to, constants.COPYFILE_EXCL)
     // Node's FICLONE never clones on macOS (libuv copies the bytes there); `cp -c` does.
-    else if (info.isFile() && process.platform === "darwin") await execute("/bin/cp", ["-c", "-n", from, to])
+    else if (info.isFile() && onMac()) await execute("/bin/cp", ["-c", "-n", from, to])
     else if (info.isFile()) await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
     else if (info.isDirectory()) {
       const [cloned] = await cloneTrees([[from, to]], false)
@@ -462,7 +463,7 @@ export async function bringFiles(repoRoot: string, checkout: string, entries: re
       const source = await realpath(join(repoRoot, path))
       const info = await lstat(source)
       if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(source, to, constants.COPYFILE_EXCL)
-      else if (info.isFile() && process.platform === "darwin") await execute("/bin/cp", ["-c", "-n", source, to])
+      else if (info.isFile() && onMac()) await execute("/bin/cp", ["-c", "-n", source, to])
       else if (info.isFile()) await copyFile(source, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
       else if (info.isDirectory()) {
         const [cloned] = await cloneTrees([[source, to]], false)
@@ -780,7 +781,7 @@ export function outputNames(recipe: Recipe | undefined): string[] {
 
 /** A checkout's own size, in the background band, without the named output folders. */
 export async function ownBytes(path: string, skipped: readonly string[] = []): Promise<number | null> {
-  const skip = skipped.flatMap((name) => process.platform === "darwin" ? ["-I", name] : [`--exclude=${name}`])
+  const skip = skipped.flatMap((name) => onMac() ? ["-I", name] : [`--exclude=${name}`])
   const [command, args] = belowAgents("du", ["-sk", ...skip, path])
   const kilobytes = Number((await execute(command, args).then(({ stdout }) => stdout, () => "")).split("\t")[0])
   return Number.isFinite(kilobytes) && kilobytes > 0 ? kilobytes * 1024 : null

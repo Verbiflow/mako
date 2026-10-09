@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { basename, delimiter, dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { MachineOffer } from "./contracts/machine-offer.js"
+import { nodePlatform } from "./platform.js"
 
 /**
  * What a person sitting at the host's machine sees: its file manager, its
@@ -277,7 +278,7 @@ let machine: MachineCapability | undefined
 
 /** This host's machine, probed once. */
 export function hostMachine(): MachineCapability {
-  machine ??= probeMachine({ platform: process.platform, env: process.env })
+  machine ??= probeMachine({ platform: nodePlatform(), env: process.env })
   return machine
 }
 

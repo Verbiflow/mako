@@ -3,6 +3,7 @@ import { access } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { NotificationPermission } from "./contracts/notifications.js"
+import { onMac } from "./platform.js"
 
 /**
  * The truth about macOS notification authorization.
@@ -73,7 +74,7 @@ let inFlight: Promise<NotificationPermission | null> | null = null
 export function readNotificationAuthorization(
   executable = process.execPath
 ): Promise<NotificationPermission | null> {
-  if (process.platform !== "darwin") return Promise.resolve(null)
+  if (!onMac()) return Promise.resolve(null)
   helperPresent ??= access(helperPathFor(executable)).then(
     () => helperPathFor(executable),
     () => null

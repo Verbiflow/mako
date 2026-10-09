@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path"
 import { spawn } from "node:child_process"
 import type { ExternalEditor } from "./shared.js"
 import { presentMachine } from "./machine.js"
+import { onMac } from "./platform.js"
 
 interface EditorDefinition {
   id: string
@@ -51,7 +52,7 @@ async function commandExists(command: string): Promise<boolean> {
 }
 
 async function installedMacApp(names: string[] = []): Promise<string | undefined> {
-  if (process.platform !== "darwin") return undefined
+  if (!onMac()) return undefined
   for (const name of names) {
     const paths = [
       join("/Applications", `${name}.app`),
