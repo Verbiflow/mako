@@ -5,6 +5,7 @@ import {
   DESKTOP_CALLS,
   DESKTOP_LINE_LIMIT,
   DESKTOP_PATH,
+  DESKTOP_ROLE_HEADER,
   DesktopAskSchema,
   readDesktopLine,
   type DesktopAsk,
@@ -12,6 +13,7 @@ import {
   type DesktopMethod,
   type DesktopParams,
   type DesktopResult,
+  type DesktopRole,
 } from "./contracts/desktop-channel.js"
 import { hostLog } from "./host-log.js"
 
@@ -20,25 +22,37 @@ export type DesktopHandlers = { [Method in DesktopMethod]?: (params: DesktopPara
 const RETRY_FIRST_MS = 500
 const RETRY_LAST_MS = 5_000
 
+export interface DesktopLinkOptions {
+  /** The host's socket, read again for each connection. */
+  socket(): string
+  role: DesktopRole
+  handlers: DesktopHandlers
+  /** A connection opened: the host knows nothing this desktop told an earlier one. */
+  attached?(): void
+  /** A connection ended: the host forgets what it asked for. */
+  detached?(): void
+  /**
+   * The agent views app serves one host for one attachment: refused, or once
+   * that attachment ends, the link stops and says so here. A person's
+   * desktop has no `finished` and attaches again for as long as it runs.
+   */
+  finished?(): void
+}
+
 /**
- * The desktop's end of `POST /desktop` (`contracts/desktop-channel.ts`) for as
- * long as it runs: answers the host on `socket` with `handlers`, and carries
- * frames its desk windows send on their own. A host that restarts or comes
- * up later is attached again; the link never starts one. `detached` runs each
- * time a connection ends, since the host forgets what it asked for.
+ * The desktop's end of `POST /desktop` (`contracts/desktop-channel.ts`):
+ * answers the host with `handlers`, and carries frames its desk windows and
+ * updater send on their own. A host that restarts or comes up later is
+ * attached again; the link never starts one.
  */
 export class DesktopLink {
   private readonly stop = new AbortController()
   private current: ClientRequest | undefined
   private running = false
-  private readonly socket: () => string
-  private readonly handlers: DesktopHandlers
-  private readonly detached: () => void
+  private readonly options: DesktopLinkOptions
 
-  constructor(socket: () => string, handlers: DesktopHandlers, detached: () => void = () => {}) {
-    this.socket = socket
-    this.handlers = handlers
-    this.detached = detached
+  constructor(options: DesktopLinkOptions) {
+    this.options = options
   }
 
   start(): void {
@@ -61,29 +75,32 @@ export class DesktopLink {
     let retry = RETRY_FIRST_MS
     while (!this.stop.signal.aborted) {
       const outcome = await this.connect()
+      if (this.options.finished) {
+        this.options.finished()
+        return
+      }
       if (outcome === "attached") retry = RETRY_FIRST_MS
-      // A host older than the channel answers 404 and does this work itself; one
-      // another desktop answers says 409 until that desktop leaves.
-      const wait = outcome === "absent" ? RETRY_LAST_MS : retry
+      // Another desktop answers until it leaves; asking again sooner only adds refusals to the log.
+      const wait = outcome === "refused" ? RETRY_LAST_MS : retry
       await delay(wait, undefined, { signal: this.stop.signal }).catch(() => undefined)
       if (outcome !== "attached") retry = Math.min(retry * 2, RETRY_LAST_MS)
     }
   }
 
-  private connect(): Promise<"attached" | "absent" | "failed"> {
+  private connect(): Promise<"attached" | "refused" | "failed"> {
     return new Promise((resolve) => {
       let attached = false
       const req = request({
-        socketPath: this.socket(),
+        socketPath: this.options.socket(),
         path: DESKTOP_PATH,
         method: "POST",
-        headers: { "content-type": "application/x-ndjson" },
+        headers: { "content-type": "application/x-ndjson", [DESKTOP_ROLE_HEADER]: this.options.role },
         signal: this.stop.signal,
       })
       const finish = () => {
         if (this.current === req) {
           this.current = undefined
-          this.detached()
+          this.options.detached?.()
         }
         resolve(attached ? "attached" : "failed")
       }
@@ -91,12 +108,13 @@ export class DesktopLink {
         if (response.statusCode !== 200) {
           response.resume()
           req.destroy()
-          resolve(response.statusCode === 404 || response.statusCode === 409 ? "absent" : "failed")
+          resolve(response.statusCode === 409 ? "refused" : "failed")
           return
         }
         attached = true
         this.current = req
-        hostLog("desktop", "answering the host", { socket: this.socket() })
+        hostLog("desktop", "answering the host", { socket: this.options.socket(), role: this.options.role })
+        this.options.attached?.()
         const lines = new LineAssembler(DESKTOP_LINE_LIMIT)
         response.on("data", (chunk: Buffer) => {
           const complete = lines.push(chunk)
@@ -113,7 +131,7 @@ export class DesktopLink {
         response.once("close", finish)
       })
       req.once("error", finish)
-      req.write(JSON.stringify({ kind: "hello", pid: process.pid, methods: Object.keys(this.handlers) } satisfies DesktopFrame) + "\n")
+      req.write(JSON.stringify({ kind: "hello", pid: process.pid, methods: Object.keys(this.options.handlers) } satisfies DesktopFrame) + "\n")
     })
   }
 
@@ -121,7 +139,7 @@ export class DesktopLink {
     let reply: string
     try {
       // SAFETY: each handler takes its own method's parameters, which DESKTOP_CALLS[ask.method].params parses just below; TypeScript can't pair the two through the union of methods.
-      const handler = this.handlers[ask.method] as ((params: DesktopParams<DesktopMethod>) => Promise<DesktopResult<DesktopMethod>>) | undefined
+      const handler = this.options.handlers[ask.method] as ((params: DesktopParams<DesktopMethod>) => Promise<DesktopResult<DesktopMethod>>) | undefined
       if (!handler) throw new Error(`This desktop app doesn't answer ${ask.method}.`)
       const value = await handler(DESKTOP_CALLS[ask.method].params.parse(ask.params))
       // The host validates the answer against the same contract.

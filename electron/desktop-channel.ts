@@ -1,23 +1,27 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { LineAssembler } from "@mako/sessions"
 import type { WindowCapturer } from "./appshots.js"
+import type { UpdateState } from "./contracts/automations-usage-updates.js"
 import {
   DESKTOP_CALLS,
   DESKTOP_LINE_LIMIT,
+  DESKTOP_ROLE_HEADER,
   DesktopFrameSchema,
+  DesktopRoleSchema,
   readDesktopLine,
   type DesktopAsk,
   type DesktopFrame,
   type DesktopMethod,
   type DesktopParams,
   type DesktopResult,
+  type DesktopRole,
 } from "./contracts/desktop-channel.js"
 import type { DeskPage } from "./desk-browser.js"
 import { hostLog, hostWarn } from "./host-log.js"
 
 type JsonObject = DesktopResult<"desk-page-send">
 
-/** How long each ask waits; a permission request waits for the person. */
+/** How long each ask waits; a permission request waits for the person, a check for the update feed. */
 const ASK_TIMEOUT_MS = {
   "computer-permissions": 5_000,
   "computer-permissions-request": 120_000,
@@ -26,14 +30,25 @@ const ASK_TIMEOUT_MS = {
   "desk-page-create": 60_000,
   "desk-page-send": 60_000,
   "desk-page-destroy": 5_000,
+  "update-check": 60_000,
+  "update-install": 10_000,
 } satisfies Record<DesktopMethod, number>
+
+const REPLACED_BY_DESKTOP = "Mako's desktop app opened; its windows replace the agent views app's."
 
 interface Desktop {
   attachment: number
+  role: DesktopRole
   detached?: boolean
   pid: number
   methods: ReadonlySet<string>
   response: ServerResponse
+  update?: UpdateState
+}
+
+export interface DesktopChannelOptions {
+  /** The attached desktop's updater moved, or the desktop that had one left (nothing). */
+  updated?(state: UpdateState | undefined): void
 }
 
 interface Pending {
@@ -48,8 +63,9 @@ interface Pending {
  * the attached desktop app for what only Electron's main process can do, and
  * relays the hidden desk windows it makes as pages the desk browser drives.
  * One desktop at a time: another is refused until the attached one leaves,
- * so two never take it from each other in turn. When it goes, its asks fail
- * and its windows end.
+ * so two never take it from each other in turn. The one exception is the
+ * agent views app the host started for itself, which a person's desktop
+ * replaces. When a desktop goes, its asks fail and its windows end.
  */
 export class DesktopChannel {
   private desktop: Desktop | undefined
@@ -58,15 +74,25 @@ export class DesktopChannel {
   private closed = false
   private readonly pending = new Map<number, Pending>()
   private readonly pages = new Map<string, RelayedPage>()
+  private readonly options: DesktopChannelOptions
+
+  constructor(options: DesktopChannelOptions = {}) {
+    this.options = options
+  }
 
   /** The attached desktop answers `method`. */
   answers(method: DesktopMethod): boolean {
     return this.desktop?.methods.has(method) ?? false
   }
 
-  /** The desktop app's process, while one is attached. */
-  attachedPid(): number | undefined {
-    return this.desktop?.pid
+  /** The attached desktop's process and role, while one is attached. */
+  attached(): { pid: number; role: DesktopRole } | undefined {
+    return this.desktop && { pid: this.desktop.pid, role: this.desktop.role }
+  }
+
+  /** Where the attached desktop's updater is; nothing without a desktop that runs one. */
+  update(): UpdateState | undefined {
+    return this.desktop?.update
   }
 
   /** Serve one desktop's request: its frames arrive in the body, asks go out in the response. */
@@ -75,7 +101,12 @@ export class DesktopChannel {
       response.writeHead(503, { connection: "close" }).end()
       return
     }
-    if (this.desktop) {
+    const role = DesktopRoleSchema.safeParse(request.headers[DESKTOP_ROLE_HEADER])
+    if (!role.success) {
+      response.writeHead(400, { connection: "close" }).end(`Say which desktop this is in ${DESKTOP_ROLE_HEADER}.`)
+      return
+    }
+    if (this.desktop && !this.replaces(role.data, this.desktop)) {
       response.writeHead(409, { connection: "close" }).end("Another Mako desktop app answers this host.")
       return
     }
@@ -98,11 +129,14 @@ export class DesktopChannel {
         if (!frame) return refuse("not a desktop frame")
         if (frame.kind === "hello") {
           if (desktop) continue
-          // Two desktops can race to their hello; the first keeps the channel.
-          if (this.desktop) return refuse("another desktop attached first")
-          desktop = { attachment, pid: frame.pid, methods: new Set(frame.methods), response }
+          // Two desktops can race to their hello; the first keeps the channel, unless this one replaces it.
+          if (this.desktop) {
+            if (!this.replaces(role.data, this.desktop)) return refuse("another desktop attached first")
+            this.detach(this.desktop, REPLACED_BY_DESKTOP)
+          }
+          desktop = { attachment, role: role.data, pid: frame.pid, methods: new Set(frame.methods), response }
           this.desktop = desktop
-          hostLog("desktop", "attached", { pid: desktop.pid, methods: frame.methods.join(",") })
+          hostLog("desktop", "attached", { pid: desktop.pid, role: desktop.role, methods: frame.methods.join(",") })
         } else if (desktop) this.receive(desktop, frame)
       }
     })
@@ -174,8 +208,18 @@ export class DesktopChannel {
     if (this.desktop) this.detach(this.desktop, "The host is closing.")
   }
 
+  /** Only a person's desktop takes the channel from one that holds it, and only from the agent views app. */
+  private replaces(role: DesktopRole, holder: Desktop): boolean {
+    return role === "desktop" && holder.role === "agent-views"
+  }
+
   private receive(desktop: Desktop, frame: Exclude<DesktopFrame, { kind: "hello" }>): void {
     if (this.desktop !== desktop) return
+    if (frame.kind === "update") {
+      desktop.update = frame.state
+      this.options.updated?.(frame.state)
+      return
+    }
     if (frame.kind === "reply") {
       const pending = this.pending.get(frame.id)
       if (!pending || pending.attachment !== desktop.attachment) return
@@ -199,9 +243,10 @@ export class DesktopChannel {
       this.pending.delete(id)
       pending.fail(new Error(reason))
     }
-    for (const page of this.pages.values()) if (page.attachment === desktop.attachment) page.ended()
+    for (const page of this.pages.values()) if (page.attachment === desktop.attachment) page.ended(reason)
     if (!desktop.response.writableEnded) desktop.response.end()
-    hostLog("desktop", "detached", { pid: desktop.pid, reason })
+    if (desktop.update) this.options.updated?.(undefined)
+    hostLog("desktop", "detached", { pid: desktop.pid, role: desktop.role, reason })
   }
 }
 
@@ -210,6 +255,7 @@ class RelayedPage implements DeskPage {
   private readonly messages = new Set<(method: string, params: JsonObject) => void>()
   private readonly destroyed = new Set<() => void>()
   private gone = false
+  private endedBecause: string | undefined
   readonly id: string
   readonly attachment: number
   private currentUrl: string
@@ -233,7 +279,7 @@ class RelayedPage implements DeskPage {
   }
 
   send(method: string, params: JsonObject): Promise<JsonObject> {
-    if (this.gone) return Promise.reject(new Error("The window closed."))
+    if (this.gone) return Promise.reject(new Error(this.endedBecause ? `The window closed. ${this.endedBecause}` : "The window closed."))
     return this.channel.ask("desk-page-send", { page: this.id, method, params })
   }
 
@@ -262,9 +308,11 @@ class RelayedPage implements DeskPage {
     this.currentTitle = title
   }
 
-  ended(): void {
+  /** The window is gone; `reason` is why, when its desktop left rather than closing it. */
+  ended(reason?: string): void {
     if (this.gone) return
     this.gone = true
+    this.endedBecause = reason
     this.messages.clear()
     for (const listener of this.destroyed) listener()
     this.destroyed.clear()
