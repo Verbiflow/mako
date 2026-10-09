@@ -23,7 +23,6 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { MessageChannel, Worker } from "node:worker_threads"
-import { app } from "electron"
 import { connectOnDemandCatalog } from "./catalog-connection.js"
 import {
   connectDaemon,
@@ -217,6 +216,7 @@ import type {
   ThreadInlineContext,
 } from "./shared.js"
 import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "./contracts/thread-list.js"
+import { hostEnvironment } from "./host-environment.js"
 
 /** Refs other host callers look through; the rail's own list is `threadList`. */
 const LIST_CAP = THREAD_LIST_CAP
@@ -656,7 +656,7 @@ async function runCatalogWorker(signal: AbortSignal): Promise<boolean> {
   const channel = new MessageChannel()
   const data: CatalogWorkerData = {
     port: channel.port2,
-    cachePath: join(app.getPath("userData"), "threads-catalog.json"),
+    cachePath: join(hostEnvironment().dataRoot, "threads-catalog.json"),
     // Same archive the daemon uses — whichever process runs the catalog,
     // the durable copy lands in one place.
     archivePath: join(homedir(), ".mako", "archive"),
@@ -868,7 +868,7 @@ async function runInProcessCatalog(signal: AbortSignal): Promise<void> {
   if (catalog || daemon) return
   hostWarn("threads", "catalog running on the host thread")
   const source = defaultCatalog({
-    cachePath: join(app.getPath("userData"), "threads-catalog.json"),
+    cachePath: join(hostEnvironment().dataRoot, "threads-catalog.json"),
     archivePath: join(homedir(), ".mako", "archive"),
     readOnly: catalogReadOnly,
   })

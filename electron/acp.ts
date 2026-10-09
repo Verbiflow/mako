@@ -89,6 +89,7 @@ import type {
   LiveSessionState,
   LiveDriverEvent,
 } from "./shared.js"
+import { hostEnvironment } from "./host-environment.js"
 
 interface OpenedAcpSession {
   sessionId: string
@@ -265,7 +266,7 @@ async function startAcp(
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const launchOptions: AcpLaunchOptions = {
     cwd: workingDir,
-    appPath: app.getAppPath(),
+    appPath: hostEnvironment().appRoot,
     execPath: process.execPath,
     resume: options.resume,
     nativePath: options.threadPath,
@@ -307,7 +308,7 @@ async function startAcp(
   preparedServers.push(...makoMcp)
   const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
   const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
-    root: join(app.getPath("userData"), "approval-evidence"), env,
+    root: join(hostEnvironment().dataRoot, "approval-evidence"), env,
     previous: options.observedApprovals ?? [],
     publish: decision => send({ type: "live-approval-decision", id, decision }),
   }))

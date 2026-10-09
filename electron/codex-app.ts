@@ -2,7 +2,6 @@ import { applyControlEnvironment } from "./control-launch.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "./execution-context.js"
 import { CODEX_NATIVE_IDENTITY } from "./providers/codex/live-driver.js"
 import { applyThreadEnvironment } from "./thread-environment.js"
-import { app } from "electron"
 import { join } from "node:path"
 import { z } from "zod"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./providers/codex/permission-observer.js"
@@ -78,6 +77,7 @@ import type {
 } from "./shared.js"
 import { createLiveEngine } from "./live-engine.js"
 import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { hostEnvironment } from "./host-environment.js"
 
 type Live = {
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }
@@ -219,7 +219,7 @@ async function startCodex(
     stoppingCommands: new Set(),
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     stderrBuffer: "",
-    approvals: new CodexPermissionObserver(join(app.getPath("userData"), "approval-evidence", "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
+    approvals: new CodexPermissionObserver(join(hostEnvironment().dataRoot, "approval-evidence", "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
     agents: new CodexAgents({
       read: async (threadId) => {
         const result = await rpcRequest(live, "thread/turns/list", {

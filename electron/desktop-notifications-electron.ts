@@ -5,6 +5,7 @@ import {
   type DesktopNotifierPlatform,
 } from "./desktop-notifications.js"
 import { readNotificationAuthorization } from "./notification-authorization.js"
+import { hostEnvironment } from "./host-environment.js"
 
 /**
  * The real platform behind `createDesktopNotifier`, shared by the desktop
@@ -23,7 +24,7 @@ export function electronDesktopNotifier(options: {
 }): DesktopNotifier {
   const platform: DesktopNotifierPlatform = {
     platform: process.platform,
-    signed: app.isPackaged,
+    signed: hostEnvironment().packaged,
     supported: () => Notification.isSupported(),
     create: (notification) => {
       const native = new Notification({

@@ -19,10 +19,10 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { app } from "electron"
 import { DAEMON_NODE_ARGS } from "./daemon-command.js"
 import { buildTag } from "./build-identity.js"
 import { headlessNodeExecutable } from "./headless-node.js"
+import { hostEnvironment } from "./host-environment.js"
 
 const run = promisify(execFile)
 
@@ -33,7 +33,7 @@ function plistPath(): string {
 }
 
 export function daemonScript(): string {
-  return join(app.getAppPath(), "node_modules", "@mako", "sessions", "dist", "daemon-main.js")
+  return join(hostEnvironment().appRoot, "node_modules", "@mako", "sessions", "dist", "daemon-main.js")
 }
 
 /**
@@ -42,7 +42,7 @@ export function daemonScript(): string {
  * outlives every window the checkout ever opened.
  */
 export function daemonLoginOwner(): boolean {
-  return app.isPackaged
+  return hostEnvironment().packaged
 }
 
 function daemonPlist(script = daemonScript()): string {

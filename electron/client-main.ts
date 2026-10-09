@@ -27,7 +27,7 @@ if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(flavor)) throw new Error("Invalid Mako client
 const uiRoot = `${dataRoot}-ui-${flavor}`
 app.setPath("userData", uiRoot)
 installHostLog(join(uiRoot, "logs", "desktop.log"))
-installCrashReporting({ directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}` })
+installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}` })
 hostLog("desktop", "starting", { pid: process.pid, build: buildIdentity()?.id, version: app.getVersion(), dataRoot, uiRoot })
 protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")

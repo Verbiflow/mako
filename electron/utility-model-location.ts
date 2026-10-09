@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readdir, rename, rm, rmdir, stat, utimes, writeFile, readFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, join, resolve, sep } from "node:path"
+import { basename, join, resolve } from "node:path"
+import { userRootFor } from "./host-environment.js"
 import { utilityProviderSchema } from "./utility-models.js"
 
 /**
@@ -28,11 +29,12 @@ export function utilityModelDirectory(input: {
   appData: string
   home?: string
 }): string {
-  const root = resolve(input.dataRoot)
-  const appData = resolve(input.appData)
-  const isProfile = root === appData || root.startsWith(appData + sep)
-  if (!isProfile) return join(root, "utility-models")
-  return join(input.home ?? homedir(), ".mako", "utility-models")
+  return utilityModelsIn(userRootFor({ ...input, home: input.home ?? homedir() }))
+}
+
+/** The connections' directory in a user root (`HostEnvironment.userRoot`). */
+export function utilityModelsIn(userRoot: string): string {
+  return join(userRoot, "utility-models")
 }
 
 /** The directory a profile host used before connections became per user. */

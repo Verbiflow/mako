@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { hostError, hostLogPath } from "./host-log.js"
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { hostEnvironment } from "./host-environment.js"
 
 /**
  * Crash reporting: a failure leaves a trace you can find, read, and hand over.
@@ -89,7 +90,7 @@ export function breadcrumb(note: string) {
 }
 
 export function crashesDir() {
-  return reportDirectory ?? join(app.getPath("userData"), "crashes")
+  return reportDirectory ?? join(hostEnvironment().dataRoot, "crashes")
 }
 
 function normalizeCause(cause: unknown): CrashDescription {
@@ -129,7 +130,7 @@ export function record(kind: CrashKind, cause: unknown, source?: string): CrashR
     stack,
     source: [reportSource, source].filter(Boolean).join(" · ") || undefined,
     app: {
-      version: app.getVersion(),
+      version: hostEnvironment().version,
       electron: process.versions.electron ?? "",
       chrome: process.versions.chrome ?? "",
       node: process.versions.node ?? "",
@@ -357,15 +358,21 @@ export function clearCrashes() {
  * which is the exact failure this file exists to end. A caught exception is
  * recorded and the app carries on — degraded, but present and able to say so.
  */
-export function installCrashReporting(options: { directory?: string; source?: string } = {}) {
+export function installCrashReporting(options: {
+  /** This process's own data folder, where its native dumps go: the host's data root, or a window's UI root. */
+  root: string
+  /** Where reports are kept, when not `<root>/crashes`; every window shares the host's list. */
+  directory?: string
+  source?: string
+}) {
   if (installed) return
   installed = true
-  reportDirectory = options.directory
+  reportDirectory = options.directory ?? join(options.root, "crashes")
   reportSource = options.source
   // Native failures cannot run a JavaScript exception handler. Keep their dumps
   // on this machine, including when the desktop was launched with no terminal.
   try {
-    const dumps = join(app.getPath("userData"), "Crashpad")
+    const dumps = join(options.root, "Crashpad")
     mkdirSync(dumps, { recursive: true })
     app.setPath("crashDumps", dumps)
     crashReporter.start({ uploadToServer: false })

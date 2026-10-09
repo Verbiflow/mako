@@ -1,4 +1,3 @@
-import { app } from "electron"
 import { join } from "node:path"
 import type { UpdateInstallation } from "./contracts/app-lifecycle.js"
 import { buildMetadata } from "./build-identity.js"
@@ -7,6 +6,7 @@ import { prepareLocalInstall } from "./local-update-install.js"
 import type { HostEvent, UpdateState } from "./shared.js"
 import { record } from "./crash.js"
 import { packagedDistribution } from "./distribution.js"
+import { hostEnvironment } from "./host-environment.js"
 
 /**
  * Updates.
@@ -38,13 +38,13 @@ interface UpdaterModule {
 }
 
 let updater: Updater | null = null
-let state: UpdateState = { status: "idle", version: app.getVersion() }
+let state: UpdateState = { status: "idle", version: hostEnvironment().version }
 let emit: (event: HostEvent) => void = () => {}
 let local: LocalUpdates | null = null
 const metadata = buildMetadata()
 
 export function installationState(): UpdateInstallation {
-  return { distribution: app.isPackaged ? packagedDistribution(app.getAppPath()) : "development", build: metadata.makoBuild ?? null, ...local?.snapshot() ?? { source: null, local: { kind: "idle" } } }
+  return { distribution: hostEnvironment().packaged ? packagedDistribution(hostEnvironment().appRoot) : "development", build: metadata.makoBuild ?? null, ...local?.snapshot() ?? { source: null, local: { kind: "idle" } } }
 }
 
 export async function selectUpdateSource(path: string): Promise<UpdateInstallation> {
@@ -66,7 +66,7 @@ export function updateBuilding(): boolean { return local?.building ?? false }
 
 export async function prepareUpdateInstall() {
   assertUpdateReady()
-  if (local) return prepareLocalInstall(await local.prepared(), join(app.getPath("userData"), "updates/install-result.json"))
+  if (local) return prepareLocalInstall(await local.prepared(), join(hostEnvironment().dataRoot, "updates/install-result.json"))
   const auto = await load()
   if (!auto || state.status !== "ready") throw new Error("The downloaded update is no longer available.")
   return { install: () => installNow(auto), cancel: () => {} }
@@ -74,7 +74,7 @@ export async function prepareUpdateInstall() {
 
 function updatesSupported(): boolean {
   return (
-    app.isPackaged && packagedDistribution(app.getAppPath()) === "signed"
+    hostEnvironment().packaged && packagedDistribution(hostEnvironment().appRoot) === "signed"
   )
 }
 
@@ -174,12 +174,12 @@ function isString(
 
 export function installUpdates(send: (event: HostEvent) => void) {
   emit = send
-  if (app.isPackaged && process.platform === "darwin" && packagedDistribution(app.getAppPath()) === "local" && metadata.makoLocalSigningIdentity) {
-    local = new LocalUpdates(join(app.getPath("userData"), "updates"), metadata.makoLocalSigningIdentity, () => emit({ type: "installation", installation: installationState() }), metadata.makoBuild ?? null)
+  if (hostEnvironment().packaged && process.platform === "darwin" && packagedDistribution(hostEnvironment().appRoot) === "local" && metadata.makoLocalSigningIdentity) {
+    local = new LocalUpdates(join(hostEnvironment().dataRoot, "updates"), metadata.makoLocalSigningIdentity, () => emit({ type: "installation", installation: installationState() }), metadata.makoBuild ?? null)
     void local.load().then(() => emit({ type: "installation", installation: installationState() })).catch(() => emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
   }
   if (!updatesSupported()) {
-    state = { status: "unsupported", version: app.getVersion() }
+    state = { status: "unsupported", version: hostEnvironment().version }
     return
   }
   // A check at launch, then every six hours. More often than that is polling

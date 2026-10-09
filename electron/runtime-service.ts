@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 import { mkdir, open, readFile, rename, stat, writeFile, type FileHandle } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
+import { appDataFor } from "./host-environment.js"
 import { HOST_LOG_MAX_BYTES } from "./host-log.js"
 import { ensurePrivateDirectory } from "./private-directory.js"
 import { probeRuntime, settleRuntime } from "./runtime-connection.js"
@@ -12,9 +13,7 @@ const EXITED_GRACE_MS = 5_000
 
 /** Where Electron keeps every app's data on this platform, as `app.getPath("appData")` says. */
 export function appDataFolder(env: NodeJS.ProcessEnv = process.env): string {
-  if (process.platform === "darwin") return join(homedir(), "Library", "Application Support")
-  if (process.platform === "win32") return env.APPDATA ?? join(homedir(), "AppData", "Roaming")
-  return env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
+  return appDataFor(process.platform, homedir(), env)
 }
 
 /** The profile a fixture desk launched from the checkout at `root` runs on. */
