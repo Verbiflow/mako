@@ -61,11 +61,6 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
       store: "~/.local/share/opencode/opencode.db (SQLite: event, session_v2, session_message)",
     },
     models: "GET /api/model (opencode models)",
-    distinct: [
-      { name: "Staged revert", via: "revert/stage, commit, clear" },
-      { name: "Inbox", via: "a prompt sent while busy is steered or queued (inbox/:id/steer|queue)" },
-      { name: "Code Mode MCP", via: "MCP tools through the code tool, on by default" },
-    ],
   },
 })
 

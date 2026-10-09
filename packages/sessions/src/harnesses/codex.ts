@@ -85,12 +85,6 @@ export const CODEX_VOCABULARY = defineVocabulary({
       store: "~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl, indexed in ~/.codex/session_index.jsonl",
     },
     models: "app-server model/list",
-    distinct: [
-      { name: "Rate-limit reset credits", via: "account/rateLimits/read rateLimitResetCredits, account/rateLimitResetCredit/consume" },
-      { name: "Review mode", via: "review/start; enteredReviewMode and exitedReviewMode items" },
-      { name: "Goals", via: "thread/goal/*" },
-      { name: "Session questions", via: "item/tool/requestUserInput, answered in the session" },
-    ],
   },
 })
 

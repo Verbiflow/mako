@@ -68,8 +68,6 @@ export interface HarnessConcepts {
   }
   /** How its model catalog is read. */
   models: string
-  /** What only this harness has, with what carries it. */
-  distinct: readonly { name: string; via: string }[]
 }
 
 export interface ConceptAbsent {

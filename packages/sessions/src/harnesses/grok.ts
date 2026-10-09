@@ -78,12 +78,6 @@ export const GROK_VOCABULARY = defineVocabulary({
       store: "~/.grok/sessions/<encoded working directory>/<id>/updates.jsonl, one ACP update per line, with summary.json and plan.md",
     },
     models: "grok models; the ACP initialize model list",
-    distinct: [
-      { name: "X search", via: "x_keyword_search and x_semantic_search tools" },
-      { name: "Image and video generation", via: "image_gen, /imagine, /imagine-video" },
-      { name: "Announcements", via: "_x.ai/announcements/update" },
-      { name: "Folder trust", via: "_x.ai/folder_trust/request to a client that sets x.ai/folderTrust.interactive, saved in ~/.grok/trusted_folders.toml" },
-    ],
   },
 })
 

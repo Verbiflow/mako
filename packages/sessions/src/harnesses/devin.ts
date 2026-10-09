@@ -77,12 +77,6 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       store: "~/.local/share/devin/cli/sessions.db (SQLite: sessions, messages, message_nodes, tool_call_state)",
     },
     models: "devin models list --format json",
-    distinct: [
-      { name: "Cloud handoff", via: "/handoff, /cloud-attach" },
-      { name: "Step revert and fork", via: "cognition.ai/revert/*" },
-      { name: "Editable approvals", via: "cognition.ai/editableCommand, command/revise" },
-      { name: "Credits and ACUs", via: "usage_update _meta totalCreditCost and totalAcuCost on the reading that ends a turn, for an account billed in credits or ACUs rather than quota; 0 on every quota account recorded, so unread" },
-    ],
   },
 })
 

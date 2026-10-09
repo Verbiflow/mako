@@ -77,12 +77,6 @@ export const CURSOR_VOCABULARY = defineVocabulary({
       store: "SQLite index.db and agents/<agent>/store.db under the SDK state root (Mako's: ~/.mako/cursor-sdk); cursor-agent keeps ~/.cursor/chats/<hash>/<id>/store.db",
     },
     models: "Cursor.models.list(), parameters per model",
-    distinct: [
-      { name: "Artifact preview", via: "SDKArtifact (listArtifacts is empty in local runs)" },
-      { name: "Server-side summarization", via: "a task message carrying the summary" },
-      { name: "Image generation and screen recording", via: "generateImage, recordScreen tools" },
-      { name: "Cloud agents", via: "AgentOptions.cloud, bc- agent ids" },
-    ],
   },
 })
 

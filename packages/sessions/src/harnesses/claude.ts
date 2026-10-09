@@ -167,13 +167,6 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
       store: "~/.claude/projects/<working directory, non-alphanumerics as ->/<session>.jsonl, with <session>/subagents/",
     },
     models: "SDK supportedModels() (control request list_models)",
-    distinct: [
-      { name: "Context breakdown", via: "getContextUsage: categories, memory files, MCP tools, messages" },
-      { name: "Checkpoints", via: "rewindFiles(userMessageId), /rewind" },
-      { name: "Output styles", via: "~/.claude/output-styles, .claude/output-styles; outputStyle" },
-      { name: "Plugins", via: ".claude-plugin/plugin.json and marketplaces" },
-      { name: "Background agents", via: "claude --bg, claude agents" },
-    ],
   },
 })
 
