@@ -9,8 +9,28 @@ import {
   type Appshot,
   type AppshotTarget,
   type AppshotWindow,
+  type ControlImage,
   ControlImageSchema,
 } from "@mako/control-runtime/contracts"
+
+/** A window as the system's capturer sees it. */
+export interface CapturedWindow {
+  windowId: number
+  name: string
+  thumbnail?: ControlImage
+  icon?: ControlImage
+}
+
+/**
+ * Electron's `desktopCapturer` (`window-capture-electron.ts`): in the desktop
+ * app, which a host under Node asks, or in a host Electron runs.
+ */
+export interface WindowCapturer {
+  /** Every window with a 320-wide JPEG thumbnail and its app's 24-point icon. */
+  windows(): Promise<CapturedWindow[]>
+  /** The capture source for the window's video, or null once it's gone. */
+  source(windowId: number): Promise<string | null>
+}
 
 const windowList = z.object({
   windows: z
@@ -36,12 +56,15 @@ export class Appshots {
   private connection: Promise<ComputerDriverClient> | undefined
   private readonly backend: () => Promise<ComputerBackend | null>
   private readonly connectDriver: ComputerDriverConnector
+  private readonly capturer: () => WindowCapturer | undefined
   constructor(
     backend: () => Promise<ComputerBackend | null>,
-    connectDriver: ComputerDriverConnector = connectMcpComputerDriver
+    connectDriver: ComputerDriverConnector = connectMcpComputerDriver,
+    capturer: () => WindowCapturer | undefined = () => undefined
   ) {
     this.backend = backend
     this.connectDriver = connectDriver
+    this.capturer = capturer
   }
 
   private client(): Promise<ComputerDriverClient> {
@@ -97,45 +120,20 @@ export class Appshots {
       .sort(
         (a, b) => a.app.localeCompare(b.app) || a.title.localeCompare(b.title)
       )
-    if (!includeThumbnails) return windows
-    const { desktopCapturer } = await import("electron")
-    const sources = await desktopCapturer.getSources({
-      types: ["window"],
-      thumbnailSize: { width: 320, height: 200 },
-      fetchWindowIcons: true,
-    })
-    const byId = new Map(
-      sources.map((source) => [Number(source.id.split(":")[1]), source])
-    )
+    const capturer = this.capturer()
+    // Without a capturer the list is the driver's alone, with no pictures.
+    if (!includeThumbnails || !capturer) return includeThumbnails ? windows.slice(0, 80) : windows
+    const byId = new Map((await capturer.windows()).map((source) => [source.windowId, source]))
     return windows
       .filter((window) => byId.has(window.windowId))
       .slice(0, 80)
       .map((window) => {
         const source = byId.get(window.windowId)
         if (!source) return window
-        return {
-          ...window,
-          title: window.title || source.name,
-          thumbnail: source.thumbnail.isEmpty()
-            ? undefined
-            : {
-                mimeType: "image/jpeg",
-                data: source.thumbnail
-                  .resize({ width: 320 })
-                  .toJPEG(65)
-                  .toString("base64"),
-              },
-          icon:
-            !source.appIcon || source.appIcon.isEmpty()
-              ? undefined
-              : {
-                  mimeType: "image/png",
-                  data: source.appIcon
-                    .resize({ width: 24, height: 24 })
-                    .toPNG()
-                    .toString("base64"),
-                },
-        }
+        const shown: AppshotWindow = { ...window, title: window.title || source.name }
+        if (source.thumbnail) shown.thumbnail = source.thumbnail
+        if (source.icon) shown.icon = source.icon
+        return shown
       })
   }
 
@@ -186,7 +184,7 @@ export class Appshots {
     }
   }
 
-  /** Resolve a live window for Electron's video capture without walking AX or invalidating agent tokens. */
+  /** Resolve a live window for the desktop's video capture without walking AX or invalidating agent tokens. */
   async source(target: AppshotTarget): Promise<string | null> {
     const windows = await this.windows()
     if (
@@ -196,17 +194,7 @@ export class Appshots {
       )
     )
       return null
-    const { desktopCapturer } = await import("electron")
-    const sources = await desktopCapturer.getSources({
-      types: ["window"],
-      thumbnailSize: { width: 0, height: 0 },
-      fetchWindowIcons: false,
-    })
-    return (
-      sources.find(
-        (source) => Number(source.id.split(":")[1]) === target.windowId
-      )?.id ?? null
-    )
+    return (await this.capturer()?.source(target.windowId)) ?? null
   }
 
   async close() {
