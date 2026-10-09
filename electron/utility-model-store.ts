@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
+import { legacyNamesIn, type LegacyFiles, type Secrets } from "./secrets.js"
 import type {
   UtilityConnection,
   UtilityConnectionInput,
@@ -10,22 +11,15 @@ import type {
   UtilityProvider,
 } from "./shared.js"
 import {
-  completeUtilityText,
   connectionSchema,
   parseConnection,
   parseUtilityEndpoint,
-  utilityLanguageModel,
   utilityProviders,
   utilityProviderSchema,
   UtilityModelError,
 } from "./utility-models.js"
+import { heavy } from "./heavy-packages.js"
 import { AUTOMATIC, HARNESS_ORDER_LIMIT, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "./contracts/utility-work.js"
-
-export interface UtilityKeyEncryption {
-  available(): boolean | Promise<boolean>
-  encrypt(value: string): Buffer | Promise<Buffer>
-  decrypt(value: Buffer): string | Promise<string>
-}
 
 const apiKeySchema = z
   .string()
@@ -54,6 +48,23 @@ const credentialSchema = z.object({
   apiKey: apiKeySchema.optional(),
 })
 
+/** A connection is the saved key `utility/<provider>`. */
+const SECRET_PREFIX = "utility/"
+
+/** Where older builds sealed each connection: `<provider>.enc` in the connections' directory. */
+export function utilityLegacyFiles(directory: string): LegacyFiles {
+  return {
+    path(kind, name) {
+      if (kind !== "saved-key" || !name.startsWith(SECRET_PREFIX)) return null
+      const provider = utilityProviderSchema.safeParse(name.slice(SECRET_PREFIX.length))
+      return provider.success ? join(directory, `${provider.data}.enc`) : null
+    },
+    async names(kind) {
+      return kind === "saved-key" ? (await legacyNamesIn(directory, ".enc")).map((provider) => `${SECRET_PREFIX}${provider}`) : []
+    },
+  }
+}
+
 export interface UtilityModelStoreOptions {
   /**
    * Work the directory needs before it is read, such as moving a profile's
@@ -68,16 +79,17 @@ export class UtilityModelStore {
   private writes: Promise<unknown> = Promise.resolve()
 
   private readonly directory: string
-  private readonly encryption: UtilityKeyEncryption
+  private readonly secrets: Secrets
   private readonly ready: Promise<unknown>
 
+  /** Connections, keys included, are saved keys in `secrets`; `directory` keeps the choices, which aren't secret. */
   constructor(
     directory: string,
-    encryption: UtilityKeyEncryption,
+    secrets: Secrets,
     options: UtilityModelStoreOptions = {}
   ) {
     this.directory = directory
-    this.encryption = encryption
+    this.secrets = secrets
     this.ready = options.ready ?? Promise.resolve()
   }
 
@@ -103,7 +115,7 @@ export class UtilityModelStore {
       providers: utilityProviders,
       connections,
       issues,
-      secureStorage: await this.encryption.available(),
+      secureStorage: await this.secrets.durable(),
     }
   }
 
@@ -156,19 +168,12 @@ export class UtilityModelStore {
 
   async load(provider: UtilityProvider) {
     await this.ready
-    const path = this.path(provider)
     try {
-      const info = await stat(path)
-      if (info.size > 32_768) throw new Error("Invalid credential file")
-      if (!(await this.encryption.available()))
-        throw new Error("Secure storage unavailable")
-      const value = storedSchema.parse(
-        JSON.parse(await this.encryption.decrypt(await readFile(path)))
-      )
+      const record = await this.secrets.read("saved-key", this.secretName(provider))
+      if (!record) return null
+      const value = storedSchema.parse(JSON.parse(record.value))
       return { ...parseConnection(value), apiKey: value.apiKey }
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT")
-        return null
+    } catch {
       throw new UtilityModelError(
         "auth",
         "The saved model connection could not be opened. Unlock your system keychain or reconnect the provider in Settings › Git."
@@ -196,13 +201,14 @@ export class UtilityModelStore {
   async connect(input: UtilityConnectionInput): Promise<UtilityConnection> {
     await this.ready
     const connection = parseConnection(input)
-    if (!(await this.encryption.available()))
+    if (!(await this.secrets.durable()))
       throw new Error(
         "Secure key storage is unavailable. Unlock your system keychain before connecting a model."
       )
     this.lock(connection.provider)
     try {
       const { apiKey } = await this.credentials(input)
+      const { completeUtilityText, utilityLanguageModel } = await heavy.utilityLanguage.load("model connection test")
       await completeUtilityText(
         utilityLanguageModel(connection, apiKey),
         "Reply with OK only.",
@@ -239,26 +245,14 @@ export class UtilityModelStore {
   }
 
   private async save(connection: UtilityConnection, apiKey: string) {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    const path = this.path(connection.provider)
-    const temporary = `${path}.${randomUUID()}.tmp`
-    try {
-      await writeFile(
-        temporary,
-        await this.encryption.encrypt(JSON.stringify({ ...connection, apiKey })),
-        { mode: 0o600, flag: "wx" }
-      )
-      await rename(temporary, path)
-    } finally {
-      await rm(temporary, { force: true })
-    }
+    await this.secrets.write("saved-key", this.secretName(connection.provider), JSON.stringify({ ...connection, apiKey }))
   }
 
   async disconnect(provider: UtilityProvider): Promise<void> {
     await this.ready
     this.lock(provider)
     try {
-      await rm(this.path(provider), { force: true })
+      await this.secrets.delete("saved-key", this.secretName(provider))
       // A task that used this connection goes back to Automatic, which Settings shows resolved.
       const choices = await this.choices()
       for (const task of UTILITY_TASKS)
@@ -268,8 +262,8 @@ export class UtilityModelStore {
     }
   }
 
-  private path(provider: UtilityProvider) {
-    return join(this.directory, `${utilityProviderSchema.parse(provider)}.enc`)
+  private secretName(provider: UtilityProvider) {
+    return `${SECRET_PREFIX}${utilityProviderSchema.parse(provider)}`
   }
 
   private choicesPath() {

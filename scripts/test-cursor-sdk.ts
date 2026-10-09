@@ -646,6 +646,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const { join } = await import("node:path")
   const { CursorSdkAuth } = await import("../electron/providers/cursor/sdk/auth.ts")
   const { CursorCredentialStore } = await import("../electron/providers/cursor/sdk/credentials.ts")
+  const { memorySecrets } = await import("../electron/secrets.ts")
   const { createCursorSdkDriver } = await import("../electron/providers/cursor/sdk/driver.ts")
   type Client = import("../electron/providers/cursor/sdk/driver.ts").CursorSdkLiveClient
   type Answers = { [M in SdkMethod]?: () => SdkResult<M> }
@@ -675,11 +676,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     openUrl: async () => {
       throw new Error("Fixture must not sign in")
     },
-    credentials: new CursorCredentialStore(join(root, "credential.bin"), {
-      available: async () => false,
-      encrypt: async () => Buffer.alloc(0),
-      decrypt: async () => "",
-    }),
+    credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
     cliKey: async () => null,
     client: () => client,
   })

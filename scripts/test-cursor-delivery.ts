@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { memorySecrets } from "../electron/secrets.ts"
 import { CursorSdkDisconnectedError, type CursorSdkExit } from "../electron/providers/cursor/sdk/client.ts"
 import { cursorProfileLoaderWith } from "../electron/providers/cursor/profile.ts"
 import { resolveHarnessTuning } from "../electron/harness-models.ts"
@@ -72,11 +73,7 @@ const auth = new CursorSdkAuth({
   openUrl: async () => {
     throw new Error("Fixture must not sign in")
   },
-  credentials: new CursorCredentialStore(join(root, "credential.bin"), {
-    available: async () => false,
-    encrypt: async () => Buffer.alloc(0),
-    decrypt: async () => "",
-  }),
+  credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
   cliKey: async () => null,
   client: () => client,
 })

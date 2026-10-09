@@ -11,7 +11,7 @@ import { cursorMcpSource } from "./mcp.js"
 import { cursorProcessProbe } from "./process-probe.js"
 import { createCursorProfileLoader } from "./profile.js"
 import { CursorSdkAuth } from "./sdk/auth.js"
-import { CursorAccountKeys, CursorCredentialStore, cursorAccountKeysRoot, cursorCredentialPath } from "./sdk/credentials.js"
+import { CursorAccountKeys, CursorCredentialStore, cursorLegacyFiles } from "./sdk/credentials.js"
 import { cursorDecoderSource } from "./sdk/decoder-source.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
@@ -19,12 +19,12 @@ import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../executable.js"
 import { scriptInstall } from "../update-source.js"
-import { electronSecretEncryption } from "../../secure-storage.js"
+import { adoptLegacySecrets, hostSecrets } from "../../host-secrets.js"
 import { cursorPresentation } from "./presentation.js"
+import { presentMachine } from "../../machine.js"
 
 async function openExternal(url: string): Promise<void> {
-  const { shell } = await import("electron")
-  await shell.openExternal(url)
+  await presentMachine().openUrl(url)
 }
 
 /**
@@ -40,9 +40,9 @@ export const installCursor: ProviderModule = (host) => {
   // account's key arrives in each launch's prepared environment instead.
   const env = async () => childProcessEnv(process.env)
   const stateRoot = () => cursorSdkStateRoot()
-  const encryption = electronSecretEncryption()
-  const credentials = new CursorCredentialStore(cursorCredentialPath(stateRoot()), encryption)
-  const keys = new CursorAccountKeys(cursorAccountKeysRoot(stateRoot()), encryption)
+  adoptLegacySecrets(cursorLegacyFiles(stateRoot()))
+  const credentials = new CursorCredentialStore(hostSecrets())
+  const keys = new CursorAccountKeys(hostSecrets())
   const auth = new CursorSdkAuth({ env, openUrl: openExternal, credentials })
   const modelCache = createCursorModelCache()
   installHarness(host, {

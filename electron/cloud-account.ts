@@ -1,8 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { dirname } from "node:path"
+import { basename, join } from "node:path"
 import { z } from "zod"
 import {
   CloudDeviceSchema,
@@ -14,7 +13,7 @@ import {
   type CloudSignedOutNotice,
 } from "./contracts/cloud-account.js"
 import type { CloudRoute, DiagnosticEvents } from "./contracts/telemetry.js"
-import type { SecretEncryption } from "./secure-storage.js"
+import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "./secrets.js"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
 const SIGN_IN_MS = 10 * 60_000
@@ -82,12 +81,26 @@ const StoredSchema = z.object({
 })
 type Stored = z.infer<typeof StoredSchema>
 
+/** The record a host's sign-in is kept under; each data root signs in as its own device. */
+export function cloudSignInName(dataRoot: string): string {
+  const host = basename(dataRoot).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+/, "").slice(0, 64)
+  return `cloud/${host || "host"}`
+}
+
+/** Where older builds sealed the sign-in: `cloud-account` in the data root. */
+export function cloudLegacyFiles(dataRoot: string): LegacyFiles {
+  return {
+    path: (kind, name) => (kind === "mako-sign-in" && name === cloudSignInName(dataRoot) ? join(dataRoot, "cloud-account") : null),
+    names: async () => [],
+  }
+}
+
 export type CloudAccountOptions = {
   /** `MAKO_CLOUD_URL`: https, or http on this Mac's loopback. */
   url: string | undefined
-  /** Where the encrypted credential is kept, in this profile's data folder. */
-  storePath: string
-  encryption: SecretEncryption
+  /** Where the device credential is kept: a `mako-sign-in` record, one per data root. */
+  secrets: Secrets
+  secretName: string
   openExternal: (url: string) => Promise<void>
   /** How this Mac names itself on the account's device list. */
   device: () => Promise<{ name: string; platform: string; appVersion: string }>
@@ -335,30 +348,24 @@ export class CloudAccounts {
   }
 
   async #load(): Promise<Stored | undefined> {
-    let bytes: Buffer
+    const { secrets, secretName } = this.#options
+    let record: SecretRecord | null
     try {
-      bytes = await readFile(this.#options.storePath)
+      record = await secrets.read("mako-sign-in", secretName)
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined
+      if (error instanceof SecretLocked && error.reason === "unavailable") return undefined
       throw error
     }
-    if (!(await this.#options.encryption.available())) return undefined
-    const stored = StoredSchema.parse(JSON.parse(await this.#options.encryption.decrypt(bytes)))
+    if (!record) return undefined
+    const stored = StoredSchema.parse(JSON.parse(record.value))
     return stored.cloud === this.#cloud?.origin ? stored : undefined
   }
 
   /** False when the keychain is unavailable: the credential then lives in memory, until Mako quits. */
   async #save(stored: Stored): Promise<boolean> {
-    if (!(await this.#options.encryption.available())) return false
-    const payload = await this.#options.encryption.encrypt(JSON.stringify(stored))
-    await mkdir(dirname(this.#options.storePath), { recursive: true, mode: 0o700 })
-    const temporary = `${this.#options.storePath}.${randomUUID()}.tmp`
-    try {
-      await writeFile(temporary, payload, { mode: 0o600 })
-      await rename(temporary, this.#options.storePath)
-    } finally {
-      await rm(temporary, { force: true })
-    }
+    const { secrets, secretName } = this.#options
+    if (!(await secrets.durable())) return false
+    await secrets.write("mako-sign-in", secretName, JSON.stringify(stored))
     return true
   }
 
@@ -366,7 +373,7 @@ export class CloudAccounts {
     this.#stored = undefined
     this.#token = undefined
     this.#disconnect()
-    await rm(this.#options.storePath, { force: true })
+    await this.#options.secrets.delete("mako-sign-in", this.#options.secretName)
     this.#set(notice ? { status: "signed-out", notice } : { status: "signed-out" })
   }
 

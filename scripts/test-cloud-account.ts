@@ -16,6 +16,7 @@ import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { CloudAccounts, type CloudAccountOptions } from "../electron/cloud-account.ts"
 import type { CloudAccount, CloudAccountState, CloudDevice } from "../electron/contracts/cloud-account.ts"
 import type { DiagnosticEvents } from "../electron/contracts/telemetry.ts"
+import { aesSealer, fileSecrets, wrappedKey } from "../electron/secrets.ts"
 import type { SecretEncryption } from "../electron/secure-storage.ts"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
@@ -28,6 +29,10 @@ const encryption: SecretEncryption = {
   decrypt: async (value) => Buffer.from(value.toString().slice("sealed:".length).split("").reverse().join(""), "base64").toString(),
 }
 const noKeychain: SecretEncryption = { ...encryption, available: async () => false }
+/** The host's store, under the stand-in keychain; each test's Mac keeps its sign-in under its own name. */
+const vault = join(scratch, "secrets")
+const secrets = (keychain = encryption) => fileSecrets(vault, aesSealer(wrappedKey(join(vault, "data-key"), keychain)))
+const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.json`.split("/"))
 
 type FakeDevice = CloudDevice & { credential: string; removed: boolean }
 
@@ -180,8 +185,8 @@ function desktop(options: Partial<CloudAccountOptions> & { url: string | undefin
   const opened: string[] = []
   const waiters = new Set<() => void>()
   const accounts = new CloudAccounts({
-    storePath: join(scratch, `${randomUUID()}.bin`),
-    encryption,
+    secrets: secrets(),
+    secretName: `cloud/${randomUUID()}`,
     openExternal: async (url) => void opened.push(url),
     device: async () => ({ name: "Ada's MacBook Pro", platform: "macOS 26.0", appVersion: "0.4.0" }),
     onChange: (account: CloudAccount) => {
@@ -273,9 +278,12 @@ test("signing in through the browser enrolls this Mac, keeps its credential seal
 
   const device = [...cloud.devices.values()][0]
   assert.ok(device)
-  const sealed = await Promise.all((await readdir(scratch)).map((name) => readFile(join(scratch, name), "utf8")))
-  assert.ok(sealed.some((text) => text.startsWith("sealed:")), "the credential is written sealed")
-  assert.ok(!sealed.some((text) => text.includes(device.credential)), "never in the clear")
+  const files = (await readdir(vault, { recursive: true })).filter((name) => /data-key$|\.json$/.test(name))
+  const written = await Promise.all(files.map((name) => readFile(join(vault, name), "utf8")))
+  const keyFile = JSON.parse(await readFile(join(vault, "data-key"), "utf8"))
+  assert.ok(Buffer.from(keyFile.wrapped, "base64").toString().startsWith("sealed:"), "the data key is kept wrapped by the keychain")
+  assert.ok(written.some((text) => text.includes('"sealer":"aes-256-gcm"')), "the credential is written sealed")
+  assert.ok(!written.some((text) => text.includes(device.credential)), "never in the clear")
 
   const port = new URL(page.searchParams.get("redirect_uri") ?? "").port
   await assert.rejects(fetch(`http://127.0.0.1:${port}/callback`), "the loopback listener is gone once signed in")
@@ -283,17 +291,17 @@ test("signing in through the browser enrolls this Mac, keeps its credential seal
 
 test("the sign-in survives a restart and reconnects from the sealed credential", async () => {
   const cloud = await fakeCloud()
-  const storePath = join(scratch, "restart.bin")
-  const first = await signedIn(cloud, { storePath })
-  assert.equal(((await stat(storePath)).mode & 0o777).toString(8), "600")
+  const secretName = "cloud/restart"
+  const first = await signedIn(cloud, { secretName })
+  assert.equal(((await stat(recordPath(secretName))).mode & 0o777).toString(8), "600")
   first.accounts.close()
 
-  const again = desktop({ url: cloud.url, storePath })
+  const again = desktop({ url: cloud.url, secretName })
   const resumed = await again.accounts.ready()
   assert.equal(resumed.state.status, "signed-in", "the first answer after a restart is already signed in")
   await again.until(connected, "reconnected")
 
-  const elsewhere = desktop({ url: "http://127.0.0.1:1", storePath })
+  const elsewhere = desktop({ url: "http://127.0.0.1:1", secretName })
   assert.equal((await elsewhere.accounts.ready()).state.status, "signed-out", "another cloud's credential is never used")
 })
 
@@ -336,8 +344,8 @@ test("a dropped connection comes back by itself; an expired token reconnects at 
 
 test("removed from another device, this Mac signs out at once and forgets its credential", async () => {
   const cloud = await fakeCloud()
-  const storePath = join(scratch, "removed.bin")
-  const mac = await signedIn(cloud, { storePath })
+  const secretName = "cloud/removed"
+  const mac = await signedIn(cloud, { secretName })
   const other = await signedIn(cloud)
   const own = mac.accounts.account().state
   assert.equal(own.status, "signed-in")
@@ -346,17 +354,17 @@ test("removed from another device, this Mac signs out at once and forgets its cr
   await other.accounts.removeDevice(own.status === "signed-in" ? own.device.id : "")
   const state = await mac.until((entry) => entry.status === "signed-out", "signed out")
   assert.equal(state.status === "signed-out" && state.notice?.kind, "removed")
-  await assert.rejects(stat(storePath), "the credential file is gone")
+  await assert.rejects(stat(recordPath(secretName)), "the credential file is gone")
   assert.ok(connected(other.accounts.account().state), "the other device stays connected")
 })
 
 test("a Mac removed while Mako was closed finds out on its first refresh", async () => {
   const cloud = await fakeCloud()
-  const storePath = join(scratch, "removed-offline.bin")
-  const mac = await signedIn(cloud, { storePath })
+  const secretName = "cloud/removed-offline"
+  const mac = await signedIn(cloud, { secretName })
   mac.accounts.close()
   for (const device of cloud.devices.values()) device.removed = true
-  const again = desktop({ url: cloud.url, storePath })
+  const again = desktop({ url: cloud.url, secretName })
   assert.equal((await again.accounts.ready()).state.status, "signed-in", "it doesn't know yet")
   const state = await again.until((entry) => entry.status === "signed-out", "signed out on resume")
   assert.equal(state.status === "signed-out" && state.notice?.kind, "removed")
@@ -364,22 +372,22 @@ test("a Mac removed while Mako was closed finds out on its first refresh", async
 
 test("signing out removes this device from the account", async () => {
   const cloud = await fakeCloud()
-  const storePath = join(scratch, "sign-out.bin")
-  const mac = await signedIn(cloud, { storePath })
+  const secretName = "cloud/sign-out"
+  const mac = await signedIn(cloud, { secretName })
   const account = await mac.accounts.signOut()
   assert.deepEqual(account.state, { status: "signed-out" }, "no notice: the person did it")
   assert.ok([...cloud.devices.values()].every((device) => device.removed))
-  await assert.rejects(stat(storePath))
+  await assert.rejects(stat(recordPath(secretName)))
   assert.deepEqual((await mac.accounts.signOut()).state, { status: "signed-out" }, "signing out twice is signing out once")
 })
 
 test("without a keychain the sign-in lasts until Mako quits and nothing is written", async () => {
   const cloud = await fakeCloud()
-  const storePath = join(scratch, "no-keychain.bin")
-  const mac = await signedIn(cloud, { storePath, encryption: noKeychain })
+  const secretName = "cloud/no-keychain"
+  const mac = await signedIn(cloud, { secretName, secrets: secrets(noKeychain) })
   const state = mac.accounts.account().state
   assert.equal(state.status === "signed-in" && state.kept, "memory")
-  await assert.rejects(stat(storePath))
+  await assert.rejects(stat(recordPath(secretName)))
 })
 
 test("every call to the cloud goes under its own correlation ID, and is reported by route, never by path", async () => {

@@ -6,6 +6,7 @@ import { createCursorModelCache, listCursorSdkModels } from "../electron/provide
 import { createCursorSdkDriver, type CursorSdkLiveClient } from "../electron/providers/cursor/sdk/driver.ts"
 import { CursorSdkAuth, type CursorSdkSpawnOptions } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { memorySecrets } from "../electron/secrets.ts"
 import type { SdkMethod, SdkResult, SdkModelListItem } from "../electron/providers/cursor/sdk/wire.ts"
 
 type FixtureAnswers = { [K in SdkMethod]?: () => SdkResult<K> }
@@ -109,7 +110,7 @@ const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => ({
 })
 const auth = new CursorSdkAuth({
   env: async () => ({ ...env }), cliKey: async () => null, openUrl: async () => { throw Error("no login") }, client,
-  credentials: new CursorCredentialStore(join(root, "credentials"), { available: async () => false, encrypt: async () => Buffer.alloc(0), decrypt: async () => "" }),
+  credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
 })
 const shared = createCursorModelCache()
 const driver = createCursorSdkDriver({ auth, stateRoot: () => root, home: root, client, modelCache: shared })

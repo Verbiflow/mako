@@ -6,6 +6,7 @@ import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
 import { CURSOR_SDK_MODES } from "../electron/providers/cursor/sdk/modes.ts"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { memorySecrets } from "../electron/secrets.ts"
 import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
@@ -37,11 +38,7 @@ const cursorDriver = createCursorSdkDriver({
   auth: new CursorSdkAuth({
     env: async () => ({}),
     openUrl: async () => undefined,
-    credentials: new CursorCredentialStore("/nonexistent/credential.bin", {
-      available: async () => false,
-      encrypt: async () => Buffer.alloc(0),
-      decrypt: async () => "",
-    }),
+    credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
     cliKey: async () => null,
   }),
   stateRoot: () => "/nonexistent",

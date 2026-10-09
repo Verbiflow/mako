@@ -21,7 +21,9 @@ export function keychainReachable(home = homedir()): boolean {
 
 /**
  * Electron's `safeStorage`, reached lazily so callers also load in a plain
- * Node test. A `basic_text` backend is not encryption and is refused.
+ * Node test. A `basic_text` backend is not encryption and is refused. Under
+ * Node, or Electron's Helper in Node mode, there is no `safeStorage`: nothing
+ * is available, rather than a crash.
  */
 export function electronSecretEncryption(): SecretEncryption {
   const electron = import("electron")
@@ -29,6 +31,7 @@ export function electronSecretEncryption(): SecretEncryption {
     async available() {
       if (!keychainReachable()) return false
       const { safeStorage } = await electron
+      if (!safeStorage) return false
       if (process.platform === "darwin") return safeStorage.isAsyncEncryptionAvailable()
       return (
         safeStorage.isEncryptionAvailable() &&

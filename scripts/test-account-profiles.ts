@@ -20,6 +20,7 @@ import { cursorAccountCapability } from "../electron/providers/cursor/accounts.t
 import { CURSOR_ACCOUNT_ENV, CursorSdkAuth, type CursorSdkProbeClient } from "../electron/providers/cursor/sdk/auth.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
 import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential } from "../electron/providers/cursor/sdk/credentials.ts"
+import { memorySecrets } from "../electron/secrets.ts"
 import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
 
 /** The fake Cursor SDK child's reply per method; an unlisted method is a test failure. */
@@ -281,11 +282,11 @@ else signIn();
     await writeFile(path, login("refreshed", "user-2"))
     await assert.rejects(assertAccountLaunch(capability.provider, launch), /credentials changed/, `${capability.provider}: another account is refused`)
   }
-  const plainText = { available: async () => true, encrypt: async (value: string) => Buffer.from(value), decrypt: async (value: Buffer) => value.toString() }
-  const cursorKeys = new CursorAccountKeys(join(root, "cursor-accounts"), plainText)
+  const cursorSecrets = memorySecrets()
+  const cursorKeys = new CursorAccountKeys(cursorSecrets)
   const cursorAuth = new CursorSdkAuth({
     env: async () => ({ CURSOR_API_KEY: "global-fixture-key" }), openUrl: async () => {}, cliKey: async () => null,
-    credentials: new CursorCredentialStore(join(root, "cursor-credential.bin"), plainText),
+    credentials: new CursorCredentialStore(cursorSecrets),
     client: (options): CursorSdkProbeClient => ({
       hello: async () => ({ wire: 1, sdkVersion: "fixture", node: process.version }),
       close: async () => undefined,

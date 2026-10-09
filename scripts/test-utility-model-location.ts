@@ -7,10 +7,9 @@ import {
   migrateUtilityModels,
   utilityModelDirectory,
 } from "../electron/utility-model-location.ts"
-import {
-  UtilityModelStore,
-  type UtilityKeyEncryption,
-} from "../electron/utility-model-store.ts"
+import { UtilityModelStore } from "../electron/utility-model-store.ts"
+import { adoptingLegacy, memorySecrets } from "../electron/secrets.ts"
+import type { SecretEncryption } from "../electron/secure-storage.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-utility-model-location-"))
 const home = join(root, "home")
@@ -99,12 +98,18 @@ assert.deepEqual(await migrateUtilityModels(join(root, "never"), shared), { move
 assert.deepEqual(await migrateUtilityModels(shared, shared), { moved: [], replaced: [], dropped: [] })
 assert.equal(await readFile(join(shared, "google.enc"), "utf8"), "google@dev")
 
-// The store waits for the migration before its first read.
-const encryption: UtilityKeyEncryption = {
-  available: () => true,
-  encrypt: (value) => Buffer.from(value, "utf8"),
-  decrypt: (value) => value.toString("utf8"),
+// The store waits for the migration before its first read, then the host's secrets take the moved file over.
+const encryption: SecretEncryption = {
+  available: async () => true,
+  encrypt: async (value) => Buffer.from(value, "utf8"),
+  decrypt: async (value) => value.toString("utf8"),
 }
+const inner = memorySecrets()
+const secrets = adoptingLegacy(inner, {
+  encryption,
+  path: (kind, name) => (kind === "saved-key" && name.startsWith("utility/") ? join(shared, `${name.slice("utility/".length)}.enc`) : null),
+  names: async () => [],
+})
 const record = JSON.stringify({
   provider: "google",
   model: "gemini-test",
@@ -116,7 +121,7 @@ let release: () => void = () => undefined
 const gate = new Promise<void>((resolve) => {
   release = resolve
 })
-const store = new UtilityModelStore(shared, encryption, {
+const store = new UtilityModelStore(shared, secrets, {
   ready: gate.then(() => migrateUtilityModels(third, shared)),
 })
 const pending = store.settings()
@@ -133,6 +138,8 @@ assert.deepEqual(
   ["gemini-test"]
 )
 assert.doesNotMatch(JSON.stringify(settings), /synthetic-key/)
+assert.equal(JSON.parse((await inner.read("saved-key", "utility/google"))?.value ?? "{}").apiKey, "synthetic-key", "the moved connection is a saved key now")
+await assert.rejects(stat(join(shared, "google.enc")), "and the older file is gone")
 
 await rm(root, { recursive: true, force: true })
 console.log("utility model location ok")
