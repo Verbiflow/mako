@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process"
 import { promisify } from "node:util"
+import { onWindows } from "./platform.js"
 
 const run = promisify(execFile)
 
@@ -8,7 +9,7 @@ function processStartCommand(pid: number): {
   file: string
   args: string[]
 } {
-  return process.platform === "win32"
+  return onWindows()
     ? {
         file: "powershell.exe",
         args: [

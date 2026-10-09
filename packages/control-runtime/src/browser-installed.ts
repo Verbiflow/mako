@@ -6,6 +6,7 @@ import { basename, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { LocalBrowser } from "./browser-discovery.js"
+import { onMac } from "./platform.js"
 
 const execute = promisify(execFile)
 const applicationInfo = z.object({
@@ -148,7 +149,7 @@ let cached:
 export function installedChromiumBrowsers(
   extraPaths: string[] = []
 ): Promise<LocalBrowser[]> {
-  if (process.platform !== "darwin") return Promise.resolve([])
+  if (!onMac()) return Promise.resolve([])
   const key = extraPaths.join("\n")
   if (!cached || cached.key !== key || cached.expires <= Date.now()) {
     cached = {
