@@ -131,7 +131,7 @@
     "test:provider-e2e": "npm run build:electron && node scripts/test-provider-e2e.mjs",
     "test:provider-startup": "tsx scripts/test-provider-process.ts && tsx scripts/test-cursor-shell-folder.ts && tsx scripts/test-provider-child-observation.ts && tsx scripts/test-provider-launch-trace.ts && tsx scripts/test-provider-startup.ts && tsx scripts/test-cursor-startup.ts && tsx scripts/test-cursor-errors.ts && tsx scripts/test-cursor-model-cache.ts",
     "clean:fixture-sessions": "tsx scripts/clean-fixture-sessions.ts",
-    "test:desk-browser-electron": "npm run build:electron && electron scripts/test-desk-browser-electron.mjs",
+    "test:desk-browser-electron": "npm run build:electron && electron scripts/test-desk-browser-electron.mjs && electron scripts/test-desk-browser-electron.mjs --relay",
     "test:control-api-e2e": "npm run build:electron && node scripts/test-control-api-e2e.mjs",
     "audit:control-typing": "npm run build:electron && node scripts/audit-control-typing.mjs",
     "test:local-control-e2e": "npm run build:electron && node --import tsx scripts/test-local-control-e2e.mjs",
