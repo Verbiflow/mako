@@ -50,7 +50,7 @@ async function client(name, production = false) {
   await until(async()=>port,Boolean,`${name} debugger`)
   // A production client's first page is the one-time storage bridge on the old
   // origin; its debugger target ends when the desk replaces it.
-  const desk=row=>row.type==="page"&&new URL(row.url).searchParams.get("runtime")==="shared"
+  const desk=row=>row.type==="page"&&/^(mako-app:|https?:)/.test(row.url)
   const pages=await until(async()=>fetch(`http://127.0.0.1:${port}/json/list`).then(r=>r.json()),rows=>rows.some(desk),`${name} page`)
   const socket=new WebSocket(pages.find(desk).webSocketDebuggerUrl)
   await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject})

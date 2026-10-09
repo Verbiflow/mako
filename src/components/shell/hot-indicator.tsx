@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { consumeFullReload, onHotUpdate, type HotUpdate } from "@/desk/hot-reload"
 import { cn } from "@/lib/utils"
 import { RotateCcwIcon, ZapIcon, SquareArrowOutUpRightIcon } from "lucide-react"
-import { manualReload, interfacePreview, sharedRuntime, sandboxProfile, openInterfacePreview, reloadInterface } from "@/state/development"
+import { manualReload, interfacePreview, sandboxProfile, openInterfacePreview, reloadInterface } from "@/state/development"
 
 /**
  * Says when Mako has just rewritten itself.
@@ -34,18 +34,14 @@ export function HotIndicator() {
   }, [reloaded])
 
   if (manualReload || !import.meta.env.DEV) {
-    // "Shared host" is the normal case — every dev client attaches to the
-    // profile's persistent host — so it was a permanent badge reporting the
-    // expected state forever. Only the *abnormal* worlds are worth a word:
-    // a sandbox profile, a standalone isolated host, or a second preview
-    // client, each of which means this window is not the desk you think.
+    // Every client attaches to its profile's shared host, so that needs no
+    // badge. Only the worlds that mean this window is not the desk you think
+    // are worth a word: a sandbox profile, or a second preview client.
     const world = sandboxProfile
       ? { label: `Sandbox: ${sandboxProfile}`, hint: `The ${sandboxProfile} profile has its own host, agents and history.` }
       : interfacePreview
         ? { label: "Shared preview", hint: "Another client of this host, with its own draft and layout." }
-        : sharedRuntime
-          ? null
-          : { label: "Isolated dev", hint: "Standalone host. Other hosts do not share its live state." }
+        : null
     return (
       <div className="no-drag flex shrink-0 items-center gap-1 text-label">
         {world ? (

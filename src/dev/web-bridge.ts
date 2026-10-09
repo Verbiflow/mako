@@ -23,10 +23,9 @@ type WebEvent =
 
 /** Vite forwards only same-origin requests to the actual host's private socket. */
 export async function installWebBridge(): Promise<void> {
-  if (import.meta.env.MAKO_SHARED_RUNTIME === true) {
+  if (import.meta.env.MAKO_SHARED_RUNTIME === true && import.meta.env.MAKO_CLIENT_PROFILE) {
     const url = new URL(location.href)
-    url.searchParams.set("runtime", "shared")
-    if (import.meta.env.MAKO_CLIENT_PROFILE) url.searchParams.set("profile", import.meta.env.MAKO_CLIENT_PROFILE)
+    url.searchParams.set("profile", import.meta.env.MAKO_CLIENT_PROFILE)
     history.replaceState(null, "", url)
   }
   const events = new Set<(event: HostEvent) => void>()

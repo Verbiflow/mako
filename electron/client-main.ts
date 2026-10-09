@@ -301,7 +301,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
   window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//i.test(url)) void shell.openExternal(url); return { action: "deny" } })
   if (!agentView) installAutomation(window, isDev)
-  const query = new URLSearchParams({ runtime: "shared" })
+  const query = new URLSearchParams()
   if (process.env.MAKO_PROFILE) query.set("profile", process.env.MAKO_PROFILE)
   if (options.preview) query.set("preview", id)
   if (agentView) query.set("preview", agentView)
