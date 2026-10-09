@@ -8,7 +8,7 @@ import { JsonSchema, OperationNameSchema, ReplySchema, type Actor, type ClientSe
 import { createFakeGateway, type GatewayLogLine } from "@mako/protocol/fake-gateway"
 import { hostCallInput, hostChannels } from "../electron/contracts/host-call-inputs.ts"
 import { hostCallReplay } from "../electron/contracts/host-call-policy.ts"
-import { CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall } from "../electron/contracts/client-calls.ts"
+import { CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, isHostScreenCall, socketCalls } from "../electron/contracts/client-calls.ts"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../electron/contracts/host-connection.ts"
 import { FixtureDeskRefusedError } from "../electron/contracts/fixture-desk-policy.ts"
 import { fromHostOperation, hostOperationName, hostOperations, toHostOperation, toProtocolReply, toRuntimeReply, type HostChannel } from "../electron/contracts/host-operations.ts"
@@ -26,6 +26,8 @@ const scratch = await mkdtemp(join(tmpdir(), "mako-host-gateway-"))
 const logPath = join(scratch, "host.log")
 installHostLog(logPath)
 const channels = gatewayCalls(hostChannels)
+/** What the host answers on its own socket: the gateway's calls and those acting on the host's screen. */
+const answered = socketCalls(hostChannels)
 
 // 1. Every host call is an operation, and nothing else is: a client call is answered by the client, and a remote client never acts on the host's screen.
 {
@@ -74,8 +76,8 @@ const received: Received[] = []
 const behaviours = new Map<string, () => Promise<Json>>()
 const invoke: HostInvoke = async (channel, args, client = "web", history = false, correlationId) =>
   withHostClient(client, async () => {
-    if (!channels.some((known) => known === channel)) throw new Error("Unknown Mako host method")
-    const parsed = z.array(JsonSchema.optional()).parse(hostCallInput(z.enum(channels).parse(channel)).parse(args))
+    if (!answered.some((known) => known === channel)) throw new Error("Unknown Mako host method")
+    const parsed = z.array(JsonSchema.optional()).parse(hostCallInput(z.enum(answered).parse(channel)).parse(args))
     const seen = parsed.map((arg) => arg ?? null)
     received.push({ channel, args: seen, client, history, correlationId: hostCorrelation() })
     hostLog("fixture", "handled", { channel })
@@ -85,7 +87,7 @@ const invoke: HostInvoke = async (channel, args, client = "web", history = false
   }, history, correlationId)
 
 const socket = join(scratch, "host.sock")
-const host = await startWebHost(socket, invoke, async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: [...channels] })
+const host = await startWebHost(socket, invoke, async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: [...answered] })
 const gatewayLog: GatewayLogLine[] = []
 const gateway = createFakeGateway({ log: (line) => gatewayLog.push(line) })
 const laptop = { runtimeId: "laptop", build: "test", invoke }
@@ -144,6 +146,7 @@ try {
       catch (error) { return { error: error instanceof Error ? `${error.name}: ${error.message}` : "thrown" } }
     }
     let methods = 0
+    let screen = 0
     for (const [name, method] of Object.entries(viaSocket)) {
       const twin = Object.entries(viaGateway).find(([other]) => other === name)?.[1]
       if (!(method instanceof Function) || !(twin instanceof Function)) continue
@@ -154,9 +157,16 @@ try {
       assert.deepEqual(gatewayChannels, socketChannels, `${name} calls the same host methods`)
       // A real client answers these before either transport (`test-client-calls.ts`).
       if (!socketChannels.length || socketChannels.some(isClientCall)) continue
+      if (socketChannels.some(isHostScreenCall)) {
+        assert.doesNotMatch(socketOutcome.error ?? "", /no such call|Unknown Mako host method/, `${name} reaches the host on its own socket`)
+        assert.match(gatewayOutcome.error ?? "", /no such call/, `${name} acts on the host's screen, so the gateway refuses it`)
+        screen++
+        continue
+      }
       assert.deepEqual(gatewayOutcome, socketOutcome, `${name} answers the same`)
       methods++
     }
+    assert.equal(screen, HOST_SCREEN_CALLS.length, "every host-screen call has a bridge method")
     assert.ok(methods > 150, `${methods} bridge methods reach the host`)
     console.log(`Desktop bridge: all ${methods} createMakoBridge methods that reach the host give the same answer or the same error over the gateway as over the socket`)
   }

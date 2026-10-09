@@ -50,6 +50,10 @@ export const HOST_SCREEN_CALLS = [
 
 const hostScreenCalls: ReadonlySet<string> = new Set(HOST_SCREEN_CALLS)
 
+export function isHostScreenCall(channel: string): channel is (typeof HOST_SCREEN_CALLS)[number] {
+  return hostScreenCalls.has(channel)
+}
+
 /** What a host answers on its socket, and so advertises: every call but the client calls. */
 export function socketCalls<Channel extends string>(channels: readonly Channel[]): Channel[] {
   return channels.filter((channel) => !isClientCall(channel))
@@ -57,7 +61,7 @@ export function socketCalls<Channel extends string>(channels: readonly Channel[]
 
 /** What a host answers through the gateway: what its socket answers, less what acts on its screen. */
 export function gatewayCalls<Channel extends string>(channels: readonly Channel[]): Channel[] {
-  return socketCalls(channels).filter((channel) => !hostScreenCalls.has(channel))
+  return socketCalls(channels).filter((channel) => !isHostScreenCall(channel))
 }
 
 /** What each client call answers, as the renderer bridge reads it. */
