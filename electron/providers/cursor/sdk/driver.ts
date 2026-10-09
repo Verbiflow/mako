@@ -420,6 +420,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       wake: "The next message starts a new SDK child that resumes the agent; a run its killed child left active is expired by the next one (`run-records.ts`).",
       checkpoint,
       inspect: inspectNativeSession,
+      elsewhere: {
+        via: "The SDK child files the agent under the new folder in its store (`relocateCursorAgent`), which finds an agent only under its own folder, then `Agent.resume`.",
+        verified: "scripts/test-cursor-relocate.ts against SDK 1.0.31: not found from another folder as saved, resumed there with its checkpoint once filed; with real turns, the moved agent remembered its turn and its shell ran in the new folder after running in the old one.",
+      },
     },
     nativeIdentity: CURSOR_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,

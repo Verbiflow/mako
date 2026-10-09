@@ -9,6 +9,7 @@ import { z } from "zod"
 import { CursorImportError, type LegacyStoreSnapshot } from "../legacy-store.js"
 export { CursorImportError } from "../legacy-store.js"
 import type { SdkImportSource } from "./wire.js"
+import type { LocalAgentStoreAgents } from "@cursor/sdk"
 
 /**
  * Continuing a `cursor-agent` session through the SDK.
@@ -139,6 +140,18 @@ export function resolveImportAgentId(
   const held = known.find((agent) => agent.agentId === requested)
   if (!held) return { agentId: requested, existing: false }
   return { agentId: randomUUID(), existing: false }
+}
+
+/**
+ * Files an agent under the folder it resumes in. The SDK's store finds an
+ * agent only in the folder it was saved under, so a session resumed
+ * elsewhere, as a Thread's move into its worktree does, is moved there first.
+ */
+export async function relocateCursorAgent(agents: Pick<LocalAgentStoreAgents, "get" | "update">, agentId: string, cwd: string): Promise<boolean> {
+  const agent = await agents.get({ agentId })
+  if (!agent || agent.cwd === cwd) return false
+  await agents.update({ agent: { ...agent, cwd } })
+  return true
 }
 
 /** Never overwrite an indexed SDK continuation when its legacy origin moved. */

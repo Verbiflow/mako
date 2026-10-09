@@ -36,6 +36,7 @@ import {
   copyLegacyStore,
   CursorImportError,
   importedAgentDocument,
+  relocateCursorAgent,
   verifyImportRevision,
   resolveImportAgentId,
   type KnownAgent,
@@ -330,6 +331,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
       imported = result.imported
       importRevision = result.revision
     }
+    if (!params.create) await relocateCursorAgent(store.agents, agentId, params.cwd)
   } catch (cause) {
     await store.dispose().catch(() => undefined)
     if (cause instanceof CursorImportError) throw new ConfigurationError(cause.message)
