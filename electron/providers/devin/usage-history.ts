@@ -17,7 +17,7 @@ const RowSchema = z.object({ session_id: z.string(), node_id: z.number(), create
 const LastRowSchema = z.object({ last: z.number().nullable() })
 const SessionSchema = z.object({ id: z.string(), model: z.string().nullable(), working_directory: z.string().nullable() })
 /**
- * Rows read between yields to the main process, where the summary runs: on
+ * Rows read between yields to the host's event loop, where the summary runs: on
  * a 309,000-row month, 2,048 rows held it at most 39 ms, 8,192 rows 312 ms,
  * at the same 0.6 s in all.
  */

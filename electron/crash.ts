@@ -372,11 +372,11 @@ export const diagnosticReports: NativeCrashes = (root) => {
 }
 
 /**
- * Arm the main process.
+ * Arm this process: the host, or a desktop client.
  *
- * `uncaughtException` is handled rather than left to kill the process: in a
- * desktop app the alternative is the window vanishing with no explanation,
- * which is the exact failure this file exists to end. A caught exception is
+ * `uncaughtException` is handled rather than left to kill the process: the
+ * alternative is the window, or every agent the host runs, vanishing with no
+ * explanation, which is the exact failure this file exists to end. A caught exception is
  * recorded and the app carries on — degraded, but present and able to say so.
  */
 export function installCrashReporting(options: {

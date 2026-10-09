@@ -6,7 +6,7 @@ import {
 /**
  * The machine's sessions, whoever wrote them.
  *
- * This is the main-process face of `@mako/sessions`: one catalog over every
+ * This is the host's face of `@mako/sessions`: one catalog over every
  * provider's native store, scanned once, watched continuously, and pushed to
  * the renderer whenever anything anywhere writes a session. Open a conversation
  * in another provider's terminal and it appears in the rail mid-turn; that is

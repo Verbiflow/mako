@@ -40,7 +40,7 @@ import type { Capabilities } from "./mcp-skills-integrations.js"
 import type { HarnessProfile } from "./providers-acp.js"
 
 /**
- * The wire contract between the Electron host and the renderer.
+ * The wire contract between the host and the renderer.
  *
  * Design rule: the hot path (token streaming) must never re-send the whole
  * session. `stream` carries one message; `meta` carries scalars; the heavy
