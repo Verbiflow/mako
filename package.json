@@ -72,7 +72,7 @@
     "harness:catalogs": "tsx scripts/record-model-catalogs.ts",
     "test:cloud-account": "tsx scripts/test-cloud-account.ts",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
-    "test:host": "tsx scripts/test-host-environment.ts && tsx scripts/test-client-calls.ts && tsx scripts/test-machine.ts && tsx scripts/test-host-lock.ts && tsx scripts/test-host-lifecycle.ts && tsx scripts/test-secrets.ts && tsx scripts/test-host-secrets.ts && tsx scripts/test-secret-key-handover.ts && tsx scripts/test-keychain-safe-storage.ts && tsx scripts/test-host-domains.ts && tsx scripts/test-cloud-account.ts && tsx scripts/test-telemetry.ts && tsx scripts/test-workspace-clients.ts && tsx scripts/test-file-open.ts && tsx scripts/test-git-staging.ts && tsx scripts/test-git-preview.ts && tsx scripts/test-git-push.ts",
+    "test:host": "tsx scripts/test-host.ts",
     "test:git-ui": "node scripts/test-git-workbench-ui.mjs",
     "test:git-remote": "tsx scripts/test-git-remote.ts && tsx scripts/test-git-push.ts",
     "test:git-environment": "tsx scripts/test-git-environment.ts",
