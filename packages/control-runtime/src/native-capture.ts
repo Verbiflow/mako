@@ -1,4 +1,4 @@
-import sharp from "sharp"
+import { heavy } from "./heavy-packages.js"
 import { imageSize } from "image-size"
 import {
   ControlFault,
@@ -30,6 +30,7 @@ export async function nativeCapture(
     (format === "jpeg" && options.quality !== undefined)
   let bytes = source
   if (changed) {
+    const sharp = await heavy.sharp.load("native capture")
     let pipeline = sharp(source)
     if (resize)
       pipeline = pipeline.resize({

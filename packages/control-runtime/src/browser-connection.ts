@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto"
-import WebSocket from "ws"
+import type WebSocket from "ws"
 import { z } from "zod"
 import { BrowserFault } from "./contracts/browser-control.js"
+import { heavy } from "./heavy-packages.js"
 import type { JsonObject } from "./json.js"
 
 const object = z.record(z.string(), z.json())
@@ -125,7 +126,7 @@ export class BrowserConnection {
     })
   }
 
-  static connect(
+  static async connect(
     endpoint: string,
     signal: AbortSignal
   ): Promise<BrowserConnection> {
@@ -139,6 +140,7 @@ export class BrowserConnection {
         message: "Browser connections must use a local endpoint.",
         outcome: "not-dispatched",
       })
+    const { default: WebSocket } = await heavy.ws.load("browser connection")
     return new Promise((resolve, reject) => {
       signal.throwIfAborted()
       const socket = new WebSocket(url, {
@@ -193,7 +195,7 @@ export class BrowserConnection {
     signal: AbortSignal,
     sessionId?: string
   ): Promise<JsonObject> {
-    if (signal.aborted || this.socket.readyState !== WebSocket.OPEN)
+    if (signal.aborted || this.socket.readyState !== this.socket.OPEN)
       return Promise.reject(
         new BrowserFault({
           code: signal.aborted ? "cancelled" : "disconnected",

@@ -1,8 +1,8 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js"
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import type { Tool } from "@modelcontextprotocol/sdk/types.js"
+import { heavy } from "./heavy-packages.js"
 import type { JsonObject } from "./json.js"
-import { driverSchemaValidator } from "./driver-schema.js"
 import { z } from "zod"
 
 export const ComputerDriverResultSchema = z.looseObject({
@@ -79,6 +79,7 @@ class McpComputerDriverClient implements ComputerDriverClient {
           : undefined
       )
     } catch (error) {
+      const { ErrorCode, McpError } = await heavy.mcpTypes.load("computer driver error")
       if (error instanceof McpError && error.code === ErrorCode.ConnectionClosed)
         throw new ComputerDriverExitedError({ cause: error })
       throw error
@@ -99,6 +100,7 @@ class McpComputerDriverClient implements ComputerDriverClient {
 export async function connectMcpComputerDriver(
   process: ComputerDriverProcess
 ): Promise<ComputerDriverClient> {
+  const { Client, StdioClientTransport, driverSchemaValidator } = await heavy.mcpClient.load("computer driver")
   const client = new Client(
     { name: "mako-computer-use", version: "3.0.0" },
     { jsonSchemaValidator: driverSchemaValidator() }
