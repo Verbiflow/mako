@@ -1,0 +1,14 @@
+[
+  "electron/appshots.ts",
+  "electron/computer-permissions.ts",
+  "electron/crash.ts",
+  "electron/desk-browser-window.ts",
+  "electron/desk-protocol.ts",
+  "electron/desktop-notifications-electron.ts",
+  "electron/ipc/register.ts",
+  "electron/main.ts",
+  "electron/renderer-health.ts",
+  "electron/renderer-storage.ts",
+  "electron/secure-storage.ts",
+  "electron/updates.ts"
+]
