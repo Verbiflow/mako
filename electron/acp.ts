@@ -658,6 +658,9 @@ async function startAcp(
           return parseNewAcpSession(created)
         }
         capture?.opening()
+        const resuming = source?.resume
+        if (resuming?.kind === "native" && resuming.beforeLoad)
+          await trace.step("session-resume", () => resuming.beforeLoad!({ nativeId: resume, cwd: workingDir, env }))
         const reply = await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
           loadSessionRequest(resume, workingDir, harness, options.tuning, live.mcpServers)
         )))

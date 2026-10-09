@@ -76,6 +76,8 @@ export interface AcpApprovalObserver {
 export type AcpResume =
   | (Omit<Extract<NativeResume, { kind: "native" }>, "locate"> & {
       locate(input: { nativeId: string; cwd: string; env: NodeJS.ProcessEnv }): string | undefined
+      /** Run before `session/load` in `cwd`, for an agent that loads a session only from where it keeps it. */
+      beforeLoad?(input: { nativeId: string; cwd: string; env: NodeJS.ProcessEnv }): Promise<void>
     })
   | DriverAbsent
 
