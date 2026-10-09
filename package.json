@@ -28,6 +28,8 @@
     "test:shared-conversations": "tsx scripts/test-shared-conversations.ts && tsx scripts/run-shared-thread-ui.ts",
     "test:shared-runtime": "npm run build && node scripts/test-shared-runtime.mjs",
     "test:host-signals": "npm run build:electron && node scripts/test-host-signals.mjs",
+    "test:host-single": "npm run build:electron && node scripts/test-host-single.mjs",
+    "test:secrets-keychain": "node scripts/test-secrets-keychain.mjs",
     "test:fixture-desk": "npm run build:electron && node scripts/test-fixture-desk.mjs && node scripts/test-remove-fixture-desk.mjs",
     "test:thread-lifecycle": "tsx scripts/test-thread-lifecycle.ts && tsx scripts/test-runtime-transport.ts && tsx scripts/test-runtime-recovery.ts",
     "test:workspace-ui": "node scripts/test-workspace-ui.mjs",
