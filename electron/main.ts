@@ -655,23 +655,7 @@ async function configureDevRenderer(
 }
 const controlPreviews = new ControlPreviews(
   browserControl,
-  (image) => {
-    const bytes = Buffer.from(image.data, "base64")
-    const dimensions = imageSize(bytes)
-    if (dimensions.width * dimensions.height > 32_000_000) return null
-    const decoded = nativeImage.createFromBuffer(bytes)
-    if (decoded.isEmpty()) return null
-    return {
-      data: decoded
-        .resize({
-          width: Math.min(1440, decoded.getSize().width),
-          quality: "good",
-        })
-        .toJPEG(85)
-        .toString("base64"),
-      mimeType: "image/jpeg",
-    }
-  },
+  previewThumbnail,
   (activity) => emit({ type: "control-activity", activity })
 )
 let controlService: Awaited<ReturnType<typeof startControlService>> | null =

@@ -10,7 +10,6 @@ import {
   resolve,
   sep,
 } from "node:path"
-import { parse } from "yaml"
 import { z } from "zod"
 import { selectedAccount } from "./accounts.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
@@ -30,6 +29,7 @@ import type {
   SkillScope,
   SkillSyncTarget,
 } from "./shared.js"
+import { heavy } from "./heavy-packages.js"
 
 const MAX_SKILL_FILES = 1024
 const MAX_SKILL_BYTES = 64 * 1024 * 1024
@@ -71,9 +71,10 @@ function posixPath(value: string): string {
   return value.split(sep).join("/")
 }
 
-function parseFrontmatter(contents: string) {
+async function parseFrontmatter(contents: string) {
   const match = FRONTMATTER.exec(contents)
   if (!match?.[1]) return null
+  const { parse } = await heavy.yaml.load("skill frontmatter")
   const parsed = frontmatterSchema.safeParse(parse(match[1]))
   return parsed.success ? parsed.data : null
 }
@@ -145,7 +146,7 @@ async function readSkill(
   const manifest = join(directory, "SKILL.md")
   try {
     const raw = await readFile(manifest, "utf8")
-    const metadata = parseFrontmatter(raw)
+    const metadata = await parseFrontmatter(raw)
     if (!metadata) return null
     const packageFiles = await readSkillFiles(directory)
     const reasons: string[] = []

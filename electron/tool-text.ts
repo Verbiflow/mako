@@ -1,11 +1,11 @@
-import { stringify } from "yaml"
-
+import { heavy } from "./heavy-packages.js"
 /**
  * A tool's structured answer, for a model to read: YAML, which parses back
  * to the same values without JSON's quotes, braces and escapes. Absent
  * fields are left out, and long lines are never folded.
  */
-export function toolText<Report>(report: Report): string {
+export async function toolText<Report>(report: Report): Promise<string> {
+  const { stringify } = await heavy.yaml.load("tool report")
   return stringify(report, { lineWidth: 0, minContentWidth: 0, aliasDuplicateObjects: false }).trimEnd()
 }
 

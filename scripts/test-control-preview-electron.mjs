@@ -1,5 +1,5 @@
 // Private synthetic Electron window, never the user's Mako profile or renderer.
-import { app, BrowserWindow, nativeImage } from "electron"
+import { app, BrowserWindow } from "electron"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
@@ -10,7 +10,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { DeskBrowser } from "../dist-electron/desk-browser.js"
 import { deskPageForWindow } from "../dist-electron/desk-browser-window.js"
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
-import { ControlPreviews } from "../dist-electron/control-previews.js"
+import { ControlPreviews, previewThumbnail } from "../dist-electron/control-previews.js"
 import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 const clips = process.env.CAPTURE_CLIPS !== "0"
 const fps = Number(process.env.CAPTURE_FPS ?? 60)
@@ -33,12 +33,9 @@ async function main() {
   const run = command => browser.execute("binding-owner", BrowserCommandSchema.parse(command), AbortSignal.timeout(10000))
   let frames = 0, lastId, largestBytes = 0
   const thumbnailTimes = [], deliveryTimes = []
-  const previews = new ControlPreviews(browser, image => {
+  const previews = new ControlPreviews(browser, async image => {
     const start = performance.now()
-    const source = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"))
-    const size = source.getSize()
-    const resized = source.resize({ width: Math.min(size.width, 1440), quality: "good" })
-    const result = { data: resized.toJPEG(85).toString("base64"), mimeType: "image/jpeg" }
+    const result = await previewThumbnail(image)
     thumbnailTimes.push(performance.now() - start)
     return result
   }, () => {

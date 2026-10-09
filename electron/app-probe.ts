@@ -462,7 +462,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
 }
 
 /** The probe's report for an agent, as YAML. */
-export function probeText(view: AppProbeView): string {
+export function probeText(view: AppProbeView): Promise<string> {
   const { first, last } = view.ports
   const changed = view.changed.entries.map(({ folder, paths, more, who }) => {
     const said = paths.slice(0, PATHS_SAID)

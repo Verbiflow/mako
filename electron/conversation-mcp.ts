@@ -1,10 +1,7 @@
-import { createControlMcpServer, type ControlAgentOperation } from "@mako/control-runtime/mcp"
+import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { JsonValue } from "@mako/control"
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
-import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { configuredListenPort } from "./listen-port.js"
 import type { LiveConversations } from "./live-conversations.js"
@@ -12,6 +9,7 @@ import type { ConversationTools } from "./providers/live-driver.js"
 import { registerWorkspaceTools, type WorkspaceTools } from "./workspace-tools.js"
 import { registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { registerPullRequestTools, type PullRequestTools } from "./pull-request-tools.js"
+import { heavy } from "./heavy-packages.js"
 
 type ConversationOwner = Pick<LiveConversations, "authorizeAgent">
 
@@ -49,7 +47,7 @@ function routeOf(url: string | undefined): Route | undefined {
   return undefined
 }
 
-async function readMessage(request: IncomingMessage, maxBytes: number) {
+async function readBody(request: IncomingMessage, maxBytes: number) {
   const chunks: Buffer[] = []
   let bytes = 0
   for await (const chunk of request) {
@@ -59,9 +57,7 @@ async function readMessage(request: IncomingMessage, maxBytes: number) {
       throw new Error("Request exceeds the control message limit")
     chunks.push(buffer)
   }
-  return JSONRPCMessageSchema.parse(
-    JSON.parse(Buffer.concat(chunks).toString("utf8"))
-  )
+  return Buffer.concat(chunks).toString("utf8")
 }
 
 /**
@@ -97,7 +93,9 @@ export async function startConversationMcp(
         response.writeHead(403).end()
         return
       }
-      const message = await readMessage(request, 1024 * 1024)
+      const [{ McpServer, StreamableHTTPServerTransport, createControlMcpServer }, { JSONRPCMessageSchema }] =
+        await Promise.all([heavy.mcpServer.load("agent MCP request"), heavy.mcpTypes.load("agent MCP request")])
+      const message = JSONRPCMessageSchema.parse(JSON.parse(await readBody(request, 1024 * 1024)))
       // HTTP requests use separate stateless MCP transports. Cancellation must
       // find the original call by its grant and JSON-RPC id, not a new server.
       if ("method" in message && message.method === "notifications/cancelled") {

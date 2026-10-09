@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto"
 import { imageSize } from "image-size"
-import sharp from "sharp"
 import {
   type BrowserService,
   type BrowserFrame,
@@ -12,6 +11,7 @@ import {
   type ControlImage,
   type ControlPreview,
 } from "@mako/control-runtime/contracts"
+import { heavy } from "./heavy-packages.js"
 
 interface PreviewEntry {
   preview: ControlPreview
@@ -32,6 +32,8 @@ interface PreviewEntry {
   authorize?: () => void
   publish?: NodeJS.Timeout
   oversized?: boolean
+  /** Counts native snapshots, so a thumbnail finishing after a newer snapshot or another target is dropped. */
+  snapshots: number
 }
 type PreviewFrame = NonNullable<ControlPreview["frame"]>
 export interface PreviewBox {
@@ -39,16 +41,28 @@ export interface PreviewBox {
   height: number
 }
 
+type Thumbnail = (image: ControlImage) => Promise<ControlImage | null>
+
+/** A native snapshot as the viewer shows it: JPEG, at most 1440 pixels wide; none for an image too large to decode. */
+export async function previewThumbnail(image: ControlImage): Promise<ControlImage | null> {
+  const bytes = Buffer.from(image.data, "base64")
+  const { width, height } = imageSize(bytes)
+  if (!width || !height || width * height > 32_000_000) return null
+  const sharp = await heavy.sharp.load("control preview")
+  const jpeg = await sharp(bytes).resize({ width: Math.min(1440, width) }).jpeg({ quality: 85 }).toBuffer()
+  return { data: jpeg.toString("base64"), mimeType: "image/jpeg" }
+}
+
 /** One bounded image per task. Image bytes only cross IPC when its visible preview requests them. */
 export class ControlPreviews {
   private readonly entries = new Map<string, PreviewEntry>()
   private readonly browser: BrowserService
-  private readonly thumbnail: (image: ControlImage) => ControlImage | null
+  private readonly thumbnail: Thumbnail
   private readonly changed: (activity: ControlActivity) => void
   private readonly scaled = new WeakMap<PreviewFrame, Map<string, Promise<PreviewFrame>>>()
   constructor(
     browser: BrowserService,
-    thumbnail: (image: ControlImage) => ControlImage | null,
+    thumbnail: Thumbnail,
     changed: (activity: ControlActivity) => void
   ) {
     this.browser = browser
@@ -70,6 +84,7 @@ export class ControlPreviews {
         clients: new Map(),
         generation: 0,
         sourceFrames: 0,
+        snapshots: 0,
       }
       this.entries.set(activity.conversationId, entry)
     }
@@ -83,16 +98,31 @@ export class ControlPreviews {
       entry.preview.frame = null
       entry.preview.window = undefined
       entry.oversized = false
+      entry.snapshots++
     }
     entry.preview.activity = next
-    if (image) this.frame(entry, image)
-    if (!entry.publish) {
-      entry.publish = setTimeout(() => {
-        entry.publish = undefined
-        this.changed(entry.preview.activity)
-      }, 250)
-      entry.publish.unref()
-    }
+    if (image) void this.snapshot(activity.conversationId, entry, image)
+    this.publish(entry)
+  }
+
+  private publish(entry: PreviewEntry) {
+    if (entry.publish) return
+    entry.publish = setTimeout(() => {
+      entry.publish = undefined
+      this.changed(entry.preview.activity)
+    }, 250)
+    entry.publish.unref()
+  }
+
+  /** Native snapshots pass the thumbnail boundary before retention; the newest one for the current target wins. */
+  private async snapshot(conversationId: string, entry: PreviewEntry, image: ControlImage) {
+    const snapshot = ++entry.snapshots
+    let thumbnail: ControlImage | null
+    try { thumbnail = await this.thumbnail(image) } catch { return }
+    if (snapshot !== entry.snapshots || this.entries.get(conversationId) !== entry) return
+    if (!thumbnail || thumbnail.data.length > 2 * 1024 * 1024) return
+    this.frame(entry, { mimeType: thumbnail.mimeType, bytes: Buffer.from(thumbnail.data, "base64") })
+    this.publish(entry)
   }
 
   browserTarget(
@@ -211,10 +241,11 @@ export class ControlPreviews {
     if (!scaling) {
       if (bySize.size >= 8) bySize.clear()
       // Full chroma: at thumbnail sizes 4:2:0 visibly softens coloured text.
-      scaling = sharp(frame.image.bytes)
-        .resize(size.width, size.height, { fit: "fill", kernel: "mks2021" })
-        .jpeg({ quality: 90, chromaSubsampling: "4:4:4" })
-        .toBuffer()
+      scaling = heavy.sharp.load("control preview")
+        .then((sharp) => sharp(frame.image.bytes)
+          .resize(size.width, size.height, { fit: "fill", kernel: "mks2021" })
+          .jpeg({ quality: 90, chromaSubsampling: "4:4:4" })
+          .toBuffer())
         .then((bytes) => {
           // SAFETY: sharp returns a Node Buffer, which is never backed by a SharedArrayBuffer.
           const buffer = bytes.buffer as ArrayBuffer
@@ -229,16 +260,8 @@ export class ControlPreviews {
     }
   }
 
-  private frame(entry: PreviewEntry, image: ControlImage | NonNullable<ControlPreview["frame"]>["image"], capturedAt = Date.now(), sequence?: number) {
-    let pixels: NonNullable<ControlPreview["frame"]>["image"]
-    if ("bytes" in image) pixels = image // BrowserCapture already validates encoded dimensions.
-    else {
-      // Native snapshots pass the existing thumbnail boundary before retention.
-      let thumbnail: ControlImage | null
-      try { thumbnail = this.thumbnail(image) } catch { return }
-      if (!thumbnail || thumbnail.data.length > 2 * 1024 * 1024) return
-      pixels = { mimeType: thumbnail.mimeType, bytes: Buffer.from(thumbnail.data, "base64") }
-    }
+  /** Browser frames arrive with validated dimensions; native snapshots arrive here as thumbnails. */
+  private frame(entry: PreviewEntry, pixels: PreviewFrame["image"], capturedAt = Date.now(), sequence?: number) {
     // Bound actual bytes; base64 expansion no longer consumes the delivery budget.
     entry.oversized = pixels.bytes.byteLength > 2 * 1024 * 1024
     if (entry.oversized) return

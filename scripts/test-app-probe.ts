@@ -237,7 +237,7 @@ try {
   const declared = view.registered.find((entry) => entry.kind === "url-scheme")
   assert.equal(declared?.name, `${scheme}:`)
   assert.match(declared!.detail, new RegExp(`^Declared by ${bundle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}, which the app runs\\. `))
-  const text = probeText(view)
+  const text = await probeText(view)
   assert.match(text, /changedFolders:/)
   assert.match(text, /held\.log/)
 
@@ -270,7 +270,7 @@ try {
   const handler = after.registered.find((entry) => entry.kind === "url-handler")
   assert.equal(handler?.name, `${scheme}:`)
   assert.match(handler!.detail, new RegExp(`^Links now open in com\\.example\\.${scheme}; it was set while the app ran\\.$`))
-  assert.match(probeText(after), new RegExp(`${label}\\.agent: .*\\n.*${scheme}: Links now open in `))
+  assert.match(await probeText(after), new RegExp(`${label}\\.agent: .*\\n.*${scheme}: Links now open in `))
 
   await processes.stop(key)
   const stopped = await processes.footprint(key, [checkout])
@@ -292,7 +292,7 @@ try {
   assert.ok(down.registered.some((entry) => entry.name === `${label}.agent`), "an agent written while it ran still shows")
   assert.ok(!down.registered.some((entry) => entry.name === `${label}.late`), "one written after the stop doesn't")
   assert.match(down.notes[0]!, /^The app stopped .+, when Mako saw nothing of it running; changedFolders and registered cover only while it ran/)
-  assert.match(probeText(down), /stoppedAt: /)
+  assert.match(await probeText(down), /stoppedAt: /)
   const again = await probeApp(await inputFor())
   assert.deepEqual([again.stoppedAt, again.changed.entries.map((entry) => entry.folder)], [down.stoppedAt, down.changed.entries.map((entry) => entry.folder)], "a closed trace stays as it was")
 

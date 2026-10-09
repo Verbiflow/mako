@@ -6,9 +6,10 @@ import { BrowserService } from "@mako/control-runtime/browser"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
+  type ControlImage,
   type ControlPreview,
 } from "@mako/control-runtime/contracts"
-import { ControlPreviews } from "../electron/control-previews.js"
+import { ControlPreviews, previewThumbnail } from "../electron/control-previews.js"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const fixture = await browserFixture()
@@ -16,7 +17,7 @@ const browser = new BrowserService([fixture.definition])
 let events = 0
 const previews = new ControlPreviews(
   browser,
-  (image) => image,
+  async (image) => image,
   () => {
     events++
   }
@@ -208,8 +209,40 @@ try {
   const corrupt = { ...full, frame: { ...full.frame, id: "corrupt", image: { mimeType: "image/jpeg" as const, bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 4, 56, 7, 128, 3, 1, 0x11, 0]) } } }
   assert.equal(await previews.sized(corrupt, { width: 100, height: 100 }), corrupt, "A frame that cannot be scaled is sent as captured")
   assert.equal(full.frame.image.bytes.byteLength, jpeg.byteLength, "The retained capture stays full size")
+
+  const computer = { conversationId: "native", kind: "computer" as const, operation: "observe", target: "app:1", status: "observed" as const }
+  const snapshotFrame = async (from: ControlPreviews) => {
+    for (let attempt = 0; attempt < 200 && !from.read("native", false)?.frame; attempt++) await delay(10)
+    return from.read("native", false)?.frame ?? null
+  }
+  const snapshotPng = await sharp(noise, { raw: { width: 1920, height: 1080, channels: 3 } }).png().toBuffer()
+  const native = new ControlPreviews(browser, previewThumbnail, () => {})
+  native.observe(computer, { mimeType: "image/png", data: snapshotPng.toString("base64") })
+  const nativeFrame = await snapshotFrame(native)
+  assert.ok(nativeFrame, "A native snapshot becomes the preview's frame")
+  const nativeSize = await sharp(nativeFrame.image.bytes).metadata()
+  assert.deepEqual([nativeFrame.image.mimeType, nativeSize.format, nativeSize.width, nativeSize.height], ["image/jpeg", "jpeg", 1440, 810],
+    "A native snapshot is kept as a JPEG at most 1440 pixels wide")
+  native.close()
+
+  const thumbnails: Array<(image: ControlImage | null) => void> = []
+  const ordered = new ControlPreviews(browser, () => new Promise((resolve) => thumbnails.push(resolve)), () => {})
+  const image = (data: string): ControlImage => ({ mimeType: "image/jpeg", data: Buffer.from(data).toString("base64") })
+  ordered.observe(computer, image("older"))
+  ordered.observe(computer, image("newer"))
+  thumbnails[1]?.(image("newer"))
+  thumbnails[0]?.(image("older"))
+  const kept = await snapshotFrame(ordered)
+  await delay(20)
+  assert.equal(Buffer.from(kept?.image.bytes ?? []).toString(), "newer", "An older snapshot finishing late never replaces a newer one")
+  ordered.observe({ ...computer, target: "app:2" }, image("first window"))
+  ordered.observe({ ...computer, target: "app:3" })
+  thumbnails[2]?.(image("first window"))
+  await delay(20)
+  assert.equal(ordered.read("native", false)?.frame, null, "A snapshot of a target the task has left is dropped")
+  ordered.close()
   console.log(
-    "Control previews: hidden capture suppression, one shared stream, task isolation, viewer ownership, event coalescing, target invalidation, bounded retention and viewer-sized frames passed"
+    "Control previews: hidden capture suppression, one shared stream, task isolation, viewer ownership, event coalescing, target invalidation, bounded retention, viewer-sized frames and native snapshot thumbnails passed"
   )
 } finally {
   previews.close()
