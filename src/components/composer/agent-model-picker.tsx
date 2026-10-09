@@ -1,7 +1,8 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { useEffect, useMemo, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react"
 import {
   AlertCircleIcon,
+  ArrowRightIcon,
   CheckIcon,
   ChevronDownIcon,
   BrainIcon,
@@ -14,7 +15,7 @@ import {
   UserRoundIcon,
   ZapIcon,
 } from "lucide-react"
-import type { ModelOption, ResolvedSessionSettings, ResolvedSetting, SettingValue } from "@mako/sessions/settings"
+import type { ModelIssue, ModelOption, ResolvedSessionSettings, ResolvedSetting, SettingValue } from "@mako/sessions/settings"
 import {
   Menu,
   MenuContent,
@@ -34,6 +35,7 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import {
   chooseComposerModel,
   chooseComposerOption,
+  replaceUnusableModel,
 } from "@/state/composer-settings"
 import {
   addToLoadout,
@@ -143,6 +145,8 @@ export interface ModelChoice {
   options: ModelOption[]
   resolved: ResolvedSessionSettings
   chooseOption(id: string, value: SettingValue): void
+  /** Move off a chosen model that can't start, onto the one it was covering. */
+  replaceModel(issue: ModelIssue): void
   /** Where a value came from, in this place's words. */
   source(setting: ResolvedSetting): string
 }
@@ -155,6 +159,7 @@ function composerChoice(view: ComposerSettingsView): ModelChoice {
     options: view.options,
     resolved: view.resolved,
     chooseOption: (id, value) => chooseComposerOption(view.target, id, value),
+    replaceModel: (issue) => replaceUnusableModel(view.target, issue),
     source: settingSourceLabel,
   }
 }
@@ -472,15 +477,20 @@ function ModelRow({
   onLoadout(): void
 }) {
   const pinned = loadoutIndex >= 0
+  const note = model.unavailable ?? model.description
   return (
-    <MenuItem onSelect={onChoose} className="group/model py-1.5">
+    <MenuItem
+      onSelect={onChoose}
+      disabled={Boolean(model.unavailable)}
+      data-model-unavailable={model.unavailable ? "" : undefined}
+      title={model.unavailable}
+      className="group/model py-1.5"
+    >
       <span className="min-w-0 flex-1">
         <span className={cn("block truncate", selected ? "font-medium text-foreground" : "text-foreground/90")}>
           {model.label}
         </span>
-        {model.description ? (
-          <span className="block truncate text-label text-faint">{model.description}</span>
-        ) : null}
+        {note ? <span className="block truncate text-label text-faint">{note}</span> : null}
       </span>
       {model.contextWindow ? (
         <span className="shrink-0 text-label text-faint tabular">
@@ -566,13 +576,25 @@ export function ModelOptionRows({ choice }: { choice: ModelChoice }) {
         </MenuItem>
       ))}
       {issues.map((issue) => (
-        <p key={issue.option} className="flex items-start gap-2 px-2 py-1.5 text-label text-caution">
-          <AlertCircleIcon className="mt-px size-3 shrink-0" />
-          {issue.message}
-        </p>
+        <Fragment key={issue.kind === "model" ? "model" : issue.option}>
+          <p className="flex items-start gap-2 px-2 py-1.5 text-label text-caution">
+            <AlertCircleIcon className="mt-px size-3 shrink-0" />
+            {issue.message}
+          </p>
+          {issue.kind === "model" && issue.instead ? (
+            <MenuItem data-model-instead={issue.instead} onSelect={() => choice.replaceModel(issue)}>
+              <ArrowRightIcon className="size-3.5 shrink-0" />
+              <span className="flex-1 truncate">Use {modelName(choice, issue.instead)}</span>
+            </MenuItem>
+          ) : null}
+        </Fragment>
       ))}
     </>
   )
+}
+
+function modelName(choice: Pick<ModelChoice, "models">, id: string) {
+  return choice.models.find((model) => model.id === id)?.label ?? id
 }
 
 type OptionRole = NonNullable<ModelOption["role"]>

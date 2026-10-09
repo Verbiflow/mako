@@ -3,6 +3,7 @@ import { ControlPreviewOverlay } from "@/components/inspector/control-preview-ov
 import { AppshotButton } from "@/components/composer/appshot-button"
 import { ProviderConnectionNotice } from "@/components/composer/connection-notice"
 import { AccountSwitchNotice } from "@/components/composer/account-notice"
+import { ModelChoiceNotice } from "@/components/composer/model-notice"
 import { SignInRecovery } from "@/components/composer/sign-in-recovery"
 import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
@@ -90,6 +91,7 @@ export function installBuiltins(): () => void {
     registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
     registerSlot("sign-in-recovery", "composer.above", SignInRecovery),
     registerSlot("account-switch", "composer.above", AccountSwitchNotice),
+    registerSlot("model-choice", "composer.above", ModelChoiceNotice),
     registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
 
     // Views by the shared kind (packages/sessions/src/tool-identity.ts), so

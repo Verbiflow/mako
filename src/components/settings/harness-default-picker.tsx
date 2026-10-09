@@ -29,6 +29,7 @@ export function HarnessDefaultPicker({ harness, profile }: { harness: string; pr
     options,
     resolved,
     chooseOption: (id, value) => save({ ...resolved.settings, options: { ...resolved.settings.options, [id]: value } }),
+    replaceModel: (issue) => { if (issue.instead) resetHarnessDefaults(harness) },
     source: (setting: ResolvedSetting) =>
       setting.kind !== "known" ? "The harness has not said" : setting.source === "saved" ? "Your choice" : `From ${recommended}`,
   }
