@@ -304,7 +304,7 @@ try {
       during.push((await invoke("mako:threads", [])).ms)
       if (during.length % 20 === 0) {
         const memory = await processes(host.pid)
-        if (memory.totalMb > peak.totalMb) peak = memory
+        if (memory.totalMb > peak.totalMb) peak = await processes(host.pid, { footprint: true })
       }
       await delay(100)
     }
