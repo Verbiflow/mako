@@ -159,7 +159,8 @@ async function launch() {
     )
   host = current
   const { stdout: presence } = await run("/usr/bin/lsappinfo", ["info", "-only", "ApplicationType", String(host.pid)])
-  assert.match(presence, /UIElement|BackgroundOnly/, "An isolated test host must never claim a Dock icon")
+  // The host runs as Node under the Helper and never registers with LaunchServices, so it can't claim a Dock icon.
+  assert.match(presence, /"ApplicationType"=\[ NULL \]/, "The host must never register as an application")
   assert.notEqual(
     host.pid,
     child.clientPid,
