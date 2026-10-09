@@ -6,6 +6,7 @@ import { delimiter, isAbsolute, join } from "node:path"
 import { hostLog } from "./host-log.js"
 import { trackProviderChild, untrackProviderPid } from "./provider-children.js"
 import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
+import { onMac } from "./platform.js"
 
 /**
  * The embedded native driver, one per host.
@@ -123,7 +124,7 @@ export function ensureCuaEmbedded(
   hostBundleId: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string | null> {
-  if (process.platform !== "darwin") return Promise.resolve(null)
+  if (!onMac()) return Promise.resolve(null)
   if (daemon && daemonRuns(daemon)) return Promise.resolve(daemon.socket)
   if (daemon) forget(daemon)
   starting ??= start(stateDir, hostBundleId, env).finally(() => {

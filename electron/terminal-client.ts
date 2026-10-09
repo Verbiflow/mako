@@ -24,6 +24,7 @@ import {
   type TerminalResult,
   type TerminalWireValue,
 } from "./terminal-protocol.js"
+import { onWindows } from "./platform.js"
 
 interface PendingRequest {
   resolve: (result: TerminalResult) => void
@@ -40,7 +41,7 @@ const SOCKET_PATH_BYTES = 104
  */
 export function terminalEndpoint(stateDir: string) {
   const owner = createHash("sha256").update(stateDir).digest("hex")
-  if (process.platform === "win32") return `\\\\.\\pipe\\mako-terminal-${owner.slice(0, 20)}`
+  if (onWindows()) return `\\\\.\\pipe\\mako-terminal-${owner.slice(0, 20)}`
   const local = join(stateDir, "daemon.sock")
   if (Buffer.byteLength(local) <= SOCKET_PATH_BYTES) return local
   return join(tmpdir(), `mako-terminal-${owner.slice(0, 16)}`, "daemon.sock")
@@ -185,8 +186,8 @@ export class TerminalDaemonClient {
   async #connect() {
     this.#emit({ type: "connection", state: "connecting" })
     await mkdir(this.#stateDir, { recursive: true, mode: 0o700 })
-    if (process.platform !== "win32") await chmod(this.#stateDir, 0o700)
-    if (process.platform !== "win32" && dirname(this.#endpoint) !== this.#stateDir)
+    if (!onWindows()) await chmod(this.#stateDir, 0o700)
+    if (!onWindows() && dirname(this.#endpoint) !== this.#stateDir)
       await ensurePrivateDirectory(dirname(this.#endpoint), "terminal socket")
     // One replacement per connection attempt: an outdated daemon is asked to
     // persist and leave, a fresh one is spawned from this executable, and the

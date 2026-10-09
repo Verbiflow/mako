@@ -11,6 +11,7 @@ import { belowAgents } from "./background-priority.js"
 import { FIT_RUNS } from "./contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 import { containersBy, lookAtContainers, type Container, type ContainerLook } from "./container-runtime.js"
+import { onLinux, onMac } from "./platform.js"
 
 const run = promisify(execFile)
 
@@ -1124,7 +1125,7 @@ function groupAlive(pid: number): boolean {
  */
 async function physicalFootprints(pids: number[]): Promise<Map<number, { bytes: number; peakBytes: number }>> {
   const found = new Map<number, { bytes: number; peakBytes: number }>()
-  if (process.platform !== "darwin") return found
+  if (!onMac()) return found
   const queue = [...pids]
   const readOne = async (pid: number) => {
     const [command, args] = belowAgents("/usr/bin/footprint", ["--noCategories", "-f", "bytes", "-p", String(pid)])
@@ -1141,7 +1142,7 @@ async function physicalFootprints(pids: number[]): Promise<Map<number, { bytes: 
 
 /** Memory the system could give apps now, and all it has. */
 export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: number } | undefined> {
-  if (process.platform === "darwin") {
+  if (onMac()) {
     const values = await run("sysctl", ["-n", "kern.memorystatus_level", "hw.memsize"]).then(({ stdout }) => stdout.trim().split("\n").map(Number), () => [])
     const [level, total] = values
     if (level === undefined || total === undefined || !Number.isFinite(level) || !Number.isFinite(total)) return undefined
@@ -1259,7 +1260,7 @@ async function runMarks(rows: Row[]): Promise<Map<number, string>> {
   const found = new Map<number, string>()
   if (!rows.length) return found
   const markIn = (variables: string) => new RegExp(`(?:^|\\s)${RUN_MARK}=(\\S+)`).exec(variables)?.[1] ?? ""
-  if (process.platform === "linux") {
+  if (onLinux()) {
     await Promise.all(rows.map(async (row) => {
       const text = await readFile(`/proc/${row.pid}/environ`, "utf8").catch(() => undefined)
       if (text !== undefined) found.set(row.pid, markIn(text.split("\0").join(" ")))
@@ -1326,7 +1327,7 @@ function sleep(ms: number): Promise<void> {
  * Linux's pressure stall figures. Anything unreadable counts as normal.
  */
 export async function memoryPressure(): Promise<MemoryPressure> {
-  if (process.platform === "darwin") {
+  if (onMac()) {
     const level = await run("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).then(({ stdout }) => Number(stdout.trim()), () => 1)
     return level >= 4 ? "critical" : level >= 2 ? "warning" : "normal"
   }
