@@ -46,7 +46,7 @@ try {
   await seal(join(dataRoot, "cloud-account"), { version: 1, cloud: "https://cloud.example", credential: "mako_dc_x" })
 
   const domains = [cursorLegacyFiles(cursorRoot), utilityLegacyFiles(utilityModelDirectory({ dataRoot, appData, home })), cloudLegacyFiles(dataRoot)]
-  const secrets = openHostSecrets({ userRoot, encryption: keychain, legacy: domains }).secrets
+  const secrets = openHostSecrets({ userRoot, keychain, legacy: domains }).secrets
   assert.equal((await new CursorCredentialStore(secrets).load())?.apiKey, cursorKey.apiKey, "Cursor's key reads from its older file")
   const accounts = new CursorAccountKeys(secrets)
   assert.deepEqual(await accounts.names(), ["work"], "an added account's older file is listed")
@@ -68,12 +68,12 @@ try {
     for (const value of [cursorKey.apiKey, workKey.apiKey, utility.apiKey, "mako_dc_x"])
       assert.equal((await readFile(join(userRoot, "secrets", entry), "utf8")).includes(value), false, "no value in the clear")
 
-  const again = openHostSecrets({ userRoot, encryption: keychain, legacy: domains }).secrets
+  const again = openHostSecrets({ userRoot, keychain, legacy: domains }).secrets
   assert.equal((await new CursorCredentialStore(again).load())?.apiKey, cursorKey.apiKey, "the next start reads the record")
 
   const isolated = join(root, "isolated")
   assert.equal(userRootFor({ dataRoot: isolated, appData, home }), isolated, "a test's host keeps its own")
-  const apart = openHostSecrets({ userRoot: isolated, encryption: keychain, legacy: [cursorLegacyFiles(join(isolated, "cursor"))] }).secrets
+  const apart = openHostSecrets({ userRoot: isolated, keychain, legacy: [cursorLegacyFiles(join(isolated, "cursor"))] }).secrets
   assert.equal(await new CursorCredentialStore(apart).load(), null, "and never sees the user's keys")
 
   console.log("Host secrets: one store per user, older Cursor, account, utility and cloud files taken over at their real paths, nothing in the clear, isolated hosts apart")

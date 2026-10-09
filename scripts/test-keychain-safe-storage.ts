@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { openHostSecrets } from "../electron/host-secrets.ts"
 import type { Keychain, KeychainItem, KeychainRead } from "../electron/keychain.ts"
 import { securityValue } from "../electron/keychain.ts"
-import { chromiumSafeStorage, KeychainUnavailable, NO_ENCRYPTION, safeStorageItem } from "../electron/secure-storage.ts"
+import { chromiumSafeStorage, KeychainUnavailable, safeStorageItem } from "../electron/secure-storage.ts"
 
 /**
  * A host in Node mode reads the keychain item behind Electron's `safeStorage`
@@ -84,17 +84,17 @@ try {
   // The host in Node mode: the desktop's handover first, the keychain itself without one.
   const userRoot = join(root, "user")
   const electronSide = keychain({ [itemKey]: password })
-  const electron = openHostSecrets({ userRoot, encryption: chromiumSafeStorage({ appName: "mako", keychain: electronSide.keychain, platform: "darwin", home }), legacy: [] })
-  await electron.secrets.write("saved-key", "cursor", "cursor-key")
+  const first = openHostSecrets({ userRoot, keychain: chromiumSafeStorage({ appName: "mako", keychain: electronSide.keychain, platform: "darwin", home }), legacy: [] })
+  await first.secrets.write("saved-key", "cursor", "cursor-key")
 
   const alone = keychain({ [itemKey]: password })
-  const nodeMode = openHostSecrets({ userRoot, encryption: NO_ENCRYPTION, keychain: chromiumSafeStorage({ appName: "mako", keychain: alone.keychain, platform: "darwin", home }), legacy: [] })
+  const nodeMode = openHostSecrets({ userRoot, keychain: chromiumSafeStorage({ appName: "mako", keychain: alone.keychain, platform: "darwin", home }), legacy: [] })
   assert.equal((await nodeMode.secrets.read("saved-key", "cursor"))?.value, "cursor-key", "a host with no desktop reads its key from the keychain")
   assert.equal(alone.state.reads, 1)
   assert.equal(await nodeMode.handover.wanted(), true, "a desktop still hands its key over, so a successor needn't ask")
 
   const started = keychain({ [itemKey]: password })
-  const graced = openHostSecrets({ userRoot, encryption: NO_ENCRYPTION, keychain: chromiumSafeStorage({ appName: "mako", keychain: started.keychain, platform: "darwin", home }), legacy: [], handoverUntil: Date.now() + 5_000 })
+  const graced = openHostSecrets({ userRoot, keychain: chromiumSafeStorage({ appName: "mako", keychain: started.keychain, platform: "darwin", home }), legacy: [], handoverUntil: Date.now() + 5_000 })
   const waiting = graced.secrets.read("saved-key", "cursor")
   const desktopKey = await electronKey(userRoot, electronSide.keychain)
   await graced.handover.offer(desktopKey)
@@ -102,7 +102,7 @@ try {
   assert.equal(started.state.reads, 0, "a desktop that started the host hands the key over before the host asks macOS as Mako Helper")
 
   const late = keychain({ [itemKey]: password })
-  const lapsed = openHostSecrets({ userRoot, encryption: NO_ENCRYPTION, keychain: chromiumSafeStorage({ appName: "mako", keychain: late.keychain, platform: "darwin", home }), legacy: [], handoverUntil: Date.now() + 100 })
+  const lapsed = openHostSecrets({ userRoot, keychain: chromiumSafeStorage({ appName: "mako", keychain: late.keychain, platform: "darwin", home }), legacy: [], handoverUntil: Date.now() + 100 })
   const startedAt = Date.now()
   assert.equal((await lapsed.secrets.read("saved-key", "cursor"))?.value, "cursor-key")
   assert.ok(Date.now() - startedAt >= 90, "with no desktop, it waits out the grace once")
@@ -110,7 +110,7 @@ try {
 
   const denied = keychain({ [itemKey]: password })
   denied.state.refuse = true
-  const refusedHost = openHostSecrets({ userRoot, encryption: NO_ENCRYPTION, keychain: chromiumSafeStorage({ appName: "mako", keychain: denied.keychain, platform: "darwin", home }), legacy: [] })
+  const refusedHost = openHostSecrets({ userRoot, keychain: chromiumSafeStorage({ appName: "mako", keychain: denied.keychain, platform: "darwin", home }), legacy: [] })
   await assert.rejects(refusedHost.secrets.read("saved-key", "cursor"), { name: "SecretLocked", reason: "unavailable" }, "refused is waiting for a key, not broken")
   await assert.rejects(refusedHost.secrets.read("saved-key", "cursor"), { name: "SecretLocked", reason: "unavailable" })
   assert.equal(denied.state.reads, 1, "after a refusal the host doesn't ask again")
@@ -123,7 +123,6 @@ try {
   await writeFile(join(legacyDirectory, "openai.bin"), chromium("legacy-openai-key"))
   const adopting = openHostSecrets({
     userRoot,
-    encryption: NO_ENCRYPTION,
     keychain: chromiumSafeStorage({ appName: "mako", keychain: keychain({ [itemKey]: password }).keychain, platform: "darwin", home }),
     legacy: [{
       path: (kind, name) => kind === "saved-key" ? join(legacyDirectory, `${name}.bin`) : null,

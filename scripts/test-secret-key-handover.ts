@@ -77,7 +77,7 @@ const locked = { name: "SecretLocked", reason: "unavailable" }
 try {
   // A fresh store under a Node-mode host: locked until the desktop arrives, then the desktop makes the key.
   const socket = socketAt("host")
-  const first = openHostSecrets({ userRoot, encryption: nodeMode, legacy: [] })
+  const first = openHostSecrets({ userRoot, keychain: nodeMode, legacy: [] })
   let host = await serve(socket, first.handover)
   assert.deepEqual(JSON.parse((await call(socket, "GET", "/secret-key")).text), { wanted: true })
   assert.equal(await first.secrets.read("saved-key", "cursor"), null, "a fresh store has nothing to wait for")
@@ -107,24 +107,15 @@ try {
 
   // A successor host with no window attaching: the held request hands it over.
   host.close()
-  const successor = openHostSecrets({ userRoot, encryption: nodeMode, legacy: [] })
+  const successor = openHostSecrets({ userRoot, keychain: nodeMode, legacy: [] })
   host = await serve(socket, successor.handover)
   await until("the successor is handed its key", async () => !(await successor.handover.wanted()))
   assert.equal((await successor.secrets.read("saved-key", "cursor"))?.value, "handed-value")
   assert.equal(desktop.decrypts, 1, "one unwrap for the successor")
 
-  // A host that reaches the keychain itself is never offered the key, and the desktop never unwraps it.
-  host.close()
-  const electron = openHostSecrets({ userRoot, encryption: keychain(), legacy: [] })
-  host = await serve(socket, electron.handover)
-  assert.equal(await handOverSecretKey(socket, keyPath, desktop), "not-wanted")
-  await delay(200)
-  assert.equal(desktop.decrypts, 1)
-  assert.equal((await electron.secrets.read("saved-key", "cursor"))?.value, "handed-value")
-
   // A desktop whose keychain is shut, or refuses: one ask per window, never a loop of prompts.
   const lockedSocket = socketAt("locked")
-  const waiting = openHostSecrets({ userRoot, encryption: nodeMode, legacy: [] })
+  const waiting = openHostSecrets({ userRoot, keychain: nodeMode, legacy: [] })
   let lockedHost = await serve(lockedSocket, waiting.handover)
   await assert.rejects(waiting.secrets.read("saved-key", "cursor"), locked, "a record waits for the key, it isn't broken")
   const shut = keychain()

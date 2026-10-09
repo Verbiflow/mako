@@ -102,16 +102,6 @@ export function chromiumSafeStorage({ appName, keychain, platform = nodePlatform
   }
 }
 
-/** `first` where it's available, else `then`: Electron's `safeStorage`, else the keychain read in this process. */
-export function preferring(first: SecretEncryption, then: SecretEncryption): SecretEncryption {
-  const pick = async () => (await first.available()) ? first : then
-  return {
-    available: async () => (await first.available()) || then.available(),
-    encrypt: async (value) => (await pick()).encrypt(value),
-    decrypt: async (value) => (await pick()).decrypt(value),
-  }
-}
-
 /** No keychain: Node off macOS. */
 export const NO_ENCRYPTION: SecretEncryption = {
   available: async () => false,

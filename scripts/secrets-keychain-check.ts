@@ -5,7 +5,7 @@ import { dataKeyPath, openHostSecrets } from "../electron/host-secrets.js"
 import { processKeychain } from "../electron/keychain.js"
 import { handOverSecretKey } from "../electron/secret-key-link.js"
 import { aesSealer, fileSecrets, SecretLocked, wrappedKey, type Secrets } from "../electron/secrets.js"
-import { chromiumSafeStorage } from "../electron/secure-storage.js"
+import { chromiumSafeStorage, NO_ENCRYPTION } from "../electron/secure-storage.js"
 import { electronSecretEncryption } from "../electron/secure-storage-electron.js"
 import { startWebHost } from "../electron/web-host.js"
 
@@ -54,7 +54,7 @@ async function check(): Promise<void> {
   const report: Report = { runtime: app ? "electron" : "node", available: await encryption.available() }
   const step = process.env.PROOF_STEP
   if (step === "serve") {
-    const { secrets, handover } = openHostSecrets({ userRoot: root, encryption, legacy: [] })
+    const { secrets, handover } = openHostSecrets({ userRoot: root, keychain: NO_ENCRYPTION, legacy: [] })
     const host = await startWebHost(socket, async () => JSON.stringify({ ok: true, value: null }), async () => new Response(""), undefined, undefined, undefined, handover)
     report.wanted = await handover.wanted()
     console.log("PROOF_READY")
@@ -70,7 +70,7 @@ async function check(): Promise<void> {
     }
   } else if (step === "keychain-read") {
     report.keychain = await keychain.available()
-    await readBack(openHostSecrets({ userRoot: root, encryption, keychain, legacy: [] }).secrets, expected, report)
+    await readBack(openHostSecrets({ userRoot: root, keychain, legacy: [] }).secrets, expected, report)
   } else if (step === "legacy-write") {
     await writeFile(legacyFile, await encryption.encrypt(expected))
     report.wrote = true
@@ -80,7 +80,7 @@ async function check(): Promise<void> {
       path: (kind: string, name: string) => kind === "saved-key" && name === "proof-legacy" ? legacyFile : null,
       names: async () => ["proof-legacy"],
     }]
-    await readBack(openHostSecrets({ userRoot: root, encryption, keychain, legacy }).secrets, expected, report, "proof-legacy")
+    await readBack(openHostSecrets({ userRoot: root, keychain, legacy }).secrets, expected, report, "proof-legacy")
     report.adopted = !(await readFile(legacyFile).then(() => true, () => false))
   } else if (step === "node-seal") {
     report.keychain = await keychain.available()

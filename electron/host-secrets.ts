@@ -3,36 +3,31 @@ import { heavy } from "./heavy-packages.js"
 import { hostEnvironment } from "./host-environment.js"
 import { processKeychain } from "./keychain.js"
 import { adoptingLegacy, aesSealer, fileSecrets, handedKey, legacyFiles, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
-import { chromiumSafeStorage, NO_ENCRYPTION, preferring, type SecretEncryption } from "./secure-storage.js"
+import { chromiumSafeStorage, type SecretEncryption } from "./secure-storage.js"
 
-/** How long a host in Node mode waits after it starts for the desktop's handover before reading the keychain itself. */
+/** How long the host waits after it starts for the desktop's handover before reading the keychain itself. */
 const HANDOVER_GRACE_MS = 5_000
 
 export interface HostSecretsInput {
   /** `HostEnvironment.userRoot`: the store is `<userRoot>/secrets`. */
   userRoot: string
-  /** Electron's `safeStorage`, while Electron runs the host. */
-  encryption: SecretEncryption
   /**
-   * The same keychain item read in this process, for a host without
-   * `safeStorage`: Electron's Helper in Node mode (`chromiumSafeStorage`).
+   * The keychain item older builds' `safeStorage` used, read in this process
+   * (`chromiumSafeStorage`); none off macOS.
    */
-  keychain?: SecretEncryption
+  keychain: SecretEncryption
   /** Each domain's older files; read as they are when a record is first asked for. */
   legacy: readonly LegacyFiles[]
-  /**
-   * Until when (epoch ms) a read without `safeStorage` waits for the
-   * desktop's handover before asking `keychain`.
-   */
+  /** Until when (epoch ms) a read waits for the desktop's handover before asking `keychain`. */
   handoverUntil?: number
 }
 
 /**
- * How a host without `safeStorage` gets its data key from the desktop app,
- * which has it, on the host's private socket (`/secret-key`).
+ * How the host gets its data key from the desktop app, whose `safeStorage`
+ * has it, on the host's private socket (`/secret-key`).
  */
 export interface SecretKeyHandover {
-  /** This host has no `safeStorage` and holds no handed key. */
+  /** This host holds no handed key. */
   wanted(): Promise<boolean>
   /** Refused unless it is this store's key. */
   offer(key: Buffer): Promise<void>
@@ -53,22 +48,19 @@ export function dataKeyPath(userRoot: string): string {
  * keeps its own. The data key is wrapped by the keychain item older builds
  * used through `safeStorage`, so moving onto this store asks for nothing new.
  *
- * Under Electron, `safeStorage` unwraps it. In Node mode the desktop hands it
- * over, since its `safeStorage` reads the item without asking the person; the
- * host reads the item itself only without one, as Mako Helper, after giving a
- * desktop that started it a moment to hand the key over. Either way each older
- * file is taken over the first time its record is read, opened by the same
- * keychain.
+ * The desktop hands the key over, since its `safeStorage` reads the item
+ * without asking the person. The host reads the item itself only without
+ * one, as Mako Helper, after giving a desktop that started it a moment to
+ * hand the key over. Either way each older file is taken over the first time
+ * its record is read, opened by the same keychain.
  */
-export function openHostSecrets({ userRoot, encryption, keychain = NO_ENCRYPTION, legacy, handoverUntil = 0 }: HostSecretsInput): HostSecrets {
+export function openHostSecrets({ userRoot, keychain, legacy, handoverUntil = 0 }: HostSecretsInput): HostSecrets {
   const path = dataKeyPath(userRoot)
-  const sealing = preferring(encryption, keychain)
-  const wrapped = wrappedKey(path, sealing)
+  const wrapped = wrappedKey(path, keychain)
   const handed = handedKey(path)
   const key: SecretKey = {
-    available: async () => handed.held() || (await sealing.available()),
+    available: async () => handed.held() || (await keychain.available()),
     async key(create) {
-      if (await encryption.available()) return wrapped.key(create)
       if (!handed.held() && (await keychain.available())) await handed.arrival(handoverUntil - Date.now())
       if (handed.held() || !(await keychain.available())) return handed.key(create)
       return wrapped.key(create)
@@ -76,11 +68,11 @@ export function openHostSecrets({ userRoot, encryption, keychain = NO_ENCRYPTION
   }
   return {
     secrets: adoptingLegacy(fileSecrets(join(userRoot, "secrets"), aesSealer(key)), {
-      encryption: sealing,
+      encryption: keychain,
       ...legacyFiles(legacy),
     }),
     handover: {
-      wanted: async () => !handed.held() && !(await encryption.available()),
+      wanted: async () => !handed.held(),
       offer: (value) => handed.offer(value),
     },
   }
@@ -88,21 +80,12 @@ export function openHostSecrets({ userRoot, encryption, keychain = NO_ENCRYPTION
 
 const legacy: LegacyFiles[] = []
 let opened: HostSecrets | undefined
-let safeStorage: SecretEncryption | undefined
-
-/** Electron's `safeStorage`, which the Electron shell gives the host before any secret is read. */
-export function provideSafeStorage(encryption: SecretEncryption): void {
-  if (opened) throw new Error("The host's secrets opened before Electron's safeStorage was given")
-  safeStorage = encryption
-}
 
 function host(): HostSecrets {
   const environment = hostEnvironment()
   opened ??= openHostSecrets({
     userRoot: environment.userRoot,
-    encryption: safeStorage ?? NO_ENCRYPTION,
-    // A process with `safeStorage` reading its item again here would ask the person twice.
-    keychain: safeStorage ? undefined : chromiumSafeStorage({ appName: environment.appName, keychain: processKeychain(() => heavy.keyring.load("keychain")) }),
+    keychain: chromiumSafeStorage({ appName: environment.appName, keychain: processKeychain(() => heavy.keyring.load("keychain")) }),
     legacy,
     handoverUntil: performance.timeOrigin + HANDOVER_GRACE_MS,
   })
@@ -111,8 +94,8 @@ function host(): HostSecrets {
 
 /**
  * This host's one `Secrets`, every domain's. It opens on its first use, not
- * here: providers take it while the host's modules load, before the Electron
- * shell gives `safeStorage`.
+ * here: providers take it while the host's modules load, before any domain
+ * has declared its older files.
  */
 export function hostSecrets(): Secrets {
   return {
