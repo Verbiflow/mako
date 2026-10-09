@@ -43,7 +43,9 @@ code { font: 12px ui-monospace, monospace; white-space: pre-wrap; overflow-wrap:
 
 export const cursorCanvasPreview: ProviderArtifactPreview = {
   provider: "cursor",
-  matches: (path) => path.endsWith(".canvas.tsx"),
+  name: "Canvas",
+  files: [".canvas.tsx"],
+  via: "Cursor writes a canvas as a React file importing `cursor/canvas`; its SDK lists no artifacts for a local run.",
   async render(source) {
     if (source.length > 256_000)
       throw new Error(

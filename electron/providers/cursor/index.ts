@@ -3,7 +3,8 @@ import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from 
 import { childProcessEnv } from "../../accounts-common.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
-import { harnessLacks, implemented } from "../live-capabilities.js"
+import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
 import { cursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
 import { cursorMcpSource } from "./mcp.js"
@@ -57,6 +58,12 @@ export const installCursor: ProviderModule = (host) => {
       missedCalls: harnessLacks("Cursor's usage messages never say they left a call out."),
       resetCredits: harnessLacks("Cursor's usage report has no reset credits."),
     },
+    unique: [
+      { name: "Artifact preview", native: "Canvas files (`*.canvas.tsx`); `SDKArtifact`, though `listArtifacts` is empty in local runs", mako: shownBy("artifacts") },
+      { name: "Server-side summarization", native: "a task message carrying the summary", mako: byDefault("Cursor summarizes on its server when the context fills, and the summary shows as a compaction in the transcript.") },
+      { name: "Image generation and screen recording", native: "`generateImage`, `recordScreen` tools", mako: shownInTools(["generateImage", "recordScreen"]) },
+      { name: "Cloud agents", native: "`AgentOptions.cloud`, `bc-` agent IDs", mako: makoLacks("Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built.") },
+    ],
     hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
     commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

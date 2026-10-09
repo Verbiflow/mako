@@ -3,7 +3,8 @@ import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitGrokSession } from "@mako/sessions"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
-import { harnessLacks, implemented } from "../live-capabilities.js"
+import { harnessLacks, implemented, noOp } from "../live-capabilities.js"
+import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
 import { grokAcpSource } from "./acp.js"
 import { grokMcpSource } from "./mcp.js"
 import { grokNativeRunner } from "./native-runner.js"
@@ -33,6 +34,13 @@ export const installGrok: ProviderModule = (host) => installHarness(host, {
     missedCalls: implemented("`usageIsIncomplete` on a turn's usage."),
     resetCredits: harnessLacks("Grok's usage report has no reset credits."),
   },
+  unique: [
+    { name: "X search", native: "`x_search`, a server-side xAI search reported by its title", mako: shownInTools(["x_search"]) },
+    { name: "Image and video generation", native: "`image_gen`, `image_edit`, `image_to_video` and `reference_to_video` tools; `/imagine`, `/imagine-video`", mako: shownInTools(["image_gen", "image_edit", "image_to_video", "reference_to_video"]) },
+    { name: "Incomplete usage reports", native: "`usageIsIncomplete` and `costIsPartial` on a turn's usage", mako: shownBy("usage.missedCalls") },
+    { name: "Announcements", native: "`_x.ai/announcements/update`", mako: noOp("They're xAI's product news for Grok's own pager, so Mako ignores them.") },
+    { name: "Folder trust", native: "`_x.ai/folder_trust/request` to a client that sets `x.ai/folderTrust.interactive`, saved in `~/.grok/trusted_folders.toml`", mako: shownBy("capabilities.approvals") },
+  ],
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -69,7 +77,7 @@ export const installGrok: ProviderModule = (host) => installHarness(host, {
       npmInstall("@xai-official/grok"),
     ],
   },
-  usageHistory: grokUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: grokUsageHistory,  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
 })
 
 /** Grok's own updater can spawn npm even when its binary lives in ~/.grok/bin.

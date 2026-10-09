@@ -5,7 +5,8 @@ import { emitCodexSession } from "@mako/sessions"
 import { codexModelProvider } from "./credentials.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
-import { harnessLacks, implemented } from "../live-capabilities.js"
+import { harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { shownBy } from "../../contracts/harness-unique.js"
 import { codexAccountCapability } from "./accounts.js"
 import { codexDecoderSource } from "./decoder-source.js"
 import { codexMcpSource } from "./mcp.js"
@@ -31,6 +32,12 @@ export const installCodex: ProviderModule = (host) => installHarness(host, {
     missedCalls: harnessLacks("Codex's readings never say they left a call out."),
     resetCredits: implemented("ChatGPT's usage report lists the plan's reset credits, and the account's row spends one."),
   },
+  unique: [
+    { name: "Rate-limit reset credits", native: "`account/rateLimits/read` `rateLimitResetCredits`, `account/rateLimitResetCredit/consume`", mako: shownBy("usage.resetCredits") },
+    { name: "Session questions", native: "`item/tool/requestUserInput`, answered in the session", mako: shownBy("capabilities.questions") },
+    { name: "Review mode", native: "`review/start`; `enteredReviewMode` and `exitedReviewMode` items", mako: makoLacks("A review the session runs shows as Review mode markers in the transcript; starting one isn't built.") },
+    { name: "Goals", native: "`thread/goal/*`", mako: makoLacks("Mako doesn't show or set a thread's goal.") },
+  ],
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -67,5 +74,5 @@ export const installCodex: ProviderModule = (host) => installHarness(host, {
       { label: "Install with Homebrew", command: "brew", args: ["install", "codex"] },
     ],
   },
-  usageHistory: codexUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: codexUsageHistory,  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
 })

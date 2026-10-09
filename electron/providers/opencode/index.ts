@@ -3,7 +3,8 @@ import { accountEnv } from "../../accounts.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { openCodeCommands } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
-import { byDefault, harnessLacks, implemented } from "../live-capabilities.js"
+import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
 import { openCodeAccountCapability } from "./accounts.js"
 import { openCodeDecoderSource } from "./decoder-source.js"
 import { createOpenCodeDriver } from "./live-driver.js"
@@ -36,6 +37,11 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
     missedCalls: harnessLacks("OpenCode's steps never say they left a call out."),
     resetCredits: harnessLacks("OpenCode's providers report no reset credits to it."),
   },
+  unique: [
+    { name: "Staged revert", native: "`revert/stage`, `commit`, `clear`", mako: makoLacks("Mako follows a revert another client commits; staging one isn't built.") },
+    { name: "Inbox", native: "a prompt sent while busy is steered or queued (`inbox/:id/steer|queue`)", mako: shownBy("capabilities.steering") },
+    { name: "Code Mode MCP", native: "MCP tools called from a script through the `execute` tool, on by default", mako: shownInTools(["execute"]) },
+  ],
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: openCodeCommands,
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -62,5 +68,5 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   },
   connection: lacks("Signs in through OpenCode’s own providers"),
   updates: openCodeUpdateSource,
-  usageHistory: openCodeUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: openCodeUsageHistory,  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
 })

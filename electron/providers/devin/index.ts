@@ -3,7 +3,8 @@ import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitDevinSession } from "@mako/sessions"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
-import { byDefault, harnessLacks, implemented } from "../live-capabilities.js"
+import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { shownBy } from "../../contracts/harness-unique.js"
 import { devinAccountCapability } from "./accounts.js"
 import { devinAcpSource } from "./acp.js"
 import { devinMcpSource } from "./mcp.js"
@@ -29,6 +30,12 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
     missedCalls: harnessLacks("Devin's usage updates never say they left a call out."),
     resetCredits: harnessLacks("Devin's usage report has no reset credits."),
   },
+  unique: [
+    { name: "Step revert and fork", native: "`cognition.ai/revert/*`", mako: shownBy("capabilities.fork") },
+    { name: "Editable approvals", native: "`cognition.ai/editableCommand`, `command/revise`", mako: makoLacks("The approval card shows the command Devin proposes; editing it before it runs isn't built.") },
+    { name: "Cloud handoff", native: "`/handoff`, `/cloud-attach`", mako: makoLacks("Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built.") },
+    { name: "Credits and ACUs", native: "`usage_update` `_meta` `totalCreditCost` and `totalAcuCost` on the reading that ends a turn, for an account billed in credits or ACUs", mako: makoLacks("Every account recorded is billed by quota and reports 0, so Mako doesn't read them yet.") },
+  ],
   hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
   commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -56,5 +63,5 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
     managedBy: [["external_agents", "Zed"]],
     install: [scriptInstall("https://cli.devin.ai/install.sh")],
   },
-  usageHistory: devinUsageHistory,  artifactPreview: lacks("Writes no artifact Mako previews"),
+  usageHistory: devinUsageHistory,  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
 })

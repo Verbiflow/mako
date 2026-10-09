@@ -1,6 +1,7 @@
 import { diagnosticFormat, officeFormat } from "./contracts/file-preview.js"
 import { fileContentType, mediaForContentType } from "./file-media.js"
 import { providerHost } from "./providers/index.js"
+import { artifactDocument, previewsFile } from "./providers/artifact-preview.js"
 import { filePreviewUrl } from "./file-previews.js"
 import {
   copyFile,
@@ -282,17 +283,19 @@ export class WorkspaceFiles {
       const contents = buffer.toString("utf8")
       const preview = providerHost.artifactPreviews
         .list()
-        .find((reader) => reader.matches(path))
+        .find((reader) => previewsFile(reader, path))
       const artifactPreview: FileContents["artifactPreview"] = preview
         ? info.size > FILE_VIEW_LIMIT
           ? {
               kind: "unavailable",
+              name: preview.name,
               reason: "This file exceeds the preview size limit",
             }
-          : await preview.render(contents).then(
-              (html) => ({ kind: "html" as const, html }),
+          : await artifactDocument(preview, contents).then(
+              (html) => ({ kind: "html" as const, name: preview.name, html }),
               () => ({
                 kind: "unavailable" as const,
+                name: preview.name,
                 reason:
                   "This artifact uses content or components the preview cannot render. Its source is available.",
               })

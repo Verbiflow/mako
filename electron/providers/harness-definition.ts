@@ -1,10 +1,12 @@
 import type { HarnessPresentation } from "../contracts/harness-presentation.js"
-import { capabilityText, implemented, type Capability } from "../contracts/harness-capabilities.js"
+import { capabilityText, implemented, LIVE_CAPABILITY_KEYS, type Capability } from "../contracts/harness-capabilities.js"
 import { HARNESS_USAGE_KEYS, type HarnessUsage, type UsageDeclaration } from "../contracts/harness-usage.js"
 import type { ProviderAuthoringCapability, ProviderEditingCapability } from "./editing-capability.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderArtifactPreview } from "./artifact-preview.js"
+import { VOCABULARIES } from "@mako/sessions/harnesses"
+import type { ArtifactCapability, DeclarationKey, UniqueCapability } from "../contracts/harness-unique.js"
 import type { ProviderConnectionCapability } from "./connection-capability.js"
 import type { ProviderDecoderSource } from "./decoder-source.js"
 import type { ProviderHost } from "./host.js"
@@ -55,6 +57,8 @@ export interface HarnessDefinition {
   diagnostics: HarnessDiagnostics
   /** What it reports about usage, which the meter, Settings › Usage and the account rows read. */
   usage: UsageDeclaration
+  /** What only this harness has, each with the declaration that shows it in Mako or why none does. */
+  unique: readonly UniqueCapability[]
   hooks: ProviderAuthoringCapability | Absent
   commands: ProviderAuthoringCapability | Absent
   toolEditing: ProviderAuthoringCapability | Absent
@@ -76,7 +80,7 @@ export interface HarnessDefinition {
   artifactPreview: ProviderArtifactPreview | Absent
 }
 
-export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation" | "diagnostics" | "usage">
+export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation" | "diagnostics" | "usage" | "unique">
 
 /** What each family is, in the words the new-harness checklist (`npm run harness:checklist`) shows. */
 export const HARNESS_FAMILIES = {
@@ -109,6 +113,45 @@ export interface HarnessRecord {
   absent: Partial<Record<HarnessFamily, Absent>>
   capabilities: LiveCapabilities
   usage: HarnessUsage
+  artifacts: ArtifactCapability
+  unique: readonly UniqueCapability[]
+}
+
+/** The artifact preview family as the window reads it: the files it covers, or why there are none. */
+export function artifactCapability(preview: ProviderArtifactPreview | Absent): ArtifactCapability {
+  return isAbsent(preview)
+    ? { state: "absent", by: preview.absent, reason: preview.reason }
+    : { state: "implemented", via: preview.via, name: preview.name, files: [...preview.files] }
+}
+
+type Declared = Pick<HarnessRecord, "capabilities" | "usage" | "artifacts">
+
+function declaration(record: Declared, key: DeclarationKey): Capability {
+  if (key === "artifacts") return record.artifacts
+  const field = key.slice(key.indexOf(".") + 1)
+  // SAFETY: DeclarationKey is `capabilities.<LiveCapabilityKey>` or `usage.<HarnessUsageKey>`.
+  return key.startsWith("capabilities.") ? record.capabilities[field as keyof LiveCapabilities] : record.usage[field as keyof HarnessUsage]
+}
+
+/** Why a harness's own features can't be installed: one unexplained, or shown by a declaration it doesn't make. */
+function uniqueProblem(harness: HarnessDefinition, record: Declared): string | undefined {
+  const names = new Set<string>()
+  for (const { name, native, mako } of harness.unique) {
+    if (!name.trim() || !native.trim()) return "must name each of its own features and say what carries it"
+    if (names.has(name)) return `lists its own feature ${name} twice`
+    names.add(name)
+    if (!capabilityText(mako).trim()) return `must say where ${name} stands in Mako`
+    if (mako.state === "absent" && mako.by === "harness") return `lists ${name} as its own feature and as one it lacks`
+    if (mako.state !== "implemented") continue
+    if (mako.field === "tools") {
+      const tools = VOCABULARIES.find((vocabulary) => vocabulary.harness === harness.provider)?.tools ?? {}
+      const unknown = mako.tools.find((tool) => !Object.hasOwn(tools, tool))
+      if (!mako.tools.length || unknown) return `shows ${name} in tool rows for ${unknown ?? "no tool"}, which its vocabulary doesn't declare`
+    } else if (declaration(record, mako.field).state === "absent") {
+      return `shows ${name} through ${mako.field}, which it declares absent`
+    }
+  }
+  return undefined
 }
 
 /**
@@ -150,6 +193,27 @@ function usageProblem(harness: HarnessDefinition): string | undefined {
   return undefined
 }
 
+/**
+ * Declarations only one of these harnesses implements, which its `unique`
+ * must list as showing one of its own features. Session questions count on
+ * their own, since only their form is unique. The breakdown's usage key is
+ * the live capability's.
+ */
+export function unlistedOwnDeclarations(records: readonly HarnessRecord[]): { provider: string; key: DeclarationKey }[] {
+  if (records.length < 2) return []
+  const keys: DeclarationKey[] = [
+    ...LIVE_CAPABILITY_KEYS.map((key) => `capabilities.${key}` as const),
+    ...HARNESS_USAGE_KEYS.filter((key) => key !== "contextBreakdown").map((key) => `usage.${key}` as const),
+    "artifacts",
+  ]
+  const only = (implementers: readonly HarnessRecord[], key: DeclarationKey) => implementers.length === 1 ? [{ record: implementers[0]!, key }] : []
+  return [
+    ...keys.flatMap((key) => only(records.filter((record) => declaration(record, key).state === "implemented"), key)),
+    ...only(records.filter(({ capabilities: { questions } }) => questions.state === "implemented" && questions.asks === "session"), "capabilities.questions"),
+  ].filter(({ record, key }) => !record.unique.some(({ mako }) => mako.state === "implemented" && mako.field === key))
+    .map(({ record, key }) => ({ provider: record.provider, key }))
+}
+
 export function isAbsent<T extends ProviderCapability>(value: T | Absent): value is Absent {
   return "absent" in value && "reason" in value
 }
@@ -161,8 +225,9 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   // Validate every family before registering anything: an incomplete adapter
   // must not leave half of its capabilities installed.
   if (harness.diagnostics.runsInSdk && !harness.diagnostics.sdk) throw new Error(`${harness.provider} runs in an SDK it does not name`)
-  const { provider, presentation, diagnostics, usage, ...declarations } = harness
+  const { provider, presentation, diagnostics, usage, unique, ...declarations } = harness
   if (!usage) throw new Error(`${provider} has no usage declaration`)
+  if (!unique) throw new Error(`${provider} doesn't list what only it has`)
   for (const [family, value] of Object.entries(declarations)) {
     if (!value) throw new Error(`${provider} has no ${family} declaration`)
     if (isAbsent(value)) {
@@ -178,6 +243,13 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
     throw new Error(`${provider} forks by importing the conversation into a new session, which needs its session emitter`)
   const usageRefusal = usageProblem(harness)
   if (usageRefusal) throw new Error(`${provider} ${usageRefusal}`)
+  const preview = harness.artifactPreview
+  if (!isAbsent(preview) && (!preview.name.trim() || !preview.via.trim() || !preview.files.length || preview.files.some((ending) => !ending.trim())))
+    throw new Error(`${provider} must name its artifacts, the files they are and how it makes them`)
+  const capabilities = liveCapabilities(harness.live)
+  const declared: Declared = { capabilities, usage: harnessUsage(harness, capabilities), artifacts: artifactCapability(preview) }
+  const uniqueRefusal = uniqueProblem(harness, declared)
+  if (uniqueRefusal) throw new Error(`${provider} ${uniqueRefusal}`)
   if (!harness.profile.defaults.work.length && !harness.profile.defaults.none?.trim())
     throw new Error(`${provider} picks no model for new conversations and doesn't say why`)
   if (!isAbsent(harness.nativeRunner) && !harness.nativeRunner.transport?.trim())
@@ -221,6 +293,5 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   install(host.updateSources, "updates", harness.updates)
   install(host.usageHistories, "usageHistory", harness.usageHistory)
   install(host.artifactPreviews, "artifactPreview", harness.artifactPreview)
-  const capabilities = liveCapabilities(harness.live)
-  host.harnesses.register({ provider: harness.provider, presentation, diagnostics, absent, capabilities, usage: harnessUsage(harness, capabilities) })
+  host.harnesses.register({ provider: harness.provider, presentation, diagnostics, absent, ...declared, unique })
 }

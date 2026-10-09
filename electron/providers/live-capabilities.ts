@@ -51,7 +51,7 @@ export function liveCapabilities(driver: ProviderLiveDriver): LiveCapabilities {
       planning.feedback.kind === "in-refusal" ? `A reply to it goes with the refusal, in ${planning.feedback.via}.` : `A reply to it is the next message: ${planning.feedback.reason}`}`),
     approvals: approvals.kind === "no-interactive-requests" ? harnessLacks(approvals.reason)
       : implemented(approvals.kind === "native-decisions" ? "The harness asks and reports each decision it applied." : "The harness asks; Mako sees only that its answer was submitted."),
-    questions: questions.kind === "request" || questions.kind === "session" ? implemented(questions.via) : absent(questions),
+    questions: questions.kind === "request" || questions.kind === "session" ? { state: "implemented", via: questions.via, asks: questions.kind } : absent(questions),
     modes: modeSwitching.kind === "native" ? implemented(modeSwitching.via) : noOp(modeSwitching.reason),
     nativeAgents: nativeAgents.kind === "observed" ? implemented(nativeAgents.via) : absent(nativeAgents),
     backgroundStop: background.kind === "ends-on-stop" ? implemented(background.how) : byDefault(background.evidence),
