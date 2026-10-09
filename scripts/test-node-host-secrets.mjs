@@ -11,9 +11,9 @@ import { invokeRuntime } from "../dist-electron/runtime-connection.js"
 import { ensureRuntime } from "../dist-electron/runtime-service.js"
 
 /**
- * The real host under Electron's Helper in Node mode (`MAKO_HOST_RUNTIME=node`)
- * opening a saved key the desktop's keychain guards. A test app of its own name
- * plays the desktop: its `safeStorage` makes its own keychain item and wraps
+ * The real host, as `ensureRuntime` runs it under Electron's Helper in Node
+ * mode, opening a saved key the desktop's keychain guards. A test app of its
+ * own name plays the desktop: its `safeStorage` makes its own keychain item and wraps
  * the data key, so no real secret is read, and the item is deleted at the end.
  * The host runs with a throwaway HOME, so it can't reach the keychain itself:
  * the saved model connection reads as unavailable until the test app hands the
@@ -67,7 +67,7 @@ try {
     executable: resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"),
     args: [resolve(".")],
     cwd: resolve("."),
-    env: { ...process.env, HOME: home, MAKO_HOST_RUNTIME: "node" },
+    env: { ...process.env, HOME: home },
   })
   const client = crypto.randomUUID()
   const settings = () => invokeRuntime(host.socket, client, "mako:utility-model-settings", [])
