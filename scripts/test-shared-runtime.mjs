@@ -10,6 +10,7 @@ import { createServer } from "vite"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
 import { runtimeInfo, invokeRuntime } from "../dist-electron/runtime-connection.js"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { spawnHost } from "./lib/host-launch.mjs"
 
 const root = await mkdtemp(join(tmpdir(), "mako-shared-runtime-"))
 const dataRoot = join(root, "host-data")
@@ -21,8 +22,12 @@ const server = await createServer({cacheDir:join(root,"vite"),plugins:[manualDev
 await server.listen()
 const url = server.resolvedUrls.local[0]
 const executable = createRequire(import.meta.url)("electron")
-const env = {...process.env, MAKO_DATA_ROOT:dataRoot, VITE_DEV_SERVER_URL:url}
-for (const key of ["ELECTRON_RUN_AS_NODE","MAKO_PROFILE","MAKO_PROD","MAKO_STANDALONE"]) delete env[key]
+const transportOnly = process.argv.includes("--transport-only")
+// The transport check starts no provider, so it needs nothing of the person's: a scratch home keeps every keychain item out of reach.
+const home = transportOnly ? join(root, "home") : homedir()
+if (transportOnly) await mkdir(home)
+const env = {...process.env, HOME:home, MAKO_DATA_ROOT:dataRoot, VITE_DEV_SERVER_URL:url}
+for (const key of ["ELECTRON_RUN_AS_NODE","MAKO_PROFILE","MAKO_PROD","MAKO_WEB_SOCKET"]) delete env[key]
 const processes = []
 const connectId=randomUUID()
 const call=(channel,...args)=>invokeRuntime(location.socket,connectId,channel,args)
@@ -31,15 +36,15 @@ const until=async(read,predicate,label)=>{
   while(Date.now()<end){const value=await read();if(predicate(value))return value;await new Promise(resolve=>setTimeout(resolve,50))}
   throw new Error(`Timed out: ${label}`)
 }
-const launch=(args,extra)=>{
-  const child=spawn(executable,args,{env:{...env,...extra},stdio:["ignore","pipe","pipe"]})
+const track=(child)=>{
   processes.push(child)
   child.stdout.on("data",chunk=>{if(process.env.MAKO_TEST_TRACE)process.stdout.write(chunk)})
   child.stderr.on("data",chunk=>{if(process.env.MAKO_TEST_TRACE)process.stderr.write(chunk)})
   return child
 }
+const launch=(args,extra)=>track(spawn(executable,args,{env:{...env,...extra},stdio:["ignore","pipe","pipe"]}))
 async function client(name, production = false) {
-  const child=launch([resolve("."),"--background","--remote-debugging-port=0"],{MAKO_HOST_ONLY:"0",MAKO_CLIENT_ID:name,MAKO_PROD:production?"1":""})
+  const child=launch([resolve("."),"--background","--remote-debugging-port=0",...(transportOnly?["--use-mock-keychain"]:[])],{MAKO_CLIENT_ID:name,MAKO_PROD:production?"1":""})
   let port
   child.stderr.on("data",chunk=>{const match=chunk.toString().match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/);if(match)port=Number(match[1])})
   await until(async()=>port,Boolean,`${name} debugger`)
@@ -111,7 +116,7 @@ async function client(name, production = false) {
 }
 let conversation
 try {
-  const host=launch([resolve("."),"--background"],{MAKO_HOST_ONLY:"1",MAKO_WEB_ONLY:"1",MAKO_WEB_SOCKET:location.socket})
+  const host=track(spawnHost({...env,MAKO_WEB_SOCKET:location.socket},{stdio:["ignore","pipe","pipe"]}))
   console.log(`Starting isolated host ${host.pid}; evidence ${root}`)
   const info=await until(()=>runtimeInfo(location.socket),Boolean,"shared host")
   assert.equal(info.pid,host.pid)
@@ -123,7 +128,7 @@ try {
     const failure = await page.evaluate(`window.mako.liveStart('transport-fixture',${JSON.stringify(workspace)},{conversationId:${JSON.stringify(randomUUID())},threadPath:undefined,displayPrompt:undefined,modeId:undefined,tuning:{model:undefined,options:undefined},initialRequest:undefined}).then(()=>null,error=>error.message)`)
     assert.match(failure, /transport-fixture has no available interactive transport/, "Valid optional fields must reach the shared host from each Electron client")
   }
-  if (process.argv.includes("--transport-only")) {
+  if (transportOnly) {
     await a.close()
     await b.close()
     console.log("PASS: development and production-renderer Electron clients forward live-start options with undefined fields to the shared host; no provider was started")
