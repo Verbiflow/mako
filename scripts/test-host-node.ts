@@ -6,33 +6,18 @@ import type { ComputerDriverClient } from "@mako/control-runtime/host"
 import { Appshots, type WindowCapturer } from "../electron/appshots.ts"
 import { computerPermissions } from "../electron/computer-permissions.ts"
 import { fileResponse, localFile } from "../electron/file-response.ts"
-import { nodeShell } from "../electron/host-shell.ts"
 import { onMac } from "../electron/platform.ts"
 import { hostCommand } from "../electron/runtime-service.ts"
+import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "../electron/agent-views.ts"
+import { DesktopChannel } from "../electron/desktop-channel.ts"
 
 /**
- * The host without Electron: the shell it runs in under Node, how a launcher
- * picks that runtime, and the host's own answers where Electron's main
- * process used to give them. Runs under plain Node and Electron's Helper in
- * Node mode alike (`test-host.mjs`).
+ * The host as Node: how a launcher starts it, and the host's own answers
+ * where only a desktop app can give them. Runs under plain Node and
+ * Electron's Helper in Node mode alike (`test-host.ts`).
  */
-const root = await mkdtemp(join(tmpdir(), "mako-host-shell-"))
+const root = await mkdtemp(join(tmpdir(), "mako-host-node-"))
 try {
-  // Node's shell draws no windows and says so for Mako's own window.
-  const shell = nodeShell()
-  assert.equal(shell.runtime, "node")
-  assert.deepEqual(shell.disagreements, [])
-  assert.equal(shell.singleInstance(), true)
-  assert.deepEqual(shell.clients(), [])
-  assert.equal(shell.windowOpen() || shell.windowVisible(), false)
-  assert.equal(shell.deskPage, undefined)
-  assert.equal(shell.privacy ?? shell.capturer ?? shell.updater ?? shell.nativeCrashes, undefined)
-  await assert.rejects(shell.createWindow(), /needs Electron/)
-  await assert.rejects(shell.openPreviewWindow(), /needs Electron/)
-  assert.deepEqual(await shell.notifier.notify(1, { id: "n1", subject: "s", title: "t", body: "b", silent: true }), { delivered: false, reason: "unsupported" })
-  assert.equal(await shell.notifier.permission(), "unsupported")
-  await shell.ready()
-
   // A file preview reads the file itself, whole or by range, as Electron's file fetch did.
   const file = join(root, "notes.txt")
   await writeFile(file, "0123456789")
@@ -46,21 +31,24 @@ try {
   await assert.rejects(localFile(join(root, "missing.txt")))
   await assert.rejects(localFile(root), /Not a file/)
 
-  // The switch: Electron's main process by default, its Helper in Node mode on request.
+  // Always Node: Electron's Helper on the bundle's or checkout's entry, plain Node where there is no Electron.
   const electron = "/Applications/Mako.app/Contents/MacOS/Mako"
-  const inherited = { ELECTRON_RUN_AS_NODE: "1", KEEP: "yes" }
-  const main = hostCommand({ executable: electron, args: [], env: inherited })
-  assert.equal(main.executable, electron)
-  assert.deepEqual(main.args, [])
-  assert.equal(main.env.ELECTRON_RUN_AS_NODE, undefined)
-  assert.equal(main.env.MAKO_HOST_EXECUTABLE, electron)
-  assert.equal(main.env.KEEP, "yes")
-  const packaged = hostCommand({ executable: electron, args: [], env: { MAKO_HOST_RUNTIME: "node" } })
+  const packaged = hostCommand({ executable: electron, args: [], env: { KEEP: "yes" } })
   assert.deepEqual(packaged.args, ["/Applications/Mako.app/Contents/Resources/app.asar/dist-electron/entry.js"])
   assert.equal(packaged.env.ELECTRON_RUN_AS_NODE, "1")
-  assert.equal(packaged.env.MAKO_HOST_EXECUTABLE, electron)
-  const checkout = hostCommand({ executable: process.execPath, args: ["/src/mako"], env: { MAKO_HOST_RUNTIME: "node" } })
+  assert.equal(packaged.env.MAKO_HOST_EXECUTABLE, electron, "the host learns the executable that starts it and the agent views app")
+  assert.equal(packaged.env.KEEP, "yes")
+  const checkout = hostCommand({ executable: process.execPath, args: ["/src/mako"], env: {} })
+  assert.equal(checkout.executable, process.execPath)
   assert.deepEqual(checkout.args, ["/src/mako/dist-electron/entry.js"])
+
+  // With no Electron to start, agents read that Mako's own windows need the desktop app.
+  const channel = new DesktopChannel()
+  const noDesktop = new AgentViewsApp({ channel, launch: () => undefined })
+  await assert.rejects(noDesktop.ready(), new RegExp(NO_DESKTOP_WINDOWS.replace(/[.']/g, "\\$&")))
+  noDesktop.close()
+  await assert.rejects(noDesktop.ready(), /closing/)
+  channel.close()
 
   // Without a desktop to read macOS's privacy settings, nothing is granted and nothing is claimed.
   const unknown = computerPermissions(undefined)
@@ -98,7 +86,7 @@ try {
   assert.equal(await shots.source({ pid: 12, windowId: 4 }), null)
   await shots.close()
 
-  console.log(`host shell (${process.versions.electron ? `Electron ${process.versions.electron} as Node` : `Node ${process.versions.node}`}): Node's shell draws no windows and says Mako's own window needs Electron; file previews read whole files and ranges themselves; MAKO_HOST_RUNTIME=node starts Electron's Helper on the bundle's or checkout's entry and the host learns Electron's executable; no privacy readings claim nothing; app shots list the driver's windows and add pictures and live sources only from a capturer`)
+  console.log(`host as Node (${process.versions.electron ? `Electron ${process.versions.electron} as Node` : `Node ${process.versions.node}`}): file previews read whole files and ranges themselves; hostCommand always starts Node on the bundle's or checkout's entry and tells the host its executable; with no Electron, agents are told Mako's windows need the desktop; no privacy readings claim nothing; app shots list the driver's windows and add pictures and live sources only from a capturer`)
 } finally {
   await rm(root, { recursive: true, force: true })
 }

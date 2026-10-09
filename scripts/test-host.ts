@@ -3,14 +3,14 @@ import { createRequire } from "node:module"
 import { headlessNodeExecutable } from "../electron/headless-node.ts"
 
 /**
- * The host's tests, under each runtime the host runs in: this Node, and
- * Electron's Helper in Node mode, which is what `MAKO_HOST_RUNTIME=node`
- * starts. `--runtime node` or `--runtime electron` runs one.
+ * The host's tests, under each runtime the host runs in: this Node, as on a
+ * cloud machine, and Electron's Helper in Node mode, which is how
+ * `hostCommand` starts it on a Mac. `--runtime node` or `--runtime electron`
+ * runs one.
  */
 const TESTS = [
   "scripts/test-host-environment.ts",
-  "scripts/test-host-shell.ts",
-  "scripts/test-host-secrets-order.ts",
+  "scripts/test-host-node.ts",
   "scripts/test-client-calls.ts",
   "scripts/test-machine.ts",
   "scripts/test-host-lock.ts",

@@ -42,6 +42,15 @@ export function runtimeDataRoot(appData: string, env: NodeJS.ProcessEnv): string
   return join(appData, profile ? `mako-${profile}` : "mako")
 }
 
+/** A desktop client's own folder beside the host's data: its renderer storage and `logs/desktop.log`. */
+export function clientRoot(dataRoot: string, client: string): string {
+  if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(client)) throw new Error("Invalid Mako client identity")
+  return `${dataRoot}-ui-${client}`
+}
+
+/** The agent views app's client identity, so its storage and log stay apart from the person's desktop. */
+export const AGENT_VIEWS_CLIENT = "agent-views"
+
 export function runtimeLocation(dataRoot: string) {
   const identity = createHash("sha256").update(resolve(dataRoot)).digest("hex").slice(0, 16)
   const directory = join(tmpdir(), `mako-host-${identity}`)
@@ -72,7 +81,7 @@ async function openRuntimeOutput(path: string): Promise<FileHandle | null> {
 
 export interface RuntimeLaunch {
   dataRoot: string
-  /** Electron's own executable, whichever runtime the host gets. */
+  /** Mako's desktop executable (Electron), or plain Node where there is no desktop. */
   executable: string
   /** The checkout for a development build; nothing for the packaged app. */
   args: string[]
@@ -81,10 +90,10 @@ export interface RuntimeLaunch {
 }
 
 /**
- * How a host starts. Electron's main process by default; with
- * `MAKO_HOST_RUNTIME=node`, Electron's Helper in Node mode runs the same
- * entry, with no windows and no Electron API (`host-shell.ts`). The host
- * learns Electron's executable either way, to record how to start it again.
+ * How a host starts: always as Node. On a Mac that is Electron's Helper in
+ * Node mode, which shows no Dock icon and loads no Electron API; elsewhere
+ * plain Node. The host learns the executable, to record how to start it
+ * again and to start the agent views app with it.
  */
 export interface HostCommand {
   executable: string
@@ -93,15 +102,12 @@ export interface HostCommand {
 }
 
 export function hostCommand(input: Pick<RuntimeLaunch, "executable" | "args" | "env">): HostCommand {
-  const env: NodeJS.ProcessEnv = { ...input.env, MAKO_HOST_EXECUTABLE: input.executable }
-  delete env.ELECTRON_RUN_AS_NODE
-  if (input.env.MAKO_HOST_RUNTIME !== "node") return { executable: input.executable, args: input.args, env }
   // A packaged app's code is its bundle's app.asar, which Electron's Node mode reads as a folder.
   const appRoot = input.args[0] ?? join(dirname(input.executable), "..", "Resources", "app.asar")
   return {
     executable: headlessNodeExecutable(input.executable),
     args: [join(appRoot, "dist-electron", "entry.js")],
-    env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
+    env: { ...input.env, MAKO_HOST_EXECUTABLE: input.executable, ELECTRON_RUN_AS_NODE: "1" },
   }
 }
 
@@ -121,7 +127,7 @@ export async function ensureRuntime(input: RuntimeLaunch) {
   try {
     child = spawn(command.executable, command.args, {
       cwd: input.cwd, detached: true, stdio: output ? ["ignore", output.fd, output.fd] : "ignore",
-      env: { ...command.env, MAKO_HOST_ONLY: "1", MAKO_DATA_ROOT: input.dataRoot, MAKO_WEB_SOCKET: location.socket, MAKO_WEB_ONLY: "1" },
+      env: { ...command.env, MAKO_DATA_ROOT: input.dataRoot, MAKO_WEB_SOCKET: location.socket },
     })
   } finally {
     await output?.close().catch(() => undefined)

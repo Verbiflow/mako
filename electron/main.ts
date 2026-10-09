@@ -2,25 +2,25 @@ import { browserApplicationIcon } from "./browser-icon.js"
 import { z } from "zod"
 import { describeHarnesses } from "./providers/harness-descriptors.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
-import { hostLifecycle, stopOnSignals, takePredecessor } from "./host-lifecycle.js"
-import { nodeShell, type HostShell, type ShellHost } from "./host-shell.js"
+import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./host-lifecycle.js"
 import { devHostBuild } from "./dev-host-build.js"
 import { hostEnvironment } from "./host-environment.js"
 import { acquireHostLock } from "./host-lock.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostChannels } from "./contracts/host-call-inputs.js"
-import { openableLink, socketCalls } from "./contracts/client-calls.js"
+import { socketCalls } from "./contracts/client-calls.js"
 import { runtimeInfo, RuntimeDisconnectedError, settleRuntime } from "./runtime-connection.js"
 import { lstat, mkdir, rm, stat, unlink } from "node:fs/promises"
-import { existsSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, realpathSync, rmSync, watch, type FSWatcher } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { restrictNativeStores } from "@mako/sessions/read-only-sqlite"
 import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
 import { DesktopChannel } from "./desktop-channel.js"
+import { AgentViewsApp } from "./agent-views.js"
+import { AGENT_VIEWS_CLIENT, clientRoot } from "./runtime-service.js"
 import type { MakoComputerPermissions } from "./contracts/mcp-skills-integrations.js"
 import { ControlPreviews, previewThumbnail } from "./control-previews.js"
-import type { DesktopNotification } from "./contracts/notifications.js"
 import { assessProviderResume } from "./provider-recovery.js"
 import { randomUUID } from "node:crypto"
 import type { ProviderBinding, ResumeVerdict } from "./contracts/conversation-control.js"
@@ -91,7 +91,6 @@ import { installThreadAppIpc } from "./ipc/thread-app.js"
 import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
 import { nativeStopToken } from "./drivers.js"
 import type { LiveStartOptions } from "./shared.js"
-import { spawn } from "node:child_process"
 import { homedir } from "node:os"
 import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
@@ -109,11 +108,8 @@ import { flushHostLog, hostLog, hostLogPath, hostWarn, installHostLog } from "./
 import { closeRepositories, configureGit } from "@mako/git"
 import { belowAgents } from "./background-priority.js"
 import { installProviderChildren } from "./provider-children.js"
-import {
-  computerPermissions,
-  requestComputerPermissions,
-} from "./computer-permissions.js"
-import { check, installUpdates, updateState } from "./updates.js"
+import { computerPermissions } from "./computer-permissions.js"
+import { check, desktopUpdateChanged, installUpdates, updateState } from "./updates.js"
 import { installApplicationIpc } from "./ipc/application.js"
 import { UsageReader } from "./usage-reader.js"
 import {
@@ -236,6 +232,7 @@ import {
   deletePlugin,
   listPlugins,
   pluginsDir,
+  watchPlugins,
   writePlugin,
 } from "./plugins.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
@@ -278,16 +275,14 @@ import type {
 import { nodePlatform } from "./platform.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-/** The renderer bundle, served on `mako-app://desk/` when not on Vite. */
-const rendererBundle = join(__dirname, "../dist")
-/**
- * One classic script for every renderer. Renderers run sandboxed, so the
- * preload cannot import; `scripts/build-preload.mjs` bundles it.
- */
-const PRELOAD = join(__dirname, "preload.cjs")
 const environment = hostEnvironment()
-/** Electron's own executable, which starts this host again; the Helper runs it in Node mode (`hostCommand`). */
-const electronExecutable = process.env.MAKO_HOST_EXECUTABLE ?? process.execPath
+/** What `hostCommand` starts this host with again: Mako's Electron executable, or plain Node. */
+const hostExecutable = process.env.MAKO_HOST_EXECUTABLE ?? process.execPath
+/**
+ * Electron, which runs the agent views app. A host under plain Node, such as
+ * on a cloud machine, has none: agents there get no Mako windows of its own.
+ */
+const desktopExecutable = process.versions.electron ? hostExecutable : undefined
 const isDev = environment.development
 const loadedDevBuild = isDev ? devHostBuild(environment.appRoot) : undefined
 const configuredDevServerUrl = isDev
@@ -302,38 +297,18 @@ let activeDevServerUrl = configuredDevServerUrl
  * comes and goes. Dev defaults to its own profile; `MAKO_PROFILE` names any
  * other, for a second checkout or a throwaway test instance.
  */
-const persistentHost = process.env.MAKO_HOST_ONLY === "1"
-const webSocket =
-  isDev || persistentHost ? process.env.MAKO_WEB_SOCKET : undefined
 const instanceProfile = environment.profile
 /** The installed app's own directory; a launcher passes it back as MAKO_DATA_ROOT. */
 const defaultUserData = environment.defaultDataRoot
-/**
- * Electron while Electron's main process runs the host; plain Node, or
- * Electron's Helper in Node mode (`MAKO_HOST_RUNTIME=node`), otherwise. The
- * Electron shell is the one module of the host that imports Electron.
- */
-const shellHost: ShellHost = {
-  environment,
-  development: isDev,
-  persistent: persistentHost,
-  rendererBundle,
-  preload: PRELOAD,
-  devServerUrl: () => activeDevServerUrl,
-  isDeskUrl: (url) => isDeskUrl(url),
-  openLink: (url) => openLink(url),
-  emit: (event) => emit(event),
-  release: (client) => {
-    terminalClients?.release(client)
-    void workspaceClients.release(client)
-  },
-  running: () => lifecycle.running(),
-  socketClients: () => webHost?.clients().length ?? 0,
+/** Every client reaches the host here: the desktop, the agent views app, browsers through the gateway. */
+const hostSocket = launchedSocket()
+function launchedSocket(): string {
+  const socket = process.env.MAKO_WEB_SOCKET
+  if (socket) return socket
+  process.stderr.write("The Mako host needs MAKO_WEB_SOCKET, the socket its clients reach it on; start it with `ensureRuntime`\n")
+  process.exit(64)
 }
-const shell: HostShell = process.type === "browser"
-  ? (await import("./host-shell-electron.js")).electronShell(shellHost)
-  : nodeShell()
-const exitHost = shell.exit
+const exitHost = nodeHostExit()
 /**
  * A fixture desk host serves agents a look at the interface. It keeps its own
  * profile and refuses every host call outside the fixture allowlist, from
@@ -349,8 +324,6 @@ if (fixtureDesk) {
   }
 }
 installHostLog(join(environment.dataRoot, "logs", "host.log"))
-for (const [name, [ours, electron]] of shell.disagreements)
-  hostWarn("host", "the host's environment disagrees with Electron's", { name, ours: String(ours), electron: String(electron) })
 /** A Git process slower than this is logged. */
 const GIT_SLOW_MS = 2_000
 configureGit({
@@ -389,9 +362,9 @@ function openSessionMemory(): SessionMemory | null {
       pid: process.pid,
       startedAt: Math.round(performance.timeOrigin),
       label: sessionMemoryLabel(),
-      socket: process.env.MAKO_WEB_SOCKET,
+      socket: hostSocket,
       launch: {
-        dataRoot: environment.dataRoot, executable: electronExecutable,
+        dataRoot: environment.dataRoot, executable: hostExecutable,
         args: environment.packaged ? [] : [environment.appRoot], cwd: process.cwd(), profile: instanceProfile,
       },
     }, { readOnly: fixtureDesk })
@@ -501,7 +474,6 @@ hostLog("host", "starting", {
   pid: process.pid,
   version: environment.version,
   profile: instanceProfile || "default",
-  persistent: persistentHost,
   electron: process.versions.electron ?? "",
   node: process.versions.node ?? "",
   dataRoot: environment.dataRoot,
@@ -510,11 +482,10 @@ hostLog("host", "starting", {
 const hostLock = await acquireHostLock(environment.dataRoot, { predecessor: takePredecessor() })
 // A host from before this lock holds only Electron's, and answers on the socket once it listens.
 // A socket that neither answers nor refuses counts as occupied.
-const olderHost = hostLock.kind === "held" && persistentHost && webSocket
-  ? await settleRuntime(webSocket, { timeoutMs: 2_000 }).then((probe) => probe.state !== "absent", () => true)
+const olderHost = hostLock.kind === "held"
+  ? await settleRuntime(hostSocket, { timeoutMs: 2_000 }).then((probe) => probe.state !== "absent", () => true)
   : false
-// Electron's lock stays for standalone mode alone, which reopens its window on a second launch.
-if (hostLock.kind === "taken" || olderHost || (!persistentHost && !shell.singleInstance())) {
+if (hostLock.kind === "taken" || olderHost) {
   hostWarn("host", "another host holds this data root", {
     dataRoot: environment.dataRoot,
     holder: hostLock.kind === "taken" ? hostLock.holder : null,
@@ -535,29 +506,45 @@ let nativeRequests: NativeRequests | null = null
 let usageReader: UsageReader | undefined
 /**
  * The desktop app attached on `/desktop`, for what only Electron's main
- * process can do. It answers first; a host Electron runs answers the rest
- * itself, and a host under Node without a desktop goes without.
+ * process can do: Mako.app's grants, window capture, its own update, and the
+ * desk windows agents drive. Without one the host goes without, except for
+ * those windows, which the agent views app makes.
  */
-const desktop = new DesktopChannel()
+const desktop = new DesktopChannel({ updated: () => desktopUpdateChanged() })
+const agentViews = new AgentViewsApp({
+  channel: desktop,
+  launch: () => desktopExecutable ? {
+    executable: desktopExecutable,
+    args: environment.packaged ? [] : [environment.appRoot],
+    env: {
+      ...desktopLaunchEnvironment(process.env),
+      MAKO_DATA_ROOT: environment.dataRoot,
+      ...(instanceProfile && { MAKO_PROFILE: instanceProfile }),
+      ...(process.env.MAKO_PROD && { MAKO_PROD: process.env.MAKO_PROD }),
+      ...(activeDevServerUrl && { VITE_DEV_SERVER_URL: activeDevServerUrl }),
+    },
+    log: join(clientRoot(environment.dataRoot, AGENT_VIEWS_CLIENT), "logs", "desktop.log"),
+  } : undefined,
+})
 const appshots = new Appshots(async () => {
   const driver = resolveExecutable("cua-driver")
   const socket = await ensureMakoLocalControl()
   return driver && socket
     ? { command: driver, args: ["mcp", "--embedded", "--socket", socket] }
     : null
-}, undefined, () => desktop.answers("window-thumbnails") ? desktop.capturer() : shell.capturer)
+}, undefined, () => desktop.answers("window-thumbnails") ? desktop.capturer() : undefined)
 const deskBrowser = new DeskBrowser({
   fixture: fixtureDesk,
   allowsUrl: (url) => isDeskUrl(url),
-  createPage: (previewId) => {
-    if (desktop.answers("desk-page-create")) return desktop.deskPage(previewId)
-    if (shell.deskPage) return shell.deskPage(previewId)
-    throw new Error("Open Mako's desktop app to let agents open Mako's own windows.")
+  createPage: async (previewId) => {
+    await agentViews.ready()
+    return desktop.deskPage(previewId)
   },
 })
+/** Mako.app's grants as the desktop reads them; without a desktop, macOS can't say which app holds them. */
 function readComputerPermissions(): Promise<MakoComputerPermissions> {
   if (desktop.answers("computer-permissions")) return desktop.ask("computer-permissions", {})
-  return Promise.resolve(computerPermissions(shell.privacy))
+  return Promise.resolve(computerPermissions(undefined))
 }
 let removeDeskBrowserRegistration: (() => void) | undefined
 let stopDevRendererWatch: (() => void) | undefined
@@ -565,14 +552,6 @@ let defaultBrowserApplication: Promise<string | undefined> | undefined
 function preferredBrowserApplication() {
   const machine = hostMachine()
   return (defaultBrowserApplication ??= machine.kind === "present" ? machine.defaultBrowser() : Promise.resolve(undefined))
-}
-/** A link from a window this host shows itself: a desk window, or the standalone window. */
-function openLink(url: string) {
-  const link = openableLink(url)
-  if (!link) return
-  void Promise.resolve()
-    .then(() => presentMachine().openUrl(link))
-    .catch((error: Error) => hostWarn("machine", "link not opened", { reason: error.message }))
 }
 // The application owns checkout resources; the reusable Node runtime does not
 // infer workspace paths. Child control servers receive the same explicit root.
@@ -583,7 +562,6 @@ const browserControl = new BrowserService(
   async () => {
     const defaultPath = await preferredBrowserApplication()
     const browsers = await localBrowsers(defaultPath ? [defaultPath] : [])
-    await shell.ready()
     return [
       ...(await Promise.all(
         browsers.map(async (browser) => {
@@ -662,8 +640,6 @@ const runtimeUpdates = new RuntimeUpdates({
 let threadLifecycle: ThreadLifecycle
 let webHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 let sharedConversations: SharedConversations | undefined
-const webOnly =
-  persistentHost || Boolean(webSocket && process.env.MAKO_WEB_ONLY !== "0")
 let terminalClients: TerminalClients | null = null
 const workspaceClients = new WorkspaceClients(emit)
 
@@ -691,7 +667,6 @@ function ensureMakoLocalControl() {
 let wakeWatch: WakeWatch | undefined
 function emitTerminalWake() {
   webHost?.terminal({ type: "wake" })
-  shell.send("mako:terminal-event", { type: "wake" })
 }
 
 const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}/`)
@@ -821,11 +796,8 @@ function emit(event: HostEvent, client?: string) {
   // Selecting a child repository is not a commit in the parent workspace.
   if (event.type === "git" && !event.git.repositories?.length) noticeHead(event.git.head)
   webHost?.event(event, client)
-  shell.send("mako:event", event, client)
 }
 
-/** The system is shutting down or logging out; Electron's quit then ends the host instead of backgrounding it. */
-let systemShutdown = false
 /** Set when cleanup begins; events stop going out from then on. */
 let hostClosing = false
 let application: ReturnType<typeof installApplicationIpc> | undefined
@@ -869,8 +841,7 @@ function watchProfileHostIdle(hostDirectory: string): void {
       !lifecycle.running() && "stopping",
       application?.lifecycle.blocked && "lifecycle blocked",
       hasActiveWork() && "active work",
-      shell.windowOpen() && "open window",
-      clients > 0 && `${clients} web client${clients === 1 ? "" : "s"}`,
+      clients > 0 && `${clients} client${clients === 1 ? "" : "s"}`,
       leases > 0 && `${leases} launcher lease${leases === 1 ? "" : "s"}`,
     ].filter(Boolean)
     const now = reasons.join(", ") || "nothing"
@@ -905,36 +876,26 @@ function watchProfileHostIdle(hostDirectory: string): void {
   timer.unref()
 }
 
-async function reopenWindow(): Promise<void> {
-  if (!lifecycle.running()) return
-  if (webOnly && !shell.clients().length) {
-    // The default profile answers an activate/second-instance by starting a
-    // desktop client; a sandbox or test host owns another data root and stays
-    // headless. Packaged clients must come up through `open -n` — a process
-    // spawned outside LaunchServices checks in as a UIElement, which `open`
-    // can then resolve as the bundle's instance and fail to activate.
-    if (
-      persistentHost &&
-      resolve(environment.dataRoot) === resolve(defaultUserData)
-    ) {
-      const env = desktopLaunchEnvironment(process.env)
-      if (environment.packaged) {
-        spawn("open", ["-n", resolve(dirname(environment.appRoot), "../..")], {
-          detached: true,
-          stdio: "ignore",
-          env,
-        }).unref()
-        return
-      }
-      spawn(electronExecutable, [environment.appRoot], {
-        detached: true,
-        stdio: "ignore",
-        env,
-      }).unref()
-    }
-    return
+let pluginWatcher: FSWatcher | null = null
+let buildWatcher: FSWatcher | undefined
+/**
+ * Answers "is the host I am talking to current?" without guessing: in dev,
+ * the moment a rebuild of this host lands on disk, every window says so. The
+ * renderer hot-reloads through Vite; the host cannot, and pretending
+ * otherwise is how stale builds get debugged for an hour.
+ */
+function watchOwnBuild(): FSWatcher | undefined {
+  let told = false
+  try {
+    return watch(join(__dirname, "main.js"), () => {
+      if (told) return
+      told = true
+      setTimeout(() => emit({ type: "notice", level: "info", message: "Mako's engine was rebuilt — run Restart Mako from the palette to load it." }), 500)
+    })
+  } catch (error) {
+    hostWarn("host", "own build not watched", { error: error instanceof Error ? error.message : String(error) })
+    return undefined
   }
-  await shell.reopen(!webOnly)
 }
 
 function relaunch() {
@@ -1333,7 +1294,7 @@ function bindIpc() {
     browserControl.prefer(browser)
   )
   handle("mako:browser-extension-setup", () =>
-    prepareBrowserExtension(environment.appRoot, electronExecutable)
+    prepareBrowserExtension(environment.appRoot, hostExecutable)
   )
   handle("mako:browser-control-connect", async (_event, browser: string) => {
     await browserControl.connect(browser)
@@ -1344,9 +1305,8 @@ function bindIpc() {
     return browserControl.status()
   })
   handle("mako:computer-permissions-request", () => {
-    if (desktop.answers("computer-permissions-request")) return desktop.ask("computer-permissions-request", {})
-    if (!shell.privacy) throw new Error("Open Mako's desktop app on this Mac to grant computer permissions.")
-    return requestComputerPermissions(shell.privacy, () => shell.focusForPermission())
+    if (!desktop.answers("computer-permissions-request")) throw new Error("Open Mako's desktop app on this Mac to grant computer permissions.")
+    return desktop.ask("computer-permissions-request", {})
   })
   handle("mako:computer-driver", () =>
     cuaDriverStatus(resolveExecutable("cua-driver"))
@@ -1830,7 +1790,6 @@ function bindIpc() {
     return application.lifecycle.command({ kind: "wait", action: "install" })
   })
   handle("mako:relaunch", () => relaunch())
-  handle("mako:open-preview-window", () => shell.openPreviewWindow())
 
   handle("mako:crashes", () => listCrashes())
   handle("mako:crashes-dir", () => crashesDir())
@@ -1848,26 +1807,6 @@ function bindIpc() {
       error.stack = payload.stack
       record(kind, error, payload.source)
     }
-  )
-
-  // Client calls, answered here only for the standalone window: the socket
-  // refuses them, and each client answers them itself (`contracts/client-calls.ts`).
-  handle("mako:open-url", (_e, url: string) => openLink(url))
-
-  handle("mako:copy", (_e, text: string) => presentMachine().copy(text))
-
-  handle("mako:notify", (_e, notification: DesktopNotification) =>
-    shell.notifier.notify(shell.notificationWindow(), notification)
-  )
-  handle("mako:notify-dismiss", (_e, subject: string) =>
-    shell.notifier.dismiss(subject)
-  )
-  handle("mako:set-badge-count", (_e, count: number) =>
-    shell.notifier.setBadgeCount(count)
-  )
-  handle("mako:notification-permission", () => shell.notifier.permission())
-  handle("mako:request-notification-permission", () =>
-    shell.notifier.permission()
   )
 }
 
@@ -1897,17 +1836,17 @@ async function readFilePreview(request: Request): Promise<Response> {
   }
 }
 
-installCrashReporting({ root: environment.dataRoot, native: shell.nativeCrashes })
+installCrashReporting({ root: environment.dataRoot })
 
-void shell.ready().then(async () => {
+void (async () => {
   stopOnSignals(lifecycle)
   const trace = (stage: string) => {
     if (process.env.MAKO_RUNTIME_TRACE === "1")
       console.info("[mako-runtime]", stage)
   }
-  if (isDev && webSocket) {
+  if (isDev) {
     stopDevRendererWatch = watchDevRendererRegistration(
-      dirname(webSocket),
+      dirname(hostSocket),
       {
         profile: instanceProfile || "dev",
         sourceRoot: environment.appRoot,
@@ -1916,31 +1855,18 @@ void shell.ready().then(async () => {
         void configureDevRenderer(registration)
       }
     )
-  } else if (isDev && configuredDevServerUrl) {
-    await configureDevRenderer({
-      profile: instanceProfile || "dev",
-      sourceRoot: environment.appRoot,
-      url: configuredDevServerUrl,
-    })
   }
-  trace("electron ready")
+  trace("host ready")
   // Agents an earlier host left running are ended before this one starts any.
   await providerChildren.reap().catch((error) => {
     hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
   })
-  await shell.start(readFilePreview)
   terminalClients = new TerminalClients(
     join(__dirname, "terminal-daemon.js"),
     join(environment.dataRoot, "terminal"),
-    (event, owner) => {
-      webHost?.terminal(event, owner)
-      shell.send("mako:terminal-event", event, owner)
-    },
+    (event, owner) => webHost?.terminal(event, owner),
     buildTag()
   )
-  shell.onSystemShutdown(() => {
-    systemShutdown = true
-  })
   wakeWatch = watchWake((source) => {
     hostLog("host", "woke", { source })
     emitTerminalWake()
@@ -1952,7 +1878,7 @@ void shell.ready().then(async () => {
   })
   const telemetry = await installTelemetry({
     fixture: fixtureDesk,
-    attended: () => (webHost?.clients().length ?? 0) > 0 || shell.windowVisible(),
+    attended: () => (webHost?.clients().length ?? 0) > 0,
     inventory: async () => ({
       harnesses: (await harnessProfiles()).filter((profile) => profile.available).map((profile) => profile.id),
       runtimes: runtimeUpdates.snapshot(),
@@ -2176,11 +2102,7 @@ void shell.ready().then(async () => {
     live: liveConversations,
     native: nativeRequests,
     emit,
-    clients: () => [
-      ...(webHost?.clients() ?? []),
-      ...shell.clients(),
-    ],
-    quitClient: () => shell.hideWindows(),
+    clients: () => webHost?.clients() ?? [],
     finish: (action, install) => {
       install?.()
       void lifecycle.stop({ kind: "request", action })
@@ -2190,7 +2112,6 @@ void shell.ready().then(async () => {
     const conversations = new SharedConversations(sessionMemory, (event) => {
       if (hostClosing) return
       webHost?.conversationEvent(event)
-      shell.send("mako:event", event)
     }, {
       snapshot: (id) => liveConversations.snapshot(id),
       find: (provider, nativeId) => {
@@ -2204,56 +2125,58 @@ void shell.ready().then(async () => {
   bindIpc()
   bindAcp((event) => liveConversations.observe(event))
   bindCodexApp((event) => liveConversations.observe(event))
-  if (webSocket) {
-    if (persistentHost) {
-      await mkdir(dirname(webSocket), { recursive: true, mode: 0o700 })
-      const stale = await lstat(webSocket).catch(
-        (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return null
-          throw error
-        }
-      )
-      if (stale) {
-        if (
-          !stale.isSocket() ||
-          (process.getuid && stale.uid !== process.getuid()) ||
-          (await runtimeInfo(webSocket))
-        )
-          throw new Error("The shared host socket is already owned")
-        await unlink(webSocket)
-      }
+  await mkdir(dirname(hostSocket), { recursive: true, mode: 0o700 })
+  const stale = await lstat(hostSocket).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null
+      throw error
     }
-    const runtime: RuntimeInfo = {
-      protocol: RUNTIME_PROTOCOL,
-      instanceId: crypto.randomUUID(),
-      storageScope: basename(dirname(webSocket)),
-      pid: process.pid,
-      version: environment.version,
-      devBuild: loadedDevBuild,
-      methods: socketCalls(hostChannels),
-      previewSizing: true,
-    }
-    if (fixtureDesk) runtime.fixture = true
-    webHost = await startWebHost(
-      webSocket,
-      invokeHost,
-      (request, client = "web") =>
-        withHostClient(client, () => readFilePreview(request)),
-      (client) => {
-        terminalClients?.release(client)
-        void workspaceClients.release(client)
-      },
-      runtime,
-      invokeHostPreview,
-      fixtureDesk ? undefined : hostSecretKeyHandover(),
-      (request, response) => desktop.attach(request, response)
+  )
+  if (stale) {
+    if (
+      !stale.isSocket() ||
+      (process.getuid && stale.uid !== process.getuid()) ||
+      (await runtimeInfo(hostSocket))
     )
+      throw new Error("The shared host socket is already owned")
+    await unlink(hostSocket)
   }
+  const runtime: RuntimeInfo = {
+    protocol: RUNTIME_PROTOCOL,
+    instanceId: crypto.randomUUID(),
+    storageScope: basename(dirname(hostSocket)),
+    pid: process.pid,
+    version: environment.version,
+    devBuild: loadedDevBuild,
+    methods: socketCalls(hostChannels),
+    previewSizing: true,
+  }
+  if (fixtureDesk) runtime.fixture = true
+  webHost = await startWebHost(
+    hostSocket,
+    invokeHost,
+    (request, client = "web") =>
+      withHostClient(client, () => readFilePreview(request)),
+    (client) => {
+      terminalClients?.release(client)
+      void workspaceClients.release(client)
+    },
+    runtime,
+    invokeHostPreview,
+    fixtureDesk ? undefined : hostSecretKeyHandover(),
+    (request, response) => desktop.attach(request, response)
+  )
   trace("host listening")
-  if (persistentHost && instanceProfile && webSocket)
-    watchProfileHostIdle(dirname(webSocket))
-  if (!webOnly) await shell.createWindow()
-  installUpdates(emit, shell.updater)
+  if (instanceProfile) watchProfileHostIdle(dirname(hostSocket))
+  // The agent writes a plugin with its ordinary file tools and every window
+  // re-evaluates it: no IPC for it to learn, no command for the user to run.
+  pluginWatcher = fixtureDesk ? null : watchPlugins(() => emit({ type: "plugins-changed" }))
+  if (isDev) buildWatcher = watchOwnBuild()
+  installUpdates(emit, {
+    state: () => desktop.update(),
+    check: () => desktop.ask("update-check", {}),
+    install: () => desktop.ask("update-install", {}).then(() => {}),
+  })
   trace("updates ready")
   installThreads(emit, { readOnly: fixtureDesk })
   trace("catalog starting")
@@ -2298,13 +2221,8 @@ void shell.ready().then(async () => {
   void ready().then((live) => {
     watchWorkspace(live.active.workspace)
   })
-  shell.onActivate(() => {
-    void reopenWindow()
-  })
   void telemetry.started(performance.now())
-})
-
-shell.followQuit(lifecycle, () => !systemShutdown && (persistentHost || hasActiveWork()))
+})()
 
 /** Everything the host holds, released once, in order, by its lifecycle. */
 async function cleanupHost(): Promise<void> {
@@ -2314,19 +2232,16 @@ async function cleanupHost(): Promise<void> {
   // must not inherit its reset admission callback and dispatch late.
   const providersDrained = Promise.all([stopDrivers(), stopHarnessProfiles()])
   void providersDrained.catch(() => {})
-  shell.notifier.dispose()
   closeRepositories()
   application?.dispose()
   sharedConversations?.dispose()
   webHost?.close()
-  if (persistentHost && webSocket) {
-    // The runtime directory is this host's alone; leaving it behind is how
-    // fifty of them piled up in the temp folder.
-    try {
-      rmSync(dirname(webSocket), { recursive: true, force: true })
-    } catch {
-      /* best effort */
-    }
+  // The runtime directory is this host's alone; leaving it behind is how
+  // fifty of them piled up in the temp folder.
+  try {
+    rmSync(dirname(hostSocket), { recursive: true, force: true })
+  } catch {
+    /* best effort */
   }
   wakeWatch?.stop()
   stopCloudAccountIpc()
@@ -2334,6 +2249,9 @@ async function cleanupHost(): Promise<void> {
   void controlSessions.close()
   stopCuaEmbedded()
   void appshots.close()
+  pluginWatcher?.close()
+  buildWatcher?.close()
+  agentViews.close()
   desktop.close()
   controlService?.close()
   stopDevRendererWatch?.()
