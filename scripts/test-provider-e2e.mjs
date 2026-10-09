@@ -119,7 +119,7 @@ async function runElectron() {
   const sessions = new ControlSessions(async () => {
     const socket = await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")
     return socket ? {socket,driver:resolveExecutable("cua-driver")} : undefined
-  }, runtimeSnapshot.startDesktopControlSession)
+  }, runtimeSnapshot.startDesktopControlSession, new runtimeSnapshot.ControlWorkers())
   const controlMcpCalls = []
   const requestControl = (bindingId, operation, signal) => {
     controlMcpCalls.push({ bindingId, method: operation.method })

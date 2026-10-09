@@ -1,150 +1,190 @@
-import { readControlSession, invokeControlSession } from "./control-session-client.js"
-import type { SessionOperation } from "./control-session-protocol.js"
-import { fork, type ChildProcess } from "node:child_process"
-import { rm, writeFile } from "node:fs/promises"
-import { join } from "node:path"
-import { fileURLToPath } from "node:url"
-import { z } from "zod"
-import { createControlDirectory } from "./private-socket.js"
+import { invokeControlSession } from "./control-session-client.js"
+import { refuseControlConnection } from "./control-session-server.js"
 import {
-  DesktopSessionConfigSchema,
-  type DesktopSessionConfig,
-} from "./desktop-session-config.js"
+  CONTROL_SESSION_PROTOCOL,
+  controlSessionBuild,
+  type SessionDescriptor,
+  type SessionOperation,
+} from "./control-session-protocol.js"
+import type { Socket } from "node:net"
+import { randomUUID } from "node:crypto"
+import { lstat, mkdir, readdir, rm, rmdir, unlink, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { basename, join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { ControlFault } from "@mako/control/control"
+import { createControlDirectory, listenPrivateControlSocket, processAbsent, stagingPath } from "./private-socket.js"
+import { ControlWorkers, type ControlWorker, type ControlWorkerOptions } from "./control-workers.js"
+import type { DesktopSessionConfig } from "./desktop-session-config.js"
 
 export interface ControlLaunch {
   bin: string
   command: string
   sessionFile: string
 }
+type NativeDriver = NonNullable<DesktopSessionConfig["native"]>
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
-const reply = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("ready"), file: z.string() }).strict(),
-  z.object({ kind: z.literal("failed") }).strict(),
-])
+const LAUNCH = /^mako-cli-([1-9]\d*)-[a-zA-Z0-9]{6}$/
+let swept: Promise<void> | undefined
 
-/** A task owns the worker; shell processes only borrow its private socket. */
+/**
+ * A task's Local Control session, ready at once and started on first use.
+ * The launch files and the listening socket exist from the start, so the
+ * agent's environment is the same as ever; the first connection, from the CLI
+ * or from this process's own `request`, takes a worker and hands it the
+ * socket with every connection waiting on it. A task that never uses the
+ * computer never starts one.
+ */
 export async function startDesktopControlSession(
   input: DesktopSessionConfig,
-  options: {
-    executable?: string
-    env?: NodeJS.ProcessEnv
-    startupMs?: number
-    onSpawn?: (child: ChildProcess) => void
+  options: ControlWorkerOptions & {
+    /** Where workers come from; without it, each session spawns its own. */
+    workers?: ControlWorkers
+    /** The native driver, resolved when the session first starts, in place of `input.native`. */
+    native?: () => Promise<NativeDriver | undefined>
   } = {}
 ) {
-  const config = DesktopSessionConfigSchema.parse(input)
-  const executable = options.executable ?? process.execPath
-  const directory = await createControlDirectory("mako-cli-")
-  const supplied = options.env ?? process.env
-  const environment: NodeJS.ProcessEnv = { ELECTRON_RUN_AS_NODE: "1" }
-  for (const key of [
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "PATH",
-    "SHELL",
-    "TERM",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "TMPDIR",
-    "TEMP",
-    "TMP",
-    "TZ",
-    "DISPLAY",
-    "XAUTHORITY",
-    "DBUS_SESSION_BUS_ADDRESS",
-    "XDG_RUNTIME_DIR",
-    "XDG_SESSION_TYPE",
-    "WAYLAND_DISPLAY",
-    "GDK_BACKEND",
-    "QT_QPA_PLATFORM",
-    "MAKO_CONTROL_MEDIA_ROOT",
-    "MAKO_CONTROL_ASYNC_GUARD",
-  ])
-    if (supplied[key] !== undefined) environment[key] = supplied[key]
-  const child = fork(
-    fileURLToPath(new URL("./desktop-session-worker.js", import.meta.url)),
-    [],
-    {
-      execPath: executable,
-      execArgv: [],
-      env: environment,
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
-    }
-  )
-  // Never echo driver/page contents or launch credentials into provider logs.
-  child.stderr?.resume()
+  void (swept ??= sweepAbandonedLaunches().catch(() => {}))
+  const workers = options.workers ?? new ControlWorkers({ ...options, spare: false })
+  const directory = await createControlDirectory(`mako-cli-${process.pid}-`)
+  const files = join(directory, "session")
+  const command = join(directory, "mako-control")
+  const sessionFile = join(files, "session.json")
+  let state: "waiting" | "starting" | "running" | "ended" = "waiting"
+  let worker: ControlWorker | undefined
+  let starting: Promise<void> | undefined
+  const waiting: Socket[] = []
+  let ended!: (reason: "stopped" | "failed") => void
+  const exited = new Promise<"stopped" | "failed">((resolve) => { ended = resolve })
   let closing: Promise<void> | undefined
-  let exited = false
-  const exit = new Promise<"stopped" | "failed">((resolve) => {
-    const done = (code: number | null) => {
-      exited = true
-      resolve(code === 0 ? "stopped" : "failed")
+  let listener: Awaited<ReturnType<typeof listenPrivateControlSocket>> | undefined
+  let descriptor: SessionDescriptor | undefined
+
+  /** `close` can end the session while a start awaits. */
+  const over = () => state === "ended"
+  const closed = (connection: Socket) =>
+    refuseControlConnection(connection, { code: "session-closed", message: "This task's Local Control session has ended; no action was dispatched." })
+  const release = async (reason: "stopped" | "failed") => {
+    state = "ended"
+    for (const connection of waiting.splice(0)) closed(connection)
+    await listener?.close()
+    await rm(directory, { recursive: true, force: true })
+    ended(reason)
+  }
+  const start = async (session: SessionDescriptor) => {
+    state = "starting"
+    try {
+      const taken = workers.take()
+      worker = taken
+      const native = options.native ? await options.native() : input.native
+      await taken.bind({ ...input, native }, session, files, listener!.server)
+      if (over()) return
+      state = "running"
+      for (const connection of waiting.splice(0)) taken.hand(connection, closed)
+      await listener!.release()
+      void taken.exited.then((reason) => { if (!over()) void release(reason) })
+    } catch (error) {
+      const fault = error instanceof ControlFault ? { code: error.code, message: error.message } : {
+        code: "session-start-failed",
+        message: "Local Control couldn't start for this task; no action was dispatched. Start a new task to try again.",
+      }
+      for (const connection of waiting.splice(0)) refuseControlConnection(connection, fault)
+      void worker?.stop()
+      if (!over()) await release("failed")
     }
-    child.once("exit", done)
-    child.once("error", () => done(null))
-  })
+  }
+
   const close = (): Promise<void> =>
     (closing ??= (async () => {
-      if (!exited && child.connected) child.send({ kind: "stop" }, () => {})
-      const deadline = setTimeout(() => child.kill("SIGKILL"), 17_000)
-      try {
-        await exit
-      } finally {
-        clearTimeout(deadline)
-        await rm(directory, { recursive: true, force: true })
-      }
+      state = "ended"
+      await starting
+      await worker?.stop()
+      await release("stopped")
     })())
+
   try {
-    options.onSpawn?.(child)
-    const sessionFile = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("Local Control session startup timed out")),
-        options.startupMs ?? 20_000
-      )
-      const fail = () =>
-        reject(new Error("Local Control session exited before becoming ready"))
-      child.once("error", fail)
-      child.once("exit", fail)
-      child.on("message", function received(raw) {
-        const message = reply.safeParse(raw)
-        if (!message.success) return
-        clearTimeout(timer)
-        child.off("message", received)
-        child.off("error", fail)
-        child.off("exit", fail)
-        if (message.data.kind === "ready") resolve(message.data.file)
-        else reject(new Error("Local Control session startup failed"))
-      })
-      void exit.then(() => clearTimeout(timer))
-      child.send(
-        { kind: "start", config, directory: join(directory, "session") },
-        (error) => {
-          if (error) fail()
-        }
-      )
+    await mkdir(files, { mode: 0o700 })
+    listener = await listenPrivateControlSocket(files, "session.sock")
+    descriptor = {
+      protocol: CONTROL_SESSION_PROTOCOL,
+      build: await controlSessionBuild(),
+      session: randomUUID(),
+      socket: listener.path,
+      pid: process.pid,
+    }
+    const session = descriptor
+    listener.server.on("connection", (connection: Socket) => {
+      if (state === "running" && worker) return worker.hand(connection, closed)
+      if (state === "ended") return closed(connection)
+      waiting.push(connection)
+      if (state === "waiting") starting = start(session)
     })
-    const command = join(directory, "mako-control")
+    await writeFile(sessionFile, JSON.stringify(descriptor) + "\n", { mode: 0o600, flag: "wx" })
+    const executable = options.executable ?? process.execPath
     const cli = fileURLToPath(new URL("./control-cli.js", import.meta.url))
     await writeFile(
       command,
       `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexport MAKO_CONTROL_SESSION_FILE=${quote(sessionFile)}\nexec ${quote(executable)} ${quote(cli)} "$@"\n`,
       { mode: 0o700, flag: "wx" }
     )
-    void exit
-      .then(() => rm(directory, { recursive: true, force: true }))
-      .catch(() => {})
-    const descriptor = await readControlSession(sessionFile)
-    return {
-      request: (operation: SessionOperation, signal: AbortSignal) => invokeControlSession(descriptor, operation, signal),
-      launch: { bin: directory, command, sessionFile } satisfies ControlLaunch,
-      pid: child.pid,
-      exited: exit,
-      close,
-    }
   } catch (error) {
     await close()
     throw error
+  }
+  if (!options.workers) void exited.then(() => workers.close())
+  return {
+    request: (operation: SessionOperation, signal: AbortSignal) => {
+      if (state === "ended")
+        throw new ControlFault("session-closed", "This task's Local Control session is no longer active.", "not-dispatched")
+      return invokeControlSession(session(), operation, signal)
+    },
+    launch: { bin: directory, command, sessionFile } satisfies ControlLaunch,
+    /** The worker serving this session, once it started and while it runs. */
+    get pid() {
+      return state === "running" ? worker?.pid : undefined
+    },
+    exited,
+    close,
+  }
+
+  function session(): SessionDescriptor {
+    if (!descriptor) throw new Error("Local Control session isn't listening")
+    return descriptor
+  }
+}
+
+/**
+ * Launch folders whose host died before any worker took them; a worker that
+ * ran removes its own. Only the files a launch makes are removed, so anything
+ * else in such a folder keeps it.
+ */
+async function sweepAbandonedLaunches(): Promise<void> {
+  const deadline = Date.now() + 25
+  for (const root of new Set([tmpdir(), "/tmp"])) {
+    const names = await readdir(root).catch(() => [])
+    for (const name of names) {
+      if (Date.now() >= deadline) return
+      const pid = LAUNCH.exec(name)?.[1]
+      if (!pid || !processAbsent(Number(pid))) continue
+      const directory = join(root, name)
+      try {
+        const info = await lstat(directory)
+        if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o777) !== 0o700) continue
+        const entries = await readdir(directory)
+        if (entries.some((entry) => entry !== "session" && entry !== "mako-control")) continue
+        if (entries.includes("session")) {
+          const files = join(directory, "session")
+          const inside = await readdir(files)
+          const expected = ["session.json", "session.sock", basename(stagingPath(join(files, "session.sock")))]
+          if (inside.some((entry) => !expected.includes(entry))) continue
+          for (const entry of inside) await unlink(join(files, entry))
+          await rmdir(files)
+        }
+        if (entries.includes("mako-control")) await unlink(join(directory, "mako-control"))
+        await rmdir(directory)
+      } catch {
+        /* Races and unverifiable ownership leave the folder alone. */
+      }
+    }
   }
 }

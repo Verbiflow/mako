@@ -1,5 +1,6 @@
 import { controlAgent } from "./control-agent.js"
 import { createServer } from "node:http"
+import type { Server, Socket } from "node:net"
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
@@ -70,6 +71,92 @@ export async function serveControlSession(
     socket,
     pid: process.pid,
   }
+  const transport = controlSessionTransport(session, descriptor, () => {
+    void close().then(() => options.onStop?.())
+  })
+  let closing: Promise<void> | undefined
+  async function close(): Promise<void> {
+    return (closing ??= (async () => {
+      try {
+        await transport.close()
+      } finally {
+        try {
+          await endpoint.close()
+        } finally {
+          await rm(directory, { recursive: true, force: true })
+        }
+      }
+    })())
+  }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      transport.server.once("error", reject)
+      transport.server.listen(socket, resolve)
+    })
+    await chmod(socket, 0o600)
+    await writeFile(file, JSON.stringify(descriptor) + "\n", {
+      mode: 0o600,
+      flag: "wx",
+    })
+    return { file, descriptor, close }
+  } catch (error) {
+    await close()
+    throw error
+  }
+}
+
+/**
+ * Serve a session on a socket another process listens on and handed over,
+ * with the connections that arrived before the handover. The files are the
+ * listener's owner's; closing ends the session and stops accepting here.
+ */
+export function serveHandedControlSession(
+  session: ControlSession,
+  options: { descriptor: SessionDescriptor; listener: Server; onStop?: () => void }
+) {
+  let closing: Promise<void> | undefined
+  const close = (): Promise<void> =>
+    (closing ??= (async () => {
+      options.listener.close()
+      await transport.close()
+    })())
+  const transport = controlSessionTransport(session, options.descriptor, () => {
+    void close().then(() => options.onStop?.())
+  })
+  const accept = (connection: Socket) => {
+    transport.server.emit("connection", connection)
+    connection.resume()
+  }
+  options.listener.on("connection", accept)
+  return { accept, close }
+}
+
+/** Answer each request on a connection with a fault; nothing reaches an engine. */
+export function refuseControlConnection(connection: Socket, fault: { code: string; message: string }) {
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    let bytes = 0
+    request.on("data", (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > 1024 * 1024) request.destroy()
+      else chunks.push(chunk)
+    })
+    request.once("end", () => {
+      let requestId = "invalid"
+      try {
+        requestId = z.object({ requestId: z.string() }).parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))).requestId
+      } catch { /* a malformed request still gets its refusal */ }
+      response
+        .writeHead(200, { "content-type": "application/json", connection: "close" })
+        .end(JSON.stringify({ ok: false, requestId, fault: { ...fault, outcome: "not-dispatched" } }))
+    })
+  })
+  connection.once("close", () => server.close())
+  server.emit("connection", connection)
+  connection.resume()
+}
+
+function controlSessionTransport(session: ControlSession, descriptor: SessionDescriptor, stop: () => void) {
   const requests = new Set<AbortController>()
   const diagnostics: Array<{
     requestId: string
@@ -287,10 +374,7 @@ export async function serveControlSession(
         .json()
         .parse(await invoke(input.operation, controller.signal))
       outcome = "completed"
-      if (method === "stop")
-        response.once("finish", () => {
-          void close().then(() => options.onStop?.())
-        })
+      if (method === "stop") response.once("finish", stop)
       response
         .writeHead(200, { "content-type": "application/json" })
         .end(JSON.stringify({ ok: true, requestId, value }))
@@ -340,31 +424,9 @@ export async function serveControlSession(
       const stoppedServer = new Promise<void>((resolve) =>
         server.close(() => resolve())
       )
-      try {
-        await session.close()
-        await stoppedServer
-      } finally {
-        try {
-          await endpoint.close()
-        } finally {
-          await rm(directory, { recursive: true, force: true })
-        }
-      }
+      await session.close()
+      await stoppedServer
     })())
   }
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject)
-      server.listen(socket, resolve)
-    })
-    await chmod(socket, 0o600)
-    await writeFile(file, JSON.stringify(descriptor) + "\n", {
-      mode: 0o600,
-      flag: "wx",
-    })
-    return { file, descriptor, close }
-  } catch (error) {
-    await close()
-    throw error
-  }
+  return { server, close }
 }

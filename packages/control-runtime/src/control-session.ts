@@ -102,7 +102,7 @@ import { NativeRecordings, nativeRecordingRate } from "./native-recording.js"
 import { RecordingOptionsSchema } from "@mako/control/control"
 import { randomUUID } from "node:crypto"
 import { readFile, stat, writeFile } from "node:fs/promises"
-import { type Tool } from "@modelcontextprotocol/sdk/types.js"
+import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 
 export { BACKGROUND_INPUT_LADDER }
