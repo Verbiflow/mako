@@ -2119,16 +2119,11 @@ function bindIpc() {
     }
   )
 
-  handle("mako:open-url", (_e, url: string) => {
-    // Only ever http(s): `shell.openExternal` will happily run a `file://` or a
-    // custom scheme, and this is reached from data the app did not author.
-    if (!/^https?:\/\//i.test(url)) return
-    void shell.openExternal(url)
-  })
+  // Client calls, answered here only for the standalone window: the socket
+  // refuses them, and each client answers them itself (`contracts/client-calls.ts`).
+  handle("mako:open-url", (_e, url: string) => openLink(url))
 
-  handle("mako:copy", (_e, text: string) => {
-    clipboard.writeText(text)
-  })
+  handle("mako:copy", (_e, text: string) => presentMachine().copy(text))
 
   handle("mako:notify", (_e, notification: DesktopNotification) =>
     desktopNotifier.notify(window?.webContents.id ?? 0, notification)
@@ -2546,9 +2541,9 @@ app.whenReady().then(async () => {
       instanceId: crypto.randomUUID(),
       storageScope: basename(dirname(webSocket)),
       pid: process.pid,
-      version: app.getVersion(),
+      version: environment.version,
       devBuild: loadedDevBuild,
-      methods: Object.keys(hostCallInputs),
+      methods: socketCalls(hostChannels),
       previewSizing: true,
     }
     if (fixtureDesk) runtime.fixture = true

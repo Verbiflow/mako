@@ -46,6 +46,8 @@ const fixtureReads = [
   "mako:default-commit-prompt",
   /** Says telemetry is off on a fixture desk; answers from memory. */
   "mako:telemetry",
+  /** The desktop's notice of a wake the host's own clock also gives it; writes and starts nothing. */
+  "mako:machine-woke",
 ] as const
 
 export const fixtureDeskHostCalls: ReadonlySet<string> = new Set<string>(fixtureReads)

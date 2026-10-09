@@ -1,11 +1,14 @@
-import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, protocol, shell } from "electron"
+import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, protocol, shell, type IpcMainInvokeEvent } from "electron"
 import { WindowShutdown } from "./window-shutdown.js"
 import { createHash, randomUUID } from "node:crypto"
 import { cp, mkdir, access, mkdtemp, rename, rm } from "node:fs/promises"
+import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
-import { hostCallInputs } from "./contracts/host-call-inputs.js"
+import { hostCallInput, hostChannels } from "./contracts/host-call-inputs.js"
+import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "./contracts/client-calls.js"
+import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "./contracts/machine-offer.js"
 import { ensureRuntime, runtimeDataRoot } from "./runtime-service.js"
 import { invokeRuntime, invokeRuntimePreview, runtimeFile, subscribeRuntime } from "./runtime-connection.js"
 import { invokeWithRecovery, type RecoveryLink } from "./runtime-retry.js"
@@ -71,11 +74,73 @@ function requestCommand(command: "app.quit" | "app.updates"): void {
   }
 }
 
+/** Closes this client once every window has saved its draft; the shared host and its agents keep running. */
+function closeClient(): Promise<void> {
+  closingLocally = true
+  return draftShutdown.request([...clients.keys()].map(String), (requestId) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("mako:event", { type: "app-shutdown", requestId, action: "quit" })
+  }).then(() => { shuttingDown = true; app.quit() })
+}
+
+/**
+ * A signal comes from the system or a process manager, not a person, so the
+ * client closes as "Quit and keep agents running" does, without asking. A
+ * window that can't save its draft in time, or a second signal, ends it anyway.
+ *
+ * Called after `ready`, when Electron installs handlers that would ask through
+ * the quit dialog instead. As in `stopOnSignals`, listeners added earlier stay
+ * after this one, so signal-exit never finds itself alone and re-raises.
+ */
+function closeOnSignals(): void {
+  let signalled = false
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+    const earlier = process.listeners(signal)
+    process.removeAllListeners(signal)
+    process.on(signal, () => {
+      if (signalled) { app.exit(0); return }
+      signalled = true
+      hostLog("desktop", "closing on signal", { pid: process.pid, signal })
+      void closeClient().catch((error) => {
+        hostLog("desktop", "closing without saved drafts", { pid: process.pid, reason: error instanceof Error ? error.message : String(error) })
+        app.exit(0)
+      })
+    })
+    for (const listener of earlier) process.on(signal, listener)
+  }
+}
+
 function finishClientShutdown(): void {
   if (!shutdownAction || shuttingDown || BrowserWindow.getAllWindows().length) return
   shuttingDown = true
   if (shutdownAction === "restart") app.relaunch()
   app.quit()
+}
+
+/** What this client answers on its own Mac, never the shared host (`contracts/client-calls.ts`). */
+const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
+  "mako:open-url": async (_event, url) => {
+    const link = openableLink(url)
+    if (!link) throw new Error("Mako opens only http and https links")
+    await shell.openExternal(link)
+  },
+  "mako:copy": (_event, text) => { clipboard.writeText(text) },
+  "mako:notify": (event, notification) => desktopNotifier.notify(event.sender.id, notification),
+  "mako:notify-dismiss": (_event, subject) => { desktopNotifier.dismiss(subject) },
+  "mako:set-badge-count": (_event, count) => { desktopNotifier.setBadgeCount(count) },
+  "mako:notification-permission": () => desktopNotifier.permission(),
+  "mako:request-notification-permission": () => desktopNotifier.permission(),
+  "mako:open-preview-window": async () => { await openWindow(true) },
+  "mako:quit-client": (event) => {
+    if (shutdownAction) {
+      BrowserWindow.fromWebContents(event.sender)?.close()
+      finishClientShutdown()
+    } else if (!closingLocally) {
+      void closeClient().catch((error) => {
+        closingLocally = false
+        for (const window of BrowserWindow.getAllWindows()) window.webContents.send("mako:event", { type: "notice", level: "error", message: error instanceof Error ? error.message : "A draft could not be saved. Mako stayed open." })
+      })
+    }
+  },
 }
 
 async function openWindow(preview = false) {
@@ -235,32 +300,7 @@ async function start() {
       if (channel === "mako:crashes-dir") return crashesDir()
       if (channel === "mako:clear-crashes") return clearCrashes()
       if (channel === "mako:shutdown-ack" && draftShutdown.acknowledge(z.string().parse(args[0]), String(event.sender.id))) return
-      if (channel === "mako:quit-client") {
-        if (shutdownAction) {
-          BrowserWindow.fromWebContents(event.sender)?.close()
-          finishClientShutdown()
-        } else if (!closingLocally) {
-          closingLocally = true
-          void draftShutdown.request([...clients.keys()].map(String), (requestId) => {
-            for (const window of BrowserWindow.getAllWindows()) window.webContents.send("mako:event", { type: "app-shutdown", requestId, action: "quit" })
-          }).then(() => { shuttingDown = true; app.quit() }).catch((error) => {
-            closingLocally = false
-            for (const window of BrowserWindow.getAllWindows()) window.webContents.send("mako:event", { type: "notice", level: "error", message: error instanceof Error ? error.message : "A draft could not be saved. Mako stayed open." })
-          })
-        }
-        return
-      }
-      if (channel === "mako:open-preview-window") { await openWindow(true); return }
-      if (channel === "mako:copy") { clipboard.writeText(z.string().parse(args[0])); return }
-      if (channel === "mako:open-url") {
-        const url = z.url({ protocol: /^https?$/ }).parse(args[0])
-        await shell.openExternal(url)
-        return
-      }
-      if (channel === "mako:notify") return desktopNotifier.notify(event.sender.id, hostCallInputs["mako:notify"].parse(args)[0])
-      if (channel === "mako:notify-dismiss") { desktopNotifier.dismiss(z.string().parse(args[0])); return }
-      if (channel === "mako:set-badge-count") { desktopNotifier.setBadgeCount(z.number().parse(args[0])); return }
-      if (channel === "mako:notification-permission" || channel === "mako:request-notification-permission") return desktopNotifier.permission()
+      if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, event, hostCallInput(channel).parse(raw))
       if (channel === "mako:pick-folder") {
         const parent = BrowserWindow.fromWebContents(event.sender)
         const options: Electron.OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] }

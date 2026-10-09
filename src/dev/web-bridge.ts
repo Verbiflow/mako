@@ -7,7 +7,8 @@ import {
   type HostEvent,
   type TerminalEvent,
 } from "../../electron/shared.ts"
-import { hostCallInputs } from "../../electron/contracts/host-call-inputs.ts"
+import { hostCallInput } from "../../electron/contracts/host-call-inputs.ts"
+import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "../../electron/contracts/client-calls.ts"
 import { invokeWithRecovery } from "../../electron/runtime-retry.ts"
 import { hostCallReplay } from "../../electron/contracts/host-call-policy.ts"
 import { RuntimeDisconnectedError, HOST_OUTAGE_MESSAGE } from "../../electron/contracts/host-connection.ts"
@@ -189,29 +190,31 @@ export async function installWebBridge(): Promise<void> {
   const notifications = createWebNotificationChannels((event) => {
     for (const listener of events) listener(event)
   })
-  const answer = async (channel: string, args: unknown[]) => {
-    if (channel === "mako:open-preview-window") {
+  // Links, the clipboard and the preview window are this browser's too: the
+  // host may be another machine, or have no screen (`contracts/client-calls.ts`).
+  const clientAnswers: ClientAnswers<undefined> = {
+    "mako:open-url": (_page, url) => {
+      const link = openableLink(url)
+      if (!link) throw new Error("Mako opens only http and https links")
+      window.open(link, "_blank", "noopener,noreferrer")
+    },
+    "mako:copy": (_page, text) => navigator.clipboard.writeText(text),
+    "mako:notify": (_page, notification) => notifications.notify(notification),
+    "mako:notify-dismiss": (_page, subject) => { notifications.dismiss(subject) },
+    "mako:set-badge-count": (_page, count) => { notifications.badge(count) },
+    "mako:notification-permission": () => notifications.permission(),
+    "mako:request-notification-permission": () => notifications.requestPermission(),
+    "mako:open-preview-window": () => {
       const url = new URL(location.href)
       url.searchParams.set("preview", crypto.randomUUID())
       window.open(url.href, "_blank", "noopener")
-      return
-    }
-    if (channel === "mako:notify")
-      return notifications.notify(hostCallInputs["mako:notify"].parse(args)[0])
-    if (channel === "mako:notify-dismiss") {
-      notifications.dismiss(hostCallInputs["mako:notify-dismiss"].parse(args)[0])
-      return
-    }
-    if (channel === "mako:set-badge-count") {
-      notifications.badge(hostCallInputs["mako:set-badge-count"].parse(args)[0])
-      return
-    }
+    },
     // A tab cannot close itself, and the host's quit-client hides the desktop
     // windows. After a host restart this page reconnects on its own.
-    if (channel === "mako:quit-client") return
-    if (channel === "mako:notification-permission") return notifications.permission()
-    if (channel === "mako:request-notification-permission")
-      return notifications.requestPermission()
+    "mako:quit-client": () => {},
+  }
+  const answer = async (channel: string, args: unknown[]) => {
+    if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, undefined, hostCallInput(channel).parse(args))
     if (supported && !supported.has(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
     const value = await invokeHost(channel, args)
     if (channel === "mako:boot" && import.meta.env.MAKO_SOURCE_ROOT) return { ...z.record(z.string(), z.json()).parse(value), sourceRoot: import.meta.env.MAKO_SOURCE_ROOT }

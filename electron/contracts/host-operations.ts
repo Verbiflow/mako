@@ -10,7 +10,8 @@ import {
 } from "@mako/protocol"
 import { z } from "zod"
 import { FIXTURE_REFUSED_CODE } from "./fixture-desk-policy.js"
-import { hostCallInputs } from "./host-call-inputs.js"
+import { hostChannels, type HostChannel } from "./host-call-inputs.js"
+import { gatewayCalls } from "./client-calls.js"
 import { hostCallReplay, type HostCallReplay } from "./host-call-policy.js"
 import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./host-connection.js"
 import { RuntimeArgsSchema, type RuntimeCall, type RuntimeReply } from "./runtime.js"
@@ -22,21 +23,16 @@ import { RuntimeArgsSchema, type RuntimeCall, type RuntimeReply } from "./runtim
  */
 const PREFIX = "host."
 
-export type HostChannel = keyof typeof hostCallInputs
+export type { HostChannel }
 export type HostOperation = { channel: HostChannel; replay: HostCallReplay }
-
-function isHostChannel(channel: string): channel is HostChannel {
-  return Object.hasOwn(hostCallInputs, channel)
-}
 
 export function hostOperationName(channel: string): string {
   return PREFIX + channel.slice("mako:".length)
 }
 
-/** The host calls, by operation name, with what a client may do when one's answer is lost. */
+/** The host calls, by operation name, with what a client may do when one's answer is lost. Client calls and host-screen calls aren't operations: no client reaches another machine's screen. */
 export const hostOperations: ReadonlyMap<string, HostOperation> = new Map(
-  Object.keys(hostCallInputs)
-    .filter(isHostChannel)
+  gatewayCalls(hostChannels)
     .map((channel) => [hostOperationName(channel), { channel, replay: hostCallReplay(channel) }])
 )
 

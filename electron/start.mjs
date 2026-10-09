@@ -7,7 +7,8 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { appDataFolder, ensureRuntime, fixtureProfile, noteFixtureCheckout, runtimeDataRoot } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
-import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
+import { hostChannels } from "../dist-electron/contracts/host-call-inputs.js"
+import { socketCalls } from "../dist-electron/contracts/client-calls.js"
 import { fixtureDeskRefusal } from "../dist-electron/contracts/fixture-desk-policy.js"
 import { holdHostLease } from "../dist-electron/host-idle.js"
 import { join } from "node:path"
@@ -65,7 +66,7 @@ const socket = runtime.socket
 // implementation, so compare executable content before serving the renderer.
 const expectedBuild = shared ? undefined : devHostBuild(root)
 const missingOn = (info) =>
-  Object.keys(hostCallInputs).filter((method) => !info.methods.includes(method))
+  socketCalls(hostChannels).filter((method) => !info.methods.includes(method))
 const needsRestart = (info) => missingOn(info).length > 0 ||
   (expectedBuild !== undefined && info.devBuild !== expectedBuild) ||
   (fixture && info.fixture !== true)
