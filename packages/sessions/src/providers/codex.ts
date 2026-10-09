@@ -1249,6 +1249,9 @@ function translator(): CodexTranslator {
   const applyItem = (block: ToolBlock, item: CodexToolItem) => {
     itemized.add(block)
     if (item.input !== undefined) block.input = clip(item.input)
+    // A stopped call stays stopped: Codex can record the process it killed
+    // afterwards as a failed item exiting -1.
+    if (block.canceled) return
     // A completed item ended its call; one that printed nothing still finished.
     block.output = clip(item.output ?? "")
     if (item.error) block.error = true

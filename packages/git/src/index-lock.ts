@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { hostname } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { setTimeout as pause } from "node:timers/promises"
 import { z } from "zod"
 import { GitError } from "./errors.js"
@@ -32,11 +32,17 @@ function release(path: string, token: string): void {
 /** Exclusive creation publishes ownership before any asynchronous work starts. */
 function create(path: string): (() => void) | undefined {
   const owner: Owner = { owner: "mako-git-index", pid: process.pid, token: randomUUID(), host: hostname() }
-  try { writeFileSync(path, JSON.stringify(owner), { flag: "wx", mode: 0o600 }) }
-  catch (error) {
+  const prepared = `${path}.${owner.token}.lock`
+  writeFileSync(prepared, JSON.stringify(owner), { flag: "wx", mode: 0o600 })
+  try {
+    // The hard link publishes a complete owner atomically and fails if a lock
+    // exists. A process killed before publication leaves only its private
+    // preparation file, never an empty lock blocking the next writer.
+    linkSync(prepared, path)
+  } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") return undefined
     throw error
-  }
+  } finally { unlinkSync(prepared) }
   return () => release(path, owner.token)
 }
 
@@ -49,7 +55,7 @@ function create(path: string): (() => void) | undefined {
 function recover(path: string, depth = 0): boolean {
   const previous = readOwner(path)
   if (!previous || !dead(previous) || depth >= 8) return false
-  const guard = `${path}.recover-${previous.token}.lock`
+  const guard = join(dirname(path), `mako-index-recover-${previous.token}.lock`)
   let done = create(guard)
   if (!done && recover(guard, depth + 1)) done = create(guard)
   if (!done) return false
@@ -76,7 +82,9 @@ export async function withIndexWriteLock<T>(gitDir: string, action: () => Promis
   let done: (() => void) | undefined
   while (!(done = create(path))) {
     if (recover(path)) continue
-    if (!readOwner(path) || performance.now() >= deadline) throw busy()
+    // Unknown ownership is never reclaimed. It may be a legacy host still
+    // writing its owner record, so wait rather than failing at publication.
+    if (performance.now() >= deadline) throw busy()
     await pause(25)
   }
   try {
@@ -92,4 +100,12 @@ export async function withIndexWriteLock<T>(gitDir: string, action: () => Promis
     }
     return await action()
   } finally { done() }
+}
+
+/** Called inside the coordinator, for operations copying the real index and writing a private one. */
+export async function withReservedIndex<T>(gitDir: string, action: () => Promise<T>): Promise<T> {
+  const done = create(join(gitDir, "index.lock"))
+  if (!done) throw busy()
+  try { return await action() }
+  finally { done() }
 }

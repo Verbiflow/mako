@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { lstat, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { GitError } from "./errors.js"
-import { withIndexWriteLock } from "./index-lock.js"
+import { withIndexWriteLock, withReservedIndex } from "./index-lock.js"
 import { untrackedLines, worktreeLines, type LineCount } from "./lines.js"
 import { ObjectReader } from "./objects.js"
 import { previewBytes, readPreview, type Comparison, type Preview } from "./preview.js"
@@ -442,6 +442,14 @@ export class Repository {
     })
     this.writes = next.catch(() => undefined)
     return next
+  }
+
+  /**
+   * Reserves the real index while a checkpoint copies it and writes a private
+   * one. External Git writers are excluded; work must not write the reserved index.
+   */
+  withLockedIndex<T>(action: () => Promise<T>): Promise<T> {
+    return this.write(() => withReservedIndex(this.gitDir, action))
   }
 
   /** Resolves once every write already queued has finished. */

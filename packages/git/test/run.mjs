@@ -1,5 +1,8 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from "node:fs/promises"
+import { spawn } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { once } from "node:events"
+import { mkdir, mkdtemp, realpath, readFile, rm, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -40,7 +43,150 @@ async function fullEntries(root) {
   return parseStatus(result.stdout).entries
 }
 
+/** A separate host holding the same repository coordinator, with explicit ready/release handshakes. */
+async function lockHost(gitDir) {
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", `
+    import { withIndexWriteLock } from ${JSON.stringify(new URL("../dist/index.js", import.meta.url).href)};
+    await withIndexWriteLock(process.argv[1], async () => {
+      process.send("ready");
+      await new Promise(resolve => process.once("message", resolve));
+    });
+    process.disconnect();
+  `, gitDir], { stdio: ["ignore", "ignore", "pipe", "ipc"] })
+  let stderr = ""
+  child.stderr.on("data", data => { stderr += data })
+  const exited = once(child, "exit")
+  await Promise.race([
+    once(child, "message").then(([message]) => assert.equal(message, "ready")),
+    exited.then(() => { throw new Error(`Lock host exited before ready: ${stderr}`) }),
+  ])
+  return { child, exited }
+}
+
+async function stopHost({ child, exited }) {
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+  await exited
+}
+
 try {
+  await test("staging recovers only confirmed dead Mako owners, including interrupted recovery", async () => {
+    const root = await repository("dead-owner")
+    const repo = await openRepository(root)
+    await writeFile(join(root, "file"), "contents")
+    const host = await lockHost(repo.gitDir)
+    const pid = host.child.pid
+    await stopHost(host)
+    const owner = () => ({ owner: "mako-snapshots", pid, token: randomUUID() })
+    const abandoned = owner()
+    await writeFile(join(repo.gitDir, "index.lock"), JSON.stringify(abandoned))
+    await writeFile(join(repo.gitDir, "mako-snapshots.lock"), JSON.stringify(owner()))
+    const guards = []
+    let previous = abandoned
+    for (let depth = 0; depth < 6; depth++) {
+      const guard = `mako-index-recover-${previous.token}.lock`
+      guards.push(guard)
+      const interrupted = owner()
+      await writeFile(join(repo.gitDir, guard), JSON.stringify(interrupted))
+      previous = interrupted
+    }
+    await repo.stage(["file"])
+    assert.equal(await sh(root, "show", ":file"), "contents")
+    for (const name of ["index.lock", "mako-snapshots.lock", "mako-index-write.lock", ...guards]) {
+      await assert.rejects(readFile(join(repo.gitDir, name)), { code: "ENOENT" })
+    }
+  })
+
+  await test("foreign, malformed, remote-host and live owners remain untouched; a failed action runs once", async () => {
+    const root = await repository("foreign-lock")
+    const repo = await openRepository(root)
+    await writeFile(join(root, "file"), "contents")
+    const path = join(repo.gitDir, "index.lock")
+    for (const bytes of ["external git lock", "{", JSON.stringify({ owner: "someone-else", pid: process.pid, token: randomUUID() })]) {
+      await writeFile(path, bytes)
+      await assert.rejects(repo.stage(["file"]))
+      assert.equal(await readFile(path, "utf8"), bytes)
+    }
+    await unlink(path)
+    const elsewhere = await lockHost(repo.gitDir)
+    await stopHost(elsewhere)
+    for (const owner of [
+      { owner: "mako-snapshots", pid: process.pid, token: randomUUID() },
+      { owner: "mako-snapshots", pid: elsewhere.child.pid, token: randomUUID(), host: "another-machine.invalid" },
+    ]) {
+      const bytes = JSON.stringify(owner)
+      await writeFile(path, bytes)
+      let calls = 0
+      await assert.rejects(git.withIndexWriteLock(repo.gitDir, async () => { calls++ }, 50), /workspace is busy/)
+      assert.equal(calls, 0)
+      assert.equal(await readFile(path, "utf8"), bytes)
+      await unlink(path)
+    }
+    const foreign = join(repo.gitDir, "mako-index-write.lock")
+    await writeFile(foreign, "unrecognized owner")
+    await assert.rejects(git.withIndexWriteLock(repo.gitDir, async () => assert.fail("foreign coordination cannot be bypassed"), 50), /workspace is busy/)
+    assert.equal(await readFile(foreign, "utf8"), "unrecognized owner")
+    await unlink(foreign)
+    let calls = 0
+    await assert.rejects(git.withIndexWriteLock(repo.gitDir, async () => { calls++; throw new Error("mutation failed") }), /mutation failed/)
+    assert.equal(calls, 1)
+    await repo.stage(["file"])
+  })
+
+  await test("a checkpoint reserves the real index against external Git and releases it even on failure", async () => {
+    const root = await repository("reserved-index")
+    const repo = await openRepository(root)
+    await writeFile(join(root, "file"), "contents")
+    await assert.rejects(repo.withLockedIndex(async () => {
+      const owner = JSON.parse(await readFile(join(repo.gitDir, "index.lock"), "utf8"))
+      assert.equal(owner.owner, "mako-git-index")
+      assert.equal(owner.pid, process.pid)
+      await assert.rejects(sh(root, "add", "file"), /index.lock/)
+      throw new Error("checkpoint failed")
+    }), /checkpoint failed/)
+    await assert.rejects(readFile(join(repo.gitDir, "index.lock")), { code: "ENOENT" })
+    await repo.stage(["file"])
+    assert.equal(await sh(root, "show", ":file"), "contents")
+  })
+
+  await test("another host waits before staging and resumes after release; a crashed host is reclaimed", async () => {
+    const root = await repository("cross-host")
+    const repo = await openRepository(root)
+    await writeFile(join(root, "file"), "contents")
+    const host = await lockHost(repo.gitDir)
+    try {
+      let calls = 0
+      await assert.rejects(git.withIndexWriteLock(repo.gitDir, async () => { calls++ }, 50), /workspace is busy/)
+      assert.equal(calls, 0)
+      const staging = repo.stage(["file"])
+      host.child.send("release")
+      assert.equal((await host.exited)[0], 0)
+      await staging
+      assert.equal(await sh(root, "show", ":file"), "contents")
+    } finally { await stopHost(host) }
+    const crashed = await lockHost(repo.gitDir)
+    await stopHost(crashed)
+    await writeFile(join(root, "file"), "after crash")
+    await repo.stage(["file"])
+    assert.equal(await sh(root, "show", ":file"), "after crash")
+  })
+
+  await test("simultaneous reclaimers never remove the next host's lock", async () => {
+    const root = await repository("recovery-race")
+    const repo = await openRepository(root)
+    const deadHost = await lockHost(repo.gitDir)
+    await stopHost(deadHost)
+    const results = await Promise.allSettled(Array.from({ length: 8 }, async () => {
+      const host = await lockHost(repo.gitDir)
+      try {
+        const owner = JSON.parse(await readFile(join(repo.gitDir, "mako-index-write.lock"), "utf8"))
+        assert.equal(owner.pid, host.child.pid, "the current host still owns its lock")
+        host.child.send("release")
+        assert.equal((await host.exited)[0], 0)
+      } finally { await stopHost(host) }
+    }))
+    for (const result of results) if (result.status === "rejected") throw result.reason
+  })
+
   await test("porcelain v2 parses headers, changes, conflicts, untracked files and non-UTF-8 names", () => {
     const records = [
       "# branch.oid 0123456789012345678901234567890123456789",

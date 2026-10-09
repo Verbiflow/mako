@@ -71,6 +71,12 @@ export const SessionModelSchema = z.object({
   maxOutputTokens: z.number().optional(),
   options: z.array(ModelOptionSchema),
   variants: z.array(ModelVariantSchema).optional(),
+  /**
+   * The harness lists this model but refuses to start it, in a sentence the
+   * picker shows beside it. A choice of it can't send, and Mako's defaults
+   * pass over it.
+   */
+  unavailable: z.string().optional(),
 })
 export type SessionModel = z.infer<typeof SessionModelSchema>
 
@@ -85,10 +91,15 @@ export const SettingsPreferenceSchema = z.object({
 })
 export type SettingsPreference = z.infer<typeof SettingsPreferenceSchema>
 
-export interface SettingsIssue {
-  option: string
-  message: string
-}
+export type SettingsIssue =
+  | { kind: "option"; option: string; message: string }
+  /**
+   * A model chosen here (`override`) or in Settings (`saved`) that can't
+   * start: the catalog no longer offers it, or the harness refuses it.
+   * `instead` is the usable model the choice was covering.
+   */
+  | { kind: "model"; model: string; source: "override" | "saved"; message: string; instead?: string }
+export type ModelIssue = Extract<SettingsIssue, { kind: "model" }>
 
 export interface ResolvedSessionSettings {
   model: ResolvedSetting<string>

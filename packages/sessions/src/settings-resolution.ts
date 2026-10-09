@@ -4,6 +4,7 @@ import {
   optionDefault,
   settingsWithVariant,
   type ModelOption,
+  type ModelIssue,
   type ResolvedSessionSettings,
   type ResolvedSetting,
   type SessionModel,
@@ -65,6 +66,21 @@ export function resolveSessionSettings(
     settings: identity ? { model: identity } : {},
     issues: [],
   }
+  const refusal = modelLayer && identity ? modelRefusal(input.models, modelLayer.source, identity) : undefined
+  if (refusal && modelLayer && identity) {
+    const instead = expanded
+      .slice(expanded.indexOf(modelLayer) + 1)
+      .map((layer) => modelByIdentity(input.models, layer.settings.model))
+      .find((candidate) => candidate && !candidate.unavailable)
+    const issue: ModelIssue = {
+      kind: "model",
+      model: identity,
+      source: modelLayer.source === "saved" ? "saved" : "override",
+      message: refusal,
+    }
+    if (instead) issue.instead = instead.id
+    result.issues.push(issue)
+  }
   // Options from a different model must never bleed across a model change.
   const applicable = expanded.filter(
     (layer) =>
@@ -117,12 +133,14 @@ export function resolveSessionSettings(
     const source = selected?.source ?? carried?.source ?? "model-default"
     if (model && !option && source !== "session" && source !== "provider") {
       result.issues.push({
+        kind: "option",
         option: id,
         message: `${id} is not supported by ${model.label}.`,
       })
     }
     if (option && !optionAccepts(option, value)) {
       result.issues.push({
+        kind: "option",
         option: id,
         message: `${option.label} ${String(value)} is not supported by ${model?.label}.`,
       })
@@ -133,7 +151,7 @@ export function resolveSessionSettings(
       source !== "provider" &&
       source !== "model-default"
     ) {
-      result.issues.push({ option: id, message: option.disabledReason })
+      result.issues.push({ kind: "option", option: id, message: option.disabledReason })
     }
     if (
       input.phase === "turn" &&
@@ -141,6 +159,7 @@ export function resolveSessionSettings(
       source === "override"
     ) {
       result.issues.push({
+        kind: "option",
         option: id,
         message: `${option.label} can only be set when this provider starts a session.`,
       })
@@ -150,6 +169,19 @@ export function resolveSessionSettings(
     result.settings.options[id] = value
   }
   return result
+}
+
+/**
+ * Why a model chosen here or in Settings can't start. A session's own model
+ * and the harness's default are what the harness reported, so they stand;
+ * an empty catalog hasn't been read yet, so it says nothing.
+ */
+function modelRefusal(models: readonly SessionModel[], source: SettingSource, identity: string): string | undefined {
+  if (source !== "override" && source !== "saved") return undefined
+  if (!models.length) return undefined
+  const model = modelByIdentity(models, identity)
+  if (!model) return `${identity} isn't offered anymore. Choose another model.`
+  return model.unavailable ? `${model.label} can't start. ${model.unavailable}` : undefined
 }
 
 function carriedSpeed(
