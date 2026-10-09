@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { WorkspaceGit } from "../electron/host-git.ts"
-import { draftCommit, openRepository, type JsonSchema } from "@mako/git"
+import { draftCommit, LINE_COUNT_LIMIT, openRepository, type JsonSchema } from "@mako/git"
 
 /** What drafting a commit would send a model, from a model that only records it. */
 async function drafted(root: string, signal: AbortSignal) {
@@ -84,16 +84,16 @@ try {
   assert.equal((await git.diff("huge.txt")).preview?.kind, "unavailable")
   await assert.rejects(git.diff("../outside.txt"), /inside this repository/)
   await mkdir(join(root, "many"))
-  for (let offset = 0; offset < 600; offset += 20)
+  for (let offset = 0; offset <= LINE_COUNT_LIMIT; offset += 100)
     await Promise.all(
-      Array.from({ length: 20 }, (_, index) =>
+      Array.from({ length: 100 }, (_, index) =>
         writeFile(join(root, "many", `${offset + index}.txt`), "Change\n")
       )
     )
   const first = git.status()
   assert.equal(first, git.status(), "Concurrent status readers must share work")
   const status = await first
-  assert.ok(status.files.length >= 600)
+  assert.ok(status.files.length > LINE_COUNT_LIMIT)
   assert.ok(
     status.files.every((file) => file.insertions === null),
     "Large status snapshots must not read every patch just to count lines"
