@@ -3,7 +3,7 @@ import { heavy } from "./heavy-packages.js"
 import { hostEnvironment } from "./host-environment.js"
 import { processKeychain } from "./keychain.js"
 import { adoptingLegacy, aesSealer, fileSecrets, handedKey, legacyFiles, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
-import { chromiumSafeStorage, electronSecretEncryption, NO_ENCRYPTION, preferring, type SecretEncryption } from "./secure-storage.js"
+import { chromiumSafeStorage, NO_ENCRYPTION, preferring, type SecretEncryption } from "./secure-storage.js"
 
 /** How long a host in Node mode waits after it starts for the desktop's handover before reading the keychain itself. */
 const HANDOVER_GRACE_MS = 5_000
@@ -88,27 +88,47 @@ export function openHostSecrets({ userRoot, encryption, keychain = NO_ENCRYPTION
 
 const legacy: LegacyFiles[] = []
 let opened: HostSecrets | undefined
+let safeStorage: SecretEncryption | undefined
+
+/** Electron's `safeStorage`, which the Electron shell gives the host before any secret is read. */
+export function provideSafeStorage(encryption: SecretEncryption): void {
+  if (opened) throw new Error("The host's secrets opened before Electron's safeStorage was given")
+  safeStorage = encryption
+}
 
 function host(): HostSecrets {
   const environment = hostEnvironment()
   opened ??= openHostSecrets({
     userRoot: environment.userRoot,
-    encryption: electronSecretEncryption(),
-    // Electron's main process has `safeStorage`; reading its item again here would ask the person twice.
-    keychain: process.type === "browser" ? undefined : chromiumSafeStorage({ appName: environment.appName, keychain: processKeychain(() => heavy.keyring.load("keychain")) }),
+    encryption: safeStorage ?? NO_ENCRYPTION,
+    // A process with `safeStorage` reading its item again here would ask the person twice.
+    keychain: safeStorage ? undefined : chromiumSafeStorage({ appName: environment.appName, keychain: processKeychain(() => heavy.keyring.load("keychain")) }),
     legacy,
     handoverUntil: performance.timeOrigin + HANDOVER_GRACE_MS,
   })
   return opened
 }
 
-/** This host's one `Secrets`, every domain's. */
+/**
+ * This host's one `Secrets`, every domain's. It opens on its first use, not
+ * here: providers take it while the host's modules load, before the Electron
+ * shell gives `safeStorage`.
+ */
 export function hostSecrets(): Secrets {
-  return host().secrets
+  return {
+    durable: () => host().secrets.durable(),
+    read: (kind, name) => host().secrets.read(kind, name),
+    write: (kind, name, value, options) => host().secrets.write(kind, name, value, options),
+    delete: (kind, name) => host().secrets.delete(kind, name),
+    list: (kind) => host().secrets.list(kind),
+  }
 }
 
 export function hostSecretKeyHandover(): SecretKeyHandover {
-  return host().handover
+  return {
+    wanted: () => host().handover.wanted(),
+    offer: (key) => host().handover.offer(key),
+  }
 }
 
 /** Where a domain's older builds kept its secrets; declared as it's installed, before it reads them. */
