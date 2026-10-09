@@ -18,13 +18,18 @@ import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { breadcrumb, clearCrashes, crashesDir, installCrashReporting, listCrashes, record } from "./crash.js"
+import { electronNativeCrashes } from "./crash-electron.js"
 import { flushHostLog, hostLog, installHostLog } from "./host-log.js"
 import { watchRendererHealth } from "./renderer-health.js"
 import { buildIdentity } from "./build-identity.js"
 import { userRootFor } from "./host-environment.js"
 import { dataKeyPath } from "./host-secrets.js"
 import { SecretKeyLink } from "./secret-key-link.js"
-import { electronSecretEncryption } from "./secure-storage.js"
+import { electronSecretEncryption } from "./secure-storage-electron.js"
+import { DesktopLink } from "./desktop-link.js"
+import { desktopAnswers } from "./desktop-answers-electron.js"
+import { deskUrlPolicy } from "./desk-browser-policy.js"
+import { guardDeskNavigation } from "./desk-browser-navigation.js"
 
 const directory = dirname(fileURLToPath(import.meta.url))
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
@@ -34,7 +39,7 @@ if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(flavor)) throw new Error("Invalid Mako client
 const uiRoot = `${dataRoot}-ui-${flavor}`
 app.setPath("userData", uiRoot)
 installHostLog(join(uiRoot, "logs", "desktop.log"))
-installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}` })
+installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}`, native: electronNativeCrashes })
 hostLog("desktop", "starting", { pid: process.pid, build: buildIdentity()?.id, version: app.getVersion(), dataRoot, uiRoot })
 protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
@@ -44,6 +49,10 @@ const clients = new Map<number, { id: string; connected: boolean; link: Recovery
 const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
 let secretKeys: SecretKeyLink | undefined
+let desktopLink: DesktopLink | undefined
+/** Hidden windows hosts asked for, for agents to drive: never a window the person keeps open. */
+const agentViews = new Set<number>()
+const personWindows = () => BrowserWindow.getAllWindows().filter((window) => !agentViews.has(window.webContents.id))
 let shuttingDown = false
 let pendingCommand: "app.quit" | "app.updates" | null = null
 let shutdownAction: "quit" | "install" | "restart" | null = null
@@ -58,7 +67,7 @@ let closingLocally = false
 const desktopNotifier = electronDesktopNotifier({
   idleBadge: "",
   activate: (windowId, activation) => {
-    const target = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.id === windowId) ?? BrowserWindow.getAllWindows()[0]
+    const target = personWindows().find((candidate) => candidate.webContents.id === windowId) ?? personWindows()[0]
     if (!target || target.isDestroyed()) return
     surfaceWindow(target)
     target.webContents.send("mako:event", { type: "notification-activated", ...activation })
@@ -66,7 +75,7 @@ const desktopNotifier = electronDesktopNotifier({
 })
 
 function requestCommand(command: "app.quit" | "app.updates"): void {
-  const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  const window = BrowserWindow.getFocusedWindow() ?? personWindows()[0]
   if (window && !window.webContents.isLoadingMainFrame()) { window.show(); window.webContents.send("mako:event", { type: "app-command", command }) }
   else {
     pendingCommand = command
@@ -77,8 +86,8 @@ function requestCommand(command: "app.quit" | "app.updates"): void {
 /** Closes this client once every window has saved its draft; the shared host and its agents keep running. */
 function closeClient(): Promise<void> {
   closingLocally = true
-  return draftShutdown.request([...clients.keys()].map(String), (requestId) => {
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("mako:event", { type: "app-shutdown", requestId, action: "quit" })
+  return draftShutdown.request([...clients.keys()].filter((id) => !agentViews.has(id)).map(String), (requestId) => {
+    for (const window of personWindows()) window.webContents.send("mako:event", { type: "app-shutdown", requestId, action: "quit" })
   }).then(() => { shuttingDown = true; app.quit() })
 }
 
@@ -110,7 +119,7 @@ function closeOnSignals(): void {
 }
 
 function finishClientShutdown(): void {
-  if (!shutdownAction || shuttingDown || BrowserWindow.getAllWindows().length) return
+  if (!shutdownAction || shuttingDown || personWindows().length) return
   shuttingDown = true
   if (shutdownAction === "restart") app.relaunch()
   app.quit()
@@ -129,7 +138,7 @@ const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
   "mako:set-badge-count": (_event, count) => { desktopNotifier.setBadgeCount(count) },
   "mako:notification-permission": () => desktopNotifier.permission(),
   "mako:request-notification-permission": () => desktopNotifier.permission(),
-  "mako:open-preview-window": async () => { await openWindow(true) },
+  "mako:open-preview-window": async () => { await openWindow({ preview: true }) },
   "mako:quit-client": (event) => {
     if (shutdownAction) {
       BrowserWindow.fromWebContents(event.sender)?.close()
@@ -143,23 +152,46 @@ const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
   },
 }
 
-async function openWindow(preview = false) {
+const devServerUrl = () => process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"
+const isDeskUrl = (url: string) => deskUrlPolicy({ devServerUrl: isDev ? devServerUrl() : null })(url)
+
+/**
+ * A window on the host. `preview` keeps its own drafts; `agentView` is a
+ * hidden window a host asked for, with that preview id, which agents drive
+ * through the host (`desktop-answers-electron.ts`). It keeps painting, never
+ * shows, and doesn't hold a profile host awake.
+ */
+async function openWindow(options: { preview?: boolean; agentView?: string } = {}) {
   if (closingLocally || shutdownAction || shuttingDown) throw new Error("Mako is closing safely. Open another window after it finishes.")
   const id = randomUUID()
-  const window = new BrowserWindow({
-    title: isDev ? "Mako Dev" : "Mako", width: 1440, height: 960, minWidth: 640, minHeight: 540,
-    // Painted before the renderer is: a resize or the first frame never flashes white.
-    backgroundColor: DESK_BACKGROUND,
-    show: false, titleBarStyle: "hiddenInset", trafficLightPosition: { ...DESK_TRAFFIC_LIGHTS },
-    webPreferences: { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`] },
-  })
-  watchRendererHealth(window, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
+  const agentView = options.agentView
+  const webPreferences = { preload: join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, additionalArguments: [`--mako-client=${id}`] }
+  const window = agentView
+    ? new BrowserWindow({
+      title: isDev ? "Mako Dev Agent View" : "Mako Agent View", width: 1600, height: 1000, show: false,
+      backgroundColor: DESK_BACKGROUND, enableLargerThanScreen: true,
+      // Agents read this window through the protocol; it must keep painting.
+      webPreferences: { ...webPreferences, backgroundThrottling: false },
+    })
+    : new BrowserWindow({
+      title: isDev ? "Mako Dev" : "Mako", width: 1440, height: 960, minWidth: 640, minHeight: 540,
+      // Painted before the renderer is: a resize or the first frame never flashes white.
+      backgroundColor: DESK_BACKGROUND,
+      show: false, titleBarStyle: "hiddenInset", trafficLightPosition: { ...DESK_TRAFFIC_LIGHTS },
+      webPreferences,
+    })
+  if (agentView) {
+    // macOS clamps a new window to the display; ask for the size again.
+    window.setContentSize(1600, 1000)
+    agentViews.add(window.webContents.id)
+    guardDeskNavigation(window.webContents, isDeskUrl, (url) => hostLog("desktop", "blocked agent view navigation", { url }))
+  } else watchRendererHealth(window, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
   // Shown on the first paint rather than on load: `loadURL` settles on
   // `did-finish-load`, which can precede the first frame, and `--background`
   // keeps test windows hidden until something activates them explicitly.
   let shown = false
   const reveal = () => {
-    if (shown || window.isDestroyed() || app.commandLine.hasSwitch("background")) return
+    if (agentView || shown || window.isDestroyed() || app.commandLine.hasSwitch("background")) return
     shown = true
     window.show()
     window.maximize()
@@ -226,21 +258,35 @@ async function openWindow(preview = false) {
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
-    }, { history: true })
+    }, { history: true, observer: Boolean(agentView) })
   }
   connect()
-  window.once("closed", () => { client.dispose(); clients.delete(rendererId); finishClientShutdown() })
+  window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); finishClientShutdown() })
   window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//i.test(url)) void shell.openExternal(url); return { action: "deny" } })
   const query = new URLSearchParams({ runtime: "shared" })
   if (process.env.MAKO_PROFILE) query.set("profile", process.env.MAKO_PROFILE)
-  if (preview) query.set("preview", id)
-  if (isDev) {
-    const url = new URL(process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173")
-    for (const [key, value] of query) url.searchParams.set(key, value)
-    await window.loadURL(url.href)
-  } else await window.loadURL(deskUrl(Object.fromEntries(query)))
+  if (options.preview) query.set("preview", id)
+  if (agentView) query.set("preview", agentView)
+  try {
+    if (isDev) {
+      const url = new URL(devServerUrl())
+      for (const [key, value] of query) url.searchParams.set(key, value)
+      await window.loadURL(url.href)
+    } else await window.loadURL(deskUrl(Object.fromEntries(query)))
+  } catch (error) {
+    if (agentView) window.destroy()
+    throw error
+  }
   reveal()
   return window
+}
+
+/** The window in front, for a macOS permission prompt. */
+function focusForPermission(): void {
+  const window = BrowserWindow.getFocusedWindow() ?? personWindows()[0]
+  window?.show()
+  window?.focus()
+  app.focus({ steal: true })
 }
 
 async function start() {
@@ -266,6 +312,10 @@ async function start() {
   // Before any window reads a secret: a host under the Helper in Node mode has no keychain of its own.
   secretKeys = new SecretKeyLink(runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
   await secretKeys.attached()
+  // What only this process can do for a host under Node: permissions, window capture, and agents' windows.
+  const answers = desktopAnswers({ focus: focusForPermission, agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })
+  desktopLink = new DesktopLink(() => runtime.socket, answers.handlers, answers.forget)
+  desktopLink.start()
   powerMonitor.on("shutdown", () => { shuttingDown = true })
   // The host also notices sleep from its clock; these make the wake immediate and add the screen unlock.
   /** The desktop process's own calls, which belong to no window. */
@@ -327,7 +377,7 @@ async function start() {
     { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
   ]))
   await openWindow()
-  app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) void openWindow() })
+  app.on("activate", () => { if (!personWindows().length) void openWindow() })
 }
 
 app.on("before-quit", (event) => {
@@ -338,6 +388,7 @@ app.on("before-quit", (event) => {
   }
   desktopNotifier.dispose()
   secretKeys?.dispose()
+  desktopLink?.dispose()
   for (const client of clients.values()) client.dispose()
 })
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit() })
