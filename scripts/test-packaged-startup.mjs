@@ -36,10 +36,8 @@ for (const key of [
   "ELECTRON_RUN_AS_NODE",
   "MAKO_PROFILE",
   "MAKO_PROD",
-  "MAKO_STANDALONE",
-  "MAKO_HOST_ONLY",
-  "MAKO_WEB_ONLY",
   "MAKO_WEB_SOCKET",
+  "MAKO_HOST_EXECUTABLE",
   "VITE_DEV_SERVER_URL",
 ])
   delete env[key]
@@ -164,7 +162,7 @@ async function launch() {
   assert.notEqual(
     host.pid,
     child.clientPid,
-    "The test must exercise the separate packaged host, not standalone mode"
+    "The desktop must start the packaged host as its own process"
   )
   const target = await until(async () => {
     let port = debugPort
