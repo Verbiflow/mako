@@ -8,7 +8,7 @@ export type ProviderLaunchPhase =
   | "mcp-preparation" | "observation" | "spawn" | "handshake"
   | "authentication" | "human-sign-in" | "model-discovery"
   | "session-open" | "session-resume" | "session-fork" | "settings"
-  | "sdk-initialization"
+  | "sdk-load" | "sdk-initialization"
 
 export type ProviderLaunchRecord = {
   provider: string
