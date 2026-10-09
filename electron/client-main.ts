@@ -9,8 +9,10 @@ import { z } from "zod"
 import { hostCallInput, hostChannels } from "./contracts/host-call-inputs.js"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "./contracts/client-calls.js"
 import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "./contracts/machine-offer.js"
-import { ensureRuntime, runtimeDataRoot } from "./runtime-service.js"
-import { invokeRuntime, invokeRuntimePreview, runtimeFile, subscribeRuntime } from "./runtime-connection.js"
+import { AGENT_VIEWS_ENV, type DesktopRole } from "./contracts/desktop-channel.js"
+import { FixtureDeskRefusedError, fixtureDeskRefusal } from "./contracts/fixture-desk-policy.js"
+import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "./runtime-service.js"
+import { invokeRuntime, invokeRuntimePreview, runtimeFile, settleRuntime, subscribeRuntime } from "./runtime-connection.js"
 import { invokeWithRecovery, type RecoveryLink } from "./runtime-retry.js"
 import { HOST_OUTAGE_MESSAGE } from "./contracts/host-connection.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
@@ -27,16 +29,29 @@ import { dataKeyPath } from "./host-secrets.js"
 import { SecretKeyLink } from "./secret-key-link.js"
 import { electronSecretEncryption } from "./secure-storage-electron.js"
 import { DesktopLink } from "./desktop-link.js"
-import { desktopAnswers } from "./desktop-answers-electron.js"
+import { deskPageAnswers, machineAnswers } from "./desktop-answers-electron.js"
+import { desktopUpdates, type DesktopUpdates } from "./desktop-updates-electron.js"
+import { packagedDistribution } from "./distribution.js"
 import { deskUrlPolicy } from "./desk-browser-policy.js"
 import { guardDeskNavigation } from "./desk-browser-navigation.js"
+import { installAutomation } from "./automation.js"
 
 const directory = dirname(fileURLToPath(import.meta.url))
+/**
+ * The app a person opened, or the agent views app a host started to make
+ * the desk windows agents drive while no desktop is open (`agent-views.ts`):
+ * no Dock icon, no window of its own, nothing about the person's Mac, and it
+ * never starts a host.
+ */
+const role: DesktopRole = process.env[AGENT_VIEWS_ENV] === "1" ? "agent-views" : "desktop"
+/** The agent views app ends itself once it has had no window this long. */
+const AGENT_VIEWS_IDLE_MS = 60_000
 const isDev = !app.isPackaged && !process.env.MAKO_PROD
 const dataRoot = runtimeDataRoot(app.getPath("appData"), process.env)
-const flavor = process.env.MAKO_CLIENT_ID ?? (isDev ? `dev-${createHash("sha256").update(app.getAppPath()).digest("hex").slice(0, 12)}` : "desktop")
-if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(flavor)) throw new Error("Invalid Mako client identity")
-const uiRoot = `${dataRoot}-ui-${flavor}`
+const flavor = role === "agent-views"
+  ? AGENT_VIEWS_CLIENT
+  : process.env.MAKO_CLIENT_ID ?? (isDev ? `dev-${createHash("sha256").update(app.getAppPath()).digest("hex").slice(0, 12)}` : "desktop")
+const uiRoot = clientRoot(dataRoot, flavor)
 app.setPath("userData", uiRoot)
 installHostLog(join(uiRoot, "logs", "desktop.log"))
 installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}`, native: electronNativeCrashes })
@@ -50,6 +65,8 @@ const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
 let secretKeys: SecretKeyLink | undefined
 let desktopLink: DesktopLink | undefined
+let updates: DesktopUpdates | undefined
+let agentViewsIdle: ReturnType<typeof setTimeout> | undefined
 /** Hidden windows hosts asked for, for agents to drive: never a window the person keeps open. */
 const agentViews = new Set<number>()
 const personWindows = () => BrowserWindow.getAllWindows().filter((window) => !agentViews.has(window.webContents.id))
@@ -97,8 +114,11 @@ function closeClient(): Promise<void> {
  * window that can't save its draft in time, or a second signal, ends it anyway.
  *
  * Called after `ready`, when Electron installs handlers that would ask through
- * the quit dialog instead. As in `stopOnSignals`, listeners added earlier stay
- * after this one, so signal-exit never finds itself alone and re-raises.
+ * the quit dialog instead. Node takes a signal back from Electron only when
+ * the signal's first listener is added, and signal-exit (through
+ * proper-lockfile) listened while modules loaded, so every listener is
+ * removed and added again, after this one, so signal-exit never finds itself
+ * alone and re-raises.
  */
 function closeOnSignals(): void {
   let signalled = false
@@ -120,6 +140,8 @@ function closeOnSignals(): void {
 
 function finishClientShutdown(): void {
   if (!shutdownAction || shuttingDown || personWindows().length) return
+  // This app's own update: the host asks for the install once its work has stopped (`update-install`).
+  if (shutdownAction === "install" && updates?.ready()) return
   shuttingDown = true
   if (shutdownAction === "restart") app.relaunch()
   app.quit()
@@ -150,6 +172,19 @@ const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
       })
     }
   },
+}
+
+/** The agent views app's end: no window left to drive for a while, or its host let it go. */
+function leaveAgentViews(reason: string): void {
+  hostLog("desktop", "agent views app leaving", { pid: process.pid, reason })
+  shuttingDown = true
+  app.quit()
+}
+
+function watchAgentViewsIdle(): void {
+  clearTimeout(agentViewsIdle)
+  if (role === "agent-views" && agentViews.size === 0)
+    agentViewsIdle = setTimeout(() => leaveAgentViews("no window for a minute"), AGENT_VIEWS_IDLE_MS)
 }
 
 const devServerUrl = () => process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"
@@ -184,6 +219,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     // macOS clamps a new window to the display; ask for the size again.
     window.setContentSize(1600, 1000)
     agentViews.add(window.webContents.id)
+    clearTimeout(agentViewsIdle)
     guardDeskNavigation(window.webContents, isDeskUrl, (url) => hostLog("desktop", "blocked agent view navigation", { url }))
   } else watchRendererHealth(window, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
   // Shown on the first paint rather than on load: `loadURL` settles on
@@ -252,7 +288,8 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
       }
     }, () => {
       disconnected()
-      if (closed || window.isDestroyed()) return
+      // The agent views app never starts a host; its link ends with this one and it leaves.
+      if (closed || window.isDestroyed() || role === "agent-views") return
       const retry = () => {
         if (closed || shuttingDown || shutdownAction) return
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
@@ -261,8 +298,9 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     }, { history: true, observer: Boolean(agentView) })
   }
   connect()
-  window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); finishClientShutdown() })
+  window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
   window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//i.test(url)) void shell.openExternal(url); return { action: "deny" } })
+  if (!agentView) installAutomation(window, isDev)
   const query = new URLSearchParams({ runtime: "shared" })
   if (process.env.MAKO_PROFILE) query.set("profile", process.env.MAKO_PROFILE)
   if (options.preview) query.set("preview", id)
@@ -291,6 +329,7 @@ function focusForPermission(): void {
 
 async function start() {
   if (!app.requestSingleInstanceLock()) { app.exit(0); return }
+  if (role === "agent-views") return startAgentViews()
   app.on("second-instance", () => { if (runtime) void openWindow() })
   runtime = await ensureRuntime(launch)
   if (!isDev) {
@@ -309,13 +348,16 @@ async function start() {
   }
   await app.whenReady()
   closeOnSignals()
-  // Before any window reads a secret: a host under the Helper in Node mode has no keychain of its own.
+  // Before any window reads a secret: the host runs as Node and has no `safeStorage` of its own.
   secretKeys = new SecretKeyLink(runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
   await secretKeys.attached()
-  // What only this process can do for a host under Node: permissions, window capture, and agents' windows.
-  const answers = desktopAnswers({ focus: focusForPermission, agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })
-  desktopLink = new DesktopLink(() => runtime.socket, answers.handlers, answers.forget)
-  desktopLink.start()
+  const updater = desktopUpdates({
+    version: app.getVersion(),
+    supported: app.isPackaged && packagedDistribution(app.getAppPath()) === "signed",
+    quitting: () => { shuttingDown = true },
+    changed: (state) => desktopLink?.frame({ kind: "update", state }),
+  })
+  updates = updater
   powerMonitor.on("shutdown", () => { shuttingDown = true })
   // The host also notices sleep from its clock; these make the wake immediate and add the screen unlock.
   /** The desktop process's own calls, which belong to no window. */
@@ -326,6 +368,58 @@ async function start() {
   }
   powerMonitor.on("resume", woke("resume"))
   powerMonitor.on("unlock-screen", woke("unlock-screen"))
+  await serveWindows()
+  // What only this process can do for the host: Mako.app's grants, window capture, agents' windows and its own update.
+  const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })
+  desktopLink = new DesktopLink({
+    socket: () => runtime.socket,
+    role,
+    handlers: {
+      ...machineAnswers(focusForPermission),
+      ...pages.handlers,
+      "update-check": () => updater.check(),
+      "update-install": async () => { updater.install(); return null },
+    },
+    attached: () => desktopLink?.frame({ kind: "update", state: updater.state() }),
+    detached: pages.forget,
+  })
+  desktopLink.start()
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: "Mako", submenu: [{ role: "about" }, { label: "Updates…", click: () => requestCommand("app.updates") }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
+    { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
+  ]))
+  await openWindow()
+  app.on("activate", () => { if (!personWindows().length) void openWindow() })
+}
+
+/** The agent views app: windows for the host that started it, while it's there, and nothing for a person. */
+async function startAgentViews() {
+  app.dock?.hide()
+  const location = runtimeLocation(dataRoot)
+  const probe = await settleRuntime(location.socket)
+  if (probe.state !== "ready") {
+    hostLog("desktop", "agent views app leaving", { pid: process.pid, reason: "its host is gone" })
+    app.exit(0)
+    return
+  }
+  runtime = { ...location, info: probe.info }
+  await app.whenReady()
+  closeOnSignals()
+  await serveWindows()
+  const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })
+  desktopLink = new DesktopLink({
+    socket: () => runtime.socket,
+    role,
+    handlers: pages.handlers,
+    detached: pages.forget,
+    finished: () => leaveAgentViews("its host let it go"),
+  })
+  desktopLink.start()
+  watchAgentViewsIdle()
+}
+
+/** What every window of this process is served: the host's files, and its calls through the socket. */
+async function serveWindows() {
   protocol.handle("mako-file", (request) => runtimeFile(runtime.socket, request))
   if (!isDev) {
     serveDesk(rendererBundle, (request) => runtimeFile(runtime.socket, request))
@@ -335,6 +429,9 @@ async function start() {
   for (const channel of hostChannels) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
       const args = hostCallInput(channel).parse(raw)
+      // A window is a page: a fixture desk refuses it what it refuses a page in a browser (`fixture-desk-policy.ts`).
+      const refusal = runtime.info.fixture ? fixtureDeskRefusal(channel) : undefined
+      if (refusal) throw new FixtureDeskRefusedError(refusal)
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
       breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
@@ -372,22 +469,18 @@ async function start() {
       return result
     })
   }
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: "Mako", submenu: [{ role: "about" }, { label: "Updates…", click: () => requestCommand("app.updates") }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
-    { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
-  ]))
-  await openWindow()
-  app.on("activate", () => { if (!personWindows().length) void openWindow() })
 }
 
 app.on("before-quit", (event) => {
-  if (!shuttingDown) {
+  // A quit the system asks the agent views app for needs no window's answer.
+  if (!shuttingDown && role === "desktop") {
     event.preventDefault()
     requestCommand("app.quit")
     return
   }
   desktopNotifier.dispose()
   secretKeys?.dispose()
+  updates?.dispose()
   desktopLink?.dispose()
   for (const client of clients.values()) client.dispose()
 })
@@ -399,6 +492,8 @@ app.on("will-quit", () => {
 void start().catch(async (error) => {
   record("main-rejection", error, "startup")
   await flushHostLog()
+  // Nobody is looking at the agent views app; the host tells the agent that asked.
+  if (role === "agent-views") app.exit(1)
   await app.whenReady()
   dialog.showErrorBox("Mako could not attach to its shared host", error instanceof Error ? error.message : "Shared host startup failed")
   app.exit(1)

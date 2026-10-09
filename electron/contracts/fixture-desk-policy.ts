@@ -2,10 +2,10 @@
  * The host calls a fixture desk may make.
  *
  * A fixture host runs Mako's interface on a dedicated profile for agents to
- * look at. Every client of it (its own hidden desk windows, Electron windows
- * on its socket and browser pages behind the dev proxy) reaches the same
- * handler table, and that table refuses anything not listed here before
- * arguments are parsed. Each entry was read: it answers from memory or the
+ * look at. Every client of it (the desktop's and the agent views app's
+ * windows, and browser pages behind the dev proxy) reaches the same handler
+ * table on its socket, and that table refuses anything not listed here before
+ * arguments are parsed. Each page client refuses the same calls itself first. Each entry was read: it answers from memory or the
  * profile's own stores and starts no provider, process, network request or
  * write. Reads that refresh from a provider, run git, or probe browsers,
  * accounts or applications are left out.
@@ -69,7 +69,7 @@ export const fixtureCloudHostCalls: ReadonlySet<string> = new Set<string>([
 /**
  * Calls the launcher makes on the host's socket to replace a fixture host
  * built from older source. They stop only that host. Pages never get them:
- * the dev proxy refuses them and in-process windows are not on the socket.
+ * the dev proxy and the desktop's windows refuse them before the socket.
  */
 export const fixtureLauncherHostCalls: ReadonlySet<string> = new Set<string>([
   "mako:lifecycle-command",
