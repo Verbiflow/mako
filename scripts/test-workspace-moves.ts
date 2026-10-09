@@ -99,13 +99,19 @@ try {
   const announced: WorkspaceMovesState[] = []
   const moved: string[] = []
   const failures: string[] = []
+  const companions = new Map<string, string[]>()
   const deps = {
     file,
     source: (id: string) => sources.get(id),
+    companions: (id: string) => companions.get(id) ?? [],
     place: (id: string, cwd: string) => moveablePlace(worktrees, id, cwd),
     move: async (id: string) => {
       moved.push(id)
       if (id === "broken") throw new Error("prepare failed")
+    },
+    follow: async (id: string) => {
+      moved.push(`${id} follows`)
+      if (id === "stuck") throw new Error("“Stuck” stayed in the main checkout")
     },
     announce: (state: WorkspaceMovesState) => announced.push(state),
     failed: (_id: string, message: string) => failures.push(message),
@@ -166,6 +172,28 @@ try {
   await delay(0)
   assert.deepEqual(failures, ["prepare failed"])
   assert.equal(moves.answerFor("broken"), undefined)
+
+  // The whole Thread moves: once the asker's turn and every companion's have ended, the asker first, then each companion.
+  moved.length = 0
+  failures.length = 0
+  sources.set("lead", { cwd: project, harness: "codex", busy: true })
+  sources.set("mate", { cwd: join(project, "web"), harness: "claude", busy: true })
+  sources.set("stuck", { cwd: project, harness: "grok", busy: false })
+  companions.set("lead", ["mate", "stuck"])
+  assert.match(await moves.ask("lead"), /When this turn and those of this Thread's 2 other Sessions here end, Mako moves them all/)
+  moves.answer(moves.state().requests.find((candidate) => candidate.conversationId === "lead")!.id, "allow")
+  sources.set("lead", { ...sources.get("lead")!, busy: false })
+  moves.settled("lead")
+  assert.deepEqual(moved, [], "a companion mid-turn holds the move")
+  sources.set("mate", { ...sources.get("mate")!, busy: false })
+  moves.settled("mate")
+  assert.equal(moves.answerFor("mate"), "moving", "a companion's status says it's moving")
+  await delay(0)
+  await delay(0)
+  assert.deepEqual(moved, ["lead", "mate follows", "stuck follows"])
+  assert.deepEqual(failures, ["“Stuck” stayed in the main checkout"], "a companion that can't follow is reported; the others still move")
+  assert.equal(moves.answerFor("lead"), undefined)
+  companions.clear()
 
   await assert.rejects(moves.ask("gone"), /isn't running this conversation/)
   sources.delete("e")

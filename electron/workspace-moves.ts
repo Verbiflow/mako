@@ -18,9 +18,13 @@ interface Deps {
   /** Where "Always allow" is remembered. */
   file: string
   source(conversationId: string): MoveSource | undefined
+  /** The Thread's other open Sessions in the same checkout, which move with this one. */
+  companions(conversationId: string): string[]
   place(conversationId: string, cwd: string): Promise<MovePlace>
   /** Carry the Session onto its Thread's own branch; its turn has ended. */
   move(conversationId: string): Promise<void>
+  /** Carry a companion into the worktree the move made, without starting a turn. */
+  follow(conversationId: string): Promise<void>
   announce(state: WorkspaceMovesState): void
   failed(conversationId: string, message: string): void
 }
@@ -41,9 +45,10 @@ function remembered(file: string): string[] {
  * An agent asks through Mako's workspace tools and gets its answer at once:
  * the tool never waits on the user, because harnesses give MCP calls a
  * minute or so. The user answers in the composer, once or for the whole
- * project, and an allowed move is carried out when the agent's turn ends,
- * so nothing is pulled from under a running turn. An agent that makes its
- * own worktree instead is left to it.
+ * project. The whole Thread moves: an allowed move is carried out once the
+ * agent's turn and every companion's have ended, so nothing is pulled from
+ * under a running turn, and the companions follow into the same worktree.
+ * An agent that makes its own worktree instead is left to it.
  */
 export class WorkspaceMoves {
   private readonly requests = new Map<string, WorkspaceMoveRequest>()
@@ -89,12 +94,16 @@ export class WorkspaceMoves {
       }
       if (source.title) request.title = source.title
       if (place.joins) request.joins = place.joins
+      const companions = this.deps.companions(conversationId).length
+      if (companions) request.companions = companions
       this.requests.set(conversationId, request)
       this.announce()
     }
     const where = request.joins ? `into this Thread's worktree, on ${request.joins}` : "into a new worktree for this Thread, on a branch of its own"
     const carried = request.changed ? `, with the ${request.changed === 1 ? "uncommitted file" : `${request.changed} uncommitted files`} in this checkout` : ""
-    const then = `When this turn ends, Mako moves the Session ${where}${carried}, and sends you a message there to carry on. Finish this turn now: make no further edits here, and tell the user you'll continue in the worktree.`
+    const others = request.companions ?? 0
+    const when = others ? `When this turn and those of this Thread's ${others === 1 ? "other Session" : `${others} other Sessions`} here end, Mako moves them all` : "When this turn ends, Mako moves the Session"
+    const then = `${when} ${where}${carried}, and sends you a message there to carry on. Finish this turn now: make no further edits here, and tell the user you'll continue in the worktree.`
     return request.state === "allowed"
       ? `Allowed: this project lets agents move without asking. ${then}`
       : `Asked the user. Their answer is in a card above the composer; worktree_status shows it. If they allow it: ${then} If they don't, keep working here.`
@@ -126,23 +135,42 @@ export class WorkspaceMoves {
     this.announce()
   }
 
-  /** The conversation changed: an allowed move whose turn has ended goes ahead. */
+  /** A conversation changed: an allowed move whose turns have all ended goes ahead. */
   settled(conversationId: string): void {
-    const request = this.requests.get(conversationId)
-    if (request?.state !== "allowed" || this.moving.has(conversationId)) return
+    for (const request of this.requests.values())
+      if (request.state === "allowed" && (request.conversationId === conversationId || this.deps.companions(request.conversationId).includes(conversationId)))
+        this.go(request.conversationId)
+  }
+
+  private go(conversationId: string): void {
+    if (this.moving.has(conversationId)) return
     const source = this.deps.source(conversationId)
-    if (source?.busy) return
+    const companions = source ? this.deps.companions(conversationId).filter((id) => !this.moving.has(id)) : []
+    if (source?.busy || companions.some((id) => this.deps.source(id)?.busy)) return
     this.requests.delete(conversationId)
     if (!source) {
       this.announce()
       return
     }
-    this.moving.add(conversationId)
+    const all = [conversationId, ...companions]
+    for (const id of all) {
+      this.moving.add(id)
+      this.requests.delete(id)
+    }
     this.announce()
-    void this.deps
-      .move(conversationId)
-      .catch((error) => this.deps.failed(conversationId, error instanceof Error ? error.message : String(error)))
-      .finally(() => this.moving.delete(conversationId))
+    void (async () => {
+      try {
+        await this.deps.move(conversationId)
+      } catch (error) {
+        this.deps.failed(conversationId, error instanceof Error ? error.message : String(error))
+        return
+      }
+      for (const id of companions)
+        await this.deps.follow(id).catch((error) => this.deps.failed(id, error instanceof Error ? error.message : String(error)))
+    })().finally(() => {
+      for (const id of all) this.moving.delete(id)
+      this.announce()
+    })
   }
 
   private announce(): void {

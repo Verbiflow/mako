@@ -2,8 +2,8 @@ import { z } from "zod"
 
 /**
  * An agent asked, through Mako's workspace tools, to go on on its Thread's
- * own branch. Asking waits for the user; allowed, the Session moves when its
- * turn ends.
+ * own branch. Asking waits for the user; allowed, the Session and the
+ * Thread's other Sessions in the same checkout move once all their turns end.
  */
 export interface WorkspaceMoveRequest {
   id: string
@@ -16,6 +16,8 @@ export interface WorkspaceMoveRequest {
   joins?: string
   /** Uncommitted files in the project folder that move with it. */
   changed: number
+  /** The Thread's other Sessions in the same checkout, which move with it. */
+  companions?: number
   state: "asking" | "allowed"
 }
 
