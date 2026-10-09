@@ -42,7 +42,7 @@
     "postinstall": "node scripts/patch-cursor-sdk.mjs",
     "icons": "swiftc -O -o build/make-icns scripts/make-icns.swift && build/make-icns mako-icons/_masters/desktop-gradient.png build/Mako.iconset && iconutil -c icns build/Mako.iconset -o build/Mako.icns && cp build/Mako.iconset/icon_512x512@2x.png public/icons/app-icon.png",
     "icons:browser": "node scripts/build-favicons.mjs",
-    "lint": "eslint . && npm run lint:anti-slop && node scripts/check-actionable-toasts.mjs && node scripts/check-script-paths.mjs && node scripts/check-host-electron.mjs && node scripts/check-host-start-set.mjs",
+    "lint": "eslint . && npm run lint:anti-slop && node scripts/check-actionable-toasts.mjs && node scripts/check-script-paths.mjs && node scripts/check-host-electron.mjs && node scripts/check-host-platform.mjs && node scripts/check-host-start-set.mjs",
     "lint:anti-slop": "oxlint --config oxlint.config.ts src electron browser-extension packages/sessions/src packages/git/src packages/git/test packages/protocol/src packages/protocol/test packages/control/src packages/control/test packages/lazy/src packages/lazy/test packages/control-runtime/src packages/control-runtime/test scripts",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "node scripts/typecheck-bounded.mjs",
