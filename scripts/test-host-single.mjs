@@ -1,17 +1,15 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises"
-import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
 import { probeRuntime } from "../dist-electron/runtime-connection.js"
+import { spawnHost } from "./lib/host-launch.mjs"
 
 // One host per data root. Two clients that find no host can both start one;
 // exactly one may serve, the other leaves before touching the data, and a host
 // that was killed outright never keeps the next one out.
-const executable = createRequire(import.meta.url)("electron")
 const root = await mkdtemp(join(tmpdir(), "mako-host-single-"))
 const home = join(root, "home")
 const dataRoot = join(root, "data")
@@ -21,17 +19,15 @@ await mkdir(location.directory, { recursive: true, mode: 0o700 })
 const env = {
   ...process.env,
   HOME: home,
-  MAKO_HOST_ONLY: "1",
   MAKO_DATA_ROOT: dataRoot,
   MAKO_WEB_SOCKET: location.socket,
-  MAKO_WEB_ONLY: "1",
   MAKO_PROFILE: "single-host",
 }
-for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR"]) delete env[key]
+for (const key of ["MAKO_PROD", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR"]) delete env[key]
 const hosts = []
 const exits = new Map()
 const start = () => {
-  const host = spawn(executable, [resolve(".")], { env, stdio: "ignore" })
+  const host = spawnHost(env)
   hosts.push(host)
   exits.set(host, once(host, "exit"))
   return host

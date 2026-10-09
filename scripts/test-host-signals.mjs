@@ -1,18 +1,15 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises"
-import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
 import { probeRuntime } from "../dist-electron/runtime-connection.js"
+import { spawnHost } from "./lib/host-launch.mjs"
 
-// A persistent host must shut down, with cleanup, on the signals a session
-// ending, a closed terminal or Ctrl+C send. Electron's own one-shot handlers
-// turn the first into app.quit(), which a persistent host declines, and the
-// second into an abrupt kill.
-const executable = createRequire(import.meta.url)("electron")
+// The host must shut down, with cleanup, on the signals a session ending, a
+// closed terminal or Ctrl+C send; signal-exit, which proper-lockfile installs,
+// must not turn the first into the default action.
 const root = await mkdtemp(join(tmpdir(), "mako-host-signals-"))
 
 async function stopsOn(signal) {
@@ -24,14 +21,12 @@ async function stopsOn(signal) {
   const env = {
     ...process.env,
     HOME: home,
-    MAKO_HOST_ONLY: "1",
     MAKO_DATA_ROOT: dataRoot,
     MAKO_WEB_SOCKET: location.socket,
-    MAKO_WEB_ONLY: "1",
     MAKO_PROFILE: `signals-${signal.toLowerCase()}`,
   }
-  for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR"]) delete env[key]
-  const host = spawn(executable, [resolve(".")], { env, stdio: "ignore" })
+  for (const key of ["MAKO_PROD", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR"]) delete env[key]
+  const host = spawnHost(env)
   const exited = once(host, "exit")
   try {
     const ready = Date.now() + 60_000
@@ -58,7 +53,7 @@ async function stopsOn(signal) {
 try {
   const results = []
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) results.push(`${signal} ${await stopsOn(signal)} ms`)
-  console.log(`host signals: a persistent host stops with cleanup on ${results.join(", ")}`)
+  console.log(`host signals: the host stops with cleanup on ${results.join(", ")}`)
 } finally {
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 }
