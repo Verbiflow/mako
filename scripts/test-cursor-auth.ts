@@ -20,7 +20,8 @@ import { authenticationFailure } from "../electron/providers/cursor/sdk/driver.t
 import { cursorConnection, cursorConnectionState } from "../electron/providers/cursor/connection.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
 import { aesSealer, fileSecrets, wrappedKey } from "../electron/secrets.ts"
-import { electronSecretEncryption, keychainReachable, type SecretEncryption } from "../electron/secure-storage.ts"
+import { keychainReachable, type SecretEncryption } from "../electron/secure-storage.ts"
+import { electronSecretEncryption } from "../electron/secure-storage-electron.ts"
 
 /**
  * Cursor's SDK sign-in: which key a child runs under, how a pasted or minted

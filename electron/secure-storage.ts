@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import type { Keychain, KeychainItem } from "./keychain.js"
+import { nodePlatform, onMac } from "./platform.js"
 
 export interface SecretEncryption {
   available(): Promise<boolean>
@@ -25,37 +26,7 @@ export class KeychainUnavailable extends Error {}
  * each time its window gains focus.
  */
 export function keychainReachable(home = homedir()): boolean {
-  return process.platform !== "darwin" || existsSync(join(home, "Library", "Keychains"))
-}
-
-/**
- * Electron's `safeStorage`, reached lazily so callers also load in a plain
- * Node test. A `basic_text` backend is not encryption and is refused. Under
- * Node, or Electron's Helper in Node mode, there is no `safeStorage`: nothing
- * is available, rather than a crash.
- */
-export function electronSecretEncryption(): SecretEncryption {
-  const electron = import("electron")
-  return {
-    async available() {
-      if (!keychainReachable()) return false
-      const { safeStorage } = await electron
-      if (!safeStorage) return false
-      if (process.platform === "darwin") return safeStorage.isAsyncEncryptionAvailable()
-      return (
-        safeStorage.isEncryptionAvailable() &&
-        (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")
-      )
-    },
-    async encrypt(value) {
-      const { safeStorage } = await electron
-      return process.platform === "darwin" ? safeStorage.encryptStringAsync(value) : safeStorage.encryptString(value)
-    },
-    async decrypt(value) {
-      const { safeStorage } = await electron
-      return process.platform === "darwin" ? (await safeStorage.decryptStringAsync(value)).result : safeStorage.decryptString(value)
-    },
-  }
+  return !onMac() || existsSync(join(home, "Library", "Keychains"))
 }
 
 /** Where Electron's `safeStorage` keeps its password on macOS, named after the app (`HostEnvironment.appName`). */
@@ -93,7 +64,7 @@ export interface ChromiumSafeStorageInput {
  * holds for the rest of the process: nothing is available after it, so nothing
  * asks again.
  */
-export function chromiumSafeStorage({ appName, keychain, platform = process.platform, home }: ChromiumSafeStorageInput): SecretEncryption {
+export function chromiumSafeStorage({ appName, keychain, platform = nodePlatform(), home }: ChromiumSafeStorageInput): SecretEncryption {
   const item = safeStorageItem(appName)
   let key: Promise<Buffer> | undefined
   let refused = false

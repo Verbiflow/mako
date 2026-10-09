@@ -5,11 +5,12 @@ import { dataKeyPath, openHostSecrets } from "../electron/host-secrets.js"
 import { processKeychain } from "../electron/keychain.js"
 import { handOverSecretKey } from "../electron/secret-key-link.js"
 import { aesSealer, fileSecrets, SecretLocked, wrappedKey, type Secrets } from "../electron/secrets.js"
-import { chromiumSafeStorage, electronSecretEncryption } from "../electron/secure-storage.js"
+import { chromiumSafeStorage } from "../electron/secure-storage.js"
+import { electronSecretEncryption } from "../electron/secure-storage-electron.js"
 import { startWebHost } from "../electron/web-host.js"
 
 /**
- * One step of `test-secrets-keychain.mjs`, in a process of its own: write or
+ * One step of `test-secrets-keychain.mjs` or `test-node-host-secrets.mjs`, in a process of its own: write or
  * read a synthetic secret through the host's real store and Electron's real
  * `safeStorage`, serve the store as a Node-mode host does, hand that host
  * the data key as the desktop does, or read the keychain item in Node mode
