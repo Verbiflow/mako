@@ -12,6 +12,13 @@ const config = ts.parseJsonConfigFileContent(
 const program = ts.createProgram(config.fileNames, config.options)
 const checker = program.getTypeChecker()
 const inputs = new Map()
+/** A primitive alias keeps its name only where it's written, so a property's declared type is read too. */
+const named = { NonBlankText: "z.string().trim().min(1)" }
+function declaredSchema(property) {
+  const type = property.valueDeclaration && ts.isPropertySignature(property.valueDeclaration) ? property.valueDeclaration.type : undefined
+  const value = type && ts.isTypeReferenceNode(type) ? named[type.typeName.getText()] : undefined
+  return value && (property.flags & ts.SymbolFlags.Optional ? `${value}.optional()` : value)
+}
 function schema(type, stack = new Set()) {
   if (type.aliasSymbol?.name === "JsonValue") return "z.json()"
   if (type.flags & ts.TypeFlags.Undefined) return "z.undefined()"
@@ -77,7 +84,7 @@ function schema(type, stack = new Set()) {
         property.valueDeclaration ?? property.declarations[0]
       )
       try {
-        return `${JSON.stringify(property.name)}:${schema(value, nested)}`
+        return `${JSON.stringify(property.name)}:${declaredSchema(property) ?? schema(value, nested)}`
       } catch (error) {
         throw new Error(
           `${checker.typeToString(type)}.${property.name}: ${error.message}`
@@ -140,12 +147,38 @@ for (const file of program.getSourceFiles()) {
   }
   visit(file)
 }
-const source = `// Generated from host handler parameter types by scripts/generate-host-inputs.mjs.\n// Regenerate after changing a handler's arguments; never edit this table by hand.\nimport { z } from "zod"\n\nexport const hostCallInputs = {\n${[
-  ...inputs,
-]
+const table = [...inputs]
   .sort(([a], [b]) => a.localeCompare(b))
-  .map(([channel, input]) => `  ${JSON.stringify(channel)}: ${input},`)
-  .join("\n")}\n}\n`
+  .map(([channel, input]) => `  ${JSON.stringify(channel)}: () => ${input},`)
+  .join("\n")
+const source = `// Generated from host handler parameter types by scripts/generate-host-inputs.mjs.
+// Regenerate after changing a handler's arguments; never edit this table by hand.
+import { z } from "zod"
+
+const inputs = {
+${table}
+}
+
+export type HostChannel = keyof typeof inputs
+export type HostCallInput<Channel extends HostChannel> = ReturnType<(typeof inputs)[Channel]>
+export type HostArguments<Channel extends HostChannel> = z.output<HostCallInput<Channel>>
+
+export function isHostChannel(name: string): name is HostChannel {
+  return Object.hasOwn(inputs, name)
+}
+
+export const hostChannels: readonly HostChannel[] = Object.keys(inputs).filter(isHostChannel)
+
+const built = new Map<HostChannel, z.ZodType>()
+
+/** A call's argument schema, built at the call's first use rather than when Mako starts. */
+export function hostCallInput<Channel extends HostChannel>(channel: Channel): HostCallInput<Channel> {
+  let schema = built.get(channel)
+  if (!schema) built.set(channel, (schema = inputs[channel]()))
+  // SAFETY: \`built\` only holds what inputs[channel]() returned for this same key.
+  return schema as HostCallInput<Channel>
+}
+`
 const file = "electron/contracts/host-call-inputs.ts"
 const options = await resolveConfig(file)
 const output = await format(source, { ...options, filepath: file })

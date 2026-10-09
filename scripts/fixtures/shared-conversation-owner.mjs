@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { startWebHost } from "../../electron/web-host.ts"
 import { SessionMemory } from "../../electron/session-memory.ts"
-import { hostCallInputs } from "../../electron/contracts/host-call-inputs.ts"
+import { hostCallInput } from "../../electron/contracts/host-call-inputs.ts"
 const root = process.env.MAKO_DATA_ROOT
 const fixture = JSON.parse(readFileSync(join(root, "fixture.json"), "utf8"))
 const memory = new SessionMemory(fixture.ledger, { pid: process.pid, startedAt: Math.round(performance.timeOrigin), label: "Mako's restarted dev3 host", socket: process.env.MAKO_WEB_SOCKET })
@@ -15,7 +15,7 @@ const host = await startWebHost(process.env.MAKO_WEB_SOCKET, async (channel, arg
     session: { id: fixture.id, nativeId: "restart-native", harness: "fixture" }, requests,
   } })
   if (channel === "mako:live-prompt") {
-    const [id, requestId, text] = hostCallInputs[channel].parse(args)
+    const [id, requestId, text] = hostCallInput(channel).parse(args)
     if (id !== fixture.id) throw new Error("Wrong conversation")
     let request = requests.find((item) => item.id === requestId)
     if (!request) {

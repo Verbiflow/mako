@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
+import { hostCallInput } from "../electron/contracts/host-call-inputs.js"
 import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
@@ -243,7 +243,7 @@ try {
   }
 } finally { rmSync(root, { recursive: true, force: true }) }
 
-const permissionCall = hostCallInputs["mako:live-permission"]
+const permissionCall = hostCallInput("mako:live-permission")
 assert.deepEqual(permissionCall.parse(["live", "request", { kind: "choice", optionId: "keep", feedback: " Use async " }])[2],
   { kind: "choice", optionId: "keep", feedback: "Use async" }, "the window's words cross IPC instead of being stripped")
 assert.throws(() => permissionCall.parse(["live", "request", { kind: "choice", optionId: "keep", feedback: "  " }]))

@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { providerHost } from "../electron/providers/index"
-import { hostCallInputs } from "../electron/contracts/host-call-inputs"
+import { hostCallInput } from "../electron/contracts/host-call-inputs"
 import { RuntimeCallSchema } from "../electron/contracts/runtime"
 import { invokeRuntime } from "../electron/runtime-connection"
 import { startWebHost } from "../electron/web-host"
@@ -50,7 +50,7 @@ const host = await startWebHost(
   socket,
   async (channel, args) => {
     assert.equal(channel, "mako:live-start")
-    const [provider, cwd, options] = hostCallInputs[channel].parse(args)
+    const [provider, cwd, options] = hostCallInput(channel).parse(args)
     accepted.push(options)
     const snapshot: LiveSnapshot = {
       session: {
@@ -83,7 +83,7 @@ const start = mock.method(
   "liveStart",
   async (...[provider, cwd, options]: Parameters<typeof bridge.liveStart>) => {
     assert.ok(pendingMessages().some(command => command.kind === "start" && command.args[2].conversationId === options.conversationId), "launch intent must be saved before dispatch")
-    const args = hostCallInputs["mako:live-start"].parse([
+    const args = hostCallInput("mako:live-start").parse([
       provider,
       cwd,
       options,

@@ -14,7 +14,7 @@ import { startWebHost } from "../electron/web-host.js"
 import { invokeRuntime, subscribeRuntime, probeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection.js"
 import { runtimeLocation } from "../electron/runtime-service.js"
 import { reserveHostReplacement } from "../electron/local-update-installer.js"
-import { hostCallInputs } from "../electron/contracts/host-call-inputs.js"
+import { hostCallInput, hostChannels } from "../electron/contracts/host-call-inputs.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
@@ -74,14 +74,14 @@ let ownerHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 const owner = new LiveConversations({ appPath: root, root: join(root, "owner"), memory: ownerMemory, driver: (provider) => drivers.get(provider), history: async () => null, nativePath: (session) => join(root, `${session.harness}.jsonl`), checkpoint: async () => "checkpoint", resumeVerdict: async () => ({ kind: "resumable", record: "same" }), emit: (event: HostEvent) => ownerHost?.event(event), providerWarmLimit: 10 })
 const router = new SharedConversations(desktopMemory, (event) => { events.push(event); desktopHost?.conversationEvent(event) })
 let desktopHost: Awaited<ReturnType<typeof startWebHost>> | undefined
-const info = (pid: number) => ({ protocol: 1 as const, instanceId: randomUUID(), pid, version: "fixture", methods: Object.keys(hostCallInputs) })
+const info = (pid: number) => ({ protocol: 1 as const, instanceId: randomUUID(), pid, version: "fixture", methods: [...hostChannels] })
 const absentFile = async () => new Response(null, { status: 404 })
 let snapshotIdentityCase: "normal" | "missing" | "conflicting" | "inactive" | "transient" = "normal"
 async function ownerCall(channel: string, args: unknown[]) {
   let value
   switch (channel) {
     case "mako:live-snapshot": {
-      const [id] = hostCallInputs[channel].parse(args)
+      const [id] = hostCallInput(channel).parse(args)
       const snapshot = await owner.refreshedSnapshot(id)
       const observedCase = snapshotIdentityCase
       if (snapshotIdentityCase === "transient") snapshotIdentityCase = "normal"
@@ -92,13 +92,13 @@ async function ownerCall(channel: string, args: unknown[]) {
       } : snapshot
       break
     }
-    case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallInputs[channel].parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
-    case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallInputs[channel].parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
-    case "mako:live-steer-queued": { const [id, input] = hostCallInputs[channel].parse(args); value = await owner.act(id, input); break }
-    case "mako:live-permission": { const [id, requestId, response] = hostCallInputs[channel].parse(args); value = await owner.permission(id, requestId, response); break }
-    case "mako:live-cancel": { const [id] = hostCallInputs[channel].parse(args); value = await owner.cancel(id); break }
-    case "mako:live-close": { const [id] = hostCallInputs[channel].parse(args); value = await owner.close(id); break }
-    case "mako:live-fork": { const [id, input] = hostCallInputs[channel].parse(args); value = owner.fork(id, input); break }
+    case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallInput(channel).parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
+    case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallInput(channel).parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
+    case "mako:live-steer-queued": { const [id, input] = hostCallInput(channel).parse(args); value = await owner.act(id, input); break }
+    case "mako:live-permission": { const [id, requestId, response] = hostCallInput(channel).parse(args); value = await owner.permission(id, requestId, response); break }
+    case "mako:live-cancel": { const [id] = hostCallInput(channel).parse(args); value = await owner.cancel(id); break }
+    case "mako:live-close": { const [id] = hostCallInput(channel).parse(args); value = await owner.close(id); break }
+    case "mako:live-fork": { const [id, input] = hostCallInput(channel).parse(args); value = owner.fork(id, input); break }
     default: throw new Error(`Unexpected method ${channel}`)
   }
   return JSON.stringify({ ok: true, value })
@@ -224,7 +224,7 @@ try {
   const missingId = randomUUID()
   const missingHost = await startWebHost(missingLocation.socket, async (channel, args) => {
     if (channel === "mako:live-locate") {
-      const [provider, nativeId] = hostCallInputs[channel].parse(args)
+      const [provider, nativeId] = hostCallInput(channel).parse(args)
       if (provider !== "fixture" || nativeId !== "missing-native") return JSON.stringify({ ok: true, value: null })
       missingMemory.hold(provider, nativeId, missingId)
       return JSON.stringify({ ok: true, value: missingId })
@@ -255,7 +255,7 @@ try {
   const legacyShutdownId = randomUUID()
   const legacyHost = await startWebHost(legacyLocation.socket, async (channel, args) => {
     if (channel === "mako:live-fork") {
-      const [, input] = hostCallInputs[channel].parse(args)
+      const [, input] = hostCallInput(channel).parse(args)
       return JSON.stringify({ ok: true, value: { session: { id: input.id, harness: input.provider }, requests: [] } })
     }
     if (channel === "mako:shutdown-ack") {

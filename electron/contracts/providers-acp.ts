@@ -259,6 +259,9 @@ export interface LivePermissionRequest {
   feedbackOption?: string
 }
 
+/** What a person typed. A host call trims it and refuses it blank. */
+export type NonBlankText = string
+
 export type LivePermissionResponse =
-  | { kind: "choice"; optionId: string | null; feedback?: string }
+  | { kind: "choice"; optionId: string | null; feedback?: NonBlankText }
   | { kind: "answers"; answers: Record<string, string[]> }
