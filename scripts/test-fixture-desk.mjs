@@ -1,9 +1,7 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { request } from "node:http"
-import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { createServer } from "vite"
@@ -16,6 +14,7 @@ import { fixtureCloudHostCalls, fixtureDeskHostCalls, fixtureDeskRefusal } from 
 import { publishDevRendererRegistration } from "../dist-electron/dev-renderer-registration.js"
 import { registeredDeskBrowsers } from "../packages/control-runtime/dist/desk-browser-registration.js"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
+import { spawnHost } from "./lib/host-launch.mjs"
 
 for (const channel of fixtureDeskHostCalls) {
   assert.ok(isHostChannel(channel), `${channel} is a host call`)
@@ -50,14 +49,14 @@ const server = await createServer({
 await server.listen()
 const url = server.resolvedUrls.local[0]
 const origin = new URL(url).origin
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_PROFILE: profile, MAKO_FIXTURE_DESK: "1", MAKO_HOST_ONLY: "1", MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: location.socket }
-for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL"]) delete env[key]
-// --app=<Mako.app> runs the same checks against a packaged bundle's own main process.
+const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_PROFILE: profile, MAKO_FIXTURE_DESK: "1", MAKO_WEB_SOCKET: location.socket }
+for (const key of ["MAKO_PROD", "VITE_DEV_SERVER_URL"]) delete env[key]
+// --app=<Mako.app> runs the same checks against a packaged bundle's host.
 const app = process.argv.find((arg) => arg.startsWith("--app="))?.slice("--app=".length)
-const [command, args] = app ? [join(app, "Contents", "MacOS", "Mako"), ["--background"]] : [createRequire(import.meta.url)("electron"), [root, "--background"]]
 let host
 let removeRenderer = () => {}
 let cdp
+let agentViewsPid
 
 const until = async (read, label, ms = 90_000) => {
   const end = Date.now() + ms
@@ -87,7 +86,7 @@ const pageCall = async (body) => {
 }
 
 try {
-  host = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] })
+  host = spawnHost(env, { app: app && join(app, "Contents", "MacOS", "Mako"), stdio: ["ignore", "pipe", "pipe"] })
   if (app) console.log(`Fixture host from ${app}`)
   let output = ""
   const trace = process.env.MAKO_TEST_TRACE === "1"
@@ -142,11 +141,12 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
 
   if (app) {
     assert.equal(host.exitCode, null, `The fixture host stayed up: ${output.slice(-2000)}`)
-    // Packaged hosts load their bundled interface and serve no dev desk windows.
-    console.log("PASS: a packaged fixture desk host refuses writes, provider, git, process and unknown calls from its socket and its page proxy before any handler runs; allowed reads and boot still work. Hidden desk windows are a source-host feature, checked without --app")
+    // A packaged host's agents get desk windows only on a dev renderer's registration.
+    console.log("PASS: a packaged fixture desk host refuses writes, provider, git, process and unknown calls from its socket and its page proxy before any handler runs; allowed reads and boot still work. Agents' desk windows are checked without --app")
   } else {
-    // Hidden desk windows live inside the host and call its handlers over IPC,
-    // never through the socket or the proxy.
+    // With no desktop open, the host starts the agent views app for agents'
+    // desk windows. Each window is a page on the socket, which refuses what a
+    // fixture desk refuses itself before the host sees it.
     removeRenderer = publishDevRendererRegistration(dirname(location.socket), { profile, sourceRoot: root, url })
     const desk = await until(async () => registeredDeskBrowsers().find((browser) => browser.profile === profile), "desk registration")
     assert.equal(desk.fixture, true, "Agents discovering the desk see a fixture desk")
@@ -176,7 +176,7 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
       if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text)
       return result.result.value
     }
-    console.log(`Hidden desk window ${targetId} attached`)
+    console.log(`Agent views window ${targetId} attached`)
     await until(() => evaluate("Boolean(window.mako)"), "desk bridge")
     const outcome = (expression) => evaluate(`${expression}.then(() => "ran", (error) => String(error?.message ?? error))`)
     for (const [label, expression] of [
@@ -185,13 +185,16 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
       ["list-models", `window.mako.listModels()`],
       ["lifecycle-command", `window.mako.lifecycleCommand({ kind: "cancel" })`],
       ["save-automations", `window.mako.saveAutomations([])`],
-    ]) assert.match(await outcome(expression), /fixture desk refused/, `A hidden desk window's ${label} is refused`)
+    ]) assert.match(await outcome(expression), /fixture desk refused/, `An agent views window's ${label} is refused`)
     assert.equal(await savedAutomations(), automations, "No desk window wrote automations")
-    assert.equal(await outcome("window.mako.threads()"), "ran", "A hidden desk window can read")
+    assert.equal(await outcome("window.mako.threads()"), "ran", "An agent views window can read")
     assert.deepEqual((await socketCall(call("mako:terminal-list"))).value, [], "No desk window started a terminal")
     await send("Target.closeTarget", { targetId })
     assert.equal(host.exitCode, null, `The fixture host stayed up: ${output.slice(-2000)}`)
-    console.log("PASS: a fixture desk host refuses writes, provider, git, process and unknown calls from its socket, its page proxy and its own hidden desk windows before any handler runs; allowed reads and boot still work; the desk is registered as a fixture")
+    const started = (await readFile(join(dataRoot, "logs", "host.log"), "utf8")).match(/agent views app started pid=(\d+)/)
+    assert.ok(started, "The host started the agent views app for the window")
+    agentViewsPid = Number(started[1])
+    console.log("PASS: a fixture desk host refuses writes, provider, git, process and unknown calls from its socket, its page proxy and the agent views app's windows before any handler runs; allowed reads and boot still work; the desk is registered as a fixture")
   }
 } catch (error) {
   console.error(error)
@@ -211,6 +214,16 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
       if (!(await within(3_000))) host.kill("SIGKILL")
       await exited
     }
+  }
+  if (agentViewsPid) {
+    const alive = () => { try { process.kill(agentViewsPid, 0); return true } catch { return false } }
+    const end = Date.now() + 10_000
+    while (alive() && Date.now() < end) await new Promise((done) => setTimeout(done, 100))
+    if (alive()) {
+      console.error(`The agent views app ${agentViewsPid} outlived its host`)
+      process.exitCode = 1
+      process.kill(agentViewsPid, "SIGKILL")
+    } else console.log("The agent views app left with its host")
   }
   await server.close()
   await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
