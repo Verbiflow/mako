@@ -1,6 +1,5 @@
 [
   "@opencode/client",
-  "electron",
   "image-size",
   "jsonc-parser",
   "mime",
