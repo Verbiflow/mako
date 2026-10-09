@@ -9,9 +9,9 @@ import { hostEnvironment } from "./host-environment.js"
 import { nodePlatform, onMac } from "./platform.js"
 
 /**
- * The real platform behind `createDesktopNotifier`, shared by the desktop
- * client and the standalone host. `idleBadge` is what the dock shows when
- * nothing needs you — the dev host wears "DEV" there.
+ * The real platform behind `createDesktopNotifier`, for the desktop client;
+ * the host has no screen and never loads it. `idleBadge` is what the dock
+ * shows when nothing needs you — a dev desktop wears "DEV" there.
  *
  * A checkout runs as the ad-hoc-signed Electron.app, and macOS refuses its
  * banners outright (`failed` within 10 ms, never a prompt); only the

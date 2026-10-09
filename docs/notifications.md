@@ -30,8 +30,8 @@ calls, and attach/detach never notify: the working mark is enough.
 - `electron/desktop-notifications.ts` is the platform side, Electron-free:
   one banner per thread, retained until it reports, badge writes deduplicated
   and capped at `99+`. `desktop-notifications-electron.ts` supplies the real
-  `Notification` and dock calls; both the desktop client and the standalone
-  host use it. `src/dev/web-notifications.ts` answers the same channels in a
+  `Notification` and dock calls; the desktop client uses it, and the host
+  never does. `src/dev/web-notifications.ts` answers the same channels in a
   browser with the page Notification API and the tab title.
 - Outcomes are noted at the sites that already decide rail attention:
   `syncThreadStatus` in `acp-live.ts` (live conversations), `applyThreadRun`

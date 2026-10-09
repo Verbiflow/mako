@@ -6,8 +6,7 @@ import type { NotificationDelivery, NotificationPermission } from "./notificatio
  * Each acts on the screen in front of the person: a link opens in their
  * browser, text lands on their clipboard, a banner shows on their desktop.
  * The host can be another machine (a cloud host) or one with no screen at
- * all, so it never answers them for a client on its socket. It answers them
- * only for the window it shows itself in standalone mode.
+ * all, so it never answers them.
  *
  * The desktop client answers them with Electron, the browser client with the
  * browser's own APIs; each keeps a table typed by {@link ClientAnswers}, so a
