@@ -118,7 +118,7 @@ const dependencies: ClaudeSdkDependencies = {
   receiptTimeoutMs: 20,
   interruptTimeoutMs: 20,
   inspectCredentials: async () => clearedStore,
-  query: (options) => {
+  query: async (options) => {
     input = options.prompt[Symbol.asyncIterator]()
     return {
       [Symbol.asyncIterator]: () => output[Symbol.asyncIterator](),
@@ -235,7 +235,7 @@ await assert.rejects(
   const dyingDriver = createClaudeSdkDriver({
     ...dependencies,
     configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: configDir } }, account: { name: "fixture-launch" } }),
-    query: (options) => ({ ...dependencies.query(options), [Symbol.asyncIterator]: dying }),
+    query: async (options) => ({ ...(await dependencies.query(options)), [Symbol.asyncIterator]: dying }),
   })
   await dyingDriver.start("/tmp/work", { conversationId, emit: (event) => deaths.push(event) })
   await dyingDriver.prompt(conversationId, "Begin", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
@@ -264,7 +264,7 @@ await assert.rejects(
   const stopDriver = createClaudeSdkDriver({
     ...dependencies,
     configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: configDir } }, account: { name: "fixture-launch" } }),
-    query: (options) => ({ ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+    query: async (options) => ({ ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
       close: () => messages.close(), interrupt: async () => {} }),
   })
   await stopDriver.start("/tmp/work", { conversationId, emit: (event) => stops.push(event) })
@@ -294,9 +294,9 @@ await assert.rejects(
   const messages = new Messages()
   const events: LiveDriverEvent[] = []
   let hooks: Options["hooks"]
-  const hookDriver = createClaudeSdkDriver({ ...dependencies, query: (options) => {
+  const hookDriver = createClaudeSdkDriver({ ...dependencies, query: async (options) => {
     hooks = options.options.hooks
-    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+    return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
   await hookDriver.start("/tmp/work", { conversationId: "hook-fixture", emit: (event) => events.push(event) })
   const submitted = hooks?.UserPromptSubmit?.at(-1)?.hooks[0]
@@ -317,7 +317,7 @@ const racing = createClaudeSdkDriver({
     })
     return { options: {}, account: { name: "fixture-launch" } }
   },
-  query: (options) => {
+  query: async (options) => {
     launched = true
     return dependencies.query(options)
   },
@@ -399,9 +399,9 @@ for (const confirmed of [true, false]) {
   const messages = new Messages()
   const compactEvents: LiveDriverEvent[] = []
   let postCompact: HookCallback | undefined
-  const compactDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+  const compactDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
     postCompact = options.options.hooks?.PostCompact?.at(-1)?.hooks[0]
-    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+    return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
   await compactDriver.start("/disposable", { conversationId: "compact-fixture", emit: (event) => compactEvents.push(event) })
   assert.ok(compactDriver.compaction?.kind === "supported")
@@ -497,8 +497,8 @@ console.log("PASS: Claude compaction requires a manual boundary and the matching
 {
   const messages = new Messages()
   const backgroundEvents: LiveDriverEvent[] = []
-  const backgroundDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
-    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  const backgroundDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
+    return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
   await backgroundDriver.start("/disposable", { conversationId: "background-fixture", emit: (event) => backgroundEvents.push(event) })
   const reported = () => backgroundEvents.findLast((event) => event.type === "live-session")?.session.backgroundTasks
@@ -559,9 +559,9 @@ const assistant: SDKAssistantMessage = {
   const messages = new Messages()
   const turnEvents: LiveDriverEvent[] = []
   let turnInput: AsyncIterator<SDKUserMessage> | undefined
-  const turnDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
+  const turnDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
     turnInput = options.prompt[Symbol.asyncIterator]()
-    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close(),
+    return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close(),
       interrupt: async () => { onInterrupt?.(); await delay(5) } }
   } })
   let onInterrupt: (() => void) | undefined
@@ -654,8 +654,8 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
 {
   const messages = new Messages()
   const noticeEvents: LiveDriverEvent[] = []
-  const noticeDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
-    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  const noticeDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
+    return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
   await noticeDriver.start("/disposable", { conversationId: "notice-fixture", emit: (event) => noticeEvents.push(event) })
   const session = () => noticeEvents.findLast((event) => event.type === "live-session")?.session
@@ -1016,8 +1016,8 @@ try {
     .trim().split("\n").map((line) => JSON.parse(line))
   const messages = new Messages()
   const replayEvents: LiveDriverEvent[] = []
-  const replayDriver = createClaudeSdkDriver({ ...dependencies, query(options) {
-    return { ...dependencies.query(options), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+  const replayDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
+    return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
   await replayDriver.start("/disposable", { conversationId: "steer-replay", emit: (event) => replayEvents.push(event) })
   const session = () => replayEvents.findLast((event) => event.type === "live-session")?.session

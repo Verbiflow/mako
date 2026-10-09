@@ -1,7 +1,8 @@
-import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { tmpdir } from "node:os"
 import type { AccountUsage } from "../../account-types.js"
 import { claudeRuntime } from "./runtime.js"
+import { heavy } from "../../heavy-packages.js"
 
 const PROBE_TIMEOUT_MS = 20_000
 
@@ -24,6 +25,7 @@ export async function claudeProbeUsage(
   const prompt: AsyncIterable<SDKUserMessage> = {
     [Symbol.asyncIterator]: () => ({ next: () => idle.then(() => ({ done: true, value: undefined })) }),
   }
+  const { query } = await heavy.claudeAgentSdk.load("claude usage")
   const claude = query({
     prompt,
     options: {

@@ -119,10 +119,11 @@ export interface ClaudeSdkConfiguration {
 export interface ClaudeSdkDependencies {
   available(): boolean
   configure(cwd: string, options: ProviderStartOptions, trace: ProviderLaunchTrace): Promise<ClaudeSdkConfiguration>
+  /** Claude's SDK is loaded by the first query, so asking for one is async. */
   query(input: {
     prompt: AsyncIterable<SDKUserMessage>
     options: Options
-  }): ClaudeQuery
+  }): Promise<ClaudeQuery>
   interruptTimeoutMs?: number
   receiptTimeoutMs?: number
   prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root">) => Promise<ClaudePermissionObserver | undefined>
@@ -444,7 +445,7 @@ export function createClaudeSdkDriver(
         hostWarn(CLAUDE_AUTH_LOG, "Native authentication failure", { conversation: conversationId, ...fields }),
       dependencies.inspectCredentials)
       let query: ClaudeQuery
-      try { query = dependencies.query({
+      try { query = await dependencies.query({
         prompt: input,
         options: {
           ...config,
