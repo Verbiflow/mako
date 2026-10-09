@@ -14,6 +14,6 @@ export const openCodeMcpSource: ProviderMcpSource = {
     join(cwd, "opencode.json"),
     join(cwd, ".opencode", "opencode.json"),
   ],
-  readsCli: false,
+  cliList: null,
   write: { kind: "none" },
 }

@@ -21,7 +21,7 @@ const source: ProviderMcpSource = {
   command: () => join(root, "fixture-provider"),
   userFiles: () => [],
   workspaceFiles: () => [],
-  readsCli: true,
+  cliList: { inputs: () => [] },
   readFormat: "named-map-or-list",
   write: { kind: "none" },
 }

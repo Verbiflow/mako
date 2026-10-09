@@ -17,6 +17,6 @@ export const devinMcpSource: ProviderMcpSource = {
     join(cwd, ".devin", "mcp_config.local.json"),
     join(cwd, ".devin", "mcp_config.json"),
   ],
-  readsCli: false,
+  cliList: null,
   write: { kind: "cli", scopes: "both", args: scopedMcpWriteArgs },
 }

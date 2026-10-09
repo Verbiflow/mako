@@ -1,3 +1,4 @@
+import { dirname, join, resolve } from "node:path"
 import type {
   McpScope,
   McpServerDefinition,
@@ -42,6 +43,15 @@ export function scopedMcpWriteArgs(
   ]
 }
 
+/** `relative` inside `cwd` and inside every folder above it, nearest first. */
+export function inEveryAncestor(cwd: string, relative: string): string[] {
+  const files: string[] = []
+  for (let folder = resolve(cwd); ; folder = dirname(folder)) {
+    files.push(join(folder, relative))
+    if (dirname(folder) === folder) return files
+  }
+}
+
 export type McpReadFormat = "named-map" | "named-map-or-list" | "command-array-map"
 
 /** How a harness's JSON config holds MCP servers; Mako writes whichever format a harness declares. */
@@ -59,7 +69,11 @@ export interface ProviderMcpSource extends ProviderCapability {
   command(env: NodeJS.ProcessEnv): string | null
   userFiles(account: ProviderAccountLocation): string[]
   workspaceFiles(cwd: string): string[]
-  readsCli: boolean
+  /**
+   * Set when the harness's own CLI is what reads its MCP config (`<command> mcp list --json`).
+   * `inputs` names every file that listing reads; Mako reuses the listing until one of them changes.
+   */
+  cliList: { inputs(env: NodeJS.ProcessEnv, cwd: string): string[] } | null
   /** How long Mako waits on one of its own MCP calls the harness makes, when the harness allows longer than a minute. */
   callWaitMs?: number
   write:

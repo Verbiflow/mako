@@ -1,4 +1,7 @@
+import { join } from "node:path"
+import { grokHome } from "@mako/sessions"
 import {
+  inEveryAncestor,
   scopedMcpWriteArgs,
   type ProviderMcpSource,
 } from "../mcp-source.js"
@@ -9,6 +12,8 @@ export const grokMcpSource: ProviderMcpSource = {
   command: () => "grok",
   userFiles: () => [],
   workspaceFiles: () => [],
-  readsCli: true,
+  cliList: {
+    inputs: (env, cwd) => [join(grokHome(env), "config.toml"), ...inEveryAncestor(cwd, ".grok/config.toml")],
+  },
   write: { kind: "cli", scopes: "both", args: scopedMcpWriteArgs },
 }
