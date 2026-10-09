@@ -3,19 +3,30 @@ import { unlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { systemPreferences } from "electron"
 import { packagedDistribution } from "./distribution.js"
 import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "./local-update-installer.js"
 import type { MakoComputerPermissions } from "./shared.js"
 import { hostEnvironment } from "./host-environment.js"
 import { presentMachine } from "./machine.js"
+import { onMac } from "./platform.js"
 
 const execute = promisify(execFile)
 
 export type TccService = (typeof MAKO_GRANT_SERVICES)[number]
 
-export function computerPermissions(): MakoComputerPermissions {
-  if (process.platform !== "darwin") {
+/**
+ * What macOS's privacy settings say about this app. Electron's
+ * `systemPreferences` reads them (`computer-permissions-electron.ts`), in the
+ * desktop app or a host Electron runs; a host under Node asks the desktop.
+ */
+export interface PrivacyReadings {
+  accessibility(prompt: boolean): boolean
+  screen(): MakoComputerPermissions["screenRecording"]
+}
+
+/** With no `readings`, nothing is known yet: the desktop app that can read them isn't attached. */
+export function computerPermissions(readings: PrivacyReadings | undefined): MakoComputerPermissions {
+  if (!onMac()) {
     return {
       supported: false,
       persistentAcrossUpdates: false,
@@ -27,8 +38,8 @@ export function computerPermissions(): MakoComputerPermissions {
     supported: true,
     persistentAcrossUpdates:
       hostEnvironment().packaged && packagedDistribution(hostEnvironment().appRoot) !== "unsigned",
-    accessibility: systemPreferences.isTrustedAccessibilityClient(false),
-    screenRecording: systemPreferences.getMediaAccessStatus("screen"),
+    accessibility: readings?.accessibility(false) ?? false,
+    screenRecording: readings?.screen() ?? "unknown",
   }
 }
 
@@ -60,7 +71,7 @@ export async function resetMakoGrant(
   bundleId = MAKO_BUNDLE_ID,
   run: Run = (command, args) => execute(command, args, { timeout: 10_000 })
 ): Promise<boolean> {
-  if (process.platform !== "darwin" || !hostEnvironment().packaged) return false
+  if (!onMac() || !hostEnvironment().packaged) return false
   try {
     await run("tccutil", ["reset", service, bundleId])
     return true
@@ -92,26 +103,27 @@ async function requestScreenRecording(): Promise<void> {
 }
 
 export async function requestComputerPermissions(
+  readings: PrivacyReadings,
   focus: () => void
 ): Promise<MakoComputerPermissions> {
-  if (process.platform !== "darwin") return computerPermissions()
+  if (!onMac()) return computerPermissions(readings)
   focus()
-  if (!systemPreferences.isTrustedAccessibilityClient(false)) {
+  if (!readings.accessibility(false)) {
     await resetMakoGrant("Accessibility")
-    systemPreferences.isTrustedAccessibilityClient(true)
+    readings.accessibility(true)
     await new Promise((resolve) => setTimeout(resolve, 500))
-    const permissions = computerPermissions()
+    const permissions = computerPermissions(readings)
     if (!permissions.accessibility)
       await openPrivacyPane("Privacy_Accessibility")
     return permissions
   }
-  if (systemPreferences.getMediaAccessStatus("screen") !== "granted") {
+  if (readings.screen() !== "granted") {
     await resetMakoGrant("ScreenCapture")
     await requestScreenRecording()
-    const permissions = computerPermissions()
+    const permissions = computerPermissions(readings)
     if (permissions.screenRecording !== "granted")
       await openPrivacyPane("Privacy_ScreenCapture")
     return permissions
   }
-  return computerPermissions()
+  return computerPermissions(readings)
 }
