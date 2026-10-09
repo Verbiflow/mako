@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process"
+import { nodePlatform } from "../../../platform.js"
 
 /**
  * The key `cursor-agent login` leaves behind.
@@ -52,7 +53,7 @@ function runSecurity(args: readonly string[], timeoutMs: number): Promise<{ stdo
  * Settings then offers the other ways in.
  */
 export async function readCursorCliApiKey(options: CliKeychainOptions = {}): Promise<string | null> {
-  if ((options.platform ?? process.platform) !== "darwin") return null
+  if ((options.platform ?? nodePlatform()) !== "darwin") return null
   const run = options.run ?? ((args) => runSecurity(args, options.timeoutMs ?? 5_000))
   const result = await run([
     "find-generic-password",

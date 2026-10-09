@@ -3,6 +3,7 @@ import { createRequire } from "node:module"
 import { z } from "zod"
 import { resolveExecutable } from "../../executable.js"
 import { claudeExecutablePath } from "./sdk-process.js"
+import { onWindows } from "../../platform.js"
 
 export type ClaudeRuntime =
   | { kind: "configured"; executable: string }
@@ -40,7 +41,7 @@ let bundled: string | null | undefined
 export function bundledClaudeExecutable(): string | null {
   if (bundled !== undefined) return bundled
   const require = createRequire(import.meta.url)
-  const suffix = process.platform === "win32" ? ".exe" : ""
+  const suffix = onWindows() ? ".exe" : ""
   for (const name of bundledPackages()) {
     try {
       const path = claudeExecutablePath(

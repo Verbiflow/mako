@@ -5,6 +5,7 @@ import { lock } from "proper-lockfile"
 import { z } from "zod"
 import type { NativeAuthoringDocument } from "../contracts/native-authoring.js"
 import type { ProviderAuthoringCapability } from "./editing-capability.js"
+import { onWindows } from "../platform.js"
 
 const LIMIT = 256 * 1024
 const IdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/)
@@ -38,7 +39,7 @@ async function writablePath(cwd: string, path: string): Promise<void> {
     try {
       const actual = await realpath(ancestor)
       const suffix = relative(root, actual)
-      if (isAbsolute(suffix) || suffix === ".." || suffix.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
+      if (isAbsolute(suffix) || suffix === ".." || suffix.startsWith(`..${onWindows() ? "\\" : "/"}`))
         throw new Error("This configuration links outside the project. Edit its original file in your text editor.")
       break
     } catch (error) {

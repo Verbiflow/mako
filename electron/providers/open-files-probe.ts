@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process"
 import type { ProviderActivityResult } from "./process-probe.js"
+import { onMac, onWindows } from "../platform.js"
 
 export type OpenFilesResult =
   | { kind: "available"; paths: string[]; processFound: boolean; pids: number[] }
@@ -17,9 +18,9 @@ export async function probeOpenFiles({
   /** Query a source inode across processes; executable names are not reliable ownership evidence. */
   sourcePath?: string
 }): Promise<OpenFilesResult> {
-  if (process.platform === "win32")
+  if (onWindows())
     return { kind: "unavailable", reason: "unsupported" }
-  const command = process.platform === "darwin" ? "/usr/sbin/lsof" : "lsof"
+  const command = onMac() ? "/usr/sbin/lsof" : "lsof"
   return new Promise((resolve) => {
     const child = spawn(
       command,
