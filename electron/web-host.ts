@@ -6,11 +6,13 @@ import {
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { chmod } from "node:fs/promises"
+import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
 import type { HostEvent, TerminalEvent } from "./shared.js"
 import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "./contracts/runtime.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "./contracts/host-connection.js"
-import { hostLog } from "./host-log.js"
+import { hostLog, hostWarn } from "./host-log.js"
+import type { SecretKeyHandover } from "./host-secrets.js"
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
 
 /** How the host runs one call: the encoded reply for `channel(...args)`, on behalf of `client`. */
@@ -65,6 +67,18 @@ export async function startWebHost(
     if (request.method === "GET" && request.url === "/health" && runtime) {
       if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime] health requested")
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(runtime))
+      return
+    }
+    if (request.method === "GET" && request.url === "/packages") {
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(packageLoads()))
+      return
+    }
+    if (request.url?.split("?")[0] === "/secret-key") {
+      if (!secretKey) { response.writeHead(404).end(); return }
+      void secretKeyRoute(request, response, secretKey).catch(() => {
+        if (!response.headersSent) response.writeHead(500)
+        response.end()
+      })
       return
     }
     const client = z.string().uuid().optional().safeParse(request.headers["x-mako-window"] ?? new URL(request.url ?? "/", "http://localhost").searchParams.get("client") ?? undefined)
