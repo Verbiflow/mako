@@ -18,9 +18,9 @@ if (options) process.env.NODE_OPTIONS = options
 else delete process.env.NODE_OPTIONS
 
 // Node runs --require preloads in worker threads too; only the main thread's loop is measured.
-// The host is Electron's main process, or its entry under Node or Electron's Helper in Node mode.
-const host = process.type === "browser" || /dist-electron[\\/]entry\.js$/.test(process.argv[1] ?? "")
-if (samples && isMainThread && process.env.MAKO_HOST_ONLY === "1" && host) {
+// The host is the entry under Node or Electron's Helper in Node mode, with its socket to serve.
+const host = /dist-electron[\\/]entry\.js$/.test(process.argv[1] ?? "")
+if (samples && isMainThread && socket && host) {
   const delay = monitorEventLoopDelay({ resolution: 1 })
   delay.enable()
   let cpu = process.cpuUsage()

@@ -22,15 +22,13 @@ import { subscribeRuntime } from "../dist-electron/runtime-connection.js"
  * with Sessions streaming. Streaming uses scripts/fixtures/acp-stream-agent.mjs
  * in place of the Grok CLI, so it needs no account and no network.
  *
- *   node scripts/measure-host.mjs                 the built dist-electron host
- *   node scripts/measure-host.mjs --runtime helper
- *                                                 the same under Electron's Helper in
- *                                                 Node mode, as MAKO_HOST_RUNTIME=node runs it
+ *   node scripts/measure-host.mjs                 the built dist-electron host under
+ *                                                 Electron's Helper in Node mode, as
+ *                                                 hostCommand runs it on a Mac
  *   node scripts/measure-host.mjs --runtime node  the same under this Node
  *   node scripts/measure-host.mjs --app Mako.app  a packaged app's host: start-up,
  *                                                 memory and reads only, since a
- *                                                 packaged app ignores NODE_OPTIONS;
- *                                                 with --runtime helper, its Helper
+ *                                                 packaged app ignores NODE_OPTIONS
  *   node scripts/measure-host.mjs --node loader   under this Node with a module loader
  *                                                 first, such as a Linux machine's
  */
@@ -50,13 +48,13 @@ const run = promisify(execFile)
 const repo = resolve(".")
 const packaged = options.app ? await realpath(resolve(options.app)) : undefined
 const loader = options.node ? resolve(options.node) : undefined
-const runtime = options.runtime ?? (loader ? "node" : "electron")
-if (!["electron", "helper", "node"].includes(runtime)) throw new Error(`--runtime is electron, helper or node, not ${runtime}`)
-if (packaged && runtime === "node") throw new Error("A packaged app's host runs under Electron or its Helper; --runtime node measures the checkout")
+const runtime = options.runtime ?? (loader ? "node" : "helper")
+if (!["helper", "node"].includes(runtime)) throw new Error(`--runtime is helper or node, not ${runtime}`)
+if (packaged && runtime === "node") throw new Error("A packaged app's host runs under its Helper; --runtime node measures the checkout")
 const electron = packaged ? join(packaged, "Contents/MacOS/Mako") : runtime === "node" ? undefined : createRequire(import.meta.url)("electron")
-const executable = runtime === "node" ? process.execPath : runtime === "helper" ? headlessNodeExecutable(electron) : electron
+const executable = runtime === "node" ? process.execPath : headlessNodeExecutable(electron)
 const entry = packaged ? join(packaged, "Contents/Resources/app.asar/dist-electron/entry.js") : join(repo, "dist-electron/entry.js")
-const args = runtime === "electron" ? (packaged ? [] : [repo]) : [entry]
+const args = [entry]
 // Plain Node keeps the caller's options (a container's --preserve-symlinks) and adds the loader.
 const hostNodeOptions = loader ? `${process.env.NODE_OPTIONS ?? ""} --import ${loader}`.trim() : ""
 const psArgs = platform() === "linux" ? ["-eo", "pid=,ppid=,rss=,args="] : ["-axo", "pid=,ppid=,rss=,command="]
@@ -74,8 +72,6 @@ await mkdir(location.directory, { recursive: true, mode: 0o700 })
 const env = {
   ...process.env,
   HOME: home,
-  MAKO_HOST_ONLY: "1",
-  MAKO_WEB_ONLY: "1",
   MAKO_DATA_ROOT: dataRoot,
   MAKO_WEB_SOCKET: location.socket,
   MAKO_PROFILE: "measure",
@@ -83,7 +79,7 @@ const env = {
   MAKO_RUNTIME_TRACE: "1",
   MAKO_TELEMETRY: "off",
 }
-for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_STANDALONE", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR", "NODE_OPTIONS"]) delete env[key]
+for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR", "NODE_OPTIONS"]) delete env[key]
 let running
 let measuredPid
 const client = randomUUID()
@@ -111,7 +107,7 @@ const invoke = async (channel, values) => {
 async function start(measured) {
   const childEnv = { ...env }
   if (hostNodeOptions) childEnv.NODE_OPTIONS = hostNodeOptions
-  if (runtime === "helper") childEnv.ELECTRON_RUN_AS_NODE = "1"
+  if (electron) Object.assign(childEnv, { ELECTRON_RUN_AS_NODE: "1", MAKO_HOST_EXECUTABLE: electron })
   if (measured) Object.assign(childEnv, {
     NODE_OPTIONS: `${hostNodeOptions} --require ${join(repo, "scripts/fixtures/host-measure-preload.cjs")}`.trim(),
     MAKO_MEASURE_SAMPLES: samplesFile,
@@ -234,7 +230,7 @@ const streamAgent = async () => (await readFile(samplesFile, "utf8").catch(() =>
 let finished = false
 const report = {
   measured: new Date().toISOString(),
-  runtime: `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : runtime === "node" ? " under plain Node" : ""}`,
+  runtime: `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : " under plain Node"}`,
   executable,
   machine: { platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cores: cpus().length, memoryGb: Math.round(totalmem() / 2 ** 30) },
 }
