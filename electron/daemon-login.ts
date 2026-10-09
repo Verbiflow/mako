@@ -23,6 +23,7 @@ import { DAEMON_NODE_ARGS } from "./daemon-command.js"
 import { buildTag } from "./build-identity.js"
 import { headlessNodeExecutable } from "./headless-node.js"
 import { hostEnvironment } from "./host-environment.js"
+import { onMac } from "./platform.js"
 
 const run = promisify(execFile)
 
@@ -82,7 +83,7 @@ function optOutPath(): string {
  * opt-outs and refresh existing jobs when their command changes.
  */
 export async function refreshDaemonLoginJob(): Promise<void> {
-  if (process.platform !== "darwin" || !daemonLoginOwner()) return
+  if (!onMac() || !daemonLoginOwner()) return
   try {
     if (existsSync(optOutPath())) return
     const current = await readFile(plistPath(), "utf8").catch(() => null)
@@ -104,7 +105,7 @@ function launchdUid(): number {
  * job running for days with its plist deleted and no host able to see it.
  */
 export async function daemonLoginJob(): Promise<{ loaded: boolean; pid: number | null }> {
-  if (process.platform !== "darwin") return { loaded: false, pid: null }
+  if (!onMac()) return { loaded: false, pid: null }
   try {
     const { stdout } = await run("launchctl", ["print", `gui/${launchdUid()}/${LABEL}`])
     const match = /\bpid = (\d+)/.exec(stdout)
@@ -120,7 +121,7 @@ export async function daemonLoginProcess(): Promise<number | null> {
 
 /** Unload the job and wait until launchd agrees it is gone. */
 export async function stopDaemonLoginJob(): Promise<void> {
-  if (process.platform !== "darwin") return
+  if (!onMac()) return
   await run("launchctl", ["bootout", `gui/${launchdUid()}/${LABEL}`]).catch(() => {})
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (!(await daemonLoginJob()).loaded) return
@@ -129,7 +130,7 @@ export async function stopDaemonLoginJob(): Promise<void> {
 }
 
 export async function daemonLoginEnabled(): Promise<boolean> {
-  if (process.platform !== "darwin") return false
+  if (!onMac()) return false
   try {
     return (await readFile(plistPath(), "utf8")).includes(LABEL)
   } catch {
@@ -145,7 +146,7 @@ export async function setDaemonLogin(enabled: boolean): Promise<void> {
     await makeDir(join(homedir(), ".mako"), { recursive: true }).catch(() => {})
     await write(optOutPath(), "").catch(() => {})
   }
-  if (process.platform !== "darwin") {
+  if (!onMac()) {
     throw new Error("Login start is only wired up for macOS so far")
   }
   if (enabled && !daemonLoginOwner())

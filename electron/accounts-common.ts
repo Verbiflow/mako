@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import type { JsonValue } from "./codex-app-json.js"
 import { securityKeychain } from "./keychain.js"
+import { onMac } from "./platform.js"
 const run = promisify(execFile)
 
 const credentialSalt = randomBytes(32)
@@ -338,7 +339,7 @@ export async function readKeychain(
   account?: string,
   failurePolicy: "optional" | "required" = "optional"
 ): Promise<string | null> {
-  if (process.platform !== "darwin") return null
+  if (!onMac()) return null
   const read = await securityKeychain().read({ service, account: account || undefined })
   if (read.kind === "found") return read.value.trim() || null
   if (read.kind === "failed" && failurePolicy === "required")
@@ -350,7 +351,7 @@ export async function readKeychain(
 
 /** When a Keychain item was last written. Reads attributes only, never the secret. */
 export async function keychainWrittenAt(service: string, account?: string): Promise<string | undefined> {
-  if (process.platform !== "darwin") return undefined
+  if (!onMac()) return undefined
   try {
     const { stdout } = await run("security", ["find-generic-password", "-s", service, ...(account ? ["-a", account] : [])])
     const stamp = /"mdat"<timedate>=0x[0-9A-F]+\s+"(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)Z/.exec(stdout)
@@ -364,7 +365,7 @@ export async function writeKeychain(
   service: string,
   contents: string
 ): Promise<void> {
-  if (process.platform !== "darwin") return
+  if (!onMac()) return
   try {
     await securityKeychain().write({ service, account: userInfo().username }, contents)
   } catch (error) {
@@ -376,7 +377,7 @@ export async function writeKeychain(
 }
 
 export async function deleteKeychain(service: string): Promise<void> {
-  if (process.platform !== "darwin") return
+  if (!onMac()) return
   try {
     await securityKeychain().delete({ service, account: userInfo().username })
   } catch (error) {
