@@ -7,6 +7,7 @@ import type { HostEvent, UpdateState } from "./shared.js"
 import { record } from "./crash.js"
 import { packagedDistribution } from "./distribution.js"
 import { hostEnvironment } from "./host-environment.js"
+import { onMac } from "./platform.js"
 
 /**
  * Updates.
@@ -22,7 +23,9 @@ import { hostEnvironment } from "./host-environment.js"
  *     announce itself unless there is genuinely a new version.
  *
  * `electron-updater` is loaded lazily so a dev run — where there is no update
- * feed and never will be — does not pay for it at boot.
+ * feed and never will be — does not pay for it at boot. It needs Electron's
+ * main process, so the Electron shell supplies it; a host under Node has none
+ * and reports updates as unsupported.
  */
 
 type Updater = typeof import("electron-updater").autoUpdater
@@ -32,7 +35,7 @@ type ReleaseNotes =
   | { kind: "entries"; entries: Array<{ note: string | null }> }
   | { kind: "none" }
 
-interface UpdaterModule {
+export interface UpdaterModule {
   autoUpdater?: Updater
   default?: { autoUpdater?: Updater }
 }
@@ -41,6 +44,7 @@ let updater: Updater | null = null
 let state: UpdateState = { status: "idle", version: hostEnvironment().version }
 let emit: (event: HostEvent) => void = () => {}
 let local: LocalUpdates | null = null
+let updaterModule: (() => Promise<UpdaterModule>) | undefined
 const metadata = buildMetadata()
 
 export function installationState(): UpdateInstallation {
@@ -74,7 +78,7 @@ export async function prepareUpdateInstall() {
 
 function updatesSupported(): boolean {
   return (
-    hostEnvironment().packaged && packagedDistribution(hostEnvironment().appRoot) === "signed"
+    updaterModule !== undefined && hostEnvironment().packaged && packagedDistribution(hostEnvironment().appRoot) === "signed"
   )
 }
 
@@ -96,9 +100,9 @@ export function updateState(): UpdateState {
  */
 async function load(): Promise<Updater | null> {
   if (updater) return updater
-  if (!updatesSupported()) return null
+  if (!updatesSupported() || !updaterModule) return null
   try {
-    const module: UpdaterModule = await import("electron-updater")
+    const module = await updaterModule()
     // The package is CJS; the default export is what carries `autoUpdater`.
     const auto = module.autoUpdater ?? module.default?.autoUpdater
     if (!auto) return null
@@ -172,9 +176,10 @@ function isString(
   return Object.prototype.toString.call(value) === "[object String]"
 }
 
-export function installUpdates(send: (event: HostEvent) => void) {
+export function installUpdates(send: (event: HostEvent) => void, updater?: () => Promise<UpdaterModule>) {
   emit = send
-  if (hostEnvironment().packaged && process.platform === "darwin" && packagedDistribution(hostEnvironment().appRoot) === "local" && metadata.makoLocalSigningIdentity) {
+  updaterModule = updater
+  if (hostEnvironment().packaged && onMac() && packagedDistribution(hostEnvironment().appRoot) === "local" && metadata.makoLocalSigningIdentity) {
     local = new LocalUpdates(join(hostEnvironment().dataRoot, "updates"), metadata.makoLocalSigningIdentity, () => emit({ type: "installation", installation: installationState() }), metadata.makoBuild ?? null)
     void local.load().then(() => emit({ type: "installation", installation: installationState() })).catch(() => emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
   }
