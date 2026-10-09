@@ -352,6 +352,10 @@ export function createClaudeSdkDriver(
         const name = account?.kind === "configured" ? account.name : "default"
         return new ClaudeTranscript((dependencies.configDir ?? claudeConfigDir)(name)).locate(binding.nativeId)
       },
+      elsewhere: {
+        via: "The same `resume` from the new folder: Claude finds the session by ID and keeps writing its file under the folder it started in.",
+        verified: "scripts/test-claude-resume-elsewhere-live.mjs against Claude Code 2.1.290 with a stand-in model.",
+      },
     },
     fork: { kind: "native", point: "checkpoint", via: "The Agent SDK's `forkSession` at a checkpoint (`resumeSessionAt`)." },
     questions: { kind: "request", via: "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input." },
