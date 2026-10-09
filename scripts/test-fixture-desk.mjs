@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { request } from "node:http"
@@ -15,6 +16,8 @@ import { publishDevRendererRegistration } from "../dist-electron/dev-renderer-re
 import { registeredDeskBrowsers } from "../packages/control-runtime/dist/desk-browser-registration.js"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { spawnHost } from "./lib/host-launch.mjs"
+import { AGENT_VIEWS_ENV } from "../dist-electron/contracts/desktop-channel.js"
+import { desktopLaunchEnvironment } from "../dist-electron/local-update-installer.js"
 
 for (const channel of fixtureDeskHostCalls) {
   assert.ok(isHostChannel(channel), `${channel} is a host call`)
@@ -141,8 +144,18 @@ for (const channel of ["mako:live-start", "mako:lifecycle-command", "mako:list-m
 
   if (app) {
     assert.equal(host.exitCode, null, `The fixture host stayed up: ${output.slice(-2000)}`)
-    // A packaged host's agents get desk windows only on a dev renderer's registration.
-    console.log("PASS: a packaged fixture desk host refuses writes, provider, git, process and unknown calls from its socket and its page proxy before any handler runs; allowed reads and boot still work. Agents' desk windows are checked without --app")
+    // A packaged host builds its desk browser only for its agents' control
+    // tools, which need a live Session. The bundle's agent views app, started
+    // as the host starts it, must still attach as one and leave with it.
+    const views = spawn(join(app, "Contents", "MacOS", "Mako"), ["--use-mock-keychain"], {
+      env: { ...desktopLaunchEnvironment(process.env), MAKO_DATA_ROOT: dataRoot, MAKO_PROFILE: profile, [AGENT_VIEWS_ENV]: "1" },
+      stdio: "ignore",
+    })
+    agentViewsPid = views.pid
+    const log = () => readFile(join(dataRoot, "logs", "host.log"), "utf8")
+    await until(async () => new RegExp(`desktop attached pid=${views.pid} role=agent-views`).test(await log()), "the agent views app attached", 30_000)
+    console.log(`Agent views app ${views.pid} attached`)
+    console.log("PASS: a packaged fixture desk host refuses writes, provider, git, process and unknown calls from its socket and its page proxy before any handler runs; allowed reads and boot still work; the bundle's agent views app attaches to it. Agents' desk windows are checked without --app")
   } else {
     // With no desktop open, the host starts the agent views app for agents'
     // desk windows. Each window is a page on the socket, which refuses what a
