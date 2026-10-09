@@ -64,8 +64,6 @@ export function installCloudAccountIpc({
     onRequest: request,
   })
   accounts = cloud
-  powerMonitor.on("resume", wake)
-  powerMonitor.on("unlock-screen", wake)
 
   registerIpc("mako:cloud-account", () => cloud.ready())
   registerIpc("mako:cloud-sign-in", () => cloud.signIn())
@@ -75,18 +73,9 @@ export function installCloudAccountIpc({
   registerIpc("mako:cloud-sign-out", () => cloud.signOut())
 }
 
-function wake(): void {
+/** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
+export function wakeCloudAccount(): void {
   accounts?.wake()
-}
-
-const memoryOnly = {
-  available: async () => false,
-  encrypt: async () => {
-    throw new Error("unreachable")
-  },
-  decrypt: async () => {
-    throw new Error("unreachable")
-  },
 }
 
 let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined

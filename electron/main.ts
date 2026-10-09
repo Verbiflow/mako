@@ -1991,6 +1991,14 @@ function bindIpc() {
   )
   handle("mako:live-close", (_event, id: string) => liveConversations.close(id))
   handle("mako:live-prewarm", (_event, id: string) => liveConversations.prewarm(id))
+  /** Someone is writing a new conversation's first message in `cwd`; listing its MCP servers now lets the launch find them cached. */
+  /** The desktop app heard the Mac resume or the screen unlock. */
+  handle("mako:machine-woke", (_event, source: "resume" | "unlock-screen") => {
+    wakeWatch?.notify(source)
+  })
+  handle("mako:launch-prewarm", (_event, cwd: string) => {
+    if (isAbsolute(cwd)) void discoverMcpRegistry(cwd).catch(() => undefined)
+  })
 
   /** A new conversation on another harness, from the main composer. */
   handle(
@@ -2244,12 +2252,15 @@ app.whenReady().then(async () => {
     buildTag()
   )
   powerMonitor.on("shutdown", () => {
-    shuttingDown = true
+    systemShutdown = true
   })
-  powerMonitor.on("resume", emitTerminalWake)
-  powerMonitor.on("unlock-screen", emitTerminalWake)
+  wakeWatch = watchWake((source) => {
+    hostLog("host", "woke", { source })
+    emitTerminalWake()
+    wakeCloudAccount()
+  })
   const planBuilds = new PlanBuilds({
-    file: join(app.getPath("userData"), "plan-builds.json"),
+    file: join(environment.dataRoot, "plan-builds.json"),
     announce: (builds) => emit({ type: "plan-builds", builds }),
   })
   const telemetry = await installTelemetry({
