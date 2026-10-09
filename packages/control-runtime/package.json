@@ -18,7 +18,8 @@
     "./session": "./dist/session.js",
     "./extension": "./dist/browser-extension-protocol.js",
     "./cli": "./dist/control-cli.js",
-    "./mcp": "./dist/control-mcp.js"
+    "./mcp": "./dist/control-mcp.js",
+    "./heavy-packages": "./dist/heavy-packages.js"
   },
   "bin": {
     "mako-control": "dist/control-cli.js"
@@ -35,6 +36,7 @@
     "test": "npm run -s build && node test/lifecycle.mjs && node test/media.mjs"
   },
   "dependencies": {
+    "@mako/lazy": "0.1.0",
     "@mako/control": "0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "devtools-protocol": "0.0.1692173",

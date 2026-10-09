@@ -1,0 +1,54 @@
+{
+  "packages": [
+    "@anthropic-ai/claude-agent-sdk",
+    "@agentclientprotocol/sdk",
+    "@modelcontextprotocol/sdk",
+    "@mako/control-runtime/mcp",
+    "ai",
+    "@ai-sdk/",
+    "ajv",
+    "sharp",
+    "ws",
+    "yaml",
+    "file-type",
+    "@napi-rs/keyring"
+  ],
+  "declarations": [
+    "electron/heavy-packages.ts",
+    "packages/control-runtime/src/heavy-packages.ts"
+  ],
+  "adapters": {
+    "electron/utility-language.ts": {
+      "uses": "the AI SDK and its providers",
+      "loadedBy": ["electron/heavy-packages.ts"]
+    },
+    "electron/acp-elicitation.ts": {
+      "uses": "ACP's form schemas",
+      "loadedBy": ["electron/heavy-packages.ts", "electron/providers/devin/approval-observer.ts"]
+    },
+    "electron/providers/devin/approval-observer.ts": {
+      "uses": "ACP's elicitation requests, reading Devin's approvals",
+      "loadedBy": ["electron/heavy-packages.ts"]
+    },
+    "packages/control-runtime/src/driver-schema.ts": {
+      "uses": "MCP's ajv validator, for the computer driver's schemas",
+      "loadedBy": ["packages/control-runtime/src/heavy-packages.ts"]
+    },
+    "packages/control-runtime/src/control-mcp.ts": {
+      "uses": "MCP's server SDK; loaded as @mako/control-runtime/mcp",
+      "loadedBy": []
+    },
+    "electron/browser-tools-main.ts": {
+      "uses": "MCP's server SDK, in its own process",
+      "loadedBy": []
+    },
+    "electron/browser-native-host.ts": {
+      "uses": "ws, in the browser extension's native host, a process started from browser-native-host-entry.ts",
+      "loadedBy": ["electron/browser-native-host-entry.ts"]
+    },
+    "electron/providers/claude/approval-settings-worker.ts": {
+      "uses": "Claude's settings resolver, in its own worker thread",
+      "loadedBy": []
+    }
+  }
+}
