@@ -313,7 +313,7 @@ export const hostCallInputs = {
       z.object({
         kind: z.literal("choice"),
         optionId: z.union([z.null(), z.string()]),
-        feedback: z.string().optional(),
+        feedback: z.string().trim().min(1).optional(),
       }),
       z.object({
         kind: z.literal("answers"),

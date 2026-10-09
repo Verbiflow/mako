@@ -17,10 +17,11 @@ export type Capability<Detail extends object = object> =
   | { state: "absent"; by: "harness" | "mako"; reason: string }
 
 export const implemented = (via: string): Capability => ({ state: "implemented", via })
-export const noOp = (reason: string): Capability => ({ state: "no-op", reason })
-export const byDefault = (reason: string): Capability => ({ state: "default", reason })
-export const harnessLacks = (reason: string): Capability => ({ state: "absent", by: "harness", reason })
-export const makoLacks = (reason: string): Capability => ({ state: "absent", by: "mako", reason })
+type Not<State extends Capability["state"]> = Extract<Capability, { state: State }>
+export const noOp = (reason: string): Not<"no-op"> => ({ state: "no-op", reason })
+export const byDefault = (reason: string): Not<"default"> => ({ state: "default", reason })
+export const harnessLacks = (reason: string): Not<"absent"> => ({ state: "absent", by: "harness", reason })
+export const makoLacks = (reason: string): Not<"absent"> => ({ state: "absent", by: "mako", reason })
 
 /**
  * Every capability of one harness, projected from its live driver. A
@@ -37,7 +38,12 @@ export interface LiveCapabilities {
   compaction: Capability
   planning: Capability
   approvals: Capability
-  questions: Capability
+  /**
+   * `request`: the turn waits on the answer, given through the approval the
+   * harness raised. `session`: the question stays in the conversation after
+   * the turn and survives a restart, answered or dismissed in the session.
+   */
+  questions: Capability<{ asks: "request" | "session" }>
   modes: Capability
   nativeAgents: Capability
   backgroundStop: Capability
