@@ -627,6 +627,63 @@ export class LiveConversations {
     })
   }
 
+  /**
+   * Move an idle conversation to another folder under its own native
+   * session, as a Thread's move into its worktree does, when its harness goes
+   * on there (`resume.elsewhere`): the provider sleeps and the folder changes.
+   * Returns the folder it left, or undefined, with nothing changed, when it
+   * can't; the caller forks instead. `resumeMoved` proves the move.
+   */
+  async relocate(id: string, cwd: string): Promise<string | undefined> {
+    const resident = this.load(id)
+    if (!resident || !this.relocates(resident)) return undefined
+    const from = resident.snapshot.session.cwd
+    if (from === cwd) return from
+    if (resident.driver) await this.hibernate(resident, "workspace-move")
+    if (resident.driver || resident.waking || resident.opening || resident.closing || !this.reopens(resident)) return undefined
+    resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, cwd } }
+    this.flush(resident)
+    hostLog("residency", "conversation relocated", { conversation: id, harness: resident.snapshot.session.harness, nativeId: this.activeBinding(resident)?.nativeId })
+    return from
+  }
+
+  /**
+   * Resume a relocated conversation's native session in its new folder now,
+   * sending nothing, so a harness that no longer goes on there is found out
+   * during the move and not at the person's next message. When it doesn't
+   * resume, the conversation goes back to `from`, asleep as it was, and the
+   * reason comes back for the caller to fork instead.
+   */
+  async resumeMoved(id: string, from: string): Promise<string | undefined> {
+    const resident = this.load(id)
+    if (!resident) return "The conversation closed during the move."
+    if (resident.snapshot.session.connection === "hibernated") await this.wake(resident)
+    const { connection, status, error } = resident.snapshot.session
+    if (connection === "connected" && status === "ready") return undefined
+    const reason = error ?? `The harness didn't resume the session (${connection}, ${status}).`
+    if (!resident.driver && !resident.waking && !resident.opening) {
+      resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, cwd: from, connection: "hibernated", status: "ready", error: undefined } }
+      this.flush(resident)
+    }
+    hostWarn("residency", "a relocated conversation didn't resume", { conversation: id, harness: resident.snapshot.session.harness, error: reason })
+    return reason
+  }
+
+  /** Whether `relocate` would move this conversation now. */
+  relocatable(id: string): boolean {
+    const resident = this.load(id)
+    return Boolean(resident && this.relocates(resident))
+  }
+
+  private relocates(resident: Resident): boolean {
+    const binding = this.activeBinding(resident)
+    const driver = this.dependencies.driver(binding?.provider ?? "")
+    if (resident.snapshot.session.status === "closed" || !binding?.nativeId || !binding.path) return false
+    if (driver?.resume.kind !== "native" || !driver.resume.elsewhere) return false
+    return resident.driver ? this.canHibernate(resident)
+      : !resident.waking && !resident.opening && !resident.closing && ["hibernated", "disconnected"].includes(resident.snapshot.session.connection)
+  }
+
   hibernateIfIdle(id: string, reason = "explicit"): boolean {
     const resident = this.load(id)
     if (!resident || !this.canHibernate(resident)) return false

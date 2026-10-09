@@ -85,29 +85,27 @@ import { WorkspaceMoves, type MoveSource } from "./workspace-moves.js"
 import { moveablePlace, within, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
+import { moveIntoWorktree as moveConversation, type MovedConversation } from "./conversation-move.js"
 import { projectRecipe } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { installThreadAppIpc } from "./ipc/thread-app.js"
 import { installCheckoutHeadsIpc } from "./ipc/checkout-heads.js"
 import { nativeStopToken } from "./drivers.js"
-import type { LiveSnapshot, LiveStartOptions } from "./shared.js"
+import type { LiveStartOptions } from "./shared.js"
 import {
   app,
   BrowserWindow,
-  clipboard,
-  dialog,
   nativeImage,
   nativeTheme,
   net,
   powerMonitor,
   protocol,
-  shell,
   type BrowserWindowConstructorOptions,
 } from "electron"
 import { spawn } from "node:child_process"
 import { watch } from "node:fs"
 import { homedir } from "node:os"
-import { basename, dirname, join, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 import { AppKeySchema, type AppKey } from "./contracts/thread-environments.js"
 import { ThreadIdSchema } from "./contracts/thread-identity.js"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -719,68 +717,86 @@ const controlSessions = new ControlSessions(async () => {
 
 function ensureMakoLocalControl() {
   return ensureCuaEmbedded(
-    join(app.getPath("userData"), "computer-use", "cua"),
+    join(environment.dataRoot, "computer-use", "cua"),
     MAKO_BUNDLE_ID
   )
 }
 
+let wakeWatch: WakeWatch | undefined
 function emitTerminalWake() {
   webHost?.terminal({ type: "wake" })
   for (const renderer of rendererWindows)
     renderer.webContents.send("mako:terminal-event", { type: "wake" })
 }
 
-/** Fork a conversation into its Thread's worktree, making one (and moving the checkout's changes) when it has none. */
-async function forkIntoWorktree(id: string, input: ForkInput): Promise<{ fork: LiveSnapshot; moved: number }> {
+const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}/`)
+
+/**
+ * The Thread's other open Sessions editing in the same checkout as this
+ * one, in a folder around it or inside it. Archived ones, such as those a
+ * move left behind, and those in the Thread's worktree already stay put.
+ */
+function threadCompanions(id: string): string[] {
+  const placed = threadStore?.journalPlacement(id)
+  const cwd = liveConversations.session(id)?.cwd
+  if (!placed || !cwd) return []
+  const worktree = threadWorktrees?.threadCheckout(id)?.path
+  return liveConversations.summaries()
+    .filter(({ session, threadId }) => session.id !== id && threadId === placed.thread && session.status !== "closed" &&
+      (holds(cwd, session.cwd) || holds(session.cwd, cwd)) && !(worktree && holds(worktree, session.cwd)) &&
+      !threadLifecycle.controls({ kind: "live", id: session.id }).archived)
+    .map(({ session }) => session.id)
+}
+
+/** Where a Thread's move starts from: the outermost folder among this Session's and its companions', so the worktree is the whole project's. */
+function moveProject(id: string): string | undefined {
+  const cwd = liveConversations.session(id)?.cwd
+  if (!cwd) return undefined
+  return threadCompanions(id)
+    .map((other) => liveConversations.session(other)?.cwd ?? cwd)
+    .reduce((outer, folder) => holds(folder, outer) ? folder : outer, cwd)
+}
+
+/** Move a conversation into its Thread's worktree (`conversation-move.ts`). */
+function moveIntoWorktree(id: string, input: ForkInput, project?: string): Promise<MovedConversation> {
   if (!threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
-  const source = liveConversations.snapshot(id)
-  if (!source) throw new Error("Open the conversation before moving it into a worktree.")
-  // A Thread has one worktree: a Session moving in once it exists joins it, and nothing moves with it.
-  const joined = await threadWorktrees.joinFolder(id, input.id, source.session.cwd)
-  if (joined) return { fork: liveConversations.fork(id, input, joined), moved: 0 }
-  const worktree = await threadWorktrees.prepareFork(id, input.id, source.session.cwd, source.session.title)
-  let fork: LiveSnapshot
-  try {
-    fork = liveConversations.fork(id, input, worktree.cwd)
-  } catch (error) {
-    await threadWorktrees.abandon(input.id).catch(() => undefined)
-    throw error
-  }
-  // The fork exists before anything moves, so a refused fork leaves the checkout untouched.
-  const moved = await threadWorktrees.moveChanges(input.id)
-  await threadWorktrees.attach(input.id)
-  return { fork, moved }
+  return moveConversation({ conversations: liveConversations, worktrees: threadWorktrees, warn: (message, facts) => hostWarn("workspace", message, facts) }, id, input, project)
 }
 
 /**
- * The move an agent asked for and the user allowed, once its turn ended:
- * the Session goes on in the Thread's worktree from its last answer, the
- * one it leaves is archived, and the agent is told where it is now.
+ * The move an agent asked for and the user allowed, once its turn and its
+ * companions' ended: the Session goes on in the Thread's worktree, and the
+ * agent is told where it is now. A fork leaves the Session it came from
+ * archived. A companion (`asked` false) follows quietly, starting no turn.
  */
-async function moveOntoOwnBranch(id: string): Promise<void> {
+async function moveOntoOwnBranch(id: string, asked = true): Promise<void> {
   const source = liveConversations.snapshot(id)
   if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
   const last = source.requests.filter((request) => request.status === "completed").at(-1)
-  if (!last) throw new Error("The agent's turn didn't finish, so it didn't move onto its own branch. Move it from the composer once it has an answer.")
-  const { fork, moved } = await forkIntoWorktree(id, {
+  if (!last) throw new Error(asked
+    ? "The agent's turn didn't finish, so it didn't move onto its own branch. Move it from the composer once it has an answer."
+    : `“${source.session.title || "Untitled conversation"}” stayed in the main checkout: it has no answer yet to go on from in the worktree.`)
+  const { conversation, moved, relocated } = await moveIntoWorktree(id, {
     id: crypto.randomUUID(),
     provider: source.session.harness,
     point: { kind: "run", requestId: last.id },
     thread: "parent",
     worktree: true,
     move: true,
-  })
-  emit({ type: "thread-archives", snapshot: threadLifecycle.archive({ id: crypto.randomUUID(), target: { kind: "live", id }, archived: true }) })
-  const branch = threadWorktrees?.ofConversation(fork.session.id)?.branch
-  const event: Extract<HostEvent, { type: "workspace-moved" }> = { type: "workspace-moved", from: id, to: fork.session.id, changed: moved }
+  }, asked ? moveProject(id) : undefined)
+  if (!relocated)
+    emit({ type: "thread-archives", snapshot: threadLifecycle.archive({ id: crypto.randomUUID(), target: { kind: "live", id }, archived: true }) })
+  const branch = threadWorktrees?.ofConversation(conversation.session.id)?.branch
+  const event: Extract<HostEvent, { type: "workspace-moved" }> = { type: "workspace-moved", from: id, to: conversation.session.id, changed: moved }
   if (branch) event.branch = branch
   emit(event)
+  if (!asked) return
   const came = moved ? ` The ${moved === 1 ? "uncommitted file" : `${moved} uncommitted files`} from the project folder came with you.` : ""
-  const tuning = await resolveHarnessLaunch(fork.session.harness, fork.session.cwd, last.tuning)
+  const tuning = await resolveHarnessLaunch(conversation.session.harness, conversation.session.cwd, last.tuning)
   liveConversations.submit(
-    fork.session.id,
+    conversation.session.id,
     crypto.randomUUID(),
-    `You're on this Thread's own branch now${branch ? `, ${branch}` : ""}, in ${fork.session.cwd}.${came} Work there from now on, and carry on where you left off.`,
+    `You're on this Thread's own branch now${branch ? `, ${branch}` : ""}, in ${conversation.session.cwd}.${came} Work there from now on, and carry on where you left off.`,
     [],
     tuning,
     undefined,
@@ -1840,7 +1856,7 @@ function bindIpc() {
       liveConversations.acknowledgeAction(id, actionId)
   )
   handle("mako:live-fork", async (_event, id: string, input: ForkInput) => {
-    const fork = input.worktree ? (await forkIntoWorktree(id, input)).fork : await liveConversations.fork(id, input)
+    const fork = input.worktree ? (await moveIntoWorktree(id, input)).conversation : await liveConversations.fork(id, input)
     hostTelemetry?.feature("thread.forked", liveConversations.session(id)?.harness)
     return fork
   })
@@ -2331,8 +2347,10 @@ app.whenReady().then(async () => {
       if (session.title) source.title = session.title
       return source
     },
-    place: (id, cwd) => moveablePlace(threadWorktrees, id, cwd),
-    move: moveOntoOwnBranch,
+    companions: threadCompanions,
+    place: (id, cwd) => moveablePlace(threadWorktrees, id, moveProject(id) ?? cwd),
+    move: (id) => moveOntoOwnBranch(id),
+    follow: (id) => moveOntoOwnBranch(id, false),
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (_id, message) => emit({ type: "notice", level: "error", message }),
   })

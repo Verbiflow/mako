@@ -77,9 +77,10 @@ async function forkIntoWorktree(source: Source): Promise<{ fork: LiveSnapshot; l
 /**
  * Moves the Thread on screen onto its own branch: into its worktree, making
  * one when it has none.
- * The Session on screen goes on there, in the same Thread, from its last
- * answer, and the one it leaves is archived, so the Thread moves rather than
- * splits. A new worktree takes the project folder's uncommitted changes
+ * The Session on screen goes on there, in the same Thread: itself, when its
+ * harness resumes the same session in another folder, or else a fork from
+ * its last answer, and the one it leaves is archived, so the Thread moves
+ * rather than splits. A new worktree takes the project folder's uncommitted changes
  * along; joining the Thread's worktree moves nothing.
  */
 export async function moveToWorktree(changed: number): Promise<boolean> {
@@ -93,7 +94,8 @@ export async function moveToWorktree(changed: number): Promise<boolean> {
     applyLiveSnapshot(fork)
     acp.activate(fork.session.id)
     await refreshWorktrees()
-    await threadLifecycle.archive([leaving], true, false).catch(() => false)
+    const relocated = leaving.kind === "live" && leaving.id === fork.session.id
+    if (!relocated) await threadLifecycle.archive([leaving], true, false).catch(() => false)
     const worktree = worktreeAt(worktreesStore.get().worktrees, fork.session.cwd)?.worktree
     const joining = Boolean(worktree && before.has(worktree.path))
     toast(worktree ? `Now on its own branch, ${worktree.branch}` : "Now on its own branch", {

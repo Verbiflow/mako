@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { z } from "zod"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -96,6 +98,15 @@ try {
   await rm(path)
   assert.equal((await resumeVerdict(binding, idle)).kind, "unavailable")
   assert.equal(await nativeCheckpoint(root), undefined)
+  // A harness goes on in another folder only on a test against the real harness that a suite runs.
+  const suites = Object.values(z.object({ scripts: z.record(z.string(), z.string()) }).parse(JSON.parse(await readFile("package.json", "utf8"))).scripts).join(" ")
+  for (const driver of providerHost.liveDrivers.list()) {
+    const elsewhere = driver.resume.kind === "native" ? driver.resume.elsewhere : undefined
+    if (!elsewhere) continue
+    const test = /scripts\/[\w.-]+\.(?:ts|mjs)/.exec(elsewhere.verified)?.[0]
+    assert.ok(test && existsSync(test), `${driver.provider}: resume.elsewhere names the test that proved it`)
+    assert.ok(suites.includes(test), `${driver.provider}: a package script runs ${test}`)
+  }
   // Every installed declaration, plus a new harness, shares the decision owner.
   // Inject native facts here; real file/DB/SDK readers have separate fixture oracles.
   for (const driver of [...providerHost.liveDrivers.list(), { ...providerHost.liveDrivers.list()[0], provider: "future-harness" }]) {
