@@ -428,10 +428,10 @@ async function serveWindows() {
   }
   for (const channel of hostChannels) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
-      const args = hostCallInput(channel).parse(raw)
-      // A window is a page: a fixture desk refuses it what it refuses a page in a browser (`fixture-desk-policy.ts`).
+      // A window is a page: a fixture desk refuses it what it refuses a page in a browser, before its arguments are read (`fixture-desk-policy.ts`).
       const refusal = runtime.info.fixture ? fixtureDeskRefusal(channel) : undefined
       if (refusal) throw new FixtureDeskRefusedError(refusal)
+      const args = hostCallInput(channel).parse(raw)
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
       breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
