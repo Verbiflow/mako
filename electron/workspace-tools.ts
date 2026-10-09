@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { realpath } from "node:fs/promises"
-import { basename, isAbsolute, relative } from "node:path"
+import { basename, dirname, isAbsolute, relative } from "node:path"
 import { z } from "zod"
 import { locateCheckout } from "./checkout-heads.js"
 import { discoverRepositories } from "./repository-discovery.js"
@@ -37,6 +37,8 @@ interface BranchState {
 export interface WorkspaceStatus {
   editsIn: "this Thread's worktree" | "a worktree made outside Mako" | "the main checkout" | "a folder outside Git"
   folder: string
+  /** A project folder holding several repositories: each one's folder inside it. */
+  repositories?: string[]
   branch?: string
   uncommittedFiles?: number
   outsideWorktree?: { folder: string; mainCheckout: string }
@@ -73,12 +75,58 @@ async function uncommitted(cwd: string): Promise<number | undefined> {
   return status === undefined ? undefined : status.split("\n").filter(Boolean).length
 }
 
+async function uncommittedAcross(roots: readonly string[]): Promise<number> {
+  const counts = await Promise.all(roots.map((root) => uncommitted(root)))
+  return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
+}
+
+const IGNORED_LISTED = 200
+
+/**
+ * Ignored entries short enough to list. Past `limit`, folders show as one
+ * `folder/**` pattern, which worktree_bring takes as it is: from the top,
+ * the folder holding the fewest entries opens first while the list still
+ * fits, so a short list like the env files shows whole and a folder of
+ * thousands of recordings stays one line.
+ */
+export function foldIgnored(entries: readonly string[], limit: number): string[] {
+  if (entries.length <= limit) return [...entries].sort()
+  const isEntry = new Set(entries)
+  const children = new Map<string, Set<string>>()
+  const size = new Map<string, number>()
+  for (const entry of entries) {
+    for (let child = entry, parent = dirname(entry); ; child = parent, parent = dirname(parent)) {
+      size.set(parent, (size.get(parent) ?? 0) + 1)
+      children.set(parent, (children.get(parent) ?? new Set()).add(child))
+      if (parent === ".") break
+    }
+  }
+  const listed = new Set<string>()
+  const folded = new Set<string>()
+  const show = (node: string) => {
+    while (!isEntry.has(node) && children.get(node)?.size === 1) node = [...children.get(node)!][0]!
+    listed.add(node)
+    if (!isEntry.has(node)) folded.add(node)
+  }
+  const open = (folder: string) => {
+    listed.delete(folder)
+    folded.delete(folder)
+    for (const child of children.get(folder) ?? []) show(child)
+  }
+  open(".")
+  for (;;) {
+    const next = [...folded].sort((a, b) => size.get(a)! - size.get(b)!)
+      .find((folder) => listed.size - 1 + children.get(folder)!.size <= limit)
+    if (!next) break
+    open(next)
+  }
+  return [...listed].map((node) => folded.has(node) ? `${node}/**` : node).sort()
+}
+
 /** Uncommitted files across the repositories a folder outside Git holds; undefined when it holds none. */
 async function uncommittedIn(folder: string): Promise<number | undefined> {
   const { roots } = await discoverRepositories(folder)
-  if (!roots.length) return undefined
-  const counts = await Promise.all(roots.map((root) => uncommitted(root)))
-  return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
+  return roots.length ? uncommittedAcross(roots) : undefined
 }
 
 /** The same folder's project root and uncommitted files, for a move's request. */
@@ -134,24 +182,29 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const current = deps.worktrees?.threadCheckout(conversationId)
       const onIt = current ? await within(current.path, cwd) : false
       const several = current && current.path !== current.worktrees[0]?.path ? current : undefined
-      const [project, branch, changed, checkout] = await Promise.all([
+      const [project, branch, inRepository, checkout] = await Promise.all([
         git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => ""),
         git(cwd, ["branch", "--show-current"]).catch(() => ""),
-        uncommitted(cwd).then((count) => count ?? uncommittedIn(cwd)),
+        uncommitted(cwd),
         onIt ? null : locateCheckout(cwd),
       ])
+      const roots = project ? [] : (await discoverRepositories(cwd)).roots
+      const changed = inRepository ?? (roots.length ? await uncommittedAcross(roots) : undefined)
+      // A project folder of several repositories is its own main checkout: worktree_move gives it one worktree per repository.
+      const projectFolder = !onIt && roots.length ? await realpath(cwd).catch(() => cwd) : ""
       const status: WorkspaceStatus = {
-        editsIn: onIt ? "this Thread's worktree" : checkout?.linked ? "a worktree made outside Mako" : project ? "the main checkout" : "a folder outside Git",
+        editsIn: onIt ? "this Thread's worktree" : checkout?.linked ? "a worktree made outside Mako" : project || projectFolder ? "the main checkout" : "a folder outside Git",
         folder: cwd,
       }
+      if (projectFolder) status.repositories = roots.map((root) => relative(cwd, root) || basename(root))
       if (checkout?.linked) status.outsideWorktree = { folder: checkout.linked.path, mainCheckout: checkout.linked.repoRoot }
       if (branch) status.branch = branch
-      const main = onIt && current ? current.project : project ? checkout?.linked?.repoRoot ?? project : ""
+      const main = onIt && current ? current.project : project ? checkout?.linked?.repoRoot ?? project : projectFolder
       if (main) {
-        const ignored = await ignoredEntries(main).catch((): string[] => [])
+        const ignored = foldIgnored(await ignoredEntries(main).catch((): string[] => []), IGNORED_LISTED)
         if (ignored.length) {
-          status.ignoredInMain = { folder: main, paths: ignored.slice(0, 200) }
-          if (ignored.length > 200) status.ignoredInMain.omitted = ignored.length - 200
+          status.ignoredInMain = { folder: main, paths: ignored.slice(0, IGNORED_LISTED) }
+          if (ignored.length > IGNORED_LISTED) status.ignoredInMain.omitted = ignored.length - IGNORED_LISTED
         }
       }
       if (changed !== undefined) status.uncommittedFiles = changed
@@ -257,7 +310,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_status",
     {
       description:
-        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. Returns the folder with its branch and uncommitted files; this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these); the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once.",
+        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files; this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these); the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once, and when there are many, a folder of many shows as one folder/** pattern that worktree_bring takes as it is.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -276,7 +329,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_move",
     {
       description:
-        "Call when the user asks for this work on its own branch or in a worktree. Asks to move this Session into this Thread's worktree, so your edits stay out of the main checkout. Use this instead of `git worktree add`, a `--worktree` flag or a worktree tool of your own: Mako then shows the branch in the app, brings the conversation and the uncommitted changes along, and offers merging or a pull request afterwards. Returns at once. The user answers in the app, unless the project always allows it; an allowed move happens when your turn ends.",
+        "Call when the user asks for this work on its own branch or in a worktree, or when you'd otherwise make a worktree or a copy of the checkout to keep work apart. Asks to move this Thread into its own worktree, so your edits stay out of the main checkout; for a project folder holding several repositories, that's one worktree per repository on one branch. Use this instead of `git worktree add`, copying the checkout, a `--worktree` flag or a worktree tool of your own: Mako, its Changes panel and the recipe's checks see only this Thread's checkouts. Mako shows the branch in the app, brings the conversation and the uncommitted changes along, and offers merging or a pull request afterwards. This Session and the Thread's other Sessions in this checkout move together, into the same worktree. Returns at once. The user answers in the app, unless the project always allows it; an allowed move happens once your turn and theirs have ended.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

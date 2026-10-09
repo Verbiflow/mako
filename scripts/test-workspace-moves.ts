@@ -18,7 +18,7 @@ import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
 import { RECIPE_PATH } from "../electron/thread-recipe.js"
-import { moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
+import { foldIgnored, moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
 import { gitActionPrompt } from "../electron/contracts/git-actions.js"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
@@ -27,6 +27,15 @@ const agent = new Client({ name: "workspace-agent", version: "1" })
 let grants: Awaited<ReturnType<typeof startConversationMcp>> | undefined
 
 try {
+  // Thousands of loose recordings fold to one pattern; the short lists beside them show whole.
+  const recordings = Array.from({ length: 3000 }, (_, index) => `api/audits/day-${index % 3}/frame-${index}.png`)
+  const short = ["api/.dev.vars", "api/node_modules", "api/apps/gateway/.dev.vars", "web/.env.local", "web/node_modules", "web/docs/notes", "web/docs/plan.md", ".tool-versions"]
+  const folded = foldIgnored([...recordings, ...short], 20)
+  assert.ok(folded.length <= 20)
+  for (const entry of short) assert.ok(folded.includes(entry), `${entry} is listed`)
+  assert.deepEqual(folded.filter((entry) => entry.endsWith("/**")), ["api/audits/day-0/**", "api/audits/day-1/**", "api/audits/day-2/**"])
+  assert.deepEqual(foldIgnored(["b", "a/c"], 20), ["a/c", "b"], "a list that fits stays as it is")
+
   // A project with one commit and two uncommitted files, and a folder of this Thread's "worktree".
   const project = join(root, "project")
   mkdirSync(project)
@@ -339,6 +348,29 @@ try {
   assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), new RegExp(`^Removed this Thread's worktree, ${checkoutPath}\\. .* kept with everything committed on it in each repository\\.$`))
   assert.deepEqual(removedPaths, [worktreePath, members[0]!.path], "removing any of a project's worktrees removes its checkout")
   projectCheckout = undefined
+
+  // Before a move, a project folder of several repositories is the main checkout, not "a folder outside Git".
+  placed = undefined
+  const many = join(root, "many")
+  for (const name of ["api", "web"]) {
+    const repository = join(many, name)
+    mkdirSync(repository, { recursive: true })
+    git(repository, "init", "-q", "-b", "main")
+    writeFileSync(join(repository, ".gitignore"), "local.env\n")
+    git(repository, "add", ".")
+    git(repository, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "one")
+  }
+  writeFileSync(join(many, "api", "local.env"), "TOKEN=fixture-only")
+  writeFileSync(join(many, "web", "draft.txt"), "draft")
+  sources.set("g", { ...sources.get("g")!, cwd: many })
+  const ofFolder = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} })))
+  assert.equal(ofFolder.editsIn, "the main checkout", "a project folder is its own main checkout, which worktree_move can leave")
+  assert.deepEqual(ofFolder.repositories, ["api", "web"])
+  assert.equal(ofFolder.uncommittedFiles, 1)
+  assert.equal(ofFolder.ignoredInMain.folder, many)
+  assert.ok(ofFolder.ignoredInMain.paths.includes("api/local.env"), "its ignored files are listed for bringing along")
+  assert.match(listed.find((tool) => tool.name === "worktree_move")!.description!, /several repositories/)
+  assert.match(listed.find((tool) => tool.name === "worktree_move")!.description!, /the Thread's other Sessions in this checkout move together/)
 
   grants.revoke("binding", "g")
   await assert.rejects(agent.listTools(), { code: 401 })
