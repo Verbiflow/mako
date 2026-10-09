@@ -45,6 +45,11 @@ ids or branch on all known providers. Provider-specific wire syntax and paths
 belong under that provider's directory. A new provider adds one module to
 `electron/providers/index.ts`; it does not add switches to shared consumers.
 
+Whether a harness is installed is what its driver's `available` says:
+`npx tsx scripts/harnesses-installed.ts`. Never `which`: Devin's CLI ships
+inside `Devin.app` and isn't on PATH, and Cursor runs through its SDK package.
+Live tests take the executable from the same resolvers (`devinExecutable()`).
+
 Live native messages are decoded by a pure decoder per harness, declared as
 the `decoder` family of its `HarnessDefinition` (or `absent` with a reason).
 A decoder turns one native message into the shared `Decoded` events in
