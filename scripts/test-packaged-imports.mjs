@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { existsSync } from "node:fs"
+import { builtinModules } from "node:module"
 import { posix, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { listPackage, extractFile } from "@electron/asar"
@@ -35,6 +37,7 @@ export function assertPackagedImports(app) {
   let checked = 0
   const sources = new Map()
   const imports = []
+  const packages = new Map()
   for (const file of files) {
     if (!file.startsWith("dist-electron/") || (!file.endsWith(".js") && !file.endsWith(".mjs"))) continue
     const bytes = extractFile(archive, file)
@@ -72,6 +75,9 @@ export function assertPackagedImports(app) {
         )
         imports.push({ file, target: `/${target}`, names: importedNames(node) })
         checked++
+      } else if (specifier && ts.isStringLiteralLike(specifier)) {
+        const name = packageName(specifier.text)
+        if (name && !packages.has(name)) packages.set(name, file)
       }
       ts.forEachChild(node, check)
     }
@@ -114,8 +120,21 @@ export function assertPackagedImports(app) {
         `Packaged export missing: ${item.file} -> ${item.target}: ${name}`
       )
   }
+  const unpacked = join(app, "Contents/Resources/app.asar.unpacked")
+  for (const [name, file] of packages)
+    assert.ok(
+      files.has(`node_modules/${name}/package.json`) || existsSync(join(unpacked, "node_modules", name, "package.json")),
+      `Packaged package missing: ${file} -> ${name}`
+    )
   assert.ok(checked > 0, "The package contains no host imports")
   return checked
+}
+
+/** The package a bare specifier names, or nothing for Node's own modules and Electron's. */
+function packageName(specifier) {
+  if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("node:")) return undefined
+  if (specifier === "electron" || specifier === "original-fs" || builtinModules.includes(specifier)) return undefined
+  return specifier.split("/").slice(0, specifier.startsWith("@") ? 2 : 1).join("/")
 }
 
 if (
