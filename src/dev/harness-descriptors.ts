@@ -2,7 +2,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 
 /** Every harness in Mako's order, as the host describes it on any Mac. */
-export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities" | "usage">[] = [
+export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities" | "usage" | "artifacts" | "unique">[] = [
   {
     "provider": "claude",
     "displayName": "Claude Code",
@@ -66,7 +66,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "questions": {
         "state": "implemented",
-        "via": "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input."
+        "via": "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input.",
+        "asks": "request"
       },
       "modes": {
         "state": "implemented",
@@ -124,7 +125,56 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
-    }
+    },
+    "artifacts": {
+      "state": "absent",
+      "by": "harness",
+      "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
+    },
+    "unique": [
+      {
+        "name": "Context breakdown",
+        "native": "`getContextUsage`: categories, memory files, MCP tools, messages",
+        "mako": {
+          "state": "implemented",
+          "via": "What fills the context, in the meter's popover.",
+          "field": "capabilities.contextBreakdown"
+        }
+      },
+      {
+        "name": "Checkpoints",
+        "native": "`rewindFiles(userMessageId)`, `/rewind`",
+        "mako": {
+          "state": "no-op",
+          "reason": "Mako's own workspace checkpoints rewind files for every harness, so Mako doesn't use Claude's."
+        }
+      },
+      {
+        "name": "Output styles",
+        "native": "`~/.claude/output-styles`, `.claude/output-styles`; `outputStyle`",
+        "mako": {
+          "state": "default",
+          "reason": "Claude Code applies the output style its settings name in sessions Mako starts."
+        }
+      },
+      {
+        "name": "Plugins",
+        "native": "`.claude-plugin/plugin.json` and marketplaces",
+        "mako": {
+          "state": "default",
+          "reason": "Claude Code loads the plugins its settings enable in sessions Mako starts."
+        }
+      },
+      {
+        "name": "Background agents",
+        "native": "`claude --bg`, `claude agents`",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako doesn't list or attach to Claude's background agents."
+        }
+      }
+    ]
   },
   {
     "provider": "codex",
@@ -203,7 +253,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "questions": {
         "state": "implemented",
-        "via": "`request_user_input` requests, answered on their own channel; the thread's history retires answered ones."
+        "via": "`request_user_input` requests, answered on their own channel; the thread's history retires answered ones.",
+        "asks": "session"
       },
       "modes": {
         "state": "implemented",
@@ -263,7 +314,50 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
-    }
+    },
+    "artifacts": {
+      "state": "absent",
+      "by": "harness",
+      "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
+    },
+    "unique": [
+      {
+        "name": "Rate-limit reset credits",
+        "native": "`account/rateLimits/read` `rateLimitResetCredits`, `account/rateLimitResetCredit/consume`",
+        "mako": {
+          "state": "implemented",
+          "via": "Use a reset credit, on the account's row.",
+          "field": "usage.resetCredits"
+        }
+      },
+      {
+        "name": "Session questions",
+        "native": "`item/tool/requestUserInput`, answered in the session",
+        "mako": {
+          "state": "implemented",
+          "via": "Question cards above the composer.",
+          "field": "capabilities.questions"
+        }
+      },
+      {
+        "name": "Review mode",
+        "native": "`review/start`; `enteredReviewMode` and `exitedReviewMode` items",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "A review the session runs shows as Review mode markers in the transcript; starting one isn't built."
+        }
+      },
+      {
+        "name": "Goals",
+        "native": "`thread/goal/*`",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako doesn't show or set a thread's goal."
+        }
+      }
+    ]
   },
   {
     "provider": "cursor",
@@ -395,7 +489,56 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "by": "harness",
         "reason": "Cursor's SDK store keeps no token counts, so only its sessions in Mako are counted."
       }
-    }
+    },
+    "artifacts": {
+      "state": "implemented",
+      "via": "Cursor writes a canvas as a React file importing `cursor/canvas`; its SDK lists no artifacts for a local run.",
+      "name": "Canvas",
+      "files": [
+        ".canvas.tsx"
+      ]
+    },
+    "unique": [
+      {
+        "name": "Artifact preview",
+        "native": "Canvas files (`*.canvas.tsx`); `SDKArtifact`, though `listArtifacts` is empty in local runs",
+        "mako": {
+          "state": "implemented",
+          "via": "Interactive previews in the file viewer.",
+          "field": "artifacts"
+        }
+      },
+      {
+        "name": "Server-side summarization",
+        "native": "a task message carrying the summary",
+        "mako": {
+          "state": "default",
+          "reason": "Cursor summarizes on its server when the context fills, and the summary shows as a compaction in the transcript."
+        }
+      },
+      {
+        "name": "Image generation and screen recording",
+        "native": "`generateImage`, `recordScreen` tools",
+        "mako": {
+          "state": "implemented",
+          "via": "Its tool rows in the transcript.",
+          "field": "tools",
+          "tools": [
+            "generateImage",
+            "recordScreen"
+          ]
+        }
+      },
+      {
+        "name": "Cloud agents",
+        "native": "`AgentOptions.cloud`, `bc-` agent IDs",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built."
+        }
+      }
+    ]
   },
   {
     "provider": "opencode",
@@ -452,7 +595,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "questions": {
         "state": "implemented",
-        "via": "The `question` tool's form, answered with `form.reply`."
+        "via": "The `question` tool's form, answered with `form.reply`.",
+        "asks": "request"
       },
       "modes": {
         "state": "implemented",
@@ -512,7 +656,44 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
-    }
+    },
+    "artifacts": {
+      "state": "absent",
+      "by": "harness",
+      "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
+    },
+    "unique": [
+      {
+        "name": "Staged revert",
+        "native": "`revert/stage`, `commit`, `clear`",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako follows a revert another client commits; staging one isn't built."
+        }
+      },
+      {
+        "name": "Inbox",
+        "native": "a prompt sent while busy is steered or queued (`inbox/:id/steer|queue`)",
+        "mako": {
+          "state": "implemented",
+          "via": "Messages sent during a turn reach it.",
+          "field": "capabilities.steering"
+        }
+      },
+      {
+        "name": "Code Mode MCP",
+        "native": "MCP tools called from a script through the `execute` tool, on by default",
+        "mako": {
+          "state": "implemented",
+          "via": "Its tool rows in the transcript.",
+          "field": "tools",
+          "tools": [
+            "execute"
+          ]
+        }
+      }
+    ]
   },
   {
     "provider": "grok",
@@ -576,7 +757,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "questions": {
         "state": "implemented",
-        "via": "`_x.ai/ask_user_question` requests from the `ask_user_question` tool."
+        "via": "`_x.ai/ask_user_question` requests from the `ask_user_question` tool.",
+        "asks": "request"
       },
       "modes": {
         "state": "implemented",
@@ -635,7 +817,67 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
-    }
+    },
+    "artifacts": {
+      "state": "absent",
+      "by": "harness",
+      "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
+    },
+    "unique": [
+      {
+        "name": "X search",
+        "native": "`x_search`, a server-side xAI search reported by its title",
+        "mako": {
+          "state": "implemented",
+          "via": "Its tool rows in the transcript.",
+          "field": "tools",
+          "tools": [
+            "x_search"
+          ]
+        }
+      },
+      {
+        "name": "Image and video generation",
+        "native": "`image_gen`, `image_edit`, `image_to_video` and `reference_to_video` tools; `/imagine`, `/imagine-video`",
+        "mako": {
+          "state": "implemented",
+          "via": "Its tool rows in the transcript.",
+          "field": "tools",
+          "tools": [
+            "image_gen",
+            "image_edit",
+            "image_to_video",
+            "reference_to_video"
+          ]
+        }
+      },
+      {
+        "name": "Incomplete usage reports",
+        "native": "`usageIsIncomplete` and `costIsPartial` on a turn's usage",
+        "mako": {
+          "state": "implemented",
+          "via": "A note when its totals leave calls out.",
+          "field": "usage.missedCalls"
+        }
+      },
+      {
+        "name": "Announcements",
+        "native": "`_x.ai/announcements/update`",
+        "mako": {
+          "state": "no-op",
+          "reason": "They're xAI's product news for Grok's own pager, so Mako ignores them."
+        }
+      },
+      {
+        "name": "Folder trust",
+        "native": "`_x.ai/folder_trust/request` to a client that sets `x.ai/folderTrust.interactive`, saved in `~/.grok/trusted_folders.toml`",
+        "mako": {
+          "state": "implemented",
+          "via": "Approval cards before the agent acts.",
+          "field": "capabilities.approvals"
+        }
+      }
+    ]
   },
   {
     "provider": "devin",
@@ -707,7 +949,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "questions": {
         "state": "implemented",
-        "via": "The `ask_user_question` tool's request."
+        "via": "The `ask_user_question` tool's request.",
+        "asks": "request"
       },
       "modes": {
         "state": "implemented",
@@ -768,6 +1011,49 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
-    }
+    },
+    "artifacts": {
+      "state": "absent",
+      "by": "harness",
+      "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
+    },
+    "unique": [
+      {
+        "name": "Step revert and fork",
+        "native": "`cognition.ai/revert/*`",
+        "mako": {
+          "state": "implemented",
+          "via": "Fork a conversation from any turn.",
+          "field": "capabilities.fork"
+        }
+      },
+      {
+        "name": "Editable approvals",
+        "native": "`cognition.ai/editableCommand`, `command/revise`",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "The approval card shows the command Devin proposes; editing it before it runs isn't built."
+        }
+      },
+      {
+        "name": "Cloud handoff",
+        "native": "`/handoff`, `/cloud-attach`",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built."
+        }
+      },
+      {
+        "name": "Credits and ACUs",
+        "native": "`usage_update` `_meta` `totalCreditCost` and `totalAcuCost` on the reading that ends a turn, for an account billed in credits or ACUs",
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Every account recorded is billed by quota and reports 0, so Mako doesn't read them yet."
+        }
+      }
+    ]
   }
 ]

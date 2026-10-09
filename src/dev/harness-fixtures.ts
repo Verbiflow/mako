@@ -1,4 +1,4 @@
-import type { HarnessDescriptor, HarnessUsage, LiveCapabilities } from "@/lib/types"
+import type { HarnessDescriptor, LiveCapabilities } from "@/lib/types"
 import { harnessDescriptors } from "./harness-descriptors"
 
 /** Every harness the host installs, live and resumable as on a Mac with each signed in. */
@@ -11,11 +11,11 @@ function installed(provider: string) {
 }
 
 /** What a harness declares, for a fixture descriptor built by hand. */
-export function fixtureCapabilities(provider: string): LiveCapabilities {
-  return installed(provider).capabilities
+export function fixtureDeclarations(provider: string): Pick<HarnessDescriptor, "capabilities" | "usage" | "artifacts" | "unique"> {
+  const { capabilities, usage, artifacts, unique } = installed(provider)
+  return { capabilities, usage, artifacts, unique }
 }
 
-/** What a harness declares it reports about usage, for a fixture descriptor built by hand. */
-export function fixtureUsage(provider: string): HarnessUsage {
-  return installed(provider).usage
+export function fixtureCapabilities(provider: string): LiveCapabilities {
+  return installed(provider).capabilities
 }

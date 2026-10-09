@@ -1282,6 +1282,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 }
 
 .scroll-fade-scroller[data-virtualized],
+.scroll-fade-scroller[data-reading-anchor],
 .scroll-fade-scroller[data-preserve-scroll] {
   overflow-anchor: none;
 }

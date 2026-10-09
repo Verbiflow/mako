@@ -13,6 +13,12 @@ export function descriptorFor(
   return state.descriptors.find((item) => item.provider === harness)
 }
 
+/** Whether the harness's questions stay in the conversation, answered after the turn and across restarts. */
+export function asksInSession(descriptor: HarnessDescriptor | undefined): boolean {
+  const questions = descriptor?.capabilities.questions
+  return questions?.state === "implemented" && questions.asks === "session"
+}
+
 /** Mako's model choices for a harness, as the host declared them. */
 export function harnessDefaultsFor(
   state: WithDescriptors,

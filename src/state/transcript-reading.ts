@@ -1,10 +1,20 @@
 /** The timeline publishes what it actually painted. Cache/focus/host events
  * cannot move this state or invent a reading position. One lease per mounted
  * timeline means two panes reading the same conversation protect both places. */
+export interface TranscriptPreviewIdentity {
+  type?: "file" | "document" | "code" | "tool"
+  path: string
+  index: number
+}
+
+export type TranscriptBlockBookmark =
+  | { kind?: "text"; index: number; text: string; offset: number }
+  | ({ kind: "preview"; offset: number } & TranscriptPreviewIdentity)
+
 export interface TranscriptReading {
   visible: readonly string[]
   nearby: readonly string[]
-  anchor?: { turn: string; offset: number; block?: { index: number; text: string; offset: number } }
+  anchor?: { turn: string; offset: number; block?: TranscriptBlockBookmark }
   following: boolean
   moving: boolean
   interacting: boolean
