@@ -17,6 +17,7 @@ import { homedir, userInfo } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import type { JsonValue } from "./codex-app-json.js"
+import { securityKeychain } from "./keychain.js"
 const run = promisify(execFile)
 
 const credentialSalt = randomBytes(32)
@@ -331,37 +332,20 @@ export function jwtClaims(token: string | undefined): JwtClaims {
   }
 }
 
-const KeychainReadFailure = z.object({
-  code: z.union([z.number(), z.enum(["ENOENT", "EACCES", "ETIMEDOUT"])]).optional(),
-  killed: z.boolean().optional(),
-})
-
+/** A harness's own keychain item, which trusts `security`: see `securityKeychain`. */
 export async function readKeychain(
   service: string,
   account?: string,
   failurePolicy: "optional" | "required" = "optional"
 ): Promise<string | null> {
   if (process.platform !== "darwin") return null
-  try {
-    const { stdout } = await run("security", [
-      "find-generic-password",
-      "-s",
-      service,
-      ...(account ? ["-a", account] : []),
-      "-w",
-    ])
-    return stdout.trim() || null
-  } catch (error) {
-    if (failurePolicy === "required" && !(error instanceof Error && "code" in error && error.code === 44)) {
-      // Native exec failures can contain credential stdout; retain only public failure facts.
-      const failure = KeychainReadFailure.safeParse(error)
-      throw new Error("Could not read macOS Keychain. Unlock it and allow access before using this login.", {
-        // eslint-disable-next-line preserve-caught-error -- Raw execFile causes retain credential stdout; preserve only validated public failure facts.
-        cause: failure.success ? failure.data : { operation: "read-native-credentials" },
-      })
-    }
-    return null
-  }
+  const read = await securityKeychain().read({ service, account: account || undefined })
+  if (read.kind === "found") return read.value.trim() || null
+  if (read.kind === "failed" && failurePolicy === "required")
+    throw new Error("Could not read macOS Keychain. Unlock it and allow access before using this login.", {
+      cause: { operation: "read-native-credentials", reason: read.reason },
+    })
+  return null
 }
 
 /** When a Keychain item was last written. Reads attributes only, never the secret. */
@@ -381,22 +365,12 @@ export async function writeKeychain(
   contents: string
 ): Promise<void> {
   if (process.platform !== "darwin") return
-  const user = userInfo().username
   try {
-    await run("security", [
-      "add-generic-password",
-      "-U",
-      "-s",
-      service,
-      "-a",
-      user,
-      "-w",
-      contents,
-    ])
-  } catch {
-    // execFile errors include the command arguments, including the credential.
+    await securityKeychain().write({ service, account: userInfo().username }, contents)
+  } catch (error) {
     throw new Error(
-      "Could not save the account to macOS Keychain. Unlock Keychain and try again."
+      "Could not save the account to macOS Keychain. Unlock Keychain and try again.",
+      { cause: error }
     )
   }
 }
@@ -404,15 +378,8 @@ export async function writeKeychain(
 export async function deleteKeychain(service: string): Promise<void> {
   if (process.platform !== "darwin") return
   try {
-    await run("security", [
-      "delete-generic-password",
-      "-s",
-      service,
-      "-a",
-      userInfo().username,
-    ])
+    await securityKeychain().delete({ service, account: userInfo().username })
   } catch (error) {
-    if (z.object({ code: z.literal(44) }).safeParse(error).success) return
     throw new Error(
       "Could not remove the account from macOS Keychain. Unlock Keychain and try again.",
       { cause: error }
