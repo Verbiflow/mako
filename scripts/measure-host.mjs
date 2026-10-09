@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs, promisify } from "node:util"
 import { encodeRuntimeCall } from "../dist-electron/contracts/runtime.js"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
+import { headlessNodeExecutable } from "../dist-electron/headless-node.js"
 import { subscribeRuntime } from "../dist-electron/runtime-connection.js"
 
 /**
@@ -22,17 +23,22 @@ import { subscribeRuntime } from "../dist-electron/runtime-connection.js"
  * in place of the Grok CLI, so it needs no account and no network.
  *
  *   node scripts/measure-host.mjs                 the built dist-electron host
+ *   node scripts/measure-host.mjs --runtime helper
+ *                                                 the same under Electron's Helper in
+ *                                                 Node mode, as MAKO_HOST_RUNTIME=node runs it
+ *   node scripts/measure-host.mjs --runtime node  the same under this Node
  *   node scripts/measure-host.mjs --app Mako.app  a packaged app's host: start-up,
  *                                                 memory and reads only, since a
- *                                                 packaged app ignores NODE_OPTIONS
- *   node scripts/measure-host.mjs --node loader   dist-electron under plain Node, with
- *                                                 a module loader standing in for
- *                                                 Electron until the host needs none
+ *                                                 packaged app ignores NODE_OPTIONS;
+ *                                                 with --runtime helper, its Helper
+ *   node scripts/measure-host.mjs --node loader   under this Node with a module loader
+ *                                                 first, such as a Linux machine's
  */
 const { values: options } = parseArgs({
   options: {
     app: { type: "string" },
     node: { type: "string" },
+    runtime: { type: "string" },
     runs: { type: "string", default: "5" },
     sessions: { type: "string", default: "6" },
     "stream-ms": { type: "string", default: "20000" },
@@ -44,8 +50,13 @@ const run = promisify(execFile)
 const repo = resolve(".")
 const packaged = options.app ? await realpath(resolve(options.app)) : undefined
 const loader = options.node ? resolve(options.node) : undefined
-const executable = packaged ? join(packaged, "Contents/MacOS/Mako") : loader ? process.execPath : createRequire(import.meta.url)("electron")
-const args = packaged ? [] : loader ? [join(repo, "dist-electron/main.js")] : [repo]
+const runtime = options.runtime ?? (loader ? "node" : "electron")
+if (!["electron", "helper", "node"].includes(runtime)) throw new Error(`--runtime is electron, helper or node, not ${runtime}`)
+if (packaged && runtime === "node") throw new Error("A packaged app's host runs under Electron or its Helper; --runtime node measures the checkout")
+const electron = packaged ? join(packaged, "Contents/MacOS/Mako") : runtime === "node" ? undefined : createRequire(import.meta.url)("electron")
+const executable = runtime === "node" ? process.execPath : runtime === "helper" ? headlessNodeExecutable(electron) : electron
+const entry = packaged ? join(packaged, "Contents/Resources/app.asar/dist-electron/entry.js") : join(repo, "dist-electron/entry.js")
+const args = runtime === "electron" ? (packaged ? [] : [repo]) : [entry]
 // Plain Node keeps the caller's options (a container's --preserve-symlinks) and adds the loader.
 const hostNodeOptions = loader ? `${process.env.NODE_OPTIONS ?? ""} --import ${loader}`.trim() : ""
 const psArgs = platform() === "linux" ? ["-eo", "pid=,ppid=,rss=,args="] : ["-axo", "pid=,ppid=,rss=,command="]
@@ -100,6 +111,7 @@ const invoke = async (channel, values) => {
 async function start(measured) {
   const childEnv = { ...env }
   if (hostNodeOptions) childEnv.NODE_OPTIONS = hostNodeOptions
+  if (runtime === "helper") childEnv.ELECTRON_RUN_AS_NODE = "1"
   if (measured) Object.assign(childEnv, {
     NODE_OPTIONS: `${hostNodeOptions} --require ${join(repo, "scripts/fixtures/host-measure-preload.cjs")}`.trim(),
     MAKO_MEASURE_SAMPLES: samplesFile,
@@ -222,7 +234,7 @@ const streamAgent = async () => (await readFile(samplesFile, "utf8").catch(() =>
 let finished = false
 const report = {
   measured: new Date().toISOString(),
-  runtime: packaged ? "packaged" : loader ? "plain-node" : "dist-electron",
+  runtime: `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : runtime === "node" ? " under plain Node" : ""}`,
   executable,
   machine: { platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cores: cpus().length, memoryGb: Math.round(totalmem() / 2 ** 30) },
 }
