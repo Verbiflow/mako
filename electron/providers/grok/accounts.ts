@@ -3,11 +3,6 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { z } from "zod"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import {
-  ClientSideConnection,
-  ndJsonStream,
-  PROTOCOL_VERSION,
-} from "@agentclientprotocol/sdk"
 import type {
   AccountUsage,
   HarnessAccount,
@@ -33,6 +28,7 @@ import { resolveExecutable } from "../../executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"
 import { grokHome } from "@mako/sessions"
+import { heavy } from "../../heavy-packages.js"
 
 /** Grok rotates an entry's `key`, `refresh_token` and `expires_at` in place; a key with no refresh token is the login itself. */
 const GrokPrincipal = z.record(z.string(), z.object({
@@ -136,6 +132,7 @@ export function parseGrokBilling(
  * is created and no MCP server starts: initialize, ask, exit.
  */
 async function readGrokBilling(env: NodeJS.ProcessEnv): Promise<JsonValue> {
+  const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("grok billing")
   return withDiscoveryProcess(
     {
       command: "grok",

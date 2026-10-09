@@ -1,4 +1,4 @@
-import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type Client } from "@agentclientprotocol/sdk"
+import type { Client } from "@agentclientprotocol/sdk"
 import { join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
@@ -8,6 +8,7 @@ import { errorMessage } from "../../live-runtime.js"
 import type { AcpForkInput } from "../acp-source.js"
 import { spawnProviderProcess } from "../provider-process.js"
 import { devinCliDirectory } from "@mako/sessions"
+import { heavy } from "../../heavy-packages.js"
 
 /** A cold start and one request; about 200 ms together on 3000.10.23. */
 const FORK_MS = 30_000
@@ -51,6 +52,7 @@ export function devinCheckpoint(session: { nativeId: string; env: NodeJS.Process
  */
 export async function devinFork(input: AcpForkInput): Promise<string> {
   if (!NODE.test(input.checkpoint)) throw new Error(`Devin could not fork the session: ${JSON.stringify(input.checkpoint)} is not one of its nodes`)
+  const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("devin fork")
   const child = spawnProviderProcess(input.executable, input.args, { cwd: input.cwd, env: input.env }, { kind: "acp:devin-fork", owner: input.owner })
   const exited = new Promise<void>((resolve) => {
     child.once("exit", () => resolve())

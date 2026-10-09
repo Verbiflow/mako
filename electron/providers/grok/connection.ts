@@ -1,17 +1,13 @@
 import { homedir } from "node:os"
 import { z } from "zod"
-import {
-  ClientSideConnection,
-  ndJsonStream,
-  PROTOCOL_VERSION,
-  type InitializeResponse,
-} from "@agentclientprotocol/sdk"
+import type { InitializeResponse } from "@agentclientprotocol/sdk"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
 import { resolveExecutable } from "../../executable.js"
 import type { ProviderConnectionState } from "../../contracts/provider-connection.js"
 import type { ProviderConnectionCapability } from "../connection-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"
 import { grokProfileLoader } from "./profile.js"
+import { heavy } from "../../heavy-packages.js"
 
 /** Grok refreshes its own credentials before advertising cached_token at initialize.
  * Never call authenticate during a status check: upstream can fall through to a browser.
@@ -44,6 +40,7 @@ export async function readGrokConnection(
       status: "unavailable",
       message: "Install Grok to connect it to Mako.",
     }
+  const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("grok connection")
   return withDiscoveryProcess(
     {
       command: "grok",
