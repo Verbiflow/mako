@@ -331,11 +331,14 @@ function aggregate(
   const incomplete = new Set<string>()
 
   for (const event of events) {
-    add(total, event)
-    addTo(days, dayOf(event.timestamp), event)
-    addTo(models, event.model, event)
-    addTo(projects, event.cwd, event)
-    addTo(sources, event.source, event)
+    // The same call contributes to five buckets; price and count it once.
+    const tokens = tokenTotal(event)
+    const estimate = event.reportedCost === undefined ? estimateUsageCost(event.model, event) : null
+    add(total, event, tokens, estimate)
+    addTo(days, dayOf(event.timestamp), event, tokens, estimate)
+    addTo(models, event.model, event, tokens, estimate)
+    addTo(projects, event.cwd, event, tokens, estimate)
+    addTo(sources, event.source, event, tokens, estimate)
     if (event.incomplete) incomplete.add(event.source)
   }
 
@@ -379,10 +382,7 @@ function empty(key: string): Bucket {
   }
 }
 
-function add(bucket: Bucket, event: UsageEvent): void {
-  const tokens = tokenTotal(event)
-  const estimate =
-    event.reportedCost === undefined ? estimateUsageCost(event.model, event) : null
+function add(bucket: Bucket, event: UsageEvent, tokens: number, estimate: number | null): void {
   if (event.reportedCost !== undefined) {
     bucket.reportedCost += event.reportedCost
     bucket.cost += event.reportedCost
@@ -401,9 +401,9 @@ function add(bucket: Bucket, event: UsageEvent): void {
   bucket.messages += 1
 }
 
-function addTo(buckets: Map<string, Bucket>, key: string, event: UsageEvent): void {
+function addTo(buckets: Map<string, Bucket>, key: string, event: UsageEvent, tokens: number, estimate: number | null): void {
   const bucket = buckets.get(key) ?? empty(key)
-  add(bucket, event)
+  add(bucket, event, tokens, estimate)
   buckets.set(key, bucket)
 }
 

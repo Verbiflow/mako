@@ -131,8 +131,7 @@ import {
 } from "./computer-permissions.js"
 import { check, installUpdates, updateState } from "./updates.js"
 import { installApplicationIpc } from "./ipc/application.js"
-import { usageHarnesses, usageSummary } from "./usage.js"
-import { UsageLedger } from "./usage-ledger.js"
+import { UsageReader } from "./usage-reader.js"
 import {
   automationList,
   bindAutomations,
@@ -531,7 +530,7 @@ let conversationMcp: Awaited<ReturnType<typeof startConversationMcp>> | null =
   null
 let workspaceMoves: WorkspaceMoves | null = null
 let nativeRequests: NativeRequests | null = null
-let usageLedger: UsageLedger | undefined
+let usageReader: UsageReader | undefined
 const appshots = new Appshots(async () => {
   const driver = resolveExecutable("cua-driver")
   const socket = await ensureMakoLocalControl()
@@ -1298,8 +1297,13 @@ function bindIpc() {
   handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace)))
 
   handle("mako:usage", () => {
-    usageLedger ??= new UsageLedger(join(app.getPath("userData"), "usage-ledger.sqlite"))
-    return usageSummary(usageHarnesses(providerHost), join(homedir(), ".mako", "sessions"), homedir(), join(app.getPath("userData"), "conversations"), { ledger: usageLedger })
+    usageReader ??= new UsageReader({
+      ledgerPath: join(app.getPath("userData"), "usage-ledger.sqlite"),
+      sessionsRoot: join(homedir(), ".mako", "sessions"),
+      homeRoot: homedir(),
+      conversationsRoot: join(app.getPath("userData"), "conversations"),
+    })
+    return usageReader.read()
   })
 
   /* Cross-harness threads: every agent's sessions on this machine. */
@@ -2637,7 +2641,7 @@ const quitLifecycle = backgroundLifecycle({
       stopWatching()
       runtimeUpdates.stop()
       stopThreads()
-      await Promise.all([callsDrained, providersDrained, hostTelemetry?.close()])
+      await Promise.all([callsDrained, providersDrained, hostTelemetry?.close(), usageReader?.close()])
       await liveConversations?.stop()
       stopAcp()
       stopCodexApps()

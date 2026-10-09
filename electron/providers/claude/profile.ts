@@ -1,6 +1,7 @@
 import {
   claudeDiscoveryArgs,
   claudeDiscoveryControl,
+  claudeModelRefusal,
   ClaudeEffectiveSettingsSchema,
 } from "./settings.js"
 import { createHash } from "node:crypto"
@@ -11,6 +12,7 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { withDiscoveryStream } from "../profile-transport.js"
+import { hostWarn } from "../../host-log.js"
 import { claudeRuntime } from "./runtime.js"
 
 import { z } from "zod"
@@ -79,8 +81,22 @@ function discover(
       // Sending can use the immutable catalog while this process reads defaults.
       publish(structuredClone(catalog))
       for (const model of catalog.models) {
+        // Claude Code lists models its version doesn't describe and refuses
+        // to switch to them; its check with the API also fails now and then,
+        // which a second try usually passes.
+        const switchTo = () => control({ subtype: "set_model", model: model.id }).then(
+          () => undefined,
+          (error: Error) => error.message
+        )
+        let refused = await switchTo()
+        if (refused !== undefined && claudeModelRefusal(refused) === undefined) refused = await switchTo()
+        if (refused !== undefined) {
+          const reason = claudeModelRefusal(refused)
+          if (reason) model.unavailable = reason
+          hostWarn("discovery", reason ? "Claude Code refused a model it listed" : "Claude Code couldn't confirm a model; its defaults stay unread", { model: model.id, error: refused })
+          continue
+        }
         try {
-          await control({ subtype: "set_model", model: model.id })
           const settings = ClaudeEffectiveSettingsSchema.parse(
             await control({ subtype: "get_settings" })
           )

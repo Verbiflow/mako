@@ -69,7 +69,7 @@ export function workDefault(defaults: HarnessDefaults | undefined, models: reado
 
 /**
  * Why `models` can't start Mako's first pick as declared: a model it doesn't
- * offer, or an option value the model doesn't accept. Later picks are for
+ * offer or can't start, or an option value the model doesn't accept. Later picks are for
  * older catalogs and aren't held to this one.
  */
 export function workDefaultProblems(defaults: HarnessDefaults, models: readonly SessionModel[]): string[] {
@@ -77,6 +77,7 @@ export function workDefaultProblems(defaults: HarnessDefaults, models: readonly 
   if (!pick) return []
   const model = catalogModel(models, pick.model)
   if (!model) return [`${pick.model} isn't in the catalog`]
+  if (model.unavailable) return [`${model.id} is listed but can't start: ${model.unavailable}`]
   return Object.entries(pick.options ?? {}).flatMap(([id, value]) => {
     const option = model.options.find((entry) => entry.id === id)
     if (!option) return [`${model.id} has no ${id} option`]
@@ -87,7 +88,7 @@ export function workDefaultProblems(defaults: HarnessDefaults, models: readonly 
 function firstPick(picks: readonly ModelPick[], models: readonly SessionModel[]): HarnessPick | undefined {
   for (const pick of picks) {
     const model = catalogModel(models, pick.model)
-    if (!model) continue
+    if (!model || model.unavailable) continue
     const options: ModelOptions = {}
     for (const [id, value] of Object.entries(pick.options ?? {})) {
       const option = model.options.find((entry) => entry.id === id)

@@ -161,7 +161,8 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   // Validate every family before registering anything: an incomplete adapter
   // must not leave half of its capabilities installed.
   if (harness.diagnostics.runsInSdk && !harness.diagnostics.sdk) throw new Error(`${harness.provider} runs in an SDK it does not name`)
-  const { provider, presentation, diagnostics, usage: _usage, ...declarations } = harness
+  const { provider, presentation, diagnostics, usage, ...declarations } = harness
+  if (!usage) throw new Error(`${provider} has no usage declaration`)
   for (const [family, value] of Object.entries(declarations)) {
     if (!value) throw new Error(`${provider} has no ${family} declaration`)
     if (isAbsent(value)) {

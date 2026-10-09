@@ -2,9 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   writeFileSync,
-  unlinkSync,
 } from "node:fs"
 import {
   copyFile,
@@ -58,41 +56,6 @@ interface ActiveRun {
   /** The turn is over and its closing checkpoint is being written. */
   ending?: boolean
 }
-const LockSchema = z.object({
-  owner: z.literal("mako-snapshots"),
-  pid: z.number().int(),
-  token: z.string().uuid(),
-})
-
-/** The repository coordinator recovers abandoned ownership before this runs. */
-function acquireLock(path: string): () => void {
-  const value = {
-    owner: "mako-snapshots",
-    pid: process.pid,
-    token: randomUUID(),
-  }
-  try {
-    writeFileSync(path, JSON.stringify(value), { flag: "wx", mode: 0o600 })
-  } catch (error) {
-    throw new Error(
-      "The workspace is busy. Finish the other Git or checkpoint operation and retry.",
-      { cause: error }
-    )
-  }
-  return () => {
-    const current = parseLock(path)
-    if (current && current.token === value.token) unlinkSync(path)
-  }
-}
-function parseLock(path: string): z.infer<typeof LockSchema> | null {
-  try {
-    const result = LockSchema.safeParse(JSON.parse(readFileSync(path, "utf8")))
-    return result.success ? result.data : null
-  } catch {
-    return null
-  }
-}
-
 /** Workspace-wide Git checkpoints, with a separate index and a durable restore intent.
  * Restoring never moves HEAD. A retry completes the same fork, or refuses any edits
  * made since the interrupted operation. Native provider history is never rolled back.
@@ -499,14 +462,7 @@ export class WorkspaceSnapshots {
   ): Promise<T> {
     const repository = await openRepository(scope)
     if (!repository) throw new Error("Workspace checkpoints currently require a Git repository.")
-    return repository.write(() => this.lockedIndex(scope, repository.gitDir, work))
-  }
-
-  private async lockedIndex<T>(scope: string, gitDir: string, work: (gitDir: string) => Promise<T>): Promise<T> {
-    const releases: (() => void)[] = []
-    try {
-      releases.push(acquireLock(join(gitDir, "mako-snapshots.lock")))
-      releases.push(acquireLock(join(gitDir, "index.lock")))
+    return repository.withLockedIndex(async () => {
       if (!this.orphanBytes.has(scope)) {
         const known = new Set<string>()
         for (const row of this.db
@@ -520,10 +476,8 @@ export class WorkspaceSnapshots {
           await reclaimSnapshotOrphans(this.root, scope, known)
         )
       }
-      return await work(gitDir)
-    } finally {
-      for (const release of releases.reverse()) release()
-    }
+      return work(repository.gitDir)
+    })
   }
   private async head(scope: string): Promise<string> {
     const branch = (

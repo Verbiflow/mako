@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 /**
  * Where the app is in the update cycle.
  *
@@ -26,38 +28,40 @@ export interface UpdateState {
 }
 
 /** Tokens and API-equivalent cost for one slice of local history. */
-export interface UsageTotals {
+export const UsageTotalsSchema = z.object({
   /** Reported plus estimated cost. */
-  cost: number
+  cost: z.number(),
   /** Cost recorded by the runtime that made the request. */
-  reportedCost?: number
+  reportedCost: z.number().optional(),
   /** API-equivalent cost calculated from model list prices. */
-  estimatedCost?: number
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  messages: number
+  estimatedCost: z.number().optional(),
+  input: z.number(),
+  output: z.number(),
+  cacheRead: z.number(),
+  cacheWrite: z.number(),
+  messages: z.number(),
   /** Tokens covered by either reported cost or known model pricing. */
-  pricedTokens?: number
+  pricedTokens: z.number().optional(),
   /** Tokens whose model has no matching price. */
-  unpricedTokens?: number
-}
+  unpricedTokens: z.number().optional(),
+})
+export type UsageTotals = z.infer<typeof UsageTotalsSchema>
 
 /** Local usage from every supported session format on this machine. */
-export interface UsageSummary {
-  total: UsageTotals
-  days: Array<{ date: string } & UsageTotals>
-  models: Array<{ model: string } & UsageTotals>
-  projects: Array<{ cwd: string } & UsageTotals>
+export const UsageSummarySchema = z.object({
+  total: UsageTotalsSchema,
+  days: z.array(UsageTotalsSchema.extend({ date: z.string() })),
+  models: z.array(UsageTotalsSchema.extend({ model: z.string() })),
+  projects: z.array(UsageTotalsSchema.extend({ cwd: z.string() })),
   /** `harness` names the harness a source counts, whose `usage.outsideMako` says whether its sessions outside Mako are in it. */
-  sources?: Array<{ source: string; harness?: string } & UsageTotals>
-  sessions: number
+  sources: z.array(UsageTotalsSchema.extend({ source: z.string(), harness: z.string().optional() })).optional(),
+  sessions: z.number(),
   /** True when some records in the window could not be read, so the totals may be low; the host log names them. */
-  truncated: boolean
+  truncated: z.boolean(),
   /** Harnesses whose own records say some of their usage in the window is missing, so the totals may be low. */
-  incomplete?: string[]
-}
+  incomplete: z.array(z.string()).optional(),
+})
+export type UsageSummary = z.infer<typeof UsageSummarySchema>
 
 /**
  * A saved prompt, with an optional trigger.
