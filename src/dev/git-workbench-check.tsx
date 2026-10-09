@@ -217,3 +217,11 @@ selectProject(cwd)
 
 const node = document.getElementById("root")
 if (node) createRoot(node).render(<GitWorkbenchFixture />)
+
+// Tests use the fixture's own module instances. Direct dynamic imports of
+// state modules can create a second instance when a shared Vite app has HMR timestamps.
+export { store, actions, runGitRemote }
+export { setPref } from "@/state/prefs"
+export { rememberDraft, projectDraftKey, draftText } from "@/state/drafts"
+export { commitDrafts } from "@/state/commit-drafts"
+export { pullComposer } from "@/state/github"

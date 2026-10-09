@@ -21,10 +21,13 @@ export function loadoutAvailability(entry: LoadoutEntry, profile?: HarnessProfil
     return { kind: "loading" as const, label: entry.model, reason: "Checking model availability…" }
   const model = modelByIdentity(profile.models, entry.model)
   const label = model?.label ?? entry.model
-  if (!profile.available || profile.configurationError)
-    return { kind: "unavailable" as const, label, reason: profile.configurationError ?? profile.error ?? "This agent is not available." }
+  // A catalog whose defaults went unreported still sends, so it still switches.
+  if (!profile.available)
+    return { kind: "unavailable" as const, label, reason: profile.error ?? "This agent is not available." }
   if (!model)
     return { kind: "unavailable" as const, label, reason: "This saved model is no longer available. Choose another model or remove it from your loadout." }
+  if (model.unavailable)
+    return { kind: "unavailable" as const, label, reason: model.unavailable }
   // A native variant is a valid saved choice; retain its tuning identity.
   return { kind: "ready" as const, label, model: entry.model }
 }

@@ -122,7 +122,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "outsideMako": {
         "state": "implemented",
-        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     }
   },
@@ -261,7 +261,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "outsideMako": {
         "state": "implemented",
-        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     }
   },
@@ -393,7 +393,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "outsideMako": {
         "state": "absent",
         "by": "harness",
-        "reason": "Cursor's SDK store keeps no token counts, so Settings › Usage counts only what Mako measured while running it."
+        "reason": "Cursor's SDK store keeps no token counts, so only its sessions in Mako are counted."
       }
     }
   },
@@ -510,7 +510,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "outsideMako": {
         "state": "implemented",
-        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     }
   },
@@ -633,7 +633,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "outsideMako": {
         "state": "implemented",
-        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     }
   },
@@ -766,7 +766,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "outsideMako": {
         "state": "implemented",
-        "via": "Settings › Usage reads its own store, so sessions run outside Mako count too."
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     }
   }

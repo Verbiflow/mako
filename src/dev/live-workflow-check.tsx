@@ -366,3 +366,9 @@ export function Fixture() {
   )
 }
 createRoot(document.getElementById("root")!).render(<Fixture />)
+
+// Share the exact instances the fixture renders, including on a Vite app with HMR timestamps.
+export { store }
+export { runGitRemote } from "@/state/git-push"
+export { gitConflictAttachment } from "@/state/git-conflicts"
+export { githubStore } from "@/state/github"

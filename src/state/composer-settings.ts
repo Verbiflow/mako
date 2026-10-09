@@ -2,6 +2,7 @@ import {
   modelByIdentity,
   optionDefault,
   resolveSessionSettings,
+  type ModelIssue,
   type SessionSettings,
   type SettingValue,
   type SettingsPreference,
@@ -515,6 +516,16 @@ export function resetComposerSettings(target: ComposerTarget): void {
     delete preferences[target.harness]
     setPref("providerSettings", preferences)
   }
+}
+
+/**
+ * Moves off a model that can't start onto the one it was covering: a saved
+ * default goes back to Mako's, a choice made here is replaced.
+ */
+export function replaceUnusableModel(target: ComposerTarget, issue: ModelIssue): void {
+  if (!issue.instead) return
+  if (issue.source === "saved") resetHarnessDefaults(target.harness)
+  else chooseComposerModel(target, issue.instead)
 }
 
 /** Remove only acknowledged edits. A later edit remains pending. */

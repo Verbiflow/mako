@@ -2524,6 +2524,7 @@ const MOCK_PROFILES = [
       mockModel("opus[1m]", "Opus 5", [mockEffort("high", ["low", "medium", "high", "xhigh", "max"]), mockFast], 1_000_000),
       mockModel("claude-fable-5-1", "Fable 5.1", [mockEffort("high", ["low", "medium", "high", "xhigh", "max"])], 1_000_000),
       mockModel("claude-sonnet-5", "Sonnet 5", [mockEffort("medium", ["low", "medium", "high"])], 400_000),
+      { ...mockModel("claude-sonnet-5-5", "Sonnet 5.5", [], 1_000_000), unavailable: "This version of Claude Code doesn't support it yet. Update Claude Code to use it." },
       mockModel("claude-haiku-4-5", "Haiku 4.5", [], 200_000),
     ],
   },
