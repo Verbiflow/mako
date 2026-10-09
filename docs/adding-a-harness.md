@@ -50,7 +50,23 @@ Each is a field of the live driver: implemented with what implements it, or abse
 | Background work on Stop | `backgroundStop` | How Stop ends background work, or the evidence that none outlives its turn. | implemented | implemented | by default | implemented | implemented | implemented |
 | Context breakdown | `contextBreakdown` | An itemized account of what fills the context window. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
 
-## 3. Beside the definition
+## 3. Usage
+
+Each is a field of the definition's `usage`: `implemented` with where the harness reports it, `harnessLacks(reason)` when it reports none, or `makoLacks(reason)` when Mako doesn't read it yet; after compaction, `byDefault(reason)` when the meter keeps its reading until the next reply. The composer's meter, Settings › Usage and the account rows read these, never whether data happened to arrive. Context breakdown and spend outside Mako come from the live driver and `usageHistory`. Enforced by `installHarness` and `test-usage-declarations.ts`, which replays every recording and fails on a reading a declaration rules out, or a declared one no recording shows.
+
+| Reading | What it asks | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Context fill | Where the context fill comes from: the harness's own reading (`context` observations), or the main agent's last call (`call`). | implemented | implemented | harness has none | implemented | implemented | implemented |
+| Window size | Where the window size comes from: the harness's reports (`window`, or a reading's `size`), or its model catalog. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| After compaction | After a compaction, whether the harness says what is left (`compacted` with `after`) or the meter waits for the next reply. | implemented | implemented | harness has none | by default | implemented | by default |
+| Context breakdown | The live driver's `contextBreakdown`. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
+| Tokens spent | Tokens the session spent (`spent` or `total` observations). | implemented | implemented | implemented | implemented | implemented | implemented |
+| Cost | What the session cost (`cost` or `costSpent`). | implemented | harness has none | harness has none | implemented | implemented | harness has none |
+| Missed calls | Whether the harness says a report left calls out (`unrecorded`). | harness has none | harness has none | harness has none | harness has none | implemented | harness has none |
+| Spend outside Mako | The `usageHistory` family. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| Reset credits | The accounts' `useResetCredit`, offered on the account's row. | harness has none | implemented | harness has none | harness has none | harness has none | harness has none |
+
+## 4. Beside the definition
 
 | Step | What to add | Enforced by | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -60,7 +76,8 @@ Each is a field of the live driver: implemented with what implements it, or abse
 | Vocabulary | A module in `packages/sessions/src/harnesses/`, added to `VOCABULARIES`: every tool with its kind, keys, aliases and MCP names, its usage field map, and its concepts (instructions, hooks, skills, commands, agents, MCP files, output, models, what only it has). | `test-harness-vocabulary.ts`, `test-tool-identity.ts`, `audit:tools -- --unresolved` | yes | yes | yes | yes | yes | yes |
 | Concepts checked against the build | An entry in `scripts/harness-self-report.ts`, then `npm run harness:self-report -- <harness>` and `npm run harness:concepts`. | `test-harness-concepts.ts` | yes | yes | yes | yes | yes | yes |
 | Native tool definitions | `npm run harness:native-tools -- <harness>` records the tools the harness defines, per version, or `NO_SOURCE` in `scripts/native-tools.ts` says why they can't be recorded. | `test-native-tools.ts` | yes | yes | yes | yes | yes | yes |
-| Usage | One field map in the vocabulary module, built on `inclusiveTokens` or `exclusiveTokens` as the harness counts cache, called by the live decoder, the history reader and the `usageHistory` scanner. The scanner reads the store where the harness's own variable moved it (`UsageScan.env`), and a record the harness marks incomplete says so. | `test-session-usage.ts`, `test-harness-usage.ts`, `audit:capabilities` | – | – | – | – | – | – |
+| Usage | One field map in the vocabulary module, built on `inclusiveTokens` or `exclusiveTokens` as the harness counts cache, called by the live decoder, the history reader and the `usageHistory` scanner. The scanner reads the store where the harness's own variable moved it (`UsageScan.env`), and a record the harness marks incomplete says so. An ACP harness whose window comes from its model list gives its source `modelWindow`, and its recorder captures the `session/new` and `session/load` replies as `{response, result}` lines. | `test-session-usage.ts`, `test-harness-usage.ts`, `test-usage-declarations.ts`, `audit:capabilities` | – | – | – | – | – | – |
+| Models | A profile loader listing the harness's models through its own discovery, with `defaults.work` naming the model Mako starts on, or `defaults.none` saying why it names none. A model the harness lists but refuses to start carries `unavailable` with the reason the picker shows. Then `npm run harness:catalogs -- --harness <harness>` records the catalog the default is held to. | `test-model-defaults.ts`, `audit:capabilities` | yes | yes | yes | declared | yes | yes |
 | Opening saved history | A baseline for its reader opening its largest kept pair to the first page, from `npx tsx scripts/test-performance-budgets.ts`; `npm run harness:saved-open` times the largest sessions on the machine. | `test:performance` | yes | yes | yes | yes | yes | yes |
 | Failure stand-in | A stand-in in `scripts/fixtures/native-failure-agent.mjs` that speaks enough of its protocol for setup, so its driver is tested against a process that dies. | `test:execution-ownership` (`test-native-failures.mjs` fails for a harness without one) | – | – | – | – | – | – |
 | Session flows | `npm run test:session-flows -- <harness>` passes every flow its declarations call for on the real CLI, and `--record` then `--continue` passes. `test:seventh-harness` runs the same flows against a scripted ACP agent. | `test:session-flows`, `test:seventh-harness` | – | – | – | – | – | – |
@@ -69,3 +86,4 @@ Each is a field of the live driver: implemented with what implements it, or abse
 | Development desk | Its modes and plan approval in `src/dev/mock-bridge.ts` (`MOCK_MODES`, `MOCK_PLAN_APPROVALS`), copied from the real wire, so `?mock` shows what the harness shows. | review | – | – | – | – | – | – |
 | Only this harness | A capability only this harness has is a field the others declare absent with a reason, and its UI registers against the field. | `mako/no-harness-names` | – | – | – | – | – | – |
 
+- OpenCode, models: no default model: OpenCode's models are the person's own providers, so it starts on the model they configured.
