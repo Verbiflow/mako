@@ -8,7 +8,7 @@ import "./lib/scratch-git.mjs"
  *
  *   node scripts/test-packaged-thread-sessions.mjs <Mako.app> <harness...> [--out=dir] [--no-legacy] [--only=phase,...]
  *
- * Each harness runs in its own isolated standalone profile with a disposable
+ * Each harness runs in its own isolated profile, desktop and host, with a disposable
  * Git workspace, and its screenshots and phases are merged into
  * `<out>/result.json`. Fork and Continue in a worktree are tried on a live
  * Session first and then from the Session's saved history, because the live
@@ -741,7 +741,7 @@ for (const provider of harnesses) {
   // Read again just before writing: runs for other harnesses may share this report.
   const result = existsSync(resultPath)
     ? JSON.parse(await readFile(resultPath, "utf8"))
-    : { hostMode: "isolated-standalone", harnesses: {} }
+    : { hostMode: "isolated-profile", harnesses: {} }
   Object.assign(result, { app, build, updatedAt: new Date().toISOString() })
   result.harnesses[provider] = record
   await writeFile(resultPath, JSON.stringify(result, null, 2))

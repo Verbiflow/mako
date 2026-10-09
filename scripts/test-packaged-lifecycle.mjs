@@ -80,7 +80,7 @@ const report = {
   provider: rendererOnly ? null : provider,
   root,
   outcome: "running",
-  hostMode: "isolated-standalone",
+  hostMode: "isolated-profile",
   phases: [],
 }
 const soakMs = Number(
@@ -132,7 +132,7 @@ async function memorySample() {
     .trim()
     .split("\n")
     .map((line) => line.trim().split(/\s+/).map(Number))
-  const owned = new Set([pkg.child.pid])
+  const owned = new Set([pkg.child.pid, pkg.hostPid])
   for (let previous = 0; previous !== owned.size;) {
     previous = owned.size
     for (const [pid, parent] of processes) if (owned.has(parent)) owned.add(pid)
@@ -269,7 +269,7 @@ async function soak() {
     assert.ok(
       sample.processes.some(
         (item) =>
-          item.pid === pkg.child.pid && item.physicalFootprintBytes !== undefined
+          item.pid === pkg.hostPid && item.physicalFootprintBytes !== undefined
       ),
       "Host physical footprint was unavailable"
     )

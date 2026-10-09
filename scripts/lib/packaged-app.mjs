@@ -4,19 +4,25 @@ import { readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import WebSocket from "ws"
+import { clientRoot, runtimeLocation } from "../../dist-electron/runtime-service.js"
+import { probeRuntime } from "../../dist-electron/runtime-connection.js"
 import { threadDebugPort } from "../thread-debug-port.mjs"
 
+const PROBE_CLIENT = "packaged-probe"
+
 /**
- * A packaged Mako run in an isolated standalone profile under `root`, driven
- * over the renderer's DevTools protocol. It never reaches the user's Mako:
- * its own user data directory, a dead backend, and only the process group it
- * spawned is ever signalled.
+ * A packaged Mako's desktop run on an isolated profile under `root`, driven
+ * over its window's DevTools protocol; the desktop starts that profile's own
+ * host, as Node, as it always does. It never reaches the user's Mako: its own
+ * data root and client folder, a mock keychain, a dead backend, and only the
+ * desktop it spawned and that profile's host are ever signalled.
  */
 export class PackagedApp {
   /**
    * `args` and `env` run a built checkout instead of a package: its Electron
-   * as `executable`, the checkout in `args` and `MAKO_PROD` in `env`.
-   * @param {{ executable: string, root: string, workspace: string, args?: string[], env?: Record<string, string>, onStdoutLine?: (line: string) => void }} options
+   * as `executable`, the checkout in `args` and `MAKO_PROD` in `env`. A key
+   * set to undefined in `env` is left out of the desktop's, and so its host's.
+   * @param {{ executable: string, root: string, workspace: string, args?: string[], env?: Record<string, string | undefined>, onStdoutLine?: (line: string) => void }} options
    */
   constructor({ executable, root, workspace, args = [], env = {}, onStdoutLine }) {
     this.executable = executable
@@ -26,6 +32,7 @@ export class PackagedApp {
     this.workspace = workspace
     this.onStdoutLine = onStdoutLine
     this.child = undefined
+    this.hostPid = undefined
     this.socket = undefined
     this.counter = 0
     this.callbacks = new Map()
@@ -34,6 +41,17 @@ export class PackagedApp {
 
   get profile() {
     return join(this.root, "profile")
+  }
+
+  /** The desktop's own folder beside the profile: its renderer storage, DevTools port and log. */
+  get clientFolder() {
+    return clientRoot(this.profile, PROBE_CLIENT)
+  }
+
+  /** The profile's host, or nothing once it has gone. */
+  async host() {
+    const probe = await probeRuntime(runtimeLocation(this.profile).socket, { timeoutMs: 2_000 }).catch(() => undefined)
+    return probe?.state === "ready" ? probe.info : undefined
   }
 
   command(method, params = {}) {
@@ -89,14 +107,14 @@ export class PackagedApp {
   }
 
   async start() {
-    await rm(join(this.profile, "DevToolsActivePort"), { force: true })
+    await rm(join(this.clientFolder, "DevToolsActivePort"), { force: true })
     this.launchError = undefined
     // A probe started from inside a Mako Thread inherits that Mako's control
     // session, ports and data folder; none of them may reach the package.
     const env = {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MAKO_"))),
-      MAKO_STANDALONE: "1",
       MAKO_DATA_ROOT: this.profile,
+      MAKO_CLIENT_ID: PROBE_CLIENT,
       MAKO_CURSOR_SDK_ROOT: join(this.root, "cursor"),
       ...this.extraEnv,
     }
@@ -107,7 +125,8 @@ export class PackagedApp {
       this.executable,
       [
         ...this.args,
-        `--user-data-dir=${this.profile}`,
+        // The desktop hands its host the data key; a mock keychain keeps the person's items out of reach.
+        "--use-mock-keychain",
         `--remote-debugging-port=${debugPort}`,
         "--remote-debugging-address=127.0.0.1",
       ],
@@ -129,7 +148,7 @@ export class PackagedApp {
       async () => {
         if (debugPort) return debugPort
         try {
-          return Number((await readFile(join(this.profile, "DevToolsActivePort"), "utf8")).split("\n")[0])
+          return Number((await readFile(join(this.clientFolder, "DevToolsActivePort"), "utf8")).split("\n")[0])
         } catch {
           return 0
         }
@@ -168,27 +187,42 @@ export class PackagedApp {
       Boolean,
       "preload and composer"
     )
-    return { url: target.url, pid: child.pid }
+    this.hostPid = (await this.waitFor(() => this.host(), Boolean, "the profile's host")).pid
+    return { url: target.url, pid: child.pid, hostPid: this.hostPid }
   }
 
   /**
-   * Stops the package's process group. `graceful` signals only the host, as
-   * a quit does, and gives it time to close its providers itself first.
+   * Closes the desktop, then stops the profile's host and its process group.
+   * `graceful` signals only the host first, as a quit does, and gives it time
+   * to close its providers itself.
    */
   async stop({ graceful = false } = {}) {
     this.socket?.close()
     this.socket = undefined
     const child = this.child
     if (child && child.exitCode === null) {
-      process.kill(graceful ? child.pid : -child.pid, "SIGTERM")
-      await Promise.race([new Promise((resolve) => child.once("exit", resolve)), delay(graceful ? 30_000 : 5000)])
+      process.kill(-child.pid, "SIGTERM")
+      await Promise.race([new Promise((resolve) => child.once("exit", resolve)), delay(5000)])
       try {
         process.kill(-child.pid, "SIGKILL")
       } catch {
-        /* The owned process group has exited. */
+        /* The desktop's process group has exited. */
       }
     }
     this.child = undefined
+    this.hostPid = undefined
+    const host = await this.host()
+    if (!host) return
+    // `ensureRuntime` starts the host detached, so it leads its own process group.
+    process.kill(graceful ? host.pid : -host.pid, "SIGTERM")
+    const gone = async () => { try { process.kill(host.pid, 0); return false } catch { return true } }
+    const deadline = Date.now() + (graceful ? 30_000 : 5000)
+    while (!(await gone()) && Date.now() < deadline) await delay(100)
+    try {
+      process.kill(-host.pid, "SIGKILL")
+    } catch {
+      /* The host's process group has exited. */
+    }
   }
 }
 
