@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path"
 import { Readable } from "node:stream"
 import { forgetStartingRepository } from "./environment.js"
 import { GitError } from "./errors.js"
+import { onMac } from "./platform.js"
 
 /** One finished `git` process, for logs and `MAKO_GIT_TRACE`. */
 export interface GitTrace {
@@ -41,7 +42,7 @@ export function configureGit(next: GitRuntime): void {
  * them spawns nothing. A Git earlier on PATH (Homebrew's) is used as is.
  */
 function resolveGit(): string {
-  if (process.platform !== "darwin") return "git"
+  if (!onMac()) return "git"
   const first = (process.env.PATH ?? "").split(delimiter).map((dir) => join(dir, "git")).find((path) => existsSync(path))
   if (first && first !== "/usr/bin/git") return first
   const developer = process.env.DEVELOPER_DIR || (() => {
@@ -296,7 +297,7 @@ export async function git(cwd: string, args: readonly string[], background = fal
  * Linux filesystems keep gaining to about eight (50,000 files: one worker
  * 10-20 s, these 2-5 s, for about the same CPU).
  */
-const CHECKOUT_WORKERS = Math.min(process.platform === "darwin" ? 4 : 8, availableParallelism())
+const CHECKOUT_WORKERS = Math.min(onMac() ? 4 : 8, availableParallelism())
 export const PARALLEL_CHECKOUT = ["-c", `checkout.workers=${CHECKOUT_WORKERS}`, "-c", "checkout.thresholdForParallelism=100"]
 
 /** Whether this Git has `merge-tree --write-tree` (2.38 and later), which merges without touching a checkout. */
