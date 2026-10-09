@@ -3,18 +3,21 @@ import { z } from "zod"
 import { describeHarnesses } from "./providers/harness-descriptors.js"
 import type { QueuedPromptEdit } from "./contracts/live-queue.js"
 import { backgroundLifecycle } from "./background-lifecycle.js"
+import { hostLifecycle, stopOnSignals, takePredecessor, type HostLifecycleOptions } from "./host-lifecycle.js"
 import { devHostBuild } from "./dev-host-build.js"
+import { hostEnvironment } from "./host-environment.js"
+import { acquireHostLock } from "./host-lock.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
-import { hostCallInputs } from "./contracts/host-call-inputs.js"
-import { runtimeInfo, RuntimeDisconnectedError } from "./runtime-connection.js"
+import { hostChannels } from "./contracts/host-call-inputs.js"
+import { openableLink, socketCalls } from "./contracts/client-calls.js"
+import { runtimeInfo, RuntimeDisconnectedError, settleRuntime } from "./runtime-connection.js"
 import { lstat, mkdir, rm, stat, unlink } from "node:fs/promises"
 import { existsSync, realpathSync, rmSync } from "node:fs"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { restrictNativeStores } from "@mako/sessions/read-only-sqlite"
 import { resolveExecutable } from "./executable.js"
 import { Appshots } from "./appshots.js"
-import { imageSize } from "image-size"
-import { ControlPreviews } from "./control-previews.js"
+import { ControlPreviews, previewThumbnail } from "./control-previews.js"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import type { DesktopNotification } from "./contracts/notifications.js"
 import { assessProviderResume } from "./provider-recovery.js"
@@ -298,28 +301,56 @@ const rendererBundle = join(__dirname, "../dist")
  * preload cannot import; `scripts/build-preload.mjs` bundles it.
  */
 const PRELOAD = join(__dirname, "preload.cjs")
-const isDev = !app.isPackaged && !process.env.MAKO_PROD
-const loadedDevBuild = isDev ? devHostBuild(app.getAppPath()) : undefined
+const environment = hostEnvironment()
+const isDev = environment.development
+const loadedDevBuild = isDev ? devHostBuild(environment.appRoot) : undefined
 const configuredDevServerUrl = isDev
   ? process.env.VITE_DEV_SERVER_URL ?? null
   : null
 let activeDevServerUrl = configuredDevServerUrl
 /**
- * One data directory per instance. The single-instance lock lives in
- * userData, so a source checkout that shared the installed app's directory
+ * One data directory per instance. The host's lock is per data directory
+ * (`host-lock.ts`), so a source checkout that shared the installed app's directory
  * could never run beside it — and developing Mako from inside Mako needs
  * exactly that: the desk you work in stays up while the build under test
  * comes and goes. Dev defaults to its own profile; `MAKO_PROFILE` names any
  * other, for a second checkout or a throwaway test instance.
  */
 const persistentHost = process.env.MAKO_HOST_ONLY === "1"
-const instanceProfile = process.env.MAKO_PROFILE || (isDev ? "dev" : "")
+const webSocket =
+  isDev || persistentHost ? process.env.MAKO_WEB_SOCKET : undefined
+/**
+ * A restart comes back on the current build. Conversations are journaled as
+ * they run, so they reopen on the other side; only the provider processes end.
+ * In dev the launcher keeps Vite alive and respawns Electron when it exits with
+ * this code, because `app.relaunch()` would return to a dev server that the
+ * launcher had already torn down with the old process.
+ */
+const RELAUNCH_EXIT_CODE = 75
+/**
+ * The one way this process ends, after cleanup or before anything needs it.
+ * Electron's app while Electron runs the host; `nodeHostExit()` once it doesn't.
+ * app.exit, not app.quit, so a window can't cancel an exit cleanup has already committed to.
+ */
+const exitHost: HostLifecycleOptions["exit"] = (code, restart) => {
+  if (restart && isDev && !persistentHost) app.exit(RELAUNCH_EXIT_CODE)
+  else {
+    if (restart) app.relaunch()
+    app.exit(code)
+  }
+}
+const instanceProfile = environment.profile
 /** The installed app's own directory; a launcher passes it back as MAKO_DATA_ROOT. */
-const defaultUserData = app.getPath("userData")
-if (process.env.MAKO_DATA_ROOT)
-  app.setPath("userData", process.env.MAKO_DATA_ROOT)
-else if (instanceProfile)
-  app.setPath("userData", `${app.getPath("userData")}-${instanceProfile}`)
+const defaultUserData = environment.defaultDataRoot
+/** Until the host leaves Electron, Electron's own answers must agree with the environment's. */
+const environmentDisagreements = Object.entries({
+  defaultDataRoot: [defaultUserData, app.getPath("userData")],
+  appData: [environment.appData, app.getPath("appData")],
+  appRoot: [environment.appRoot, app.getAppPath()],
+  version: [environment.version, app.getVersion()],
+  packaged: [environment.packaged, app.isPackaged],
+}).filter(([, [ours, electron]]) => ours !== electron)
+app.setPath("userData", environment.dataRoot)
 /**
  * A fixture desk host serves agents a look at the interface. It keeps its own
  * profile and refuses every host call outside the fixture allowlist, from
@@ -329,12 +360,14 @@ const fixtureDesk = process.env.MAKO_FIXTURE_DESK === "1"
 if (fixtureDesk) {
   enforceFixtureDesk()
   restrictNativeStores()
-  if (!/(^|-)fixture-/.test(basename(app.getPath("userData")))) {
+  if (!/(^|-)fixture-/.test(basename(environment.dataRoot))) {
     process.stderr.write("A fixture desk host needs a fixture profile of its own\n")
-    app.exit(78)
+    exitHost(78, false)
   }
 }
-installHostLog(join(app.getPath("userData"), "logs", "host.log"))
+installHostLog(join(environment.dataRoot, "logs", "host.log"))
+for (const [name, [ours, electron]] of environmentDisagreements)
+  hostWarn("host", "the host's environment disagrees with Electron's", { name, ours: String(ours), electron: String(electron) })
 /** A Git process slower than this is logged. */
 const GIT_SLOW_MS = 2_000
 configureGit({
@@ -350,15 +383,15 @@ configureGit({
   },
 })
 // Earlier builds drafted with Kiri and cached its analyses here; nothing reads them now.
-void rm(join(app.getPath("userData"), "kiri-analysis-cache"), { recursive: true, force: true })
+void rm(join(environment.dataRoot, "kiri-analysis-cache"), { recursive: true, force: true })
   .catch((error: Error) => hostWarn("git", "retired Kiri cache not removed", { error: error.message }))
-const providerChildren = installProviderChildren(app.getPath("userData"))
+const providerChildren = installProviderChildren(environment.dataRoot)
 /** How another host's refusal names this one. */
 function sessionMemoryLabel(): string {
   if (instanceProfile) return `Mako's ${instanceProfile} host`
-  if (resolve(app.getPath("userData")) !== resolve(defaultUserData))
-    return `another Mako host (${basename(app.getPath("userData"))})`
-  return app.isPackaged ? "the installed Mako app" : "Mako's default host"
+  if (resolve(environment.dataRoot) !== resolve(defaultUserData))
+    return `another Mako host (${basename(environment.dataRoot)})`
+  return environment.packaged ? "the installed Mako app" : "Mako's default host"
 }
 /**
  * Per-user, shared by every host on this Mac: what each native session last
@@ -375,8 +408,8 @@ function openSessionMemory(): SessionMemory | null {
       label: sessionMemoryLabel(),
       socket: process.env.MAKO_WEB_SOCKET,
       launch: {
-        dataRoot: app.getPath("userData"), executable: process.execPath,
-        args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), profile: instanceProfile,
+        dataRoot: environment.dataRoot, executable: process.execPath,
+        args: environment.packaged ? [] : [environment.appRoot], cwd: process.cwd(), profile: instanceProfile,
       },
     }, { readOnly: fixtureDesk })
     memory.startHeartbeat()
@@ -392,7 +425,7 @@ installSessionMemory(sessionMemory)
  * native session belongs to, so every host names a conversation alike. A
  * fixture root keeps its own store; a fixture desk only reads the user's.
  */
-const { store: threadStore, problem: threadStoreProblem } = openThreadStore(threadStorePath({ dataRoot: app.getPath("userData"), appData: app.getPath("appData") }), { readOnly: fixtureDesk })
+const { store: threadStore, problem: threadStoreProblem } = openThreadStore(threadStorePath({ dataRoot: environment.dataRoot, appData: environment.appData }), { readOnly: fixtureDesk })
 if (threadStoreProblem) hostWarn("threads", "Thread store problem", { problem: threadStoreProblem })
 installThreadStore(threadStore)
 const stopFollowingThreads = threadStore ? followOtherHosts(threadStore, (event) => emit(event)) : () => {}
@@ -483,21 +516,33 @@ const threadWorktrees = threadStore
   : null
 hostLog("host", "starting", {
   pid: process.pid,
-  version: app.getVersion(),
+  version: environment.version,
   profile: instanceProfile || "default",
   persistent: persistentHost,
   electron: process.versions.electron ?? "",
   node: process.versions.node ?? "",
-  dataRoot: app.getPath("userData"),
+  dataRoot: environment.dataRoot,
   compileCache: compileCacheStatus(),
 })
-if (!app.requestSingleInstanceLock()) {
+const hostLock = await acquireHostLock(environment.dataRoot, { predecessor: takePredecessor() })
+// A host from before this lock holds only Electron's, and answers on the socket once it listens.
+// A socket that neither answers nor refuses counts as occupied.
+const olderHost = hostLock.kind === "held" && persistentHost && webSocket
+  ? await settleRuntime(webSocket, { timeoutMs: 2_000 }).then((probe) => probe.state !== "absent", () => true)
+  : false
+// Electron's lock stays for standalone mode alone, which reopens its window on a second launch.
+if (hostLock.kind === "taken" || olderHost || (!persistentHost && !app.requestSingleInstanceLock())) {
+  hostWarn("host", "another host holds this data root", {
+    dataRoot: environment.dataRoot,
+    holder: hostLock.kind === "taken" ? hostLock.holder : null,
+    olderHost,
+  })
   console.error(
     "Mako is already running. Close the existing desk host before starting another desktop or web host."
   )
-  // app.exit() drops queued log writes; this line is the only record a detached launch leaves.
+  // Exiting drops queued log writes; this line is the only record a detached launch leaves.
   await flushHostLog()
-  app.exit(1)
+  exitHost(1, false)
 }
 
 /**
@@ -614,7 +659,7 @@ const browserControl = new BrowserService(
     ]
   },
   {
-    preferencePath: join(app.getPath("userData"), "browser-preference.json"),
+    preferencePath: join(environment.dataRoot, "browser-preference.json"),
     defaultApplication: preferredBrowserApplication,
   }
 )
@@ -694,8 +739,6 @@ const desktopNotifier = electronDesktopNotifier({
 })
 let webHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 let sharedConversations: SharedConversations | undefined
-const webSocket =
-  isDev || persistentHost ? process.env.MAKO_WEB_SOCKET : undefined
 const webOnly =
   persistentHost || Boolean(webSocket && process.env.MAKO_WEB_ONLY !== "0")
 let terminalClients: TerminalClients | null = null
@@ -862,35 +905,20 @@ function emit(event: HostEvent, client?: string) {
   }
 }
 
-/**
- * Come back with the current build. Conversations are journaled as they run,
- * so they reopen on the other side; only the provider processes end. In dev
- * the launcher keeps Vite alive and respawns Electron when it exits with
- * this code, because `app.relaunch()` would return to a dev server that the
- * launcher had already torn down with the old process.
- */
-const RELAUNCH_EXIT_CODE = 75
-let relaunching = false
+/** The system is shutting down or logging out; Electron's quit then ends the host instead of backgrounding it. */
+let systemShutdown = false
+/** Set when cleanup begins; events stop going out from then on. */
 let hostClosing = false
-let shuttingDown = false
 let application: ReturnType<typeof installApplicationIpc> | undefined
-
-/**
- * A termination signal shuts the host down, with cleanup. Electron installs
- * its own handlers for these once its main loop exists, after this file first
- * runs; they call app.quit(), which a busy or persistent host answers by
- * staying in the background. Listening only after ready replaces them. Each
- * listener is one-shot, so a second signal ends the process at once, as
- * Chromium's own handler would.
- */
-function stopOnTerminationSignals(): void {
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
-    process.once(signal, () => {
-      hostLog("lifecycle", "stopping", { signal })
-      shuttingDown = true
-      app.quit()
-    })
-}
+const lifecycle = hostLifecycle({
+  cleanup: cleanupHost,
+  exit: exitHost,
+  log: (message, fields) => hostLog("lifecycle", message, fields),
+  failed: async (error) => {
+    hostWarn("lifecycle", "shutdown failed", { error: String(error) })
+    await flushHostLog()
+  },
+})
 
 function hasActiveWork(): boolean {
   return application
@@ -919,8 +947,7 @@ function watchProfileHostIdle(hostDirectory: string): void {
   const holds = () => {
     const clients = webHost?.clients().length ?? 0
     const reasons = [
-      shuttingDown && "shutting down",
-      relaunching && "relaunching",
+      !lifecycle.running() && "stopping",
       application?.lifecycle.blocked && "lifecycle blocked",
       hasActiveWork() && "active work",
       [...rendererWindows].some((renderer) => !deskWindows.has(renderer)) &&
@@ -944,8 +971,7 @@ function watchProfileHostIdle(hostDirectory: string): void {
         profile: instanceProfile,
         idleSeconds: PROFILE_HOST_IDLE_MS / 1000,
       })
-      shuttingDown = true
-      app.quit()
+      void lifecycle.stop({ kind: "idle" })
     },
   })
   const timer = setInterval(() => {
@@ -962,7 +988,7 @@ function watchProfileHostIdle(hostDirectory: string): void {
 }
 
 async function reopenWindow(): Promise<void> {
-  if (shuttingDown || relaunching) return
+  if (!lifecycle.running()) return
   if (webOnly && !rendererWindows.size) {
     // The default profile answers an activate/second-instance by starting a
     // desktop client; a sandbox or test host owns another data root and stays
@@ -971,18 +997,18 @@ async function reopenWindow(): Promise<void> {
     // can then resolve as the bundle's instance and fail to activate.
     if (
       persistentHost &&
-      resolve(app.getPath("userData")) === resolve(defaultUserData)
+      resolve(environment.dataRoot) === resolve(defaultUserData)
     ) {
       const env = desktopLaunchEnvironment(process.env)
-      if (app.isPackaged) {
-        spawn("open", ["-n", resolve(dirname(app.getAppPath()), "../..")], {
+      if (environment.packaged) {
+        spawn("open", ["-n", resolve(dirname(environment.appRoot), "../..")], {
           detached: true,
           stdio: "ignore",
           env,
         }).unref()
         return
       }
-      spawn(process.execPath, [app.getAppPath()], {
+      spawn(process.execPath, [environment.appRoot], {
         detached: true,
         stdio: "ignore",
         env,
@@ -1028,7 +1054,7 @@ async function createWindow() {
     app.dock?.setBadge("DEV")
   }
   const icon =
-    process.platform === "darwin" && app.isPackaged ? undefined : appIcon()
+    process.platform === "darwin" && environment.packaged ? undefined : appIcon()
   if (icon && process.platform === "darwin") app.dock?.setIcon(icon)
 
   const windowOptions: BrowserWindowConstructorOptions = {
@@ -1076,7 +1102,7 @@ async function createWindow() {
     })
   }
 
-  watchRendererHealth(window, { closing: () => shuttingDown || relaunching })
+  watchRendererHealth(window, { closing: () => !lifecycle.running() })
 
   installAutomation(window, isDev)
 
@@ -1298,10 +1324,10 @@ function bindIpc() {
 
   handle("mako:usage", () => {
     usageReader ??= new UsageReader({
-      ledgerPath: join(app.getPath("userData"), "usage-ledger.sqlite"),
+      ledgerPath: join(environment.dataRoot, "usage-ledger.sqlite"),
       sessionsRoot: join(homedir(), ".mako", "sessions"),
       homeRoot: homedir(),
-      conversationsRoot: join(app.getPath("userData"), "conversations"),
+      conversationsRoot: join(environment.dataRoot, "conversations"),
     })
     return usageReader.read()
   })
@@ -1345,7 +1371,7 @@ function bindIpc() {
       ...resumableHarnesses(),
       ...providerHost.liveDrivers
         .list()
-        .filter((driver) => driver.available(app.getAppPath()))
+        .filter((driver) => driver.available(environment.appRoot))
         .map((driver) => driver.provider),
     ]),
   ]
@@ -1363,7 +1389,7 @@ function bindIpc() {
     live: (provider) => {
       const driver = providerHost.liveDrivers.get(provider)
       return driver
-        ? { available: driver.available(app.getAppPath()), canResume: resumes(driver) }
+        ? { available: driver.available(environment.appRoot), canResume: resumes(driver) }
         : null
     },
     nativeInstalled: (provider) => {
@@ -1573,7 +1599,7 @@ function bindIpc() {
     browserControl.prefer(browser)
   )
   handle("mako:browser-extension-setup", () =>
-    prepareBrowserExtension(app.getAppPath(), process.execPath)
+    prepareBrowserExtension(environment.appRoot, process.execPath)
   )
   handle("mako:browser-control-connect", async (_event, browser: string) => {
     await browserControl.connect(browser)
@@ -1705,7 +1731,7 @@ function bindIpc() {
   )
 
   handle("mako:harness-descriptors", () => {
-    const appPath = app.getAppPath()
+    const appPath = environment.appRoot
     return describeHarnesses(providerHost, {
       live: (provider) => providerHost.liveDrivers.get(provider)?.available(appPath) === true,
       resumable: new Set(resumableHarnesses()),
@@ -2139,10 +2165,10 @@ async function readFilePreview(request: Request): Promise<Response> {
   }
 }
 
-installCrashReporting()
+installCrashReporting({ root: environment.dataRoot })
 
 app.whenReady().then(async () => {
-  stopOnTerminationSignals()
+  stopOnSignals(lifecycle)
   const trace = (stage: string) => {
     if (process.env.MAKO_RUNTIME_TRACE === "1")
       console.info("[mako-runtime]", stage)
@@ -2152,7 +2178,7 @@ app.whenReady().then(async () => {
       dirname(webSocket),
       {
         profile: instanceProfile || "dev",
-        sourceRoot: app.getAppPath(),
+        sourceRoot: environment.appRoot,
       },
       (registration) => {
         void configureDevRenderer(registration)
@@ -2161,7 +2187,7 @@ app.whenReady().then(async () => {
   } else if (isDev && configuredDevServerUrl) {
     await configureDevRenderer({
       profile: instanceProfile || "dev",
-      sourceRoot: app.getAppPath(),
+      sourceRoot: environment.appRoot,
       url: configuredDevServerUrl,
     })
   }
@@ -2178,7 +2204,7 @@ app.whenReady().then(async () => {
     // keeps a regular, activatable presence while no client is attached and
     // hands it back when one is; other profiles stay headless.
     const ownsAppPresence =
-      resolve(app.getPath("userData")) === resolve(defaultUserData)
+      resolve(environment.dataRoot) === resolve(defaultUserData)
     const syncActivation = () => {
       if (!ownsAppPresence) return
       if ((webHost?.clients().length ?? 0) > 0) app.dock?.hide()
@@ -2190,8 +2216,8 @@ app.whenReady().then(async () => {
   }
   app.setAboutPanelOptions({
     applicationName: "Mako",
-    applicationVersion: app.getVersion(),
-    version: app.getVersion(),
+    applicationVersion: environment.version,
+    version: environment.version,
     copyright: "© 2026 Verbiflow",
     credits:
       "Desktop app for Claude Code, Codex, Cursor, Grok, Devin, and OpenCode.",
@@ -2199,13 +2225,13 @@ app.whenReady().then(async () => {
   protocol.handle("mako-file", readFilePreview)
   if (!isDev) {
     serveDesk(rendererBundle, readFilePreview)
-    const moved = await adoptDeskOrigin({ userData: app.getPath("userData"), dist: rendererBundle })
+    const moved = await adoptDeskOrigin({ userData: environment.dataRoot, dist: rendererBundle })
     if (moved.kind === "failed") hostWarn("renderer", "storage move failed", { error: moved.error })
     else if (moved.kind === "moved") hostLog("renderer", "storage moved", { origin: "mako-app://desk", entries: moved.entries })
   }
   terminalClients = new TerminalClients(
     join(__dirname, "terminal-daemon.js"),
-    join(app.getPath("userData"), "terminal"),
+    join(environment.dataRoot, "terminal"),
     (event, owner) => {
       webHost?.terminal(event, owner)
       for (const renderer of rendererWindows) {
@@ -2240,7 +2266,7 @@ app.whenReady().then(async () => {
     threads: threadStore ?? undefined,
     mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
     workspaceSnapshots: new WorkspaceSnapshots(
-      join(app.getPath("userData"), "workspace-snapshots")
+      join(environment.dataRoot, "workspace-snapshots")
     ),
     checkpoint: (path, provider) => {
       const sourceProvider = provider ?? catalogRef(path)?.harness
@@ -2256,8 +2282,8 @@ app.whenReady().then(async () => {
       return emitter ? emitter.emit(thread) : null
     },
     resumeVerdict: assessResume,
-    appPath: app.getAppPath(),
-    root: join(app.getPath("userData"), "conversations"),
+    appPath: environment.appRoot,
+    root: join(environment.dataRoot, "conversations"),
     tools: async (bindingId, conversationId) => {
       const tools = conversationMcp?.mint(bindingId, conversationId)
       if (!tools) return undefined
@@ -2310,7 +2336,7 @@ app.whenReady().then(async () => {
     hostWarn("accounts", "pending removals could not be read", { error: error instanceof Error ? error.message : String(error) })
   )
   nativeRequests = new NativeRequests(
-    join(app.getPath("userData"), "native-requests"),
+    join(environment.dataRoot, "native-requests"),
     {
       read: async (path) => (await openThread(path))?.ref ?? null,
       running: (path) => threadRun(path)?.status === "running",
@@ -2333,7 +2359,7 @@ app.whenReady().then(async () => {
   )
   trace("journals ready")
   const moves = new WorkspaceMoves({
-    file: join(app.getPath("userData"), "workspace-moves.json"),
+    file: join(environment.dataRoot, "workspace-moves.json"),
     source: (id) => {
       const snapshot = liveConversations.snapshot(id)
       if (!snapshot || snapshot.session.status === "closed") return undefined
@@ -2416,7 +2442,7 @@ app.whenReady().then(async () => {
     emit({ type: "browser-control", browsers })
   )
   threadArchives = new ThreadArchives(
-    join(app.getPath("userData"), "thread-archives.sqlite")
+    join(environment.dataRoot, "thread-archives.sqlite")
   )
   threadLifecycle = new ThreadLifecycle({
     live: liveConversations,
@@ -2461,17 +2487,8 @@ app.whenReady().then(async () => {
       app.dock?.hide()
     },
     finish: (action, install) => {
-      shuttingDown = true
-      relaunching = action === "restart"
-      try {
-        install?.()
-        if (relaunching && (!isDev || persistentHost)) app.relaunch()
-      } catch (error) {
-        shuttingDown = false
-        relaunching = false
-        throw error
-      }
-      setImmediate(() => app.quit())
+      install?.()
+      void lifecycle.stop({ kind: "request", action })
     },
   })
   if (sessionMemory) {
@@ -2598,75 +2615,68 @@ app.on("window-all-closed", () => {
 })
 
 const quitLifecycle = backgroundLifecycle({
-    hasActiveWork: () => persistentHost || hasActiveWork(),
-    isRestarting: () => relaunching || shuttingDown,
-    hide: () => {
-      for (const renderer of rendererWindows) renderer.hide()
-      app.dock?.hide()
-    },
-    cleanup: async () => {
-      hostClosing = true
-      const callsDrained = stopHostCalls()
-      // Close admission before disposing the UI lifecycle: pending preparation
-      // must not inherit its reset admission callback and dispatch late.
-      const providersDrained = Promise.all([stopDrivers(), stopHarnessProfiles()])
-      void providersDrained.catch(() => {})
-      desktopNotifier.dispose()
-      closeRepositories()
-      application?.dispose()
-      sharedConversations?.dispose()
-      webHost?.close()
-      if (persistentHost && webSocket) {
-        // The runtime directory is this host's alone; leaving it behind is how
-        // fifty of them piled up in the temp folder.
-        try {
-          rmSync(dirname(webSocket), { recursive: true, force: true })
-        } catch {
-          /* best effort */
-        }
-      }
-      powerMonitor.removeListener("resume", emitTerminalWake)
-      powerMonitor.removeListener("unlock-screen", emitTerminalWake)
-      stopCloudAccountIpc()
-      terminalClients?.dispose()
-      void controlSessions.close()
-      stopCuaEmbedded()
-      void appshots.close()
-      controlService?.close()
-      stopDevRendererWatch?.()
-      stopDevRendererWatch = undefined
-      devRendererGeneration += 1
-      removeDeskBrowserRegistration?.()
-      removeDeskBrowserRegistration = undefined
-      deskBrowser.close()
-      stopWorkspaceIpc()
-      stopWatching()
-      runtimeUpdates.stop()
-      stopThreads()
-      await Promise.all([callsDrained, providersDrained, hostTelemetry?.close(), usageReader?.close()])
-      await liveConversations?.stop()
-      stopAcp()
-      stopCodexApps()
-      nativeRequests?.stop()
-      conversationMcp?.close()
-      sessionMemory?.close()
-      installThreadStore(null)
-      stopFollowingThreads()
-      threadStore?.close()
-      threadArchives?.close()
-      checkoutHeads.close()
-      void workspaceClients.dispose()
-      hostLog("lifecycle", "stopped")
-      await flushHostLog()
-    },
-    quit: () => {
-      if (relaunching && isDev && !persistentHost) app.exit(RELAUNCH_EXIT_CODE)
-      else app.quit()
-    },
-    failed: (error) => {
-      hostWarn("lifecycle", "shutdown failed", { error: String(error) })
-      app.exit(1)
-    },
+  lifecycle,
+  keepInBackground: () => !systemShutdown && (persistentHost || hasActiveWork()),
+  hide: () => {
+    for (const renderer of rendererWindows) renderer.hide()
+    app.dock?.hide()
+  },
 })
 app.on("before-quit", quitLifecycle.beforeQuit)
 app.on("will-quit", quitLifecycle.willQuit)
+
+/** Everything the host holds, released once, in order, by its lifecycle. */
+async function cleanupHost(): Promise<void> {
+  hostClosing = true
+  const callsDrained = stopHostCalls()
+  // Close admission before disposing the UI lifecycle: pending preparation
+  // must not inherit its reset admission callback and dispatch late.
+  const providersDrained = Promise.all([stopDrivers(), stopHarnessProfiles()])
+  void providersDrained.catch(() => {})
+  desktopNotifier.dispose()
+  closeRepositories()
+  application?.dispose()
+  sharedConversations?.dispose()
+  webHost?.close()
+  if (persistentHost && webSocket) {
+    // The runtime directory is this host's alone; leaving it behind is how
+    // fifty of them piled up in the temp folder.
+    try {
+      rmSync(dirname(webSocket), { recursive: true, force: true })
+    } catch {
+      /* best effort */
+    }
+  }
+  wakeWatch?.stop()
+  stopCloudAccountIpc()
+  terminalClients?.dispose()
+  void controlSessions.close()
+  stopCuaEmbedded()
+  void appshots.close()
+  controlService?.close()
+  stopDevRendererWatch?.()
+  stopDevRendererWatch = undefined
+  devRendererGeneration += 1
+  removeDeskBrowserRegistration?.()
+  removeDeskBrowserRegistration = undefined
+  deskBrowser.close()
+  stopWorkspaceIpc()
+  stopWatching()
+  runtimeUpdates.stop()
+  stopThreads()
+  await Promise.all([callsDrained, providersDrained, hostTelemetry?.close(), usageReader?.close()])
+  await liveConversations?.stop()
+  stopAcp()
+  stopCodexApps()
+  nativeRequests?.stop()
+  conversationMcp?.close()
+  sessionMemory?.close()
+  installThreadStore(null)
+  stopFollowingThreads()
+  threadStore?.close()
+  threadArchives?.close()
+  checkoutHeads.close()
+  void workspaceClients.dispose()
+  hostLog("lifecycle", "stopped")
+  await flushHostLog()
+}

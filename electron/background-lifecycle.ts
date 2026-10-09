@@ -1,34 +1,31 @@
+import type { HostLifecycle } from "./host-lifecycle.js"
+
 export interface BackgroundLifecycle {
-  hasActiveWork(): boolean
-  isRestarting(): boolean
+  lifecycle: HostLifecycle
+  /** Whether a quit Electron starts should leave the host running in the background instead. */
+  keepInBackground(): boolean
   hide(): void
-  cleanup(): void | Promise<void>
-  quit(): void
-  failed(error: Error): void
 }
 
-/** before-quit may still be cancelled by a window; only will-quit owns teardown. */
-export function backgroundLifecycle(lifecycle: BackgroundLifecycle) {
-  let finishing = false
-  let finished = false
+/**
+ * Electron's own quit events, while Electron runs the host: the last window
+ * closing, Cmd+Q, the system logging out. before-quit may still be cancelled
+ * by a window, so it only decides whether to stay in the background; only
+ * will-quit stops the host, through its one lifecycle. A stop the host started
+ * itself ends the process directly and passes through both untouched.
+ */
+export function backgroundLifecycle({ lifecycle, keepInBackground, hide }: BackgroundLifecycle) {
   return {
     beforeQuit(event: { preventDefault(): void }): void {
-      if (!finishing && !lifecycle.isRestarting() && lifecycle.hasActiveWork()) {
+      if (lifecycle.running() && keepInBackground()) {
         event.preventDefault()
-        lifecycle.hide()
+        hide()
       }
     },
     willQuit(event: { preventDefault(): void }): void {
-      if (finished) return
+      if (lifecycle.state().kind === "stopped") return
       event.preventDefault()
-      if (finishing) return
-      finishing = true
-      void Promise.resolve().then(() => lifecycle.cleanup()).then(() => {
-        finished = true
-        // Electron must finish unwinding the prevented will-quit event first.
-        // A microtask-only cleanup can otherwise make its next quit a no-op.
-        setImmediate(() => lifecycle.quit())
-      }, error => lifecycle.failed(error instanceof Error ? error : new Error(String(error))))
+      void lifecycle.stop({ kind: "desktop" })
     },
   }
 }

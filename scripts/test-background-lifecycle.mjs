@@ -97,6 +97,7 @@ async function checkBackground() {
   const { app, BrowserWindow } = await import("electron")
   const { backgroundLifecycle } =
     await import("../dist-electron/background-lifecycle.js")
+  const { hostLifecycle } = await import("../dist-electron/host-lifecycle.js")
   app.setPath("userData", join(process.env.MAKO_LIFECYCLE_ROOT, "profile"))
   await app.whenReady()
   await checkMcpStartup()
@@ -135,18 +136,21 @@ async function checkBackground() {
   const pid = worker.pid
   const rendererId = window.webContents.id
   app.on("activate", () => window.showInactive())
+  const host = hostLifecycle({
+    cleanup: async () => {
+      assert.equal(window.isDestroyed(), true, "Only committed quit may clean up")
+      cleaned = true
+      worker.kill()
+      console.log("PASS: will-quit tears down only after window closure")
+    },
+    exit: (code) => app.exit(code),
+    log() {},
+    failed: async error => { console.error(error) },
+  })
   const lifecycle = backgroundLifecycle({
-      hasActiveWork: () => active,
-      isRestarting: () => false,
-      hide: () => window.hide(),
-      cleanup: () => {
-        assert.equal(window.isDestroyed(), true, "Only committed quit may clean up")
-        cleaned = true
-        worker.kill()
-        console.log("PASS: will-quit tears down only after window closure")
-      },
-      quit: () => app.quit(),
-      failed: error => {console.error(error); app.exit(1)},
+    lifecycle: host,
+    keepInBackground: () => active,
+    hide: () => window.hide(),
   })
   app.on("before-quit", lifecycle.beforeQuit)
   app.on("will-quit", lifecycle.willQuit)
