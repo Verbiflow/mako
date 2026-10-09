@@ -158,7 +158,7 @@
     "test:opencode-agents": "tsgo -p tsconfig.electron.json && tsx scripts/test-opencode-agents.ts",
     "test:opencode-api": "tsx scripts/test-opencode-native-api.ts",
     "test:opencode-native-forms": "tsx scripts/test-opencode-native-forms.mjs",
-    "test:opencode-live": "tsx scripts/test-opencode-live.ts",
+    "test:opencode-live": "tsx scripts/test-opencode-live.ts && tsx scripts/test-opencode-relocate-live.ts",
     "test:turn-recovery-live": "npm run build:electron && node scripts/test-turn-recovery-live.mjs",
     "test:grok-modes-live": "npm run build:electron && node scripts/test-grok-modes-live.mjs",
     "test:proposed-plans": "tsx scripts/test-proposed-plans.ts && tsx scripts/test-plan-mode.ts && tsx scripts/test-plan-builds.ts && tsx scripts/test-plan-approvals.ts",

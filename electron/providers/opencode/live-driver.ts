@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
@@ -183,6 +183,11 @@ export function promptFiles(attachments: readonly PromptAttachment[]): Array<{ u
     if (attachment.path) return [{ uri: pathToFileURL(attachment.path).href, name: attachment.name }]
     return []
   })
+}
+
+function sameFolder(a: string, b: string): boolean {
+  const real = (path: string) => { try { return realpathSync(path) } catch { return path } }
+  return a === b || real(a) === real(b)
 }
 
 /** `/name rest` for a native command or slash skill; anything else is prose. */
@@ -673,6 +678,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       checkpoint: openCodeCheckpoint,
       inspect: inspectOpenCodeSession,
       locate: async (binding, _cwd, env) => binding.nativeId ? locateOpenCodeSession(binding.nativeId, env) : undefined,
+      elsewhere: {
+        via: "OpenCode's `session.move` to the new folder as the session resumes there; it keeps the folder on the session and runs its tools in it.",
+        verified: "scripts/test-opencode-relocate-live.ts against opencode v2.0.1 with its free hosted model: remembered its turns and ran `pwd` in the new folder, and in the old one without the move.",
+      },
     },
     nativeSource: (path, nativeId) => {
       const source = openCodeRecordLocator(path)
@@ -745,6 +754,11 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
                 boundary: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId, fork.steers),
               })))
             : await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
+          // A session resumed in another folder, as a Thread's move into its worktree does, goes on there: OpenCode keeps its folder on the session.
+          if (!fork && !sameFolder(session.location.directory, cwd)) {
+            await trace.step("session-resume", () => api.client.session.move({ sessionID: session!.id, directory: cwd }))
+            session = { ...session, location: { ...session.location, directory: cwd } }
+          }
           const current = session.model ? { id: session.model.id, providerID: session.model.providerID, variant: session.model.variant } : undefined
           const ref = openCodeRequestedModel(catalog, options.tuning, current ?? catalog.defaultModel)
           if (session.agent !== agent) await trace.step("settings", () => api.client.session.switchAgent({ sessionID: session!.id, agent }))
