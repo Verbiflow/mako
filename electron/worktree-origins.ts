@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
 import type { LinkedCheckout } from "@mako/host/contracts/checkout-heads"
 import { PROJECT_CHECKOUT_FILE } from "@mako/host/contracts/thread-worktrees"
-import { gitDirPointer, pointedCheckout, spelledLike } from "./checkout-heads.js"
+import { gitDirPointer, pointedCheckout, spelledLike } from "@mako/host/base/checkout-location"
 
 /** Worktrees remembered after they're gone, at most; the ones seen longest ago go first. */
 const REMEMBERED = 2_000

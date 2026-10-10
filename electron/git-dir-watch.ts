@@ -1,7 +1,7 @@
 import { statSync, watch, type FSWatcher } from "node:fs"
 import { realpath } from "node:fs/promises"
 import { join, sep } from "node:path"
-import { locateGitDir } from "./checkout-heads.js"
+import { locateGitDir } from "@mako/host/base/checkout-location"
 
 /** What moves on every commit, add, reset or checkout, and nothing else does. */
 const MARKERS = ["index", join("logs", "HEAD")]
