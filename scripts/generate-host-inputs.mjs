@@ -164,8 +164,8 @@ for (const file of sources) {
   const visit = (node) => {
     if (
       ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      ["registerIpc", "handle"].includes(node.expression.text) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "handle" &&
       node.arguments.length === 2 &&
       ts.isStringLiteral(node.arguments[0])
     ) {
@@ -175,7 +175,7 @@ for (const file of sources) {
           .getTypeAtLocation(node.arguments[1])
           .getCallSignatures()[0]
         if (!signature) throw new Error(`No handler signature for ${channel}`)
-        const args = signature.parameters.slice(1).map((parameter) => {
+        const args = signature.parameters.map((parameter) => {
           try {
             return schema(
               checker.getTypeOfSymbolAtLocation(

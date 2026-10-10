@@ -29,20 +29,30 @@ async function run() {
   const root = process.env.MAKO_CATALOG_CAPTURE_ROOT
   app.setPath('userData', join(root, 'profile'))
   await app.whenReady()
-  const threads = await import('../dist-electron/threads.js')
+  const { threadCatalog } = await import('../dist-electron/threads.js')
+  const { WorktreeOrigins } = await import('../dist-electron/worktree-origins.js')
+  const { hostEnvironment } = await import('../dist-electron/host-environment.js')
+  const report = { root, outcome: 'running', events: [] }
+  const threads = threadCatalog({
+    dataRoot: hostEnvironment().dataRoot,
+    sessionMemory: null,
+    threadStore: null,
+    worktreeOrigins: new WorktreeOrigins(join(root, 'worktree-origins.json')),
+    readOnly: false,
+    emit: event => { if (event.type === 'notice') report.events.push(event) },
+  })
   const { LiveConversations } = await import('../dist-electron/live-conversations.js')
   const { providerHost } = await import('../dist-electron/providers/index.js')
-  const owner = new LiveConversations({ root: join(root, 'conversations'), appPath: app.getAppPath(), driver: id => providerHost.liveDrivers.get(id), history: threads.pageThread, emit: () => {} })
-  const report = { root, outcome: 'running', events: [] }
+  const owner = new LiveConversations({ root: join(root, 'conversations'), appPath: app.getAppPath(), driver: id => providerHost.liveDrivers.get(id), history: threads.page, emit: () => {} })
   try {
     const source = join(root, 'home/.codex/sessions/2026/09/24/rollout-fixture.jsonl')
-    threads.installThreads(event => { if (event.type === 'notice') report.events.push(event) })
-    report.readyAtCapture = threads.threadsReady()
+    threads.start()
+    report.readyAtCapture = threads.ready()
     assert.equal(report.readyAtCapture, false)
     const started = performance.now()
     const captured = await owner.capture(randomUUID(), source)
     report.elapsedMs = Math.round(performance.now() - started)
-    report.discoveryReadyAfterCapture = threads.threadsReady()
+    report.discoveryReadyAfterCapture = threads.ready()
     assert.ok(captured.base.entries.length > 0)
     assert.ok(captured.control.questions.some(q => q.native.questions.some(item => !q.answered?.includes(item.id))))
     report.nativeId = captured.session.nativeId
@@ -57,7 +67,7 @@ async function run() {
     process.exitCode = 1
   } finally {
     owner.stop()
-    threads.stopThreads()
+    threads.stop()
     await writeFile(join(root, 'result.json'), JSON.stringify(report, null, 2))
     console.log(`Catalog capture evidence: ${root}/result.json`)
     app.exit(process.exitCode ?? 0)

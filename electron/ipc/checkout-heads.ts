@@ -1,4 +1,4 @@
-import { registerIpc } from "./register.js"
+import type { MethodTable } from "../host-methods.js"
 import type { CheckoutHeadService } from "../checkout-heads.js"
 import type { CheckoutHeads } from "../contracts/checkout-heads.js"
 
@@ -6,8 +6,8 @@ import type { CheckoutHeads } from "../contracts/checkout-heads.js"
 const MAX_FOLDERS = 200
 
 /** Each folder's checkout head, followed from then on; changes arrive as `checkout-heads` events. */
-export function installCheckoutHeadsIpc(heads: CheckoutHeadService) {
-  registerIpc("mako:checkout-heads", (_event, folders: string[]): Promise<CheckoutHeads> => {
+export function installCheckoutHeadsIpc(methods: MethodTable, heads: CheckoutHeadService) {
+  methods.handle("mako:checkout-heads", (folders: string[]): Promise<CheckoutHeads> => {
     if (folders.length > MAX_FOLDERS) throw new Error(`Ask for at most ${MAX_FOLDERS} folders at once.`)
     return heads.read(folders)
   })

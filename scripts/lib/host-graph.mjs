@@ -4,13 +4,13 @@ import { build, transformSync } from "esbuild"
 import { z } from "zod"
 
 /**
- * The host's source files as esbuild resolves them from electron/main.ts,
+ * The host's source files as esbuild resolves them from electron/host-main.ts,
  * through Mako's own packages; any other package stays external. Imports
  * only used as types are erased and not followed, but the graph still lists
  * them among a file's external imports: `packagesLoadedBy` tells them apart.
  */
 export const root = resolve(".")
-export const entry = "electron/main.ts"
+export const entry = "electron/host-main.ts"
 const Manifest = z.object({ exports: z.record(z.string(), z.string()) })
 
 function packageSource(specifier) {
@@ -68,7 +68,7 @@ export function staticallyLoaded(inputs) {
   return parent
 }
 
-/** `electron/main.ts → … → file`, through first importers. */
+/** `electron/host-main.ts → … → file`, through first importers. */
 export function chainTo(parent, file) {
   const chain = []
   for (let at = file; at; at = parent.get(at)) chain.unshift(at)

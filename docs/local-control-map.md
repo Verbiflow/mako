@@ -1016,7 +1016,7 @@ page; it refuses `--shared` and non-fixture profiles, and refuses to serve if th
 host does not report `fixture: true`. The boundary is in the host, not the page:
 
 - Every host call, from every transport, passes one function in
-  `electron/ipc/register.ts`. That covers the host's own hidden desk windows,
+  `electron/host-methods.ts`. That covers the host's own hidden desk windows,
   which agents drive and which call the host over in-process IPC (they never
   touch the socket or the dev proxy), plus Electron windows and pages on the
   socket. A fixture host refuses anything outside the 19 reads in

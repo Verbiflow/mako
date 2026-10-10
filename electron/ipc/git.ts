@@ -22,7 +22,7 @@ import type {
   UtilityConnectionInput,
   UtilityProvider,
 } from "../shared.js"
-import { registerIpc } from "./register.js"
+import type { MethodTable } from "../host-methods.js"
 import { hostEnvironment } from "../host-environment.js"
 
 export interface GitIpcContext {
@@ -36,44 +36,44 @@ export interface GitIpcContext {
 const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).max(400)])
 const HarnessOrderSchema = z.array(z.string().min(1).max(40)).max(HARNESS_ORDER_LIMIT)
 
-export function installGitIpc(context: GitIpcContext): void {
+export function installGitIpc(methods: MethodTable, context: GitIpcContext): void {
   const { withHost, models, work } = context
-  registerIpc("mako:git-select-repository", (_event, cwd: string, root: string) => withHost((host) => host.selectGitRepository(cwd, root)))
-  registerIpc("mako:git-status", () => withHost((host) => host.gitStatus()))
-  registerIpc("mako:git-diff", (_event, path: string) =>
+  methods.handle("mako:git-select-repository", (cwd: string, root: string) => withHost((host) => host.selectGitRepository(cwd, root)))
+  methods.handle("mako:git-status", () => withHost((host) => host.gitStatus()))
+  methods.handle("mako:git-diff", (path: string) =>
     withHost((host) => host.gitDiff(path))
   )
-  registerIpc("mako:git-diff-all", () => withHost((host) => host.gitDiffAll()))
-  registerIpc("mako:git-stage", (_event, paths: string[]) =>
+  methods.handle("mako:git-diff-all", () => withHost((host) => host.gitDiffAll()))
+  methods.handle("mako:git-stage", (paths: string[]) =>
     withHost((host) => host.gitStage(paths))
   )
-  registerIpc("mako:git-unstage", (_event, paths: string[]) =>
+  methods.handle("mako:git-unstage", (paths: string[]) =>
     withHost((host) => host.gitUnstage(paths))
   )
-  registerIpc("mako:git-discard", (_event, paths: string[]) =>
+  methods.handle("mako:git-discard", (paths: string[]) =>
     withHost((host) => host.gitDiscard(paths))
   )
-  registerIpc("mako:git-restore-discarded", (_event, stash: string) =>
+  methods.handle("mako:git-restore-discarded", (stash: string) =>
     withHost((host) => host.gitRestoreDiscarded(stash))
   )
-  registerIpc("mako:git-changed-since", (_event, ref: string) =>
+  methods.handle("mako:git-changed-since", (ref: string) =>
     withHost((host) => host.gitChangedSince(ref))
   )
-  registerIpc("mako:git-default-branch", () =>
+  methods.handle("mako:git-default-branch", () =>
     withHost((host) => host.gitDefaultBranch())
   )
-  registerIpc("mako:git-since-diff", (_event, base: string, path: string) =>
+  methods.handle("mako:git-since-diff", (base: string, path: string) =>
     withHost((host) => host.gitSinceDiff(base, path))
   )
-  registerIpc("mako:git-stage-all", () =>
+  methods.handle("mako:git-stage-all", () =>
     withHost((host) => host.gitStageAll())
   )
-  registerIpc("mako:git-unstage-all", () =>
+  methods.handle("mako:git-unstage-all", () =>
     withHost((host) => host.gitUnstageAll())
   )
-  registerIpc(
+  methods.handle(
     "mako:git-commit",
-    (_event, message: string, options?: { amend?: boolean }) =>
+    (message: string, options?: { amend?: boolean }) =>
       withHost(async (host) => {
         if (options?.amend) await host.gitCommit(message, options)
         else {
@@ -82,30 +82,30 @@ export function installGitIpc(context: GitIpcContext): void {
         }
       })
   )
-  registerIpc("mako:git-push", (_event, input: GitPushInput) => withHost((host) => {
+  methods.handle("mako:git-push", (input: GitPushInput) => withHost((host) => {
     if (host.gitWorkspace !== input.cwd) throw new Error("The project changed before pushing. Select the intended project and try again.")
     return host.gitPush(input.branch)
   }))
-  registerIpc("mako:git-remote", (_event, input: GitRemoteInput) => withHost(async (host) => {
+  methods.handle("mako:git-remote", (input: GitRemoteInput) => withHost(async (host) => {
     if (host.gitWorkspace !== input.cwd) throw new Error("Select this repository before continuing.")
     return host.gitRemote(input)
   }))
-  registerIpc("mako:git-log", (_event, limit?: number) =>
+  methods.handle("mako:git-log", (limit?: number) =>
     withHost((host) => host.gitLog(limit))
   )
-  registerIpc("mako:git-commit-files", (_event, hash: string) =>
+  methods.handle("mako:git-commit-files", (hash: string) =>
     withHost((host) => host.gitCommitFiles(hash))
   )
-  registerIpc(
+  methods.handle(
     "mako:git-commit-file-diff",
-    (_event, hash: string, path: string) =>
+    (hash: string, path: string) =>
       withHost((host) => host.gitCommitFileDiff(hash, path))
   )
-  registerIpc("mako:git-commit-diff-all", (_event, hash: string) =>
+  methods.handle("mako:git-commit-diff-all", (hash: string) =>
     withHost((host) => host.gitCommitDiffAll(hash))
   )
   // `npm run git:doctor`: what this host holds for a repository against a fresh read.
-  registerIpc("mako:git-doctor", async (_event, path: string) => {
+  methods.handle("mako:git-doctor", async (path: string) => {
     const held = knownRepository(path) !== undefined
     const repository = await openRepository(path)
     if (!repository) throw new Error(`${path} isn't inside a Git repository.`)
@@ -114,38 +114,38 @@ export function installGitIpc(context: GitIpcContext): void {
   const drafting = new GitDrafting(work)
   const catalog = new UtilityModelCatalog(models)
   const nameSavedModels = savedModelNamer(catalog, models)
-  registerIpc("mako:utility-model-settings", async () => {
+  methods.handle("mako:utility-model-settings", async () => {
     let [settings, tasks] = await Promise.all([models.settings(), work.settings()])
     if (await nameSavedModels(settings.connections))
       [settings, tasks] = await Promise.all([models.settings(), work.settings()])
     return { ...settings, work: tasks }
   })
-  registerIpc("mako:utility-choice", async (_event, task: string, choice: string) => {
+  methods.handle("mako:utility-choice", async (task: string, choice: string) => {
     const [parsedTask, parsedChoice] = UtilityChoiceSchema.parse([task, choice])
     await work.choose(parsedTask, parsedChoice)
   })
-  registerIpc("mako:harness-order-saved", () => models.harnessOrder())
-  registerIpc("mako:harness-order", (_event, order: string[]) =>
+  methods.handle("mako:harness-order-saved", () => models.harnessOrder())
+  methods.handle("mako:harness-order", (order: string[]) =>
     models.saveHarnessOrder(HarnessOrderSchema.parse(order))
   )
-  registerIpc(
+  methods.handle(
     "mako:utility-model-catalog",
-    (_event, input: UtilityCatalogInput) => catalog.list(input)
+    (input: UtilityCatalogInput) => catalog.list(input)
   )
-  registerIpc(
+  methods.handle(
     "mako:utility-model-connect",
-    (_event, input: UtilityConnectionInput) => models.connect(input)
+    (input: UtilityConnectionInput) => models.connect(input)
   )
-  registerIpc(
+  methods.handle(
     "mako:utility-model-disconnect",
-    (_event, provider: UtilityProvider) => models.disconnect(provider)
+    (provider: UtilityProvider) => models.disconnect(provider)
   )
-  registerIpc("mako:git-cancel-generation", (_event, requestId: string) =>
+  methods.handle("mako:git-cancel-generation", (requestId: string) =>
     drafting.cancel(hostClient(), requestId)
   )
-  registerIpc(
+  methods.handle(
     "mako:git-generate-message",
-    (_event, input: CommitGenerationInput) =>
+    (input: CommitGenerationInput) =>
       withHost((host) => {
         if (host.gitWorkspace !== input.cwd)
           throw new Error(
@@ -154,7 +154,7 @@ export function installGitIpc(context: GitIpcContext): void {
         return drafting.commitMessage(hostClient(), input)
       })
   )
-  registerIpc("mako:default-commit-prompt", () => COMMIT_STYLE)
+  methods.handle("mako:default-commit-prompt", () => COMMIT_STYLE)
 }
 
 /** This user's model connections, after moving a profile's older copies into them. */

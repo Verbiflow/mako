@@ -7,7 +7,7 @@ import { entry, hostGraph } from "./lib/host-graph.mjs"
  * (electron/client-main.ts), which the host asks on /desktop
  * (electron/desktop-channel.ts).
  *
- * Follows static imports and literal dynamic imports from electron/main.ts
+ * Follows static imports and literal dynamic imports from electron/host-main.ts
  * through Mako's own packages, as esbuild resolves them. Type-only imports are
  * erased before run time and don't count.
  */

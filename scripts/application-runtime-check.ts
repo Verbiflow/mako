@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { NativeRequests } from "../electron/native-requests.js"
 import { installApplicationIpc } from "../electron/ipc/application.js"
-import { invokeHost } from "../electron/ipc/register.js"
+import { HostMethods } from "../electron/host-methods.js"
 import { startWebHost } from "../electron/web-host.js"
 import {
   invokeRuntime,
@@ -93,13 +93,14 @@ async function checkRuntime() {
       throw new Error(message)
     },
   })
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value })
   const socket = join(app.getAppPath(), "host.sock")
   const host = await startWebHost(
     socket,
-    invokeHost,
+    (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     async () => new Response(null, { status: 404 })
   )
-  const application = installApplicationIpc({
+  const application = installApplicationIpc(methods, {
     live,
     native,
     clients: host.clients,

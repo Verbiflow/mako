@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from "node:fs"
 import type { AgentHost } from "../host.js"
 import type { HostEvent, SearchOptions } from "../shared.js"
-import { registerIpc } from "./register.js"
+import type { MethodTable } from "../host-methods.js"
 import { hostMachine } from "../machine.js"
 
 export interface WorkspaceIpcContext {
@@ -11,25 +11,29 @@ export interface WorkspaceIpcContext {
   emit(event: HostEvent): void
 }
 
-let fileWatcher: FSWatcher | null = null
-let fileWatchTimer: NodeJS.Timeout | null = null
-
-export function stopWorkspaceIpc(): void {
-  fileWatcher?.close()
-  fileWatcher = null
-  if (fileWatchTimer) clearTimeout(fileWatchTimer)
-  fileWatchTimer = null
+/** Returns what stops the open file's watch. */
+/** The file a client watches, between `mako:watch-file` and the host stopping. */
+export interface WatchedFile {
+  stop(): void
 }
 
-export function installWorkspaceIpc(context: WorkspaceIpcContext): void {
+export function installWorkspaceIpc(methods: MethodTable, context: WorkspaceIpcContext): WatchedFile {
   const { emit, withHost } = context
-  registerIpc(
+  let fileWatcher: FSWatcher | null = null
+  let fileChanged: NodeJS.Timeout | null = null
+  const unwatch = (): void => {
+    fileWatcher?.close()
+    fileWatcher = null
+    if (fileChanged) clearTimeout(fileChanged)
+    fileChanged = null
+  }
+  methods.handle(
     "mako:create-workspace-text",
-    (_event, cwd: string, path: string, text: string) =>
+    (cwd: string, path: string, text: string) =>
       withHost((host) => host.createWorkspaceText(cwd, path, text))
   )
-  registerIpc("mako:list-files", () => withHost((host) => host.listFiles()))
-  registerIpc("mako:read-file", (_event, path: string) =>
+  methods.handle("mako:list-files", () => withHost((host) => host.listFiles()))
+  methods.handle("mako:read-file", (path: string) =>
     withHost(async (host) => {
       const file = await host.readWorkspaceFile(path)
       if (file.media !== "spreadsheet") return file
@@ -46,26 +50,26 @@ export function installWorkspaceIpc(context: WorkspaceIpcContext): void {
    * every few seconds; the viewer should breathe with it, not wait for a
    * manual reopen. One watcher, replaced on every call, dropped on unwatch.
    */
-  registerIpc("mako:watch-file", (_event, path: string) => {
-    stopWorkspaceIpc()
+  methods.handle("mako:watch-file", (path: string) => {
+    unwatch()
     try {
-      let timer: NodeJS.Timeout | null = null
       fileWatcher = watch(path, () => {
-        if (timer) clearTimeout(timer)
-        timer = setTimeout(() => emit({ type: "file-changed", path }), 120)
+        if (fileChanged) clearTimeout(fileChanged)
+        fileChanged = setTimeout(() => emit({ type: "file-changed", path }), 120)
       })
     } catch {
       // A file that cannot be watched simply does not live-update.
     }
   })
-  registerIpc("mako:unwatch-file", stopWorkspaceIpc)
-  registerIpc("mako:search", (_event, query: string, options?: SearchOptions) =>
+  methods.handle("mako:unwatch-file", unwatch)
+  methods.handle("mako:search", (query: string, options?: SearchOptions) =>
     withHost((host) => host.search(query, options))
   )
-  registerIpc("mako:stage-file", (_event, name: string, base64: string) =>
+  methods.handle("mako:stage-file", (name: string, base64: string) =>
     withHost((host) => host.stageFile(name, base64))
   )
-  registerIpc("mako:stage-file-path", (_event, sourcePath: string) =>
+  methods.handle("mako:stage-file-path", (sourcePath: string) =>
     withHost((host) => host.stageFilePath(sourcePath))
   )
+  return { stop: unwatch }
 }

@@ -85,7 +85,7 @@ async function main(app) {
   const { assessProviderResume } = await load("dist-electron/provider-recovery.js")
   const { bindCodexApp, stopCodexApps } = await load("dist-electron/codex-app.js")
   const { bindAcp } = await load("dist-electron/acp.js")
-  const { nativePathForSession } = await load("dist-electron/threads.js")
+  const { nativeSessionPath } = await load("dist-electron/native-source.js")
   const { defaultCatalog, readableHarnesses, SAVED_HISTORY_READERS } = await load("packages/sessions/dist/index.js")
   const readers = [...SAVED_HISTORY_READERS]
   if (chosen.standIn) {
@@ -143,7 +143,7 @@ async function main(app) {
         appPath: app.getAppPath(), root: join(root, "conversations"), memory, threads, workspaceSnapshots: snapshots,
         driver: (provider) => providerHost.liveDrivers.get(provider),
         checkpoint: (path, provider) => providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path) ?? Promise.resolve(undefined),
-        nativePath: nativePathForSession,
+        nativePath: (session) => nativeSessionPath(session, []),
         history: (path, before) => catalog.page(path, before),
         resumeVerdict: (binding) => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider)),
         emitSession: async (provider, thread) => providerHost.sessionEmitters.get(provider)?.emit(thread) ?? null,

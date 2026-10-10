@@ -72,7 +72,7 @@ async function main(app) {
   const { reduceLiveUpdates } = await import(join(repo, "packages/sessions/dist/live-content.js"))
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
   const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
-  const { nativePathForSession } = await import(join(repo, "dist-electron/threads.js"))
+  const { nativeSessionPath } = await import(join(repo, "dist-electron/native-source.js"))
   const { SessionMemory } = await import(join(repo, "dist-electron/session-memory.js"))
   const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
   installHostLog(join(root, "host.log"))
@@ -144,7 +144,7 @@ async function main(app) {
         owner = new LiveConversations({ appPath: app.getAppPath(), root: join(root, `journals-${driver.provider}`),
           driver: provider => provider === driver.provider ? adapter : undefined,
           memory, history: async () => null, emit: () => {},
-          nativePath: nativePathForSession,
+          nativePath: (session) => nativeSessionPath(session, []),
           checkpoint: (path, provider) => providerHost.liveDrivers.get(provider ?? driver.provider)?.resume.checkpoint?.(path),
           resumeVerdict: binding => assessProviderResume(binding, adapter),
           providerIdleMs: ownership || cancelTool ? 60000 : 100, providerWarmLimit: ownership || cancelTool ? 1 : 0,

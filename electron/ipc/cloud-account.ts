@@ -9,33 +9,26 @@ import { hostLog } from "../host-log.js"
 import { adoptLegacySecrets, hostSecrets } from "../host-secrets.js"
 import { memorySecrets } from "../secrets.js"
 import type { HostEvent } from "../shared.js"
-import { registerIpc } from "./register.js"
+import type { MethodTable } from "../host-methods.js"
 import { presentMachine } from "../machine.js"
 import { onMac, systemName, systemVersion } from "../platform.js"
 
-let accounts: CloudAccounts | undefined
-
-export function stopCloudAccountIpc(): void {
-  accounts?.close()
-  accounts = undefined
-}
-
-/** A connection token while this Mac is signed in to Mako. */
-export function cloudConnectionToken(): Promise<string | undefined> {
-  return accounts?.optionalConnectionToken() ?? Promise.resolve(undefined)
-}
-
-/** The signed-in Mako account's ID, or undefined while signed out. */
-export async function cloudAccountId(): Promise<string | undefined> {
-  const state = (await accounts?.ready())?.state
-  return state?.status === "signed-in" ? state.account.id : undefined
+/** The Mako account this host is signed in to, for the services that act as it. */
+export interface CloudAccount {
+  /** A connection token while this Mac is signed in to Mako. */
+  token(): Promise<string | undefined>
+  /** The signed-in Mako account's ID, or undefined while signed out. */
+  id(): Promise<string | undefined>
+  /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
+  wake(): void
+  stop(): void
 }
 
 /**
  * The Mako account, against the cloud `cloudUrl()` names; a build without one says so and offers nothing.
  * A fixture desk signs in only to a cloud on this Mac and keeps the sign-in in memory, so its profile isn't written.
  */
-export function installCloudAccountIpc({
+export function installCloudAccountIpc(methods: MethodTable, {
   emit,
   fixture,
   signedIn,
@@ -45,8 +38,9 @@ export function installCloudAccountIpc({
   fixture: boolean
   signedIn?: () => void
   request?: (call: DiagnosticEvents["cloud.request"]) => void
-}): void {
+}): CloudAccount {
   let status: string | undefined
+  let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined
   const { dataRoot } = hostEnvironment()
   if (!fixture) adoptLegacySecrets(cloudLegacyFiles(dataRoot))
   const cloud = new CloudAccounts({
@@ -54,7 +48,7 @@ export function installCloudAccountIpc({
     secrets: fixture ? memorySecrets({ durable: false }) : hostSecrets(),
     secretName: cloudSignInName(dataRoot),
     openExternal: (url) => presentMachine().openUrl(url),
-    device: describeThisMac,
+    device: () => (described ??= describeThisMac()),
     fixture,
     onChange: (account) => {
       if (status === "signing-in" && account.state.status === "signed-in") signedIn?.()
@@ -64,35 +58,33 @@ export function installCloudAccountIpc({
     log: (message, fields) => hostLog("cloud", message, fields),
     onRequest: request,
   })
-  accounts = cloud
 
-  registerIpc("mako:cloud-account", () => cloud.ready())
-  registerIpc("mako:cloud-sign-in", () => cloud.signIn())
-  registerIpc("mako:cloud-sign-in-cancel", () => cloud.cancelSignIn())
-  registerIpc("mako:cloud-devices", () => cloud.devices())
-  registerIpc("mako:cloud-device-remove", (_event, id: string) => cloud.removeDevice(id))
-  registerIpc("mako:cloud-sign-out", () => cloud.signOut())
+  methods.handle("mako:cloud-account", () => cloud.ready())
+  methods.handle("mako:cloud-sign-in", () => cloud.signIn())
+  methods.handle("mako:cloud-sign-in-cancel", () => cloud.cancelSignIn())
+  methods.handle("mako:cloud-devices", () => cloud.devices())
+  methods.handle("mako:cloud-device-remove", (id: string) => cloud.removeDevice(id))
+  methods.handle("mako:cloud-sign-out", () => cloud.signOut())
+  return {
+    token: () => cloud.optionalConnectionToken(),
+    id: async () => {
+      const { state } = await cloud.ready()
+      return state.status === "signed-in" ? state.account.id : undefined
+    },
+    wake: () => cloud.wake(),
+    stop: () => cloud.close(),
+  }
 }
-
-/** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
-export function wakeCloudAccount(): void {
-  accounts?.wake()
-}
-
-let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined
 
 /** The name people gave this Mac in System Settings, as the account's device list shows it. */
-function describeThisMac() {
-  described ??= (async () => {
-    const fallback = hostname().replace(/\.local$/, "")
-    const name =
-      onMac()
-        ? await promisify(execFile)("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 }).then(
-            ({ stdout }) => stdout.trim() || fallback,
-            () => fallback
-          )
-        : fallback
-    return { name, platform: `${systemName()} ${systemVersion()}`.trim(), appVersion: hostEnvironment().version }
-  })()
-  return described
+async function describeThisMac() {
+  const fallback = hostname().replace(/\.local$/, "")
+  const name =
+    onMac()
+      ? await promisify(execFile)("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 }).then(
+          ({ stdout }) => stdout.trim() || fallback,
+          () => fallback
+        )
+      : fallback
+  return { name, platform: `${systemName()} ${systemVersion()}`.trim(), appVersion: hostEnvironment().version }
 }

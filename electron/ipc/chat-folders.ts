@@ -1,7 +1,7 @@
-import { registerIpc } from "./register.js"
+import type { MethodTable } from "../host-methods.js"
 import { chatFolders } from "../chat-folders.js"
 import type { ChatFolders } from "../contracts/chat-folders.js"
 
-export function installChatFoldersIpc() {
-  registerIpc("mako:chat-folders", (_event, paths: string[]): ChatFolders => chatFolders(paths))
+export function installChatFoldersIpc(methods: MethodTable) {
+  methods.handle("mako:chat-folders", (paths: string[]): ChatFolders => chatFolders(paths))
 }

@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { registerIpc } from "./register.js"
+import type { MethodTable } from "../host-methods.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
@@ -14,7 +14,7 @@ const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSche
  * Session's title again), and a window's renames from before the store kept
  * them. Every change is told to every window as `thread-titles`.
  */
-export function installThreadTitlesIpc(input: {
+export function installThreadTitlesIpc(methods: MethodTable, input: {
   store: ThreadStore | null
   emit(event: HostEvent): void
 }) {
@@ -22,8 +22,8 @@ export function installThreadTitlesIpc(input: {
   const tell = (titles: ThreadTitleEntry[]) => {
     if (titles.length) emit({ type: "thread-titles", titles })
   }
-  registerIpc("mako:thread-titles", (): ThreadTitleEntry[] => store?.titles() ?? [])
-  registerIpc("mako:thread-rename", (_event, operationId: string, thread: string, title: string | null, original?: string): ThreadTitleEntry => {
+  methods.handle("mako:thread-titles", (): ThreadTitleEntry[] => store?.titles() ?? [])
+  methods.handle("mako:thread-rename", (operationId: string, thread: string, title: string | null, original?: string): ThreadTitleEntry => {
     if (!store) throw new Error("This Mako couldn't open its Thread store, so it can't rename a Thread.")
     const operation = z.string().uuid().parse(operationId)
     const id = ThreadIdSchema.parse(thread)
@@ -35,7 +35,7 @@ export function installThreadTitlesIpc(input: {
     tell([entry])
     return entry
   })
-  registerIpc("mako:thread-titles-import", (_event, entries: ReadonlyArray<{ thread: string; title: string }>): ThreadTitleEntry[] => {
+  methods.handle("mako:thread-titles-import", (entries: ReadonlyArray<{ thread: string; title: string }>): ThreadTitleEntry[] => {
     if (!store) return []
     const imported = store.importThreadTitles(ImportSchema.parse(entries))
     tell(imported)

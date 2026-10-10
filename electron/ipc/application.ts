@@ -22,7 +22,7 @@ import type { NativeRequests } from "../native-requests.js"
 import type { HostEvent } from "../shared.js"
 import { abortNative, nativeLifecycleWork } from "../drivers.js"
 import { hostClient } from "../host-client.js"
-import { registerIpc as handle } from "./register.js"
+import type { MethodTable } from "../host-methods.js"
 
 interface ApplicationDependencies {
   live: LiveConversations
@@ -32,7 +32,7 @@ interface ApplicationDependencies {
   finish(action: LifecycleAction, install?: () => void): void
 }
 
-export function installApplicationIpc(dependencies: ApplicationDependencies) {
+export function installApplicationIpc(methods: MethodTable, dependencies: ApplicationDependencies) {
   const shutdown = new WindowShutdown()
   const work = (): LifecycleWork[] => [
     ...dependencies.live.lifecycleWork(),
@@ -95,16 +95,16 @@ export function installApplicationIpc(dependencies: ApplicationDependencies) {
       dependencies.emit({ type: "application-lifecycle", lifecycle: state }),
   })
   bindLifecycleAdmission(() => lifecycle.blocked)
-  handle("mako:lifecycle-state", () => lifecycle.snapshot())
-  handle("mako:lifecycle-command", (_event, command: LifecycleCommand) =>
+  methods.handle("mako:lifecycle-state", () => lifecycle.snapshot())
+  methods.handle("mako:lifecycle-command", (command: LifecycleCommand) =>
     lifecycle.command(LifecycleCommandSchema.parse(command))
   )
-  handle("mako:shutdown-ack", (_event, requestId: string) => {
+  methods.handle("mako:shutdown-ack", (requestId: string) => {
     if (!shutdown.acknowledge(requestId, hostClient()))
       throw new Error("The shutdown request is no longer active.")
   })
-  handle("mako:installation-state", () => installationState())
-  handle("mako:select-update-source", (_event, path: string) => {
+  methods.handle("mako:installation-state", () => installationState())
+  methods.handle("mako:select-update-source", (path: string) => {
     if (
       lifecycle.snapshot().operation.kind !== "idle" &&
       lifecycle.snapshot().operation.kind !== "error"
@@ -114,7 +114,7 @@ export function installApplicationIpc(dependencies: ApplicationDependencies) {
       )
     return selectUpdateSource(path)
   })
-  handle("mako:build-update", () => {
+  methods.handle("mako:build-update", () => {
     if (
       lifecycle.snapshot().operation.kind !== "idle" &&
       lifecycle.snapshot().operation.kind !== "error"

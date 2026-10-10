@@ -113,7 +113,6 @@ state.Worker = class extends EventEmitter {
 }
 const mocks = {
   "./catalog-connection.js": `export const connectOnDemandCatalog = async () => globalThis.__catalogReadinessTest.sharedEnabled ? globalThis.__catalogReadinessTest.connect() : null;`,
-  "./host-environment.js": `export const hostEnvironment = () => ({ dataRoot: globalThis.__catalogReadinessTest.root });`,
   "node:worker_threads": `export class MessageChannel { port1 = { close() {} }; port2 = {} }; export const Worker = globalThis.__catalogReadinessTest.Worker;`,
   "@mako/sessions": `const s = globalThis.__catalogReadinessTest;
     export const connectDaemonPort = () => s.connect();
@@ -161,9 +160,16 @@ try {
       },
     ],
   })
-  const threads = await import(pathToFileURL(outfile).href)
-  const install = () =>
-    threads.installThreads((event) => state.events.push(event))
+  const { threadCatalog } = await import(pathToFileURL(outfile).href)
+  const threads = threadCatalog({
+    dataRoot: root,
+    sessionMemory: null,
+    threadStore: null,
+    worktreeOrigins: { of: () => undefined, projectFolderOfRemoved: () => undefined, flush: async () => {} },
+    readOnly: false,
+    emit: (event) => state.events.push(event),
+  })
+  const install = () => threads.start()
   const listening = async () => {
     await tick()
     state.workers
@@ -173,7 +179,7 @@ try {
   }
   install()
   let settled = false
-  const pending = threads.pageThread("codex").finally(() => {
+  const pending = threads.page("codex").finally(() => {
     settled = true
   })
   await tick()
@@ -182,28 +188,28 @@ try {
     false,
     "A read before catalog startup must wait, never report missing history"
   )
-  assert.equal(threads.threadsReady(), false)
+  assert.equal(threads.ready(), false)
   state.lineage.resolve()
   await listening()
   assert.equal((await pending).ref.harness, "codex")
-  assert.equal(threads.threadsReady(), true)
+  assert.equal(threads.ready(), true)
   assert.equal(
-    await threads.pageThread("missing"),
+    await threads.page("missing"),
     null,
     "A ready reader still reports an actually absent source"
   )
-  threads.stopThreads()
+  threads.stop()
 
   // The reader is shared by every harness, including extensions not in today's registry.
   state.lineage = deferred()
   state.list = deferred()
   install()
   const providers = [...registeredHarnessIds(), "future-provider"]
-  const pages = providers.map((provider) => threads.pageThread(provider))
-  const opened = threads.openThread("claude")
-  const block = threads.threadBlock("devin", { entry: 0, block: 0 })
-  threads.followThread("stale-view", 0)
-  threads.followThread("current-view", 0)
+  const pages = providers.map((provider) => threads.page(provider))
+  const opened = threads.open("claude")
+  const block = threads.block("devin", { entry: 0, block: 0 })
+  threads.follow("stale-view", 0)
+  threads.follow("current-view", 0)
   state.lineage.resolve()
   await listening()
   assert.deepEqual(
@@ -215,7 +221,7 @@ try {
   assert.ok(state.reads.includes("follow:current-view"))
   assert.ok(!state.reads.includes("follow:stale-view"))
   assert.equal(
-    threads.threadsReady(),
+    threads.ready(),
     false,
     "known paths do not wait for full discovery"
   )
@@ -243,18 +249,18 @@ try {
     { harness: "codex", path: "updated", title: "newest snapshot" },
   ])
   await tick()
-  assert.equal(threads.threadsReady(), true)
+  assert.equal(threads.ready(), true)
   assert.equal(
-    threads.listThreads().find((ref) => ref.path === "updated").title,
+    threads.list().find((ref) => ref.path === "updated").title,
     "newest snapshot"
   )
-  assert.ok(!threads.listThreads().some((ref) => ref.path === "removed"))
+  assert.ok(!threads.list().some((ref) => ref.path === "removed"))
   state.list = null
 
   // Losing the worker temporarily removes the reader; requests share its one restart.
   const workersBefore = state.workers.length
   state.clients.at(-1).close()
-  const recovering = threads.pageThread("opencode")
+  const recovering = threads.page("opencode")
   await tick()
   assert.equal(state.workers.length, workersBefore + 1)
   await listening()
@@ -264,102 +270,102 @@ try {
   state.scan = deferred()
   state.clients.at(-1).close()
   let fallbackSettled = false
-  const fallback = threads.pageThread("grok").finally(() => {
+  const fallback = threads.page("grok").finally(() => {
     fallbackSettled = true
   })
   await tick()
-  assert.equal(threads.threadsReady(), false)
+  assert.equal(threads.ready(), false)
   assert.equal(fallbackSettled, true)
   state.scan.resolve([])
   assert.equal((await fallback).ref.harness, "grok")
   await tick()
-  assert.equal(threads.threadsReady(), true)
-  threads.stopThreads()
+  assert.equal(threads.ready(), true)
+  threads.stop()
 
   // A lost reader's delayed list cannot erase its replacement in the same lifetime.
   state.list = deferred()
   install()
   await listening()
-  assert.equal((await threads.pageThread("codex")).ref.harness, "codex")
+  assert.equal((await threads.page("codex")).ref.harness, "codex")
   const lostList = state.list
   state.list = null
   state.clients.at(-1).close()
   await listening()
-  assert.equal(threads.threadsReady(), true)
+  assert.equal(threads.ready(), true)
   lostList.resolve([{ harness: "codex", path: "lost-reader" }])
   await tick()
-  assert.ok(!threads.listThreads().some((ref) => ref.path === "lost-reader"))
-  assert.equal(threads.threadsReady(), true)
-  threads.stopThreads()
+  assert.ok(!threads.list().some((ref) => ref.path === "lost-reader"))
+  assert.equal(threads.ready(), true)
+  threads.stop()
 
   // Failed initialization is an error, including for subsequent reads; not absent history.
   state.lineage = deferred()
   install()
   const failed = assert.rejects(
-    threads.pageThread("claude"),
+    threads.page("claude"),
     /fixture lineage failed/
   )
   state.lineage.reject(new Error("fixture lineage failed"))
   await failed
-  await assert.rejects(threads.pageThread("codex"), /fixture lineage failed/)
-  assert.equal(threads.threadsReady(), false)
-  threads.stopThreads()
+  await assert.rejects(threads.page("codex"), /fixture lineage failed/)
+  assert.equal(threads.ready(), false)
+  threads.stop()
 
   // Stop settles waiters before a held operation finishes. Its late completion cannot install.
   state.lineage = deferred()
   install()
-  const stopped = assert.rejects(threads.pageThread("cursor"), /reader stopped/)
+  const stopped = assert.rejects(threads.page("cursor"), /reader stopped/)
   await tick()
   const staleLineage = state.lineage
   const beforeStop = state.workers.length
-  threads.stopThreads()
+  threads.stop()
   await stopped
   state.lineage = deferred()
   install()
   staleLineage.resolve()
   await tick()
   assert.equal(state.workers.length, beforeStop)
-  assert.equal(threads.threadsReady(), false)
+  assert.equal(threads.ready(), false)
   state.lineage.resolve()
   await listening()
-  assert.equal((await threads.pageThread("devin")).ref.harness, "devin")
-  threads.stopThreads()
+  assert.equal((await threads.page("devin")).ref.harness, "devin")
+  threads.stop()
 
   // Stop while the worker itself is starting must not trigger an in-process fallback.
   install()
   const workerStopped = assert.rejects(
-    threads.pageThread("codex"),
+    threads.page("codex"),
     /reader stopped/
   )
   await tick()
   const catalogsBefore = state.catalogs.length
-  threads.stopThreads()
+  threads.stop()
   await workerStopped
   await tick()
   assert.equal(state.catalogs.length, catalogsBefore)
-  assert.equal(threads.threadsReady(), false)
+  assert.equal(threads.ready(), false)
 
   // Stop during a fallback scan; a late scan result cannot publish or restart watchers.
   state.scan = deferred()
   install()
-  const scanRead = threads.pageThread("codex")
+  const scanRead = threads.page("codex")
   await tick()
   state.workers
     .at(-1)
     .emit("message", { type: "failed", message: "fixture worker failure" })
   await tick()
   const watches = state.reads.filter((value) => value === "watch").length
-  threads.stopThreads()
+  threads.stop()
   assert.equal((await scanRead).ref.harness, "codex")
   state.scan.resolve([])
   await tick()
-  assert.equal(threads.threadsReady(), false)
+  assert.equal(threads.ready(), false)
   assert.equal(state.catalogs.at(-1).closed, true)
   assert.equal(state.reads.filter((value) => value === "watch").length, watches)
   // Failed discovery does not turn a working known-path reader into missing history.
   state.scan = deferred()
   install()
-  const brokenScan = threads.pageThread("claude")
+  const brokenScan = threads.page("claude")
   await tick()
   state.workers
     .at(-1)
@@ -368,21 +374,21 @@ try {
   state.scan.reject(new Error("fixture scan failed"))
   assert.equal((await brokenScan).ref.harness, "claude")
   await tick()
-  assert.equal(threads.threadsReady(), false)
+  assert.equal(threads.ready(), false)
   assert.equal(state.catalogs.at(-1).closed, false)
   assert.ok(
     state.events.some(
       (e) => e.type === "notice" && e.message.includes("fixture scan failed")
     )
   )
-  threads.stopThreads()
+  threads.stop()
 
   // Preparation failure still rejects known-path reads and closes the failed reader.
   const preparation = deferred()
   state.prepare = preparation.promise
   install()
   const brokenPrepare = assert.rejects(
-    threads.pageThread("codex"),
+    threads.page("codex"),
     /fixture preparation failed/
   )
   await tick()
@@ -393,45 +399,45 @@ try {
   preparation.reject(new Error("fixture preparation failed"))
   await brokenPrepare
   assert.equal(state.catalogs.at(-1).closed, true)
-  threads.stopThreads()
+  threads.stop()
   state.prepare = Promise.resolve()
 
   // A detached daemon is not ready until its initial list is adopted.
   state.daemonEnabled = true
   state.list = deferred()
   install()
-  const daemonRead = threads.pageThread("devin")
+  const daemonRead = threads.page("devin")
   await tick()
-  assert.equal(threads.threadsReady(), false)
+  assert.equal(threads.ready(), false)
   assert.equal((await daemonRead).ref.harness, "devin")
   state.list.resolve([])
   await tick()
-  assert.equal(threads.threadsReady(), true)
+  assert.equal(threads.ready(), true)
   state.list = null
   state.clients.at(-1).close()
-  const reconnectRead = threads.pageThread("claude")
+  const reconnectRead = threads.page("claude")
   await listening()
   assert.equal((await reconnectRead).ref.harness, "claude")
-  threads.stopThreads()
+  threads.stop()
 
   // A list reply from an older lifetime cannot erase a replacement catalog.
   state.list = deferred()
   install()
-  const staleDaemon = threads.pageThread("codex")
+  const staleDaemon = threads.page("codex")
   await tick()
   const oldList = state.list
   const oldClient = state.clients.at(-1)
-  threads.stopThreads()
+  threads.stop()
   assert.equal((await staleDaemon).ref.harness, "codex")
   state.list = null
   install()
-  await threads.pageThread("new-catalog")
+  await threads.page("new-catalog")
   oldList.resolve([{ harness: "codex", path: "old-catalog" }])
   await tick()
   assert.equal(oldClient.closed, true)
-  assert.ok(!threads.listThreads().some((ref) => ref.path === "old-catalog"))
-  assert.equal(threads.threadsReady(), true)
-  threads.stopThreads()
+  assert.ok(!threads.list().some((ref) => ref.path === "old-catalog"))
+  assert.equal(threads.ready(), true)
+  threads.stop()
 
   // Login opt-out still shares an on-demand reader; disconnection recovers once.
   state.daemonEnabled = false
@@ -439,16 +445,16 @@ try {
   state.list = deferred()
   const workerCount = state.workers.length
   install()
-  assert.equal((await threads.pageThread("cursor")).ref.harness, "cursor")
-  assert.equal(threads.threadsReady(), false)
+  assert.equal((await threads.page("cursor")).ref.harness, "cursor")
+  assert.equal(threads.ready(), false)
   assert.equal(state.workers.length, workerCount)
-  threads.followThread("cursor", 10)
+  threads.follow("cursor", 10)
   const shared = state.clients.at(-1)
   const staleSharedList = state.list
   state.list = null
   shared.close()
   const recovered = await Promise.all(
-    providers.map((provider) => threads.pageThread(provider))
+    providers.map((provider) => threads.page(provider))
   )
   assert.deepEqual(
     recovered.map((page) => page.ref.harness),
@@ -465,10 +471,10 @@ try {
   staleSharedList.resolve([{ harness: "codex", path: "stale-shared-reader" }])
   await tick()
   assert.ok(
-    !threads.listThreads().some((ref) => ref.path === "stale-shared-reader")
+    !threads.list().some((ref) => ref.path === "stale-shared-reader")
   )
-  assert.equal(threads.threadsReady(), true)
-  threads.stopThreads()
+  assert.equal(threads.ready(), true)
+  threads.stop()
   assert.equal(state.clients.at(-1).closed, true)
   await tick()
   assert.equal(

@@ -1,0 +1,54 @@
+import type { MethodTable } from "../host-methods.js"
+import { check, updateState } from "../updates.js"
+import { clearCrashes, crashesDir, listCrashes, record } from "../crash.js"
+import { hostLogPath } from "../host-log.js"
+import { installApplicationIpc } from "../ipc/application.js"
+import { installSessionIpc, type SessionIpcContext } from "../ipc/session.js"
+import type { LiveConversations } from "../live-conversations.js"
+import type { NativeRequests } from "../native-requests.js"
+import type { WakeWatch } from "../wake.js"
+import type { LifecycleAction } from "../contracts/app-lifecycle.js"
+import type { HostEvent } from "../shared.js"
+
+export type Application = ReturnType<typeof installApplicationIpc>
+
+export interface ApplicationMethodsDeps {
+  session: SessionIpcContext
+  live: LiveConversations
+  native: NativeRequests
+  wake: WakeWatch
+  clients(): string[]
+  /** Stops this host for a client's quit, restart or update, once its work allows. */
+  finish(action: LifecycleAction, install?: () => void): void
+  emit(event: HostEvent): void
+}
+
+/** What a client loads first, the host's own lifecycle, its updates and its crashes. */
+export function declareApplicationMethods(methods: MethodTable, deps: ApplicationMethodsDeps): Application {
+  installSessionIpc(methods, deps.session)
+  const application = installApplicationIpc(methods, {
+    live: deps.live,
+    native: deps.native,
+    emit: deps.emit,
+    clients: deps.clients,
+    finish: deps.finish,
+  })
+  methods.handle("mako:update-state", () => updateState())
+  methods.handle("mako:check-updates", () => check())
+  methods.handle("mako:install-update", () => application.lifecycle.command({ kind: "wait", action: "install" }))
+  methods.handle("mako:relaunch", () => application.lifecycle.command({ kind: "wait", action: "restart" }))
+  /** The desktop app heard the Mac resume or the screen unlock. */
+  methods.handle("mako:machine-woke", (source: "resume" | "unlock-screen") => {
+    deps.wake.notify(source)
+  })
+  methods.handle("mako:crashes", () => listCrashes())
+  methods.handle("mako:crashes-dir", () => crashesDir())
+  methods.handle("mako:host-log-path", () => hostLogPath() ?? "")
+  methods.handle("mako:clear-crashes", () => clearCrashes())
+  methods.handle("mako:report-crash", (kind: "renderer-error" | "renderer-rejection", payload: { message: string; stack?: string; source?: string }) => {
+    const error = new Error(payload.message)
+    error.stack = payload.stack
+    record(kind, error, payload.source)
+  })
+  return application
+}
