@@ -13,10 +13,10 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { assessProviderResume } from "../electron/provider-recovery.js"
 import { MoveNotQuietError } from "../electron/live-moves.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { SessionMemory } from "../electron/session-memory.js"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import { ThreadStore } from "../electron/thread-store.js"
+import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**

@@ -1,24 +1,40 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { MethodTable } from "@mako/host/base/methods"
-import { hostWarn } from "@mako/host/base/host-log"
-import { SessionMemory, sessionMemoryPath, type SessionMemoryHost } from "../session-memory.js"
-import { openThreadStore, threadStorePath, type ThreadStore } from "../thread-store.js"
-import { followOtherHosts } from "../thread-groups-follow.js"
-import { threadCatalog, type ThreadCatalog, type ThreadCatalogDeps, type ThreadFileHomes } from "../threads.js"
-import { WorktreeOrigins } from "../worktree-origins.js"
-import { ThreadArchives } from "../thread-archives.js"
-import { ThreadLifecycle, followNativeArchives, type LiveThreads, type NativeQueue } from "../thread-lifecycle.js"
-import { installThreadLifecycleIpc } from "../ipc/thread-lifecycle.js"
-import { installThreadGroupsIpc } from "../ipc/thread-groups.js"
-import { installThreadTitlesIpc } from "../ipc/thread-titles.js"
-import { installChatFoldersIpc } from "../ipc/chat-folders.js"
-import { Lineage, chainOf } from "../lineage.js"
-import { daemonLoginEnabled, setDaemonLogin } from "../daemon-login.js"
-import type { ThreadHarnesses } from "../thread-harnesses.js"
-import type { BlockAddress, ThreadContextOptions } from "@mako/host/contracts/conversation-session"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { MessageAnchor } from "@mako/host/contracts/message-anchor"
+import type { MethodTable } from "../base/methods.js"
+import { hostWarn } from "../base/host-log.js"
+import { SessionMemory, sessionMemoryPath, type SessionMemoryHost } from "./session-memory.js"
+import { openThreadStore, threadStorePath, type ThreadStore } from "./store.js"
+import { followOtherHosts } from "./groups-follow.js"
+import { threadCatalog, type ThreadCatalog, type ThreadCatalogDeps, type ThreadFileHomes } from "./catalog.js"
+import { WorktreeOrigins } from "./worktree-origins.js"
+import { ThreadArchives } from "./archives.js"
+import { ThreadLifecycle, followNativeArchives, type LiveThreads, type NativeQueue } from "./lifecycle.js"
+import { declareThreadLifecycleMethods } from "./lifecycle-methods.js"
+import { declareThreadGroupMethods } from "./group-methods.js"
+import { declareThreadTitleMethods } from "./title-methods.js"
+import { declareChatFolderMethods } from "./chat-folder-methods.js"
+import { Lineage, chainOf } from "./lineage.js"
+import { daemonLoginEnabled, setDaemonLogin } from "./daemon-login.js"
+import type { ThreadHarnesses } from "./harnesses.js"
+import type { BlockAddress, ThreadContextOptions } from "../contracts/conversation-session.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { MessageAnchor } from "../contracts/message-anchor.js"
+
+export type { ThreadCatalog, ThreadFileHomes } from "./catalog.js"
+export type { ThreadLifecycle, LiveThreads, NativeQueue } from "./lifecycle.js"
+export { SessionMemory, SessionHeldError, type ConversationEndpoint, type ConversationRoute, type SessionFacts } from "./session-memory.js"
+export type { JournalFacts, MoveBegan, SourceRef, ThreadStore } from "./store.js"
+export { discardChatFolder, ensureChatsRoot, newChatFolder, standsForNoProject } from "./chat-folders.js"
+export { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
+export type {
+  ProviderActivityResult,
+  ProviderActivitySession,
+  ProviderActivityStatus,
+  ProviderProbeTarget,
+  ProviderProcessProbe,
+  ProviderSessionEmitter,
+  ThreadHarnesses,
+} from "./harnesses.js"
 
 /** The Thread store, the machine's catalog of sessions, and what each Session last ran as. */
 export interface Threads {
@@ -216,10 +232,10 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
     abortNative: nativeStops.abort,
     external: (path) => Boolean(catalog.activity()[path]),
   })
-  installThreadLifecycleIpc(methods, lifecycle, archives, emit)
+  declareThreadLifecycleMethods(methods, lifecycle, archives, emit)
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)
-  installThreadGroupsIpc(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
-  installThreadTitlesIpc(methods, { store, emit })
-  installChatFoldersIpc(methods)
+  declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
+  declareThreadTitleMethods(methods, { store, emit })
+  declareChatFolderMethods(methods)
   return lifecycle
 }

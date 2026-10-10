@@ -76,7 +76,13 @@ the harnesses spent and what Mako reports: the usage ledger, its pricing and
 the scan of each harness's own store (`ProviderUsageHistory`), telemetry, and
 the Mako cloud account. The ledger is read off the host, in a worker whose
 script composition names (`electron/usage-worker.ts`, which supplies the
-harnesses). The package declares
+harnesses). `threads/` is every session on this Mac and the Threads
+they belong to: the Thread store, the catalog over every harness's native
+store (`catalog.ts`, on the sessions daemon or a worker), the session
+ledger, archives and stops, titles, groups and chat folders. Each harness
+says how it sees its sessions open in other apps and how a Thread is
+written into its store (`ProviderProcessProbe`, `ProviderSessionEmitter`);
+`ThreadHarnesses` is what Threads reads of them. The package declares
 every package it imports (`scripts/check-host-dependencies.mjs`). The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.
@@ -231,7 +237,7 @@ and emits narrow activity events instead of resending or re-sorting the catalog.
 A probe sees a process, not a turn: Cursor's `cursor-agent` and another Mako
 host hold their stores open whether or not anything is running, so a reopened
 client once showed a streaming session as merely "open" and lost its working
-mark. `electron/thread-activity.ts` derives what the probe cannot say: a store
+mark. `packages/host/src/threads/activity.ts` derives what the probe cannot say: a store
 whose bytes or activity stamp moved within `WRITE_ACTIVE_MS` (45 s, long
 enough to outlast a tool call that writes nothing) while a probe reports it
 `open` or another host's hold names it is `active` with `evidence: "writes"`.
@@ -1434,7 +1440,7 @@ through the SDK's own resume (below); `test-cursor-resume.ts` covers its
 verdicts.
 
 What a session ran under is remembered per user, not per host.
-`electron/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
+`packages/host/src/threads/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
 provider plus native session id, with the settings and access mode the live
 session last reported and a hold naming the host that has it open. It exists
 because the installed app and the `dev` profile share every provider store
@@ -1462,7 +1468,7 @@ stamped with the journal's write time, never over a newer observation), so
 sessions from before the ledger are not "Model not recorded" forever.
 
 Which Thread and Session a conversation belongs to is per user too.
-`electron/thread-store.ts` keeps `~/.mako/threads.sqlite`; a fixture data
+`packages/host/src/threads/store.ts` keeps `~/.mako/threads.sqlite`; a fixture data
 root outside Application Support keeps its own. A Session is one logical
 conversation and may own several journals; a Thread groups Sessions, has an
 owner, and starts with one. Both IDs are random UUIDs the store mints, never
@@ -2266,10 +2272,10 @@ the bundle it replaced. Terminal scrollback is persisted first; live shells
 are reported interrupted.
 
 When the sync daemon is not enabled, the host still never reads a store on
-its main thread: `electron/catalog-worker.ts` runs the catalog on a
+its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a
 `worker_threads` Worker that serves the daemon's own frame protocol
 (`serveCatalogOnPort`) over a `MessageChannel` port transferred in with the
-worker data, and `threads.ts` adopts it exactly as it adopts the daemon
+worker data, and `threads/catalog.ts` adopts it exactly as it adopts the daemon
 (`adoptClient`, `connectDaemonPort`). The protocol is transport-neutral
 (`DaemonLink`): the detached daemon speaks it over its Unix socket, the
 worker over the port. The port matters: a Unix socket delivered a 7 MB

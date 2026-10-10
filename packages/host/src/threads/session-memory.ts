@@ -1,4 +1,4 @@
-import { processIdentityMatches } from "@mako/host/base/process-liveness"
+import { processIdentityMatches } from "../base/process-liveness.js"
 import { existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -10,9 +10,9 @@ import {
   SessionSettingsSchema,
   type SessionSettings,
 } from "@mako/sessions/settings"
-import { heldReason } from "@mako/host/contracts/session-hold"
-import { hostWarn } from "@mako/host/base/host-log"
-import { enableSharedWal } from "@mako/host/base/sqlite-wal"
+import { heldReason } from "../contracts/session-hold.js"
+import { hostWarn } from "../base/host-log.js"
+import { enableSharedWal } from "../base/sqlite-wal.js"
 
 /**
  * What Mako knows about a native session that its provider's store does not

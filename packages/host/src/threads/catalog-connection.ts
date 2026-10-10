@@ -6,7 +6,7 @@ import { connectDaemon, defaultCatalogIdentity, onDemandCatalogPaths, type Daemo
 import { daemonScript } from "./daemon-login.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { ON_DEMAND_CATALOG_NODE_ARGS } from "./daemon-command.js"
-import { headlessNodeExecutable } from "@mako/host/base/headless-node"
+import { headlessNodeExecutable } from "../base/headless-node.js"
 
 /**
  * Join a compatible on-demand reader, starting one unless `start` is false.

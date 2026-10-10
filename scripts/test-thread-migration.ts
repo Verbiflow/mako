@@ -28,7 +28,7 @@ import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import { type JournalFacts, ThreadStore, threadStorePath } from "../electron/thread-store.js"
+import { type JournalFacts, ThreadStore, threadStorePath } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**

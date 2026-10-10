@@ -19,7 +19,7 @@ import {
   SessionHeldError,
   SessionMemory,
   rememberedSettings,
-} from "../electron/session-memory.js"
+} from "@mako/host/threads/session-memory"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ResumeVerdict, TransferInput } from "@mako/host/contracts/conversation-control"

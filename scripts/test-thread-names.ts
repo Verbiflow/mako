@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "@mako/host/contracts/thread-identity"
-import { ThreadStore } from "../electron/thread-store.js"
+import { ThreadStore } from "@mako/host/threads/store"
 
 /**
  * A Thread's own name: a rename names the whole Thread, however many

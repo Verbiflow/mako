@@ -20,7 +20,7 @@ import {
   ThreadStore,
   type JournalFacts,
   type ThreadStoreOptions,
-} from "../electron/thread-store.js"
+} from "@mako/host/threads/store"
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-execution-"))
 const handoffActor: Actor = { kind: "service", name: "handoff" }

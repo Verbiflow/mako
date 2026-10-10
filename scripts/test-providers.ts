@@ -22,7 +22,7 @@ import {
   environmentForExecutable,
   resolveExecutable,
 } from "@mako/host/base/executable"
-import { ProviderActivityEngine } from "../electron/provider-activity-engine.ts"
+import { ProviderActivityEngine } from "@mako/host/threads/activity-engine"
 import { ProviderProfileCache } from "../electron/provider-profile-cache.ts"
 import {
   claudeProcessProbeFor,
@@ -44,7 +44,7 @@ import {
   processIdentityMatches,
   processStartMatches,
 } from "@mako/host/base/process-liveness"
-import type { ProviderProcessProbe } from "../electron/thread-harnesses.ts"
+import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
 import { providerHost } from "../electron/providers/index.ts"
 import type { NativeRunner } from "../electron/providers/native-runner.ts"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"

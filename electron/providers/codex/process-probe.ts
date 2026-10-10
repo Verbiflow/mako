@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { realpath } from "node:fs/promises"
 import { CodexSessionActivity } from "./session-activity.js"
 import { probeOpenFiles } from "../open-files-probe.js"
-import type { ProviderProcessProbe } from "../../thread-harnesses.js"
+import type { ProviderProcessProbe } from "@mako/host/threads"
 
 export function parseCodexOpenSessionPaths(
   output: string,

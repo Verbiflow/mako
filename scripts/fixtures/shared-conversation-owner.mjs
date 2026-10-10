@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { startWebHost } from "@mako/host/transport/server"
-import { SessionMemory } from "../../electron/session-memory.ts"
+import { SessionMemory } from "../../packages/host/src/threads/session-memory.ts"
 import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
 const root = process.env.MAKO_DATA_ROOT
 const fixture = JSON.parse(readFileSync(join(root, "fixture.json"), "utf8"))

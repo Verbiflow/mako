@@ -11,7 +11,7 @@ import {
   resumeVerdict,
 } from "../electron/native-continuation.ts"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
-import type { ProviderProcessProbe } from "../electron/thread-harnesses.ts"
+import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
 import { assessProviderResume, verifyRecoveredSession } from "../electron/provider-recovery.ts"
 import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"

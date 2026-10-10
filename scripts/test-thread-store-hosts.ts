@@ -6,8 +6,8 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { followOtherHosts } from "../electron/thread-groups-follow.js"
-import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA, type SourceRef } from "../electron/thread-store.js"
+import { followOtherHosts } from "@mako/host/threads/groups-follow"
+import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA, type SourceRef } from "@mako/host/threads/store"
 
 /**
  * Hosts sharing one Thread store: a Session one moves reaches the other's
@@ -122,7 +122,7 @@ try {
 
   // Hosts launched together all create the store at the same moment.
   const opener = `import { existsSync } from "node:fs";
-    import { ThreadStore } from ${JSON.stringify(new URL("../electron/thread-store.ts", import.meta.url).href)};
+    import { ThreadStore } from ${JSON.stringify(new URL("../packages/host/src/threads/store.ts", import.meta.url).href)};
     process.stdout.write("ready\\n");
     while (!existsSync(process.argv[2])) {}
     new ThreadStore(process.argv[1], { realPath: (path) => path }).close();`

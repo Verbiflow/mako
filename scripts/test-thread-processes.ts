@@ -18,7 +18,7 @@ import { environmentTools, registerEnvironmentTools } from "../electron/environm
 import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, RecipeSchema, recipeValues, recipeVersions, RECIPE_PATH, saveDraft, StaleDraftError, type Recipe } from "../electron/thread-recipe.js"
-import { ThreadStore } from "../electron/thread-store.js"
+import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 
 /**

@@ -60,7 +60,7 @@ import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { statSync } from "node:fs"
 import { join } from "node:path"
-import type { SessionFacts } from "./session-memory.js"
+import type { SessionFacts, JournalFacts, SourceRef } from "@mako/host/threads"
 import type { StartPurpose } from "@mako/host/contracts/thread-purposes"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { threadIdentity, type ThreadPage } from "@mako/sessions"
@@ -84,7 +84,6 @@ import {
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { liveContentWeight, residencyPlan, type ResidencyPlan } from "@mako/host/contracts/residency"
-import type { JournalFacts, SourceRef } from "./thread-store.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
 
 /**

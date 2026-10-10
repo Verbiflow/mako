@@ -15,7 +15,7 @@ import { hostWarn } from "@mako/host/base/host-log"
 import type { Dependencies, Resident } from "./live-runtime.js"
 import { errorMessage } from "./live-runtime.js"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import type { JournalFacts, MoveBegan, ThreadStore } from "./thread-store.js"
+import type { JournalFacts, MoveBegan, ThreadStore } from "@mako/host/threads"
 
 /** What the move logic may see and do in the conversation host. */
 export interface MoveAccess {

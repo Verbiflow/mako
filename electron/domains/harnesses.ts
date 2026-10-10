@@ -16,7 +16,7 @@ import { accountRemovalSessions } from "../account-removal-sessions.js"
 import { cancelAccountLogin, startAccountLogin, submitAccountLoginCode, waitAccountLogin } from "../account-login.js"
 import type { ProviderConnectionAction } from "@mako/host/contracts/provider-connection"
 import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
-import type { ThreadCatalog } from "../threads.js"
+import type { ThreadCatalog } from "@mako/host/threads"
 import type { LiveConversations } from "../live-conversations.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 

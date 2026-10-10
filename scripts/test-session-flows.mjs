@@ -85,7 +85,7 @@ async function main(app) {
   const { assessProviderResume } = await load("dist-electron/provider-recovery.js")
   const { bindCodexApp, stopCodexApps } = await load("dist-electron/codex-app.js")
   const { bindAcp } = await load("dist-electron/acp.js")
-  const { nativeSessionPath } = await load("dist-electron/thread-native-source.js")
+  const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { defaultCatalog, readableHarnesses, SAVED_HISTORY_READERS } = await load("packages/sessions/dist/index.js")
   const readers = [...SAVED_HISTORY_READERS]
   if (chosen.standIn) {
@@ -96,8 +96,8 @@ async function main(app) {
   }
   // The app pages through its catalog daemon; this host must not start or reach the user's.
   const catalog = defaultCatalog({ archivePath: join(root, "archive"), readers })
-  const { SessionMemory } = await load("dist-electron/session-memory.js")
-  const { openThreadStore } = await load("dist-electron/thread-store.js")
+  const { SessionMemory } = await import("@mako/host/threads/session-memory")
+  const { openThreadStore } = await import("@mako/host/threads/store")
   const { WorkspaceSnapshots } = await load("dist-electron/workspace-snapshots.js")
   const { installHostLog } = await load("packages/host/dist/base/host-log.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")

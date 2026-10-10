@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync
 import { join } from "node:path"
 import { z } from "zod"
 import { LiveConversations } from "../electron/live-conversations.js"
-import { SessionMemory } from "../electron/session-memory.js"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 import { SharedConversations } from "../electron/shared-conversations.js"
 import { startWebHost } from "@mako/host/transport/server"
 import { invokeRuntime, subscribeRuntime, probeRuntime } from "@mako/host/transport/connection"

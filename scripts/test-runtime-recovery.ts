@@ -5,7 +5,7 @@ import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host
 import { hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "@mako/host/contracts/host-call-policy"
 import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, isHostReconnectingError } from "@mako/host/contracts/host-connection"
-import { daemonIsForeign } from "../electron/daemon-vintage.ts"
+import { daemonIsForeign } from "@mako/host/threads/daemon-vintage"
 import { PROTOCOL_VERSION } from "@mako/sessions"
 
 async function rejection<T>(promise: Promise<T>): Promise<Error> {

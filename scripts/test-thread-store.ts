@@ -14,7 +14,7 @@ import {
   threadStorePath,
   type JournalFacts,
   type SourceRef,
-} from "../electron/thread-store.js"
+} from "@mako/host/threads/store"
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-store-"))
 const migration: Actor = { kind: "service", name: "migration" }

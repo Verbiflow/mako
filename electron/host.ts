@@ -1,6 +1,6 @@
 import type { GitRemoteInput, GitRemoteResult, FileContents, GitCommitEntry, GitDiff, GitFile, GitCommitFile, GitStatus, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "@mako/host/contracts/git-workspace-search"
 import { homedir } from "node:os"
-import { ensureChatsRoot } from "./chat-folders.js"
+import { ensureChatsRoot } from "@mako/host/threads"
 import { type GitTab, WorkspaceGit } from "@mako/host/git"
 import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"

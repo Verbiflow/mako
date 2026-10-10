@@ -29,9 +29,9 @@ async function run() {
   const root = process.env.MAKO_CATALOG_CAPTURE_ROOT
   app.setPath('userData', join(root, 'profile'))
   await app.whenReady()
-  const { threadCatalog } = await import('../dist-electron/threads.js')
-  const { WorktreeOrigins } = await import('../dist-electron/worktree-origins.js')
-  const { Lineage } = await import('../dist-electron/lineage.js')
+  const { threadCatalog } = await import('@mako/host/threads/catalog')
+  const { WorktreeOrigins } = await import('@mako/host/threads/worktree-origins')
+  const { Lineage } = await import('@mako/host/threads/lineage')
   const { threadHarnesses } = await import('../dist-electron/providers/thread-harnesses.js')
   const { readConversationFile } = await import('../dist-electron/host-workspace.js')
   const { providerHost } = await import('../dist-electron/providers/index.js')

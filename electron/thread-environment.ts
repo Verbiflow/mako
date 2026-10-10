@@ -15,7 +15,7 @@ import {
   type ThreadEnvironmentValues,
   type ThreadRecipeProcess,
 } from "@mako/host/contracts/thread-environments"
-import type { ThreadStore } from "./thread-store.js"
+import type { ThreadStore } from "@mako/host/threads"
 import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "./thread-recipe.js"
 import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"
 import type { Recipe } from "./thread-recipe.js"

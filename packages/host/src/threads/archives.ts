@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite"
 import { createHash } from "node:crypto"
 import { z } from "zod"
-import { shownKeyOf, threadShownKey, type ArchiveCommand, type NativeArchive, type ThreadArchiveSnapshot } from "@mako/host/contracts/thread-lifecycle"
+import { shownKeyOf, threadShownKey, type ArchiveCommand, type NativeArchive, type ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
 
 export class ThreadArchives {
   private readonly db: DatabaseSync

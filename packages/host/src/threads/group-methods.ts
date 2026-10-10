@@ -1,8 +1,8 @@
-import type { MethodTable } from "@mako/host/base/methods"
-import type { ThreadStore } from "../thread-store.js"
-import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
-import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
-import { ThreadIdSchema, type ThreadPlacement } from "@mako/host/contracts/thread-identity"
+import type { MethodTable } from "../base/methods.js"
+import type { ThreadStore } from "./store.js"
+import type { ThreadGroup } from "../contracts/thread-groups.js"
+import type { ThreadPurpose } from "../contracts/thread-purposes.js"
+import { ThreadIdSchema, type ThreadPlacement } from "../contracts/thread-identity.js"
 
 /**
  * A window's view of multi-Session Threads: the groups to draw, and a new
@@ -10,7 +10,7 @@ import { ThreadIdSchema, type ThreadPlacement } from "@mako/host/contracts/threa
  * tab's own, so a send repeated after a dropped connection gets the Session
  * the first attempt created.
  */
-export function installThreadGroupsIpc(methods: MethodTable, store: ThreadStore | null, announceGroup: (thread: string) => void, problem?: string, notify?: (message: string) => void) {
+export function declareThreadGroupMethods(methods: MethodTable, store: ThreadStore | null, announceGroup: (thread: string) => void, problem?: string, notify?: (message: string) => void) {
   // Every window asks for groups as it loads: without a store each says why,
   // and a store started over after damage is told once.
   let told = false

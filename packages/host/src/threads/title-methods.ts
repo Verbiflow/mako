@@ -1,9 +1,9 @@
 import { z } from "zod"
-import type { MethodTable } from "@mako/host/base/methods"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
-import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
-import type { ThreadStore } from "../thread-store.js"
+import type { MethodTable } from "../base/methods.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
+import { ThreadIdSchema } from "../contracts/thread-identity.js"
+import type { ThreadStore } from "./store.js"
 
 const TitleSchema = z.string().max(400)
 const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSchema })).max(5_000)
@@ -14,7 +14,7 @@ const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSche
  * Session's title again), and a window's renames from before the store kept
  * them. Every change is told to every window as `thread-titles`.
  */
-export function installThreadTitlesIpc(methods: MethodTable, input: {
+export function declareThreadTitleMethods(methods: MethodTable, input: {
   store: ThreadStore | null
   emit(event: HostEvent): void
 }) {

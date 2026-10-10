@@ -7,7 +7,7 @@ import { probeOpenFiles } from "../open-files-probe.js"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "../../thread-harnesses.js"
+} from "@mako/host/threads"
 
 const MAX_REGISTRY_BYTES = 1024 * 1024
 const GrokActiveSessionSchema = z.object({

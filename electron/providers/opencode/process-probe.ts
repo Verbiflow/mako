@@ -7,7 +7,7 @@ import { z } from "zod"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "../../thread-harnesses.js"
+} from "@mako/host/threads"
 import type { OpenCodeServers } from "./servers.js"
 
 const registration = z.object({

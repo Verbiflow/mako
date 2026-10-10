@@ -16,7 +16,7 @@ import {
   type SessionId,
   type ThreadId,
   type ThreadPlacement,
-} from "@mako/host/contracts/thread-identity"
+} from "../contracts/thread-identity.js"
 import {
   ClaimReceiptSchema,
   DeviceIdSchema,
@@ -33,14 +33,14 @@ import {
   type MoveId,
   type Refusal,
   type SessionExecution,
-} from "@mako/host/contracts/thread-execution"
-import { ThreadGroupSchema, type ThreadGroup } from "@mako/host/contracts/thread-groups"
-import type { ThreadWorktree } from "@mako/host/contracts/thread-worktrees"
-import type { ThreadPurpose, ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
-import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
-import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "@mako/host/contracts/thread-environments"
-import { hostWarn } from "@mako/host/base/host-log"
-import { enableSharedWal } from "@mako/host/base/sqlite-wal"
+} from "../contracts/thread-execution.js"
+import { ThreadGroupSchema, type ThreadGroup } from "../contracts/thread-groups.js"
+import type { ThreadWorktree } from "../contracts/thread-worktrees.js"
+import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
+import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
+import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
+import { hostWarn } from "../base/host-log.js"
+import { enableSharedWal } from "../base/sqlite-wal.js"
 
 /**
  * The per-user Thread store: which Session every journal and native session

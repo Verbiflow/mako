@@ -1,7 +1,7 @@
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "./thread-harnesses.js"
+} from "./harnesses.js"
 
 export interface ProviderActivitySnapshot {
   provider: string

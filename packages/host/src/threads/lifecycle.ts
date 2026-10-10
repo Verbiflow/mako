@@ -1,10 +1,10 @@
-import type { ThreadArchives } from "./thread-archives.js"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
-import type { NativeRequest } from "@mako/host/contracts/native-requests"
-import type { QueuedPromptEdit } from "@mako/host/contracts/live-queue"
-import type { ThreadRef } from "@mako/host/contracts/conversation-session"
-import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "@mako/host/contracts/thread-lifecycle"
+import type { ThreadArchives } from "./archives.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
+import type { NativeRequest } from "../contracts/native-requests.js"
+import type { QueuedPromptEdit } from "../contracts/live-queue.js"
+import type { ThreadRef } from "../contracts/conversation-session.js"
+import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
 
 /** What archiving and stopping a Thread read and ask of the conversations live on this host. */
 export interface LiveThreads {

@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { bindDrivers, resumeNative, startFresh, stopDrivers, threadRun, nativeLifecycleWork } from "../electron/drivers.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import { SessionMemory } from "../electron/session-memory.ts"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ThreadRef } from "@mako/sessions"
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-shutdown-"))

@@ -132,7 +132,7 @@ const mocks = {
 try {
   const outfile = join(root, "threads.mjs")
   await build({
-    entryPoints: ["electron/threads.ts"],
+    entryPoints: ["packages/host/src/threads/catalog.ts"],
     bundle: true,
     platform: "node",
     format: "esm",

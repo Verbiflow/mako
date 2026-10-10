@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { SessionMemory } from "../electron/session-memory.ts"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 
 const root = mkdtempSync(join(tmpdir(), "mako-owner-upgrade-"))
 const path = join(root, "memory.sqlite")
@@ -17,7 +17,7 @@ try {
   // Every process opens at the same moment, as hosts launched together do.
   const go = join(root, "go")
   const source = `import { existsSync } from "node:fs";
-    import { SessionMemory } from ${JSON.stringify(new URL("../electron/session-memory.ts", import.meta.url).href)};
+    import { SessionMemory } from ${JSON.stringify(new URL("../packages/host/src/threads/session-memory.ts", import.meta.url).href)};
     process.stdout.write("ready\\n");
     while (!existsSync(process.argv[3])) {}
   const memory = new SessionMemory(process.argv[1], { pid: process.pid, startedAt: Date.now(), label: 'upgrade fixture', socket: process.argv[2] });

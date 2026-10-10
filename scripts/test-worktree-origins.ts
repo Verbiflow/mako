@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { WorktreeOrigins } from "../electron/worktree-origins.js"
+import { WorktreeOrigins } from "@mako/host/threads/worktree-origins"
 import { PROJECT_CHECKOUT_FILE } from "@mako/host/contracts/thread-worktrees"
 
 /**

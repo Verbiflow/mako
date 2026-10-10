@@ -1,6 +1,6 @@
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
-import { nativeSessionPath } from "../electron/thread-native-source.ts"
+import { nativeSessionPath } from "@mako/host/threads/native-source"
 import type { ThreadRef } from "@mako/sessions"
 
 for (const harness of registeredHarnessIds()) {

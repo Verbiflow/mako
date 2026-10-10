@@ -5,8 +5,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
-import { SessionMemory } from "../electron/session-memory.js"
-import { openThreadStore, ThreadStore, type SourceRef } from "../electron/thread-store.js"
+import { SessionMemory } from "@mako/host/threads/session-memory"
+import { openThreadStore, ThreadStore, type SourceRef } from "@mako/host/threads/store"
 
 /**
  * A fixture desk reads the user's Thread store and session ledger without

@@ -5,7 +5,7 @@ import { probeOpenFiles } from "../open-files-probe.js"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "../../thread-harnesses.js"
+} from "@mako/host/threads"
 
 export function parseCursorOpenSessionPaths(
   output: string,

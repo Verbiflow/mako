@@ -12,7 +12,7 @@
  * it can inherit the conversation, and that is what this hands over.
  */
 import { threadIdentity, VIEWER_PAGE } from "@mako/sessions"
-import { nativeSessionPath, type NativeSourceIdentity } from "./thread-native-source.js"
+import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
@@ -46,28 +46,28 @@ import type {
   CatalogWorkerMessage,
 } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
-import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import { retainUnread } from "@mako/host/base/native-unknown"
-import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
+import { hostLog, hostWarn } from "../base/host-log.js"
+import { retainUnread } from "../base/native-unknown.js"
+import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import type { Lineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
-import type { ThreadStore } from "./thread-store.js"
-import type { Actor, ThreadId } from "@mako/host/contracts/thread-identity"
+import type { ThreadStore } from "./store.js"
+import type { Actor, ThreadId } from "../contracts/thread-identity.js"
 import {
   resolveAnchor,
   type MessageAnchor,
-} from "@mako/host/contracts/message-anchor"
+} from "../contracts/message-anchor.js"
 import { tmpdir } from "node:os"
-import { ProviderActivityEngine } from "./provider-activity-engine.js"
-import type { ProviderActivitySession, ThreadHarnesses } from "./thread-harnesses.js"
+import { ProviderActivityEngine } from "./activity-engine.js"
+import type { ProviderActivitySession, ThreadHarnesses } from "./harnesses.js"
 import {
   type ActivityIndex,
   WRITE_ACTIVE_MS,
   deriveActivity,
   indexActivityRefs,
   sameActivity,
-} from "./thread-activity.js"
+} from "./activity.js"
 import {
   daemonLoginEnabled,
   daemonLoginOwner,
@@ -76,10 +76,10 @@ import {
   refreshDaemonLoginJob,
   setDaemonLogin,
 } from "./daemon-login.js"
-import type { ExternalThreadActivity, HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { FileContents } from "@mako/host/contracts/git-workspace-search"
-import type { ThreadFileContext, ThreadInlineContext } from "@mako/host/contracts/conversation-session"
-import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "@mako/host/contracts/thread-list"
+import type { ExternalThreadActivity, HostEvent } from "../contracts/host-events-boot.js"
+import type { FileContents } from "../contracts/git-workspace-search.js"
+import type { ThreadFileContext, ThreadInlineContext } from "../contracts/conversation-session.js"
+import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
 
 const TEMPORARY_ROOTS = [
   tmpdir(),

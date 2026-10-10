@@ -1,7 +1,7 @@
-import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { hostWarn } from "@mako/host/base/host-log"
-import type { ThreadStore } from "./thread-store.js"
+import type { ThreadGroup } from "../contracts/thread-groups.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import { hostWarn } from "../base/host-log.js"
+import type { ThreadStore } from "./store.js"
 
 /**
  * Every host on this Mac shares one Thread store, and a new Session in a

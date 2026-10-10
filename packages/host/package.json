@@ -15,6 +15,8 @@
     "./git/*": "./dist/git/*.js",
     "./terminals": "./dist/terminals/index.js",
     "./terminals/*": "./dist/terminals/*.js",
+    "./threads": "./dist/threads/index.js",
+    "./threads/*": "./dist/threads/*.js",
     "./tools": "./dist/tools/index.js",
     "./tools/*": "./dist/tools/*.js",
     "./transport": "./dist/transport/index.js",

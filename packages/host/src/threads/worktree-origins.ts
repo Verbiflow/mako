@@ -3,9 +3,9 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
-import type { LinkedCheckout } from "@mako/host/contracts/checkout-heads"
-import { PROJECT_CHECKOUT_FILE } from "@mako/host/contracts/thread-worktrees"
-import { gitDirPointer, pointedCheckout, spelledLike } from "@mako/host/base/checkout-location"
+import type { LinkedCheckout } from "../contracts/checkout-heads.js"
+import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
+import { gitDirPointer, pointedCheckout, spelledLike } from "../base/checkout-location.js"
 
 /** Worktrees remembered after they're gone, at most; the ones seen longest ago go first. */
 const REMEMBERED = 2_000

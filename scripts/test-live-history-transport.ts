@@ -11,7 +11,7 @@ import { LiveHistoryCursorSchema, LiveHistoryReadSchema } from "@mako/host/contr
 import { startWebHost } from "@mako/host/transport/server"
 import { invokeRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { SharedConversations } from "../electron/shared-conversations"
-import { SessionMemory } from "../electron/session-memory"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 import { withHostClient } from "@mako/host/base/host-client"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { auditSnapshot } from "./performance-audit-fixtures"

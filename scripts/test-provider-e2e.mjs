@@ -94,7 +94,7 @@ async function runElectron() {
   // Use the same declared native evidence and shared policy as the host.
   const checkpoint = (provider, path) => providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path)
   const resumeVerdict = binding => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider))
-  const { nativeSessionPath } = await import("../dist-electron/thread-native-source.js")
+  const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const catalog = defaultCatalog()
   const { BrowserService } = await import("../packages/control-runtime/dist/browser-service.js")
   const { startControlService } =

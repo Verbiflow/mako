@@ -14,7 +14,7 @@ import { ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity
 import { AppKeySchema, THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "@mako/host/contracts/thread-environments"
 import { controlNote } from "@mako/host/control/launch"
 import { ThreadEnvironments, applyThreadEnvironment, folderApp, threadEnvironmentInstructions } from "../electron/thread-environment.js"
-import { ThreadStore } from "../electron/thread-store.js"
+import { ThreadStore } from "@mako/host/threads/store"
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-environment-"))
 const actor: Actor = { kind: "service", name: "migration" }

@@ -15,7 +15,7 @@ import { folderApp, portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import type { ContainerLook } from "../electron/container-runtime.js"
 import { inputsDigest, projectRecipe, RecipeSchema, RECIPE_PATH } from "../electron/thread-recipe.js"
-import { ThreadStore } from "../electron/thread-store.js"
+import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
 import type { CheckoutSetup } from "../electron/worktree-carry.js"
 

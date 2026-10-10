@@ -55,7 +55,7 @@ async function run() {
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
   const { defaultCatalog } = await import("@mako/sessions")
-  const { nativeSessionPath } = await import("../dist-electron/thread-native-source.js")
+  const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")
   const catalog = defaultCatalog()
   const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")

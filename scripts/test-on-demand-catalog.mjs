@@ -51,7 +51,7 @@ if (process.argv[2] === 'client') {
   assert.equal((await once(identityProcess, 'exit'))[0], 0)
   const paths = JSON.parse(identityOutput)
   const connector = join(root,'connector.mjs')
-  await build({entryPoints:['electron/catalog-connection.ts'],bundle:true,platform:'node',format:'esm',outfile:connector,plugins:[{
+  await build({entryPoints:['packages/host/src/threads/catalog-connection.ts'],bundle:true,platform:'node',format:'esm',outfile:connector,plugins:[{
     name:'host-boundary',setup(b){
       b.onResolve({filter:/^@mako\/sessions$/},()=>({path:resolve('packages/sessions/dist/index.js'),external:true}))
       b.onResolve({filter:/^\.\/daemon-login\.js$/},()=>({path:'daemon-path',namespace:'fixture'}))
