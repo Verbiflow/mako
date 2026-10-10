@@ -5,6 +5,9 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { emitOpenCodeSession } from "../electron/providers/opencode/session-emitter.ts"
+import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
+import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 import { accessModeId } from "../electron/contracts/access.ts"
 import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
 
@@ -79,7 +82,23 @@ try {
   assert.match(recall.prose, new RegExp(word), "it remembers its turns from the first folder")
   assert.ok(recall.output.includes(worktree), `its tools run in the new folder: ${recall.output.slice(0, 600)}`)
   assert.ok(!recall.output.includes(`${main}\\n`) && !recall.output.includes(`"${main}"`), "not in the old one")
-  console.log("opencode relocate: resumed in the new folder under the same id, with its turns, running its tools there")
+
+  // A session Mako imported to start a fork on OpenCode: resumed and answered in, it still begins with what Mako wrote.
+  const thread = seedThread(main)
+  const emitted = await emitOpenCodeSession(thread, env)
+  const opencode = new OpenCodeProvider(env.HOME, env)
+  const seed = seeded(thread, await opencode.read(emitted.path))
+  const seededChat = conversation()
+  chats.push(seededChat.id)
+  await driver.start(main, {
+    conversationId: seededChat.id, emit: seededChat.emit, tuning: { model }, title: "Seeded", modeId: accessModeId("full"),
+    resume: emitted.sessionId, threadPath: emitted.path,
+  })
+  const answered = await turn(seededChat, "Reply with exactly: noted")
+  assert.equal(answered.state.lastStop, "end_turn", answered.state.error)
+  await driver.close(seededChat.id)
+  assertSeedHolds("opencode", thread, await new OpenCodeProvider(env.HOME, env).read(emitted.path), seed)
+  console.log("opencode relocate: resumed in the new folder under the same id, with its turns, running its tools there; a seeded session resumed still begins with its seed")
 } finally {
   for (const id of chats) await Promise.resolve(driver.close(id)).catch(() => {})
   await rm(root, { recursive: true, force: true }).catch(() => {})

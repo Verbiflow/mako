@@ -28,9 +28,9 @@ import {
   NativeAgentObservationSchema,
 } from "./contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { captureNativeHistory } from "./native-history.js"
+import { captureNativeHistory, withSeed } from "./native-history.js"
 import { nativeRecord } from "./native-source.js"
-import { prepareLiveContext, contextPrompt } from "./live-context.js"
+import { capturedThread, prepareLiveContext, contextPrompt } from "./live-context.js"
 import { LiveTransfers, reconnectRefusal } from "./live-transfers.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
 import { LiveActions } from "./live-actions.js"
@@ -600,8 +600,11 @@ export class LiveConversations {
           latest.ref.bytes === base.ref.bytes && latest.ref.revision === base.ref.revision &&
           latest.ref.updatedAt === base.ref.updatedAt && latest.total === base.total
         if (sameRevision) return this.stamp(resident.snapshot)
-        const refreshed = await captureNativeHistory(path, (path, before) =>
+        const read = await captureNativeHistory(path, (path, before) =>
           before === undefined ? Promise.resolve(latest) : this.dependencies.history(path, before))
+        const refreshed = read && binding?.seeded
+          ? withSeed(read, capturedThread(before, 0, true).entries, binding.seeded) ?? read
+          : read
         if (refreshed && this.records.get(id) === resident &&
             resident.snapshot === before && resident.generation === generation &&
             !resident.opening && !resident.transferring && !lifecycleBlocked() &&

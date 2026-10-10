@@ -10,6 +10,9 @@ import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
+import { emitCodexSession } from "../packages/sessions/src/emit.ts"
+import { CodexProvider } from "../packages/sessions/src/providers/codex.ts"
+import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 
 try {
   execFileSync("codex", ["--version"], { stdio: "ignore" })
@@ -100,7 +103,20 @@ try {
   assert.equal([...sent.matchAll(/<cwd>([^<]+)<\/cwd>/g)].map((match) => match[1]).at(-1), b, "the model is told the new folder")
   second.child.kill("SIGTERM")
   await new Promise((r) => second.child.once("exit", r))
-  console.log("codex resume elsewhere: the same thread resumed in the new folder with its turns, told the new folder")
+
+  // A session Mako wrote to start a fork on Codex: resumed and answered in, it still begins with what Mako wrote.
+  const thread = seedThread(a)
+  const emitted = await emitCodexSession(thread, { cwd: a, home: root, store: home, codexModelProvider: "standin" })
+  const codex = new CodexProvider(root)
+  const seed = seeded(thread, await codex.read(emitted.path))
+  const third = await open(a)
+  const loaded = await third.request("thread/resume", { threadId: emitted.sessionId, cwd: a })
+  assert.equal(loaded.thread.id, emitted.sessionId)
+  await turn(third, emitted.sessionId, a, "Remember the word third.")
+  third.child.kill("SIGTERM")
+  await new Promise((r) => third.child.once("exit", r))
+  assertSeedHolds("codex", thread, await codex.read(emitted.path), seed)
+  console.log("codex resume elsewhere: the same thread resumed in the new folder with its turns, told the new folder; a seeded session resumed still begins with its seed")
 } finally {
   server.close()
   rmSync(root, { recursive: true, force: true, maxRetries: 5 })

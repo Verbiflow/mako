@@ -89,6 +89,55 @@ try {
   console.log("PASS: locally recorded history refresh, no duplicate turns, saved requests, streaming tail, durable coverage")
 } finally { rmSync(mixedRoot, { recursive: true, force: true }) }
 
+// A fork Mako seeded into a harness's store: the store keeps tool calls as text,
+// so a refresh keeps Mako's own record of the seed and adds what the harness wrote after it.
+const { historyDigest } = await import("../electron/native-history.ts")
+const seededRoot = mkdtempSync(join(tmpdir(), "mako-history-seeded-"))
+try {
+  const own: ThreadPage["entries"] = [
+    { kind: "user", id: "s1", text: "Find the deploy script" },
+    { kind: "assistant", id: "s2", blocks: [{ type: "tool", name: "bash", input: "rg deploy", output: "scripts/deploy.sh", error: true }, { type: "text", text: "It is scripts/deploy.sh." }] },
+    { kind: "event", id: "s3", label: "Model changed" },
+  ]
+  const written: ThreadPage["entries"] = [
+    { kind: "user", id: "n1", text: "Find the deploy script" },
+    { kind: "assistant", id: "n2", blocks: [{ type: "text", text: "[tool: bash — failed]\ninput: rg deploy\noutput: scripts/deploy.sh\n\nIt is scripts/deploy.sh." }] },
+  ]
+  const added: ThreadPage["entries"] = [{ kind: "user", id: "n3", text: "Now run it" }, { kind: "assistant", id: "n4", blocks: [{ type: "text", text: "Ran it." }] }]
+  let store = [...written, ...added]
+  let bytes = 2
+  const conversation = randomUUID()
+  const journal = new LiveJournal(seededRoot, conversation)
+  journal.commit({
+    session: { id: conversation, harness: "claude", cwd: seededRoot, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [] },
+    revision: 0, createdAt: 1, permissions: [], requests: [], blocks: [],
+    base: { ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes: 1 }, entries: own, start: 0, total: own.length, hasEarlier: false },
+    control: {
+      activeBindingId: conversation, transfers: [], actions: [], children: [], merges: [],
+      bindings: [{ id: conversation, provider: "claude", nativeId: "seeded", path: "seeded.jsonl", includesBase: true, coveredBlocks: 0, seeded: { native: written.length, entries: own.length, digest: historyDigest(written) } }],
+    },
+  })
+  journal.close()
+  const seededOwner = new LiveConversations({
+    root: seededRoot, appPath: seededRoot, driver: () => undefined, emit: () => {},
+    history: async () => ({ ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes }, entries: store, start: 0, total: store.length, hasEarlier: false, checkpoint: bytes }),
+  })
+  try {
+    const shown = (await seededOwner.refreshedSnapshot(conversation))!.base!
+    assert.deepEqual(shown.entries, [...own, ...added], "the seed shows as Mako recorded it, tool calls and all, then the harness's turns")
+    assert.equal(shown.total, store.length, "the page keeps the store's own count, so an unchanged store reads as unchanged")
+    store = [...store, { kind: "user", id: "n5", text: "And again" }]
+    bytes++
+    assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, [...own, ...store.slice(written.length)], "a later refresh keeps the seed in front")
+    store = [{ kind: "user", id: "c1", text: "Compacted summary" }, ...added]
+    bytes++
+    assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, store, "a store the harness rewrote shows as the harness has it")
+  } finally {
+    seededOwner.stop()
+  }
+  console.log("PASS: a seeded fork keeps Mako's record of the seed ahead of the harness's turns, and yields to a store the harness rewrote")
+} finally { rmSync(seededRoot, { recursive: true, force: true }) }
+
 // The reader contract permits no checkpoint. Exercise the same lifecycle and
 // durability rules for every shipped provider, without inventing native evidence.
 for (const harness of registeredHarnessIds()) {

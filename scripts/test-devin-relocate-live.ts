@@ -16,6 +16,9 @@ import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { devinExecutable } from "../electron/providers/devin/executable.ts"
 import { environmentForExecutable } from "../electron/executable.ts"
 import { type RpcMessage, rpcPeer, sandboxed, stop } from "./harness-sandbox.ts"
+import { emitDevinSession } from "../packages/sessions/src/emit.ts"
+import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
+import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 
 const executable = devinExecutable()
 const signedIn = join(homedir(), ".local/share/devin/credentials.toml")
@@ -92,5 +95,19 @@ await sandboxed("devin-relocate", "devin", async (sandbox) => {
   const folder = z.array(z.object({ working_directory: z.string() })).parse(after.prepare("SELECT working_directory FROM sessions WHERE id = ?").all(sessionId))[0]?.working_directory
   after.close()
   assert.equal(folder, main, "Devin keeps the folder the session started in on record, as Claude keeps its file there")
-  console.log("devin relocate: loaded in the new folder under the same id with its turns; its next turn remembered them and named the new folder")
+
+  // A session Mako wrote to start a fork on Devin: resumed and answered in, it still begins with what Mako wrote.
+  const thread = seedThread(main)
+  const emitted = await emitDevinSession(thread, { cwd: main, home: sandbox.home })
+  const devin = new DevinCliProvider(sandbox.home)
+  const seed = seeded(thread, await devin.read(emitted.path))
+  const resumed = await agent(main)
+  try {
+    await resumed.peer.call("session/load", { sessionId: emitted.sessionId, cwd: main, mcpServers: [] })
+    await resumed.prompt(emitted.sessionId, "Reply with exactly: noted")
+  } finally {
+    await resumed.close()
+  }
+  assertSeedHolds("devin", thread, await devin.read(emitted.path), seed)
+  console.log("devin relocate: loaded in the new folder under the same id with its turns; its next turn remembered them and named the new folder; a seeded session resumed still begins with its seed")
 })

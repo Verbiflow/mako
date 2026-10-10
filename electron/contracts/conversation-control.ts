@@ -46,6 +46,16 @@ export const ProviderBindingSchema = z.object({
   modeId: z.string().optional(),
   coveredBlocks: z.number().int().nonnegative(),
   includesBase: z.boolean(),
+  /**
+   * The conversation Mako wrote into this native session's store to start it,
+   * tool calls as text: the first `native` entries the store reads back as,
+   * with their `historyDigest`, are the conversation's first `entries`.
+   */
+  seeded: z.object({
+    native: z.number().int().nonnegative(),
+    entries: z.number().int().nonnegative(),
+    digest: z.string(),
+  }).optional(),
   /** The native session's own totals when the conversation last moved off it, for a resume that restores them. */
   nativeUsage: NativeTotalsSchema.optional(),
 })

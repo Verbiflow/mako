@@ -5,7 +5,7 @@ import "./lib/scratch-git.mjs"
 // with its turns, and its next turn carries them.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -15,6 +15,9 @@ import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
 import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { grokSessionSource, relocateGrokSession } from "../electron/providers/grok/session-source.ts"
+import { emitGrokSession } from "../packages/sessions/src/emit.ts"
+import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
+import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 
 const installed = (() => {
   try {
@@ -140,7 +143,24 @@ else {
     assert.deepEqual(readdirSync(sessions).filter((name) => existsSync(join(sessions, name, sessionId))), [encodeURIComponent(worktree)], "the session is saved under the new folder alone")
     assert.equal(grokSessionSource(sessionId, worktree, sessions), join(sessions, encodeURIComponent(worktree), sessionId, "updates.jsonl"))
     assert.equal(await relocateGrokSession({ nativeId: sessionId, to: worktree, root: sessions }), join(sessions, encodeURIComponent(worktree), sessionId, "updates.jsonl"), "moving it again where it is changes nothing")
-    console.log("Grok relocate: a session saved under one folder refuses to load from another; moved under the new folder's name, the same session loads there with its turns and goes on")
+    moved.child.kill("SIGTERM")
+
+    // A session Mako wrote to start a fork on Grok: resumed and answered in, it still begins with what Mako wrote.
+    const thread = seedThread(main)
+    const emitted = await emitGrokSession(thread, { cwd: main, home })
+    const grok = new GrokProvider(home)
+    const seed = seeded(thread, await grok.read(emitted.path))
+    const summary = join(emitted.path, "..", "summary.json")
+    writeFileSync(summary, JSON.stringify({ ...z.looseObject({}).parse(JSON.parse(readFileSync(summary, "utf8"))), current_model_id: "double" }))
+    const resumed = agent(main)
+    await resumed.connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: acpClientCapabilities(grokAcpSource) })
+    await resumed.connection.loadSession({ sessionId: emitted.sessionId, cwd: main, mcpServers: [] })
+    const answered = await resumed.connection.prompt({ sessionId: emitted.sessionId, prompt: [{ type: "text", text: "Remember the word third." }] })
+    assert.equal(answered.stopReason, "end_turn")
+    resumed.child.kill("SIGTERM")
+    await new Promise((exited) => resumed.child.once("exit", exited))
+    assertSeedHolds("grok", thread, await grok.read(emitted.path), seed)
+    console.log("Grok relocate: a session saved under one folder refuses to load from another; moved under the new folder's name, the same session loads there with its turns and goes on; a seeded session resumed still begins with its seed")
   } finally {
     for (const done of after.reverse()) done()
     rmSync(root, { recursive: true, force: true })

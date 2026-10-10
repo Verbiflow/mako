@@ -9,8 +9,10 @@ import { TransferInputSchema, resumable } from "./contracts/conversation-control
 import type {
   TransferInput,
   ContextTransfer,
+  ProviderBinding,
   ResumeVerdict,
 } from "./contracts/conversation-control.js"
+import { captureNativeHistory, historyDigest } from "./native-history.js"
 import { heldReason } from "./contracts/session-hold.js"
 import type { Actor } from "./contracts/thread-identity.js"
 import type { TurnContinuation } from "./contracts/live-conversations.js"
@@ -187,7 +189,7 @@ export class LiveTransfers {
     source: LiveSnapshot,
     provider: string,
     canResume: boolean
-  ): Promise<{ sessionId: string; path: string } | { fallback: string }> {
+  ): Promise<{ sessionId: string; path: string; seeded?: ProviderBinding["seeded"] } | { fallback: string }> {
     if (!canResume || !this.host.dependencies.emitSession)
       return { fallback: "This agent cannot resume an imported session." }
     const thread = capturedThread(source, 0, true)
@@ -199,7 +201,8 @@ export class LiveTransfers {
       if (!emitted) return { fallback: "This agent has no session import." }
       // An account's store can reach the shared one through a symlink; the
       // session index knows the file by its real path.
-      return { sessionId: emitted.sessionId, path: await realSourcePath(emitted.path) }
+      const path = await realSourcePath(emitted.path)
+      return { sessionId: emitted.sessionId, path, seeded: await this.seed(source, provider, path, thread.entries.length) }
     } catch (error) {
       hostLog("transfer", "session import failed", {
         conversation: source.session.id,
@@ -208,6 +211,18 @@ export class LiveTransfers {
       })
       return { fallback: `Writing its session failed: ${errorMessage({ error })}` }
     }
+  }
+
+  /** How the store Mako just wrote reads back, before the harness adds to it; see `withSeed`. */
+  private async seed(source: LiveSnapshot, provider: string, path: string, entries: number): Promise<ProviderBinding["seeded"]> {
+    try {
+      const read = await captureNativeHistory(path, (at, before) => this.host.dependencies.history(at, before))
+      if (read) return { native: read.entries.length, entries, digest: historyDigest(read.entries) }
+      hostWarn("transfer", "an imported session reads back empty; its history will show as the harness has it", { conversation: source.session.id, harness: provider })
+    } catch (error) {
+      hostWarn("transfer", "an imported session didn't read back; its history will show as the harness has it", { conversation: source.session.id, harness: provider, error: errorMessage({ error }) })
+    }
+    return undefined
   }
 
   private async perform(
@@ -491,6 +506,7 @@ export class LiveTransfers {
           coveredBlocks: imported ? source.blocks.length : 0,
           includesBase: false,
           path: imported?.path ?? bindingPath(this.host.dependencies, prepared.session, prepared.session.nativePath),
+          ...imported?.seeded && { seeded: imported.seeded },
         }),
         nativeId: prepared.session.nativeId,
         tuning: appliedTuning,
