@@ -192,11 +192,25 @@ async function runHarness(provider) {
     await click(`[...document.querySelectorAll('button')].find(b => b.getClientRects().length && b.textContent.includes('End live session'))`, { label: "End live session" })
     await waitFor(() => snapshot(id), (snap) => snap?.session.status === "closed", "the live session ended")
   }
-  async function openFromHistory(session) {
+  async function openFromHistory(session, id) {
     await revealRow(groupedRow(), "this Thread's rail row")
     await click(groupedRow(), { label: "this Thread's rail row" })
     await click(q(tabSelector(session)), { label: `Session tab ${session}` })
     await until(`${visible('button[title^="Fork from this answer into a new tab in this Thread"]')}.length`, "the Session's saved history with Fork on its answers")
+      .catch(async (error) => {
+        // A Session tab opens its saved history only when the catalog's row for it is a path its live record names.
+        const { threads } = await bridge("threads", [])
+        const rows = threads.filter((ref) => ref.sessionId === session).map(({ path, nativeId, archived }) => ({ path, nativeId, archived }))
+        const live = await snapshot(id)
+        const paths = { status: live?.session.status, threadPath: live?.threadPath, bindings: live?.control?.bindings.map((binding) => binding.path) }
+        const screen = {
+          livePanel: await liveOnScreen(),
+          composer: await evaluate(`document.querySelector('.composer-input')?.getAttribute('placeholder') ?? null`),
+          forks: await evaluate(`[...new Set(${visible("button")}.filter(b => b.textContent.trim() === "Fork").map(b => b.title))]`),
+          tabs: await sessionTabs(),
+        }
+        throw new Error(`${error.message}. The catalog's rows for it: ${JSON.stringify(rows)}; its live record: ${JSON.stringify(paths)}; on screen: ${JSON.stringify(screen)}`)
+      })
   }
   /**
    * Watches the Fork control on the answer to `prompt` from inside the
@@ -590,7 +604,7 @@ async function runHarness(provider) {
     await phase("fork-from-saved-history", async () => {
       await openTab(session2, ids.s2)
       await endLive(ids.s2)
-      await openFromHistory(session2)
+      await openFromHistory(session2, ids.s2)
       const historyShot = await shot("7-saved-history-with-fork")
       await click(`${visible('button[title^="Fork from this answer into a new tab in this Thread"]')}.at(-1)`, { label: "Fork on the last saved answer" })
       await click(`[...document.querySelectorAll('button')].find(b => b.getClientRects().length && b.textContent.includes('same agent'))`, { label: "Fork into the same agent" })
@@ -610,7 +624,7 @@ async function runHarness(provider) {
     if (!ids.s4) await phase("continue-in-worktree-from-saved-history", async (entry) => {
       await openTab(session1, ids.s1)
       await endLive(ids.s1)
-      await openFromHistory(session1)
+      await openFromHistory(session1, ids.s1)
       entry.onScreen = await onScreenState()
       await toasts()
       await click(`${visible('button[data-workspace="project-folder"]')}[0]`, { label: "Where this thread makes changes" })
