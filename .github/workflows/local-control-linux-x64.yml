@@ -120,6 +120,8 @@ jobs:
           if [ -d "$RUNNER_TEMP/local-control-acceptance/evidence" ]; then
             cp -R "$RUNNER_TEMP/local-control-acceptance/evidence/." evidence/
           fi
+          # The cloud runtime containers wrote as the image's user.
+          if [ -d evidence ]; then sudo chown -R "$(id -u):$(id -g)" evidence; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
