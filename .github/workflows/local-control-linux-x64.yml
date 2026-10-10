@@ -54,6 +54,8 @@ jobs:
           assert.match(readFileSync('evidence/docker-architecture.txt','utf8').trim(), /^(x86_64|amd64)$/);
           JS
       - run: npm ci
+      - name: Install the media tools recordings encode with
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Verify acceptance payload boundaries
         run: node scripts/linux-control/test-acceptance-payload.mjs
       - name: Compile the shared control host and its package references
