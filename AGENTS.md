@@ -1285,8 +1285,6 @@ processes running. Force Quit of the host and system shutdown are different: jou
 recover history, not a running process. Host restart and update installation wait
 for active work to finish. The `--background` launch switch keeps test windows
 hidden until explicitly activated.
-`npm run test:desktop-continuity` exercises actual Mako with an installed Devin
-process through Quit/reopen, a retained question, and a second native window.
 
 A live session's permission switch is saved only after provider acknowledgement,
 separately for each provider. Before a session exists, every live driver declares
@@ -1982,8 +1980,9 @@ main-chain revision for checkpoints. Legacy records without a checkpoint may
 load the existing unlocked native session. Same-provider reconnect preserves the
 observed model and mode and never replays the saved transcript into itself.
 A failed resume must not silently create a replacement native session.
-`test:desktop-continuity` covers warm preview sync, full idle shutdown, and legacy
-journal recovery. `test-devin-resume.ts` checks native revisions and lock handling.
+`test:session-flows` restarts the host under every installed harness and checks the
+native session, its context and its mode are kept. `test-devin-resume.ts` checks
+native revisions, lock handling and records without a checkpoint.
 
 New checkpoint payloads use self-contained private Git packs, not the user's
 object database. Captures must not add objects or refs to that database. Restore

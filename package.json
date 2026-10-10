@@ -19,7 +19,6 @@
     "test:thread-environment-launch": "npm run build:electron && node scripts/test-thread-environment-launch.mjs",
     "test:codex-background-work": "npm run build:electron && node scripts/test-codex-background-work.mjs",
     "test:codex-archived-resume": "npm run build:electron && node scripts/test-codex-archived-resume.mjs",
-    "test:desktop-continuity": "npm run build:electron && node scripts/test-desktop-continuity.mjs",
     "test:desktop-crashes": "npm run build:electron && node scripts/test-desktop-crashes.mjs",
     "test:window-boot": "tsx --tsconfig tsconfig.app.json scripts/test-window-boot.ts",
     "test:live-refresh": "tsx --tsconfig tsconfig.app.json scripts/test-live-refresh.ts && tsx scripts/test-runtime-read-failure.ts && node scripts/test-live-refresh-ui.mjs",

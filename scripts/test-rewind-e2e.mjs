@@ -1,49 +1,26 @@
 import "./lib/scratch-git.mjs"
 /** Opt-in real-provider check. Runs the normal web host with isolated app data and Git files. */
 import assert from "node:assert/strict"
-import { spawn, execFileSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
   mkdtemp,
   mkdir,
-  symlink,
   writeFile,
   readFile,
   realpath,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { pathToFileURL } from "node:url"
 import { createServer } from "vite"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
+import { spawnHost } from "./lib/host-launch.mjs"
 
 const repository = resolve(import.meta.dirname, "..")
 const root = await mkdtemp(join(tmpdir(), "mako-rewind-e2e-"))
 const userData = join(root, "user-data")
 const cwd = join(root, "workspace")
 await Promise.all([mkdir(userData), mkdir(cwd)])
-for (const name of [
-  "node_modules",
-  "dist-electron",
-  "dist-browser-extension",
-  "mako-icons",
-])
-  await symlink(join(repository, name), join(root, name), "dir")
-await writeFile(
-  join(root, "package.json"),
-  JSON.stringify({
-    name: "mako-rewind-verification",
-    type: "module",
-    main: "bootstrap.mjs",
-  })
-)
-await writeFile(
-  join(root, "bootstrap.mjs"),
-  `import { app } from 'electron';
-app.setPath('userData', ${JSON.stringify(userData)});
-await import(${JSON.stringify(pathToFileURL(join(repository, "dist-electron/main.js")).href)});
-`
-)
 const git = (...args) =>
   execFileSync("git", args, { cwd, encoding: "utf8" }).trim()
 git("init", "-q")
@@ -65,17 +42,7 @@ const server = await createServer({
 })
 await server.listen()
 const url = server.resolvedUrls.local[0]
-const env = {
-  ...process.env,
-  VITE_DEV_SERVER_URL: url,
-  MAKO_WEB_SOCKET: socket,
-}
-delete env.ELECTRON_RUN_AS_NODE
-const child = spawn(join(repository, "node_modules/.bin/electron"), [root], {
-  cwd: repository,
-  env,
-  stdio: ["ignore", "pipe", "pipe"],
-})
+const child = spawnHost({ ...process.env, MAKO_DATA_ROOT: userData, MAKO_WEB_SOCKET: socket }, { checkout: repository, stdio: ["ignore", "pipe", "pipe"] })
 const chunks = []
 child.stdout.on("data", (chunk) => {
   chunks.push(chunk)

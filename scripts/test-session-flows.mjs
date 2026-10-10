@@ -437,7 +437,7 @@ const FLOWS = [
   {
     name: "restart", core: true, declared: () => true,
     async run(h) {
-      const before = h.snapshot(h.main.id).blocks.length
+      const { blocks: { length: before }, session: { currentMode: mode } } = h.snapshot(h.main.id)
       await h.host.restart()
       const reopened = h.snapshot(h.main.id)
       if (!reopened) throw new Error("The restarted host could not reopen the conversation")
@@ -446,6 +446,7 @@ const FLOWS = [
       recall(h, h.main.id, requestId)
       const after = h.snapshot(h.main.id)
       if (after.session.nativeId !== h.main.nativeId) throw new Error("The restart resumed a different native session")
+      if (after.session.currentMode !== mode) throw new Error(`The restart changed the mode from ${mode} to ${after.session.currentMode}`)
       const request = h.request(h.main.id, requestId)
       if (request.context?.some((manifest) => manifest.includesBase)) throw new Error("The restart replayed the transcript instead of resuming the native session")
       return { blocksKept: before }
