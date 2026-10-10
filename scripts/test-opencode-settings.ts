@@ -7,6 +7,9 @@ import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { resolveSessionSettings } from "@mako/sessions/settings"
 import { openCodeProfileLoader } from "../electron/providers/opencode/profile.ts"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
+
+const servers = new OpenCodeServers()
 
 const variants = { low: {}, medium: {}, high: {} }
 for (const defaultVariant of ["low", "high"]) {
@@ -42,11 +45,11 @@ if (process.argv.includes("--live")) {
     env[name] = join(root, name)
     await mkdir(env[name]!, { recursive: true })
   }
-  const driver = createOpenCodeDriver({ env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
+  const driver = createOpenCodeDriver({ servers, env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
   const conversationId = randomUUID()
   try {
     const started = Date.now()
-    const profile = await openCodeProfileLoader.load(env, root)
+    const profile = await openCodeProfileLoader(servers).load(env, root)
     const discoveryMs = Date.now() - started
     assert.ok(profile.models.length > 0, "a fresh OpenCode home reports its models")
     assert.ok(profile.settings?.model, profile.configurationError)

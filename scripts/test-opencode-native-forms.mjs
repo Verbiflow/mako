@@ -3,10 +3,12 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { ProviderLaunchTrace } from "../electron/provider-launch.ts"
 
 // Native contract probe. All stores and sessions are disposable; no model call,
 // user configuration mutation, saved answer replay or patched runtime.
+const servers = new OpenCodeServers()
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-forms-"))
 const executable = process.env.OPENCODE_BIN_PATH ?? join(homedir(), ".opencode/bin/opencode2")
 const env = { ...process.env, OPENCODE_CONFIG_CONTENT: "{}" }
@@ -27,7 +29,7 @@ let reader
 let eventStop = new AbortController()
 const report = { sdk: "@opencode/client@2.0.1", passed: false, cases: [], events: [], cleanup: false }
 const request = () => ({ signal: stop.signal })
-const open = () => startOpenCodeApi({ command: executable, cwd: root, env, conversationId: "native-form-probe",
+const open = () => startOpenCodeApi({ servers, command: executable, cwd: root, env, conversationId: "native-form-probe",
     signal: stop.signal,
     trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "native-form-probe" }, { report: phase => phases.push(phase) }),
     fetch: async (input, init) => {

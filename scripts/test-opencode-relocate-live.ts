@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { emitOpenCodeSession } from "../electron/providers/opencode/session-emitter.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
@@ -16,6 +17,7 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 // worktree needs: real OpenCode v2 through Mako's driver, in disposable
 // stores, with the free hosted model. A session made in one folder resumes in
 // another under the same ID, remembers its turns, and runs its tools there.
+const servers = new OpenCodeServers()
 const executable = process.env.OPENCODE_BIN_PATH ?? join(homedir(), ".opencode/bin/opencode2")
 if (!existsSync(executable)) {
   console.log(`opencode relocate: skipped, OpenCode v2 is not at ${executable}`)
@@ -32,7 +34,7 @@ const main = join(root, "main")
 const worktree = join(root, "worktree")
 await mkdir(main)
 await mkdir(worktree)
-const driver = createOpenCodeDriver({ env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
+const driver = createOpenCodeDriver({ servers, env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
 
 function conversation() {
   const id = randomUUID()

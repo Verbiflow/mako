@@ -10,8 +10,9 @@ import { openCodeDecoderSource } from "./decoder-source.js"
 import { createOpenCodeDriver } from "./live-driver.js"
 import { openCodeMcpSource } from "./mcp.js"
 import { openCodeNativeRunner } from "./native-runner.js"
-import { openCodeProcessProbe } from "./process-probe.js"
+import { openCodeProcessProbeFor } from "./process-probe.js"
 import { openCodeProfileLoader } from "./profile.js"
+import { OpenCodeServers } from "./servers.js"
 import { emitOpenCodeSession } from "./session-emitter.js"
 import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
@@ -25,46 +26,51 @@ import { hostEnvironment } from "../../host-environment.js"
  * before; its bridge dropped native questions, could not bind a turn to the
  * message it sent, and needed a plugin to see permission decisions.
  */
-export const installOpenCode: ProviderModule = (host) => installHarness(host, {
-  provider: "opencode",
-  presentation: openCodePresentation,
-  diagnostics: { sdk: "@opencode/client" },
-  usage: {
-    context: implemented("The main session's last step: what it read, cached or not, and wrote."),
-    window: implemented("The model's context limit in OpenCode's provider catalog."),
-    compaction: byDefault("OpenCode doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."),
-    tokens: implemented("Each step's tokens."),
-    cost: implemented("Each step's cost."),
-    missedCalls: harnessLacks("OpenCode's steps never say they left a call out."),
-    resetCredits: harnessLacks("OpenCode's providers report no reset credits to it."),
-  },
-  unique: [
-    { name: "Staged revert", native: "`revert/stage`, `commit`, `clear`", mako: makoLacks("Mako follows a revert another client commits; staging one isn't built.") },
-    { name: "Inbox", native: "a prompt sent while busy is steered or queued (`inbox/:id/steer|queue`)", mako: shownBy("capabilities.steering") },
-    { name: "Code Mode MCP", native: "MCP tools called from a script through the `execute` tool, on by default", mako: shownInTools(["execute"]) },
-  ],
-  hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
-  commands: openCodeCommands,
-  toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
-  skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
-  mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
-  live: createOpenCodeDriver({
-    env: () => accountEnv("opencode", process.env),
-    approvalRoot: () => Promise.resolve(join(hostEnvironment().dataRoot, "approval-evidence")),
-  }),
-  decoder: openCodeDecoderSource,
-  profile: openCodeProfileLoader,
-  accounts: openCodeAccountCapability,
-  acp: lacks("Runs on OpenCode’s native API"),
-  nativeRunner: openCodeNativeRunner,
-  processProbe: openCodeProcessProbe,
-  mcp: openCodeMcpSource,
-  skills: openCodeSkillSource,
-  sessionEmitter: {
+export const installOpenCode: ProviderModule = (host) => {
+  const servers = new OpenCodeServers()
+  return installHarness(host, {
     provider: "opencode",
-    emit: async (thread) => emitOpenCodeSession(thread, await accountEnv("opencode", process.env)),
-  },
-  connection: lacks("Signs in through OpenCode’s own providers"),
-  updates: openCodeUpdateSource,
-  usageHistory: openCodeUsageHistory,  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
-})
+    presentation: openCodePresentation,
+    diagnostics: { sdk: "@opencode/client" },
+    usage: {
+      context: implemented("The main session's last step: what it read, cached or not, and wrote."),
+      window: implemented("The model's context limit in OpenCode's provider catalog."),
+      compaction: byDefault("OpenCode doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."),
+      tokens: implemented("Each step's tokens."),
+      cost: implemented("Each step's cost."),
+      missedCalls: harnessLacks("OpenCode's steps never say they left a call out."),
+      resetCredits: harnessLacks("OpenCode's providers report no reset credits to it."),
+    },
+    unique: [
+      { name: "Staged revert", native: "`revert/stage`, `commit`, `clear`", mako: makoLacks("Mako follows a revert another client commits; staging one isn't built.") },
+      { name: "Inbox", native: "a prompt sent while busy is steered or queued (`inbox/:id/steer|queue`)", mako: shownBy("capabilities.steering") },
+      { name: "Code Mode MCP", native: "MCP tools called from a script through the `execute` tool, on by default", mako: shownInTools(["execute"]) },
+    ],
+    hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+    commands: openCodeCommands,
+    toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
+    skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
+    mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
+    live: createOpenCodeDriver({
+      env: () => accountEnv("opencode", process.env),
+      approvalRoot: () => Promise.resolve(join(hostEnvironment().dataRoot, "approval-evidence")),
+      servers,
+    }),
+    decoder: openCodeDecoderSource,
+    profile: openCodeProfileLoader(servers),
+    accounts: openCodeAccountCapability,
+    acp: lacks("Runs on OpenCode’s native API"),
+    nativeRunner: openCodeNativeRunner,
+    processProbe: openCodeProcessProbeFor(servers),
+    mcp: openCodeMcpSource,
+    skills: openCodeSkillSource,
+    sessionEmitter: {
+      provider: "opencode",
+      emit: async (thread) => emitOpenCodeSession(thread, await accountEnv("opencode", process.env)),
+    },
+    connection: lacks("Signs in through OpenCode’s own providers"),
+    updates: openCodeUpdateSource,
+    usageHistory: openCodeUsageHistory,
+    artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
+  })
+}

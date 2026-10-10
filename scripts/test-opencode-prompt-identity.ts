@@ -5,10 +5,12 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 
 // Opt-in native proof: only its own isolated account/store and caller-assigned
 // Thread port. Not part of fast fixture gates; requires OpenCode v2 installed.
+const servers = new OpenCodeServers()
 assert.ok(process.env.MAKO_OPENCODE_API_PORT, "Assign a free port from this Thread before running the native proof")
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-prompt-identity-"))
 const env: NodeJS.ProcessEnv = { ...process.env,
@@ -20,7 +22,7 @@ for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"
   await mkdir(env[name]!, { recursive: true })
 }
 const id = randomUUID()
-const driver = createOpenCodeDriver({ env: async () => env, approvalRoot: async () => join(root, "approvals") })
+const driver = createOpenCodeDriver({ servers, env: async () => env, approvalRoot: async () => join(root, "approvals") })
 const reader = new OpenCodeProvider(env.HOME, env)
 const reports: PromptDeliveryEvidence[] = []
 try {

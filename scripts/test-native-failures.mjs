@@ -155,7 +155,8 @@ async function main() {
     })(),
     opencode: await (async () => {
       const { createOpenCodeDriver } = await load("providers/opencode/live-driver.js")
-      const driver = createOpenCodeDriver({ env: async () => ({ ...process.env }), approvalRoot: async () => join(root, "opencode-approvals") })
+      const { OpenCodeServers } = await load("providers/opencode/servers.js")
+      const driver = createOpenCodeDriver({ servers: new OpenCodeServers(), env: async () => ({ ...process.env }), approvalRoot: async () => join(root, "opencode-approvals") })
       return {
         unproven: {
           exitAfterHandoff: "OpenCode's client decodes every API response with its own schemas, so a stand-in needs its v2 API; scripts/test-opencode-live.ts kills the real server mid-turn",

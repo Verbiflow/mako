@@ -6,6 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { CONTEXT_COMPACTED } from "@mako/sessions/events"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { accessModeId } from "@mako/host/contracts/access"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LivePermissionRequest, LiveSessionState } from "@mako/host/contracts/providers-acp"
@@ -17,6 +18,7 @@ import type { PromptDispatch } from "../electron/providers/prompt-dispatch.ts"
 
 // Real OpenCode v2 through Mako's native driver. Every store is disposable
 // (isolated HOME and XDG roots); the free hosted model needs no credentials.
+const servers = new OpenCodeServers()
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-live-"))
 const executable = process.env.OPENCODE_BIN_PATH ?? join(homedir(), ".opencode/bin/opencode2")
 const model = process.env.MAKO_OPENCODE_MODEL ?? "opencode/space-bunny-free"
@@ -34,6 +36,7 @@ const report: LiveReport = { model, cases: [], passed: false }
 /** The native stream's recent text, for a timeout's diagnosis only. */
 let nativeTail = ""
 const driver = createOpenCodeDriver({
+  servers,
   env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals"),
   fetch: async (input, init) => {
     const response = await fetch(input, init)
@@ -348,6 +351,7 @@ try {
   interface TransportFaults { losePrompt: boolean; prompts: number; streams: number; cut?: () => void; hold: Promise<void>; sniffed: string }
   const faults: TransportFaults = { losePrompt: false, prompts: 0, streams: 0, hold: Promise.resolve(), sniffed: "" }
   const faulty = createOpenCodeDriver({
+    servers,
     env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals"),
     fetch: async (input, init) => {
       const path = new URL(String(input)).pathname

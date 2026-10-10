@@ -23,12 +23,15 @@ import { openCodeAgentForMode, openCodeLaunchAccess } from "../electron/provider
 import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
 import { openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
 import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
 import {
   compareVersions, definedTools, definitionsPath, diffDefinitions, NativeDefinitions, storedDefinitions,
   NATIVE_TOOLS_DIR, type Configuration, type DefinedTools, type Parameter, type Wire,
 } from "./native-tools.ts"
 import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
+
+const servers = new OpenCodeServers()
 
 /**
  * Records each harness's tools as it defines them to its model.
@@ -585,7 +588,7 @@ async function openCodeDefinitions(): Promise<Captures> {
           OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { [providerID]: { options: { baseURL: `${endpoint.url}/v1`, apiKey: CAPTURE_KEY } } } }),
         }
         configureOpenCodePermissions(env, openCodeLaunchAccess(mode))
-        const api = await startOpenCodeApi({ command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: trace("opencode") })
+        const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: trace("opencode") })
         try {
           version = api.health.version
           const location = { directory: sandbox.project }

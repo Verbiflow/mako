@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { openCodeAgentForMode, openCodeLaunchAccess, openCodeModeForAgent, openCodeModes, openCodeSessionModes } from "../electron/providers/opencode/access.ts"
 import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "../electron/providers/codex/access.ts"
 import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
@@ -22,6 +23,8 @@ import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
 import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 import type { SandboxPolicy } from "../electron/providers/codex/generated/v2/SandboxPolicy.ts"
 import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+
+const servers = new OpenCodeServers()
 
 const lands = (driver: ProviderLiveDriver) => driver.steering.kind === "supported" ? driver.steering.lands : driver.steering.kind
 
@@ -195,7 +198,7 @@ assert.deepEqual(
 
 // OpenCode: Plan and custom primary agents are native; Build is hidden behind
 // the ask/edits/full rulesets its session launches with.
-const openCodeDriver = createOpenCodeDriver({ env: async () => ({}), approvalRoot: async () => "/nonexistent" })
+const openCodeDriver = createOpenCodeDriver({ servers, env: async () => ({}), approvalRoot: async () => "/nonexistent" })
 const openCodeLadder = openCodeSessionModes([
   { id: "build", name: "build" },
   { id: "plan", name: "plan" },

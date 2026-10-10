@@ -11,12 +11,15 @@ import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClie
 import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
 import { OpenCodeDecoder } from "../electron/providers/opencode/decoder.ts"
 import { createOpenCodeDriver, openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "../electron/providers/opencode/notices.ts"
 import { flushHostLog, installHostLog } from "../electron/host-log.ts"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
+
+const servers = new OpenCodeServers()
 
 /** Native event data; an `undefined` field is one the native event leaves out. */
 type EventData = Record<string, JsonValue | undefined>
@@ -365,6 +368,7 @@ process.stdin.on("end", () => process.exit(0))
   const unexpected: string[] = []
   const reply = (data: JsonValue | McpServer[]) => new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } })
   const driver = createOpenCodeDriver({
+    servers,
     env: async () => ({ ...env }),
     approvalRoot: async () => join(home, "approvals"),
     fetch: async (input, init) => {

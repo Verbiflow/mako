@@ -7,6 +7,7 @@ import { ProviderStartupWatch } from "../../provider-startup.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
 import { isOpenCodeV2 } from "./version.js"
 import { configuredListenPort } from "../../listen-port.js"
+import type { OpenCodeServers } from "./servers.js"
 
 const Ready = z.object({ url: z.string().url() }).transform(({ url }) => {
   const endpoint = new URL(url)
@@ -27,6 +28,8 @@ export async function startOpenCodeApi(input: {
   env: NodeJS.ProcessEnv
   conversationId: string
   trace: ProviderLaunchTrace
+  /** Where the server is known for its life, so the activity probe can ask it. */
+  servers: OpenCodeServers
   signal?: AbortSignal
   /** Transport fault injection uses the same SDK boundary as normal requests. */
   fetch?: typeof globalThis.fetch
@@ -39,6 +42,7 @@ export async function startOpenCodeApi(input: {
     cwd: input.cwd,
     env: environmentForExecutable(input.command, { ...input.env, OPENCODE_PASSWORD: password }),
   }, { kind: "opencode:native-api", owner: input.conversationId }))
+  const server = child.pid ? input.servers.add(child.pid) : undefined
   let stderr = ""
   child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4096) })
   const watch = new ProviderStartupWatch(child, { harness: "OpenCode", stderr: () => stderr })
@@ -46,6 +50,7 @@ export async function startOpenCodeApi(input: {
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
     child.once("exit", (code, signal) => resolve({ code, signal }))
   })
+  void exited.then(() => server?.exited())
   const ready = new Promise<string>((resolve, reject) => {
     let pending = Buffer.alloc(0)
     let settled = false
@@ -107,6 +112,7 @@ export async function startOpenCodeApi(input: {
     const checked = Health.parse(health)
     if (!isOpenCodeV2(checked.version)) throw new Error("OpenCode native API requires a v2 runtime")
     if (checked.pid !== child.pid) throw new Error("OpenCode API does not belong to the launched process")
+    server?.answers(client)
     return { client, watch, health: checked, signal: lifetime.signal, exited, stderr: () => stderr, close }
   } catch (error) {
     await close()

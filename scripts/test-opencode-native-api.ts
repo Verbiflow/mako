@@ -3,7 +3,10 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startOpenCodeApi } from "../electron/providers/opencode/native-api.js"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.js"
 import { ProviderLaunchTrace } from "../electron/provider-launch.js"
+
+const servers = new OpenCodeServers()
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-api-boundary-"))
 try {
@@ -30,22 +33,22 @@ try {
     const command = join(root, fixture.name + ".mjs")
     const pidPath = command + ".pid"
     await writeFile(command, `#!${process.execPath}\nimport {createServer} from "node:http"; import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(pidPath)},String(process.pid)); process.stdin.resume(); process.stdin.on("end",()=>process.exit(0));\n${fixture.code}`, { mode: 0o700 })
-    await assert.rejects(startOpenCodeApi({ command, cwd: root, env: process.env, conversationId: fixture.name,
+    await assert.rejects(startOpenCodeApi({ servers, command, cwd: root, env: process.env, conversationId: fixture.name,
       trace: new ProviderLaunchTrace({ provider: "opencode", conversation: fixture.name }, { report() {} }),
     }), fixture.error)
     const pid = Number(await readFile(pidPath, "utf8"))
     assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `${fixture.name} must reap its own failed child`)
   }
-  await assert.rejects(startOpenCodeApi({ command: join(root, "missing"), cwd: root, env: process.env, conversationId: "missing",
+  await assert.rejects(startOpenCodeApi({ servers, command: join(root, "missing"), cwd: root, env: process.env, conversationId: "missing",
     trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "missing" }, { report() {} }),
   }), /ENOENT/)
   const cancelled = new AbortController()
   cancelled.abort(new Error("Owner replaced before launch"))
-  await assert.rejects(startOpenCodeApi({ command: join(root, "must-not-spawn"), cwd: root, env: process.env, conversationId: "cancelled",
+  await assert.rejects(startOpenCodeApi({ servers, command: join(root, "must-not-spawn"), cwd: root, env: process.env, conversationId: "cancelled",
     signal: cancelled.signal, trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "cancelled" }, { report() {} }),
   }), /Owner replaced/)
   const duringLaunch = new AbortController()
-  await assert.rejects(startOpenCodeApi({ command: join(root, "early-exit.mjs"), cwd: root, env: process.env, conversationId: "cancelled-during-launch",
+  await assert.rejects(startOpenCodeApi({ servers, command: join(root, "early-exit.mjs"), cwd: root, env: process.env, conversationId: "cancelled-during-launch",
     signal: duringLaunch.signal,
     trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "cancelled-during-launch" }, { report(phase) {
       if (phase.phase === "handshake" && phase.state === "started") duringLaunch.abort()

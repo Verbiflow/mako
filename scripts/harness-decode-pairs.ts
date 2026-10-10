@@ -36,6 +36,7 @@ import { readCursorCliApiKey } from "../electron/providers/cursor/sdk/cli-keycha
 import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
 import type { SdkEvent, SdkImage } from "../electron/providers/cursor/sdk/wire.ts"
 import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
@@ -46,6 +47,8 @@ import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from 
 import { FIXTURE_ROOT, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
 import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
+
+const servers = new OpenCodeServers()
 
 /**
  * Records a live capture and the store the same session wrote, from a real
@@ -592,7 +595,7 @@ const opencode: Recorder = {
     const location = { directory: sandbox.project }
     /** One native API, following its event stream before any session exists, as Mako's driver does. */
     const launch = async () => {
-      const api = await startOpenCodeApi({ command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
+      const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
       const stream = new AbortController()
       const events = api.client.event.subscribe({ signal: stream.signal })[Symbol.asyncIterator]()
       const hello = await events.next()

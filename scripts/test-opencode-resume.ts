@@ -10,8 +10,11 @@ import type { ProviderProcessProbe } from "../electron/providers/process-probe.t
 import { sameNativeSource } from "../electron/native-source.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { createOpenCodeDriver, openCodeForkBoundary, openCodeSessionMessages } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { errorMessage } from "../electron/live-runtime.ts"
 import { locateOpenCodeSession, verifyOpenCodeSession } from "../electron/providers/opencode/installation.ts"
+
+const servers = new OpenCodeServers()
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-resume-"))
 const idle: ProviderProcessProbe = { provider: "opencode", probe: async () => ({ kind: "available", sessions: [] }) }
@@ -70,7 +73,7 @@ try {
         db.exec(`DELETE FROM ${pending}`)
       }
       if (layout === "mixed-v2") {
-        const located = createOpenCodeDriver({ env: async () => ({}), approvalRoot: async () => root })
+        const located = createOpenCodeDriver({ servers, env: async () => ({}), approvalRoot: async () => root })
         const resume = located.resume
         assert.ok(resume.kind === "native" && resume.locate)
         assert.equal(await resume.locate({ ...binding, path: undefined }, root, { OPENCODE_DB: path }), binding.path, "a binding that lost its path finds its record by native ID in the configured store")

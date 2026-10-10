@@ -10,53 +10,58 @@ import {
 import { ProviderLaunchTrace } from "../../provider-launch.js"
 import { resolveOpenCodeInstallation } from "./installation.js"
 import { startOpenCodeApi } from "./native-api.js"
+import type { OpenCodeServers } from "./servers.js"
 import { loadOpenCodeCatalog, openCodeLaunchId, type OpenCodeCatalog } from "./catalog.js"
 
 const CATALOG_EVENTS = new Set<OpenCodeEvent["type"]>(["catalog.updated", "agent.updated", "command.updated", "skill.updated"])
 
-export const openCodeProfileLoader: ProviderProfileLoader = {
-  provider: "opencode",
-  label: "OpenCode",
-  defaults: { work: [], none: "OpenCode's models are the person's own providers, so it starts on the model they configured." },
-  transport: "sdk",
-  cacheKey: (env) => {
-    const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_CONFIG_HOME, env.OPENCODE_CONFIG_DIR,
-      env.OPENCODE_CONFIG, env.OPENCODE_CONFIG_CONTENT, env.OPENCODE_BIN_PATH, env.OPENCODE2_BIN_PATH])
-    try {
-      const info = statSync(
-        join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "auth.json")
-      )
-      return `${configuration}:${info.mtimeMs}:${info.size}`
-    } catch {
-      return `${configuration}:missing`
-    }
-  },
-  async load(env, cwd, context) {
-    const installation = await resolveOpenCodeInstallation(env)
-    const directory = cwd && existsSync(cwd) ? cwd : homedir()
-    const catalog = await discoverOpenCodeCatalog(installation.command, env, directory, context?.signal)
-    if (!catalog.models.length)
-      throw new Error("OpenCode reported no enabled models for this workspace")
-    const profile: HarnessModelCatalog = { models: catalog.models }
-    const fallback = catalog.defaultModel && openCodeLaunchId(catalog.defaultModel)
-    const model = fallback ? catalog.models.find((candidate) => candidate.id === fallback) : undefined
-    if (model) {
-      profile.defaultModel = model.id
-      profile.settings = {
-        model: model.id,
-        options: Object.fromEntries(
-          model.options.flatMap((option) =>
-            option.current === undefined ? [] : [[option.id, option.current]]
-          )
-        ),
+/** OpenCode's model catalog, read from a server known to `servers` while it runs. */
+export function openCodeProfileLoader(servers: OpenCodeServers): ProviderProfileLoader {
+  const loader: ProviderProfileLoader = {
+    provider: "opencode",
+    label: "OpenCode",
+    defaults: { work: [], none: "OpenCode's models are the person's own providers, so it starts on the model they configured." },
+    transport: "sdk",
+    cacheKey: (env) => {
+      const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_CONFIG_HOME, env.OPENCODE_CONFIG_DIR,
+        env.OPENCODE_CONFIG, env.OPENCODE_CONFIG_CONTENT, env.OPENCODE_BIN_PATH, env.OPENCODE2_BIN_PATH])
+      try {
+        const info = statSync(
+          join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "auth.json")
+        )
+        return `${configuration}:${info.mtimeMs}:${info.size}`
+      } catch {
+        return `${configuration}:missing`
       }
-    } else {
-      profile.configurationError = fallback
-        ? "OpenCode's default model is not in its enabled catalog. Choose a model for this conversation."
-        : "OpenCode has no default model configured. Choose a model for this conversation."
-    }
-    return availableProviderProfile(openCodeProfileLoader, profile)
-  },
+    },
+    async load(env, cwd, context) {
+      const installation = await resolveOpenCodeInstallation(env)
+      const directory = cwd && existsSync(cwd) ? cwd : homedir()
+      const catalog = await discoverOpenCodeCatalog(installation.command, env, directory, servers, context?.signal)
+      if (!catalog.models.length)
+        throw new Error("OpenCode reported no enabled models for this workspace")
+      const profile: HarnessModelCatalog = { models: catalog.models }
+      const fallback = catalog.defaultModel && openCodeLaunchId(catalog.defaultModel)
+      const model = fallback ? catalog.models.find((candidate) => candidate.id === fallback) : undefined
+      if (model) {
+        profile.defaultModel = model.id
+        profile.settings = {
+          model: model.id,
+          options: Object.fromEntries(
+            model.options.flatMap((option) =>
+              option.current === undefined ? [] : [[option.id, option.current]]
+            )
+          ),
+        }
+      } else {
+        profile.configurationError = fallback
+          ? "OpenCode's default model is not in its enabled catalog. Choose a model for this conversation."
+          : "OpenCode has no default model configured. Choose a model for this conversation."
+      }
+      return availableProviderProfile(loader, profile)
+    },
+  }
+  return loader
 }
 
 /**
@@ -64,9 +69,9 @@ export const openCodeProfileLoader: ProviderProfileLoader = {
  * catalog change reported while loading (OpenCode refreshes models after
  * startup) is read again rather than answered from the older list.
  */
-async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string, signal?: AbortSignal): Promise<OpenCodeCatalog> {
+async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string, servers: OpenCodeServers, signal?: AbortSignal): Promise<OpenCodeCatalog> {
   const trace = new ProviderLaunchTrace({ provider: "opencode", conversation: "model-discovery" }, { report() {} })
-  const api = await startOpenCodeApi({ command, cwd: directory, env, conversationId: "model-discovery", trace, signal })
+  const api = await startOpenCodeApi({ command, cwd: directory, env, conversationId: "model-discovery", trace, servers, signal })
   const stream = new AbortController()
   try {
     const events = api.client.event.subscribe({ signal: AbortSignal.any([stream.signal, api.signal]) })[Symbol.asyncIterator]()

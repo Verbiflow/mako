@@ -1,4 +1,4 @@
-import { probeOpenFiles } from "../open-files-probe.js"
+import { probeOpenFiles, type OpenFilesResult } from "../open-files-probe.js"
 import { processIdentityMatches } from "../process-liveness.js"
 import { open, readdir } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -8,6 +8,7 @@ import type {
   ProviderActivitySession,
   ProviderProcessProbe,
 } from "../process-probe.js"
+import type { OpenCodeServers } from "./servers.js"
 
 const registration = z.object({
   url: z.string().url(),
@@ -110,12 +111,21 @@ async function serviceActivity(
   })) }
 }
 
-export function openCodeProcessProbeFor(
-  stateRoot = join(
-    process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"),
-    "opencode"
-  )
-): ProviderProcessProbe {
+/**
+ * What OpenCode is running on this Mac: each registered service's active
+ * sessions, and those of the servers this host runs (`servers`), which
+ * register nowhere. Any other `opencode` process can't be asked, so it leaves
+ * the inventory incomplete for a session found running nowhere else.
+ */
+export function openCodeProcessProbeFor(servers: OpenCodeServers, {
+  stateRoot = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "opencode"),
+  processes = (signal) => probeOpenFiles({ processNames: ["/^opencode$/", "/^opencode2$/"], signal, accept: () => false }),
+}: {
+  /** Where OpenCode's services register. */
+  stateRoot?: string
+  /** The `opencode` processes running on this Mac. */
+  processes?: (signal: AbortSignal) => Promise<OpenFilesResult>
+} = {}): ProviderProcessProbe {
   return {
     provider: "opencode",
     pollIntervalMs: 3_000,
@@ -141,6 +151,10 @@ export function openCodeProcessProbeFor(
           throw new Error("Too many OpenCode services to poll")
         const sessions: ProviderActivitySession[] = []
         const registered = new Set<number>()
+        for (const server of await servers.activity(signal)) {
+          registered.add(server.pid)
+          sessions.push(...server.sessions.map((nativeId) => ({ nativeId, status: "active" as const })))
+        }
         for (let offset = 0; offset < files.length; offset += 4) {
           const batch = await Promise.all(
             files
@@ -154,10 +168,11 @@ export function openCodeProcessProbeFor(
         }
         if (target && !sessions.some(session => session.nativeId === target.nativeId)) {
           // Native 2.0.1 `serve --stdio` does not publish service.json.
-          // An empty registered API snapshot cannot clear that executor.
-          const processes = await probeOpenFiles({ processNames: ["/^opencode$/", "/^opencode2$/"], signal, accept: () => false })
-          if (processes.kind === "unavailable") return processes
-          if (processes.pids.some(pid => !registered.has(pid)))
+          // An empty registered API snapshot cannot clear that executor
+          // unless it is one of this host's own servers, which said above.
+          const running = await processes(signal)
+          if (running.kind === "unavailable") return running
+          if (running.pids.some(pid => !registered.has(pid)))
             return { kind: "unavailable", reason: "incomplete" }
         }
         return { kind: "available", sessions }
@@ -170,5 +185,3 @@ export function openCodeProcessProbeFor(
     },
   }
 }
-
-export const openCodeProcessProbe = openCodeProcessProbeFor()

@@ -26,6 +26,8 @@ import { errorMessage } from "../../live-runtime.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
+import { openCodeProcessProbeFor } from "./process-probe.js"
+import type { OpenCodeServers } from "./servers.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession } from "./installation.js"
 import { configureOpenCodePermissions } from "./permissions.js"
 import {
@@ -122,6 +124,8 @@ type ConnectedLive = Live & { root: string; catalog: OpenCodeCatalog; model: Ope
 export interface OpenCodeDriverDependencies {
   env(): Promise<NodeJS.ProcessEnv>
   approvalRoot(): Promise<string>
+  /** The servers this host runs, which its sessions start on and the activity probe asks. */
+  servers: OpenCodeServers
   /** Transport fault injection at the SDK boundary. */
   fetch?: typeof globalThis.fetch
 }
@@ -234,6 +238,7 @@ const errorText = errorMessage
 export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): ProviderLiveDriver {
   const engine: Engine = createLiveEngine<Live>()
   const sessions = engine.sessions
+  const probe = openCodeProcessProbeFor(dependencies.servers)
   // A start not yet a session: Close cancels it here, including the API launch.
   const starting = new Map<string, AbortController>()
   function cancellable<T>(id: string, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -677,7 +682,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       via: "The session ID on a new `opencode serve`, which reads the session from its own store.",
       wake: "The next message starts a new `opencode serve` that reopens the session.",
       checkpoint: openCodeCheckpoint,
-      inspect: inspectOpenCodeSession,
+      inspect: (binding) => inspectOpenCodeSession(binding, probe),
       locate: async (binding, _cwd, env) => binding.nativeId ? locateOpenCodeSession(binding.nativeId, env) : undefined,
       elsewhere: {
         via: "OpenCode's `session.move` to the new folder as the session resumes there; it keeps the folder on the session and runs its tools in it.",
@@ -708,7 +713,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const cwd = requestedCwd && existsSync(requestedCwd) ? requestedCwd : homedir()
       const servers = await trace.step("mcp-preparation", () => mcpServers(options))
       const approvalRoot = await dependencies.approvalRoot()
-      const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, signal, fetch: dependencies.fetch })
+      const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, servers: dependencies.servers, signal, fetch: dependencies.fetch })
       const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch?.account, installation.command)
       context.runtime = reportedRuntime(api.health.version, "launched native API health.version")
       const live: Live = {

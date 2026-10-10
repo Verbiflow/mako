@@ -3,7 +3,7 @@ import { z } from "zod"
 import { inspectNativeSession } from "../../native-continuation.js"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { NativeForkSource } from "../live-driver.js"
-import { openCodeProcessProbe } from "./process-probe.js"
+import type { ProviderProcessProbe } from "../process-probe.js"
 import { openCodeRecordLocator, type OpenCodeResumeRecord } from "./resume-store.js"
 
 const recordSchema = z.discriminatedUnion("kind", [
@@ -76,6 +76,6 @@ export async function openCodeCheckpoint(path: string): Promise<string | undefin
   return record.kind === "available" ? record.checkpoint : undefined
 }
 
-export function inspectOpenCodeSession(binding: ProviderBinding) {
-  return inspectNativeSession(binding, openCodeProcessProbe, readOpenCodeRecord)
+export function inspectOpenCodeSession(binding: ProviderBinding, probe: ProviderProcessProbe) {
+  return inspectNativeSession(binding, probe, readOpenCodeRecord)
 }
