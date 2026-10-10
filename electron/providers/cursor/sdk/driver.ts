@@ -15,7 +15,7 @@ import type { NativeResumeEvidence } from "../../../native-continuation.js"
 import { inspectNativeSession as inspectNativeSource } from "../../../native-continuation.js"
 import { cursorProcessProbe } from "../process-probe.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
+import type { ProviderLaunchTrace } from "../../../provider-launch.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LivePermissionResponse, type LiveSessionState, type PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { createLiveEngine, type LiveEngineApi } from "../../../live-engine.js"
 import { acpMcpServers, unlaunchableMcpServers, migrateRetiredMakoMcpFile } from "@mako/host/tools"
@@ -63,7 +63,7 @@ export interface CursorSdkDriverDependencies {
 interface Live {
   state: LiveSessionState
   client: CursorSdkLiveClient
-  emit: NonNullable<ProviderStartOptions["emit"]>
+  emit: ProviderStartOptions["emit"]
   /** Tells the host's auth that Cursor refused the key this session ran under. */
   onRejected(message: string): void
   models: SessionModel[]
@@ -412,10 +412,11 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     modes: CURSOR_SDK_MODES,
     defaultMode: CURSOR_SDK_DEFAULT_MODE,
     available: () => true,
-    start: (cwd, options) => traceProviderLaunch("cursor", options.conversationId, async trace => {
+    start: async (cwd, options) => {
+      const { trace } = options
       if (sessions.get(options.conversationId)?.closed === false)
         throw new Error("This Cursor binding is already connected")
-      const launch = await trace.step("account", () => dependencies.auth.childLaunch(options.accountLaunch?.env))
+      const launch = await trace.step("account", () => dependencies.auth.childLaunch(options.accountLaunch.env))
       const accountEnvironment = launch.env
       const env = { ...accountEnvironment }
       applyControlEnvironment(env, options.conversationTools?.control)
@@ -431,7 +432,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         },
       }
       const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn))
-      const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY, options.accountLaunch?.account)
+      const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY, options.accountLaunch.account)
       context.credential = launch.credential
       const account = launch.credential.kind === "configured" && launch.credential.source === "account"
       // A selected account's refused key is that account's to sign in again,
@@ -567,7 +568,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         }
         throw error
       }
-    }),
+    },
     async prompt(id, text, attachments, settings, dispatch) {
       await preparePromptAsync(dispatch, async () => {
         const live = requireLive(id)

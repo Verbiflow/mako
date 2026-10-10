@@ -1,4 +1,3 @@
-import { resolveAccountLaunch } from "../accounts.js"
 import type { ToolHarnesses } from "@mako/host/tools"
 import { harnessLabel } from "./harness-descriptors.js"
 import type { ProviderHost } from "./host.js"
@@ -13,6 +12,6 @@ export function toolHarnesses(host: ProviderHost): ToolHarnesses {
     authoring: { hooks: host.hooks, commands: host.commands },
     harnesses: host.harnesses,
     label: (provider) => harnessLabel(host, provider),
-    account: (provider) => resolveAccountLaunch(provider, process.env, { trackCredential: false }),
+    account: (provider) => host.accounts.launch(provider, process.env, { trackCredential: false }),
   }
 }

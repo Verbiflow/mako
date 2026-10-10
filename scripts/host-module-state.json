@@ -1,23 +1,4 @@
 {
-  "electron/account-holds.ts": [
-    "held",
-    "releasedListeners"
-  ],
-  "electron/account-login.ts": [
-    "logins"
-  ],
-  "electron/accounts.ts": [
-    "accountMutations",
-    "lastGood",
-    "removalListeners",
-    "spentAt",
-    "suggestedAt",
-    "usageCache",
-    "usageIdentity",
-    "usageListeners",
-    "usageReads",
-    "usageRevisions"
-  ],
   "electron/drivers.ts": [
     "closing",
     "emit",

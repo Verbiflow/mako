@@ -1,4 +1,4 @@
-import type { ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
+import type { AdmittedStartOptions, ProviderLiveDriver } from "./live-driver.js"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 type ExclusiveSession = Awaited<ReturnType<NonNullable<ProviderLiveDriver["startExclusive"]>>>
@@ -48,7 +48,7 @@ export function withNativeExclusion(driver: ProviderLiveDriver): ProviderLiveDri
     closing.set(id, operation)
     return operation
   }
-  const start = async (cwd: string, options: ProviderStartOptions): Promise<LiveSessionState> => {
+  const start = async (cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState> => {
     const id = options.conversationId
     if (sessions.has(id) || closing.has(id)) throw new Error("This native binding already has an execution owner.")
     const operation = Promise.resolve().then(() => startExclusive.call(driver, cwd, options))

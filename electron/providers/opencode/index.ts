@@ -1,5 +1,4 @@
 import { join } from "node:path"
-import { accountEnv } from "../../accounts.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { createOpenCodeCommands } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
@@ -52,7 +51,6 @@ export const installOpenCode: ProviderModule = (host) => {
     skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
     mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
     live: createOpenCodeDriver({
-      env: () => accountEnv("opencode", process.env),
       approvalRoot: () => Promise.resolve(join(hostEnvironment().dataRoot, "approval-evidence")),
       servers,
     }),
@@ -66,7 +64,7 @@ export const installOpenCode: ProviderModule = (host) => {
     skills: openCodeSkillSource,
     sessionEmitter: {
       provider: "opencode",
-      emit: async (thread) => emitOpenCodeSession(thread, await accountEnv("opencode", process.env)),
+      emit: async (thread) => emitOpenCodeSession(thread, await host.accounts.env("opencode", process.env)),
     },
     connection: lacks("Signs in through OpenCode’s own providers"),
     updates: openCodeUpdateSource,

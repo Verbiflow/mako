@@ -19,7 +19,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe): ProviderLive
   const engine = () => (loading ??= import("../../codex-app.js").then(({ createCodexEngine }) => createCodexEngine()))
   return {
     provider: "codex",
-    launchEnvironment: { kind: "prepared", via: "app-server spawn consumes ProviderStartOptions.accountLaunch." },
+    launchEnvironment: { kind: "prepared", via: "app-server spawn consumes AdmittedStartOptions.accountLaunch." },
     nativeIdentity: CODEX_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,

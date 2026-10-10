@@ -3,7 +3,6 @@ import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { access, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { onAccountRemoval, removeAccount, resolveAccountLaunch, selectAccount } from "../../electron/accounts.ts"
 import { providerHost } from "../../electron/providers/index.ts"
 const root = process.argv[2]!,
   action = process.argv[3]!
@@ -11,6 +10,7 @@ mock.method(os, "homedir", () => root)
 syncBuiltinESMExports()
 const release = Promise.withResolvers<void>()
 process.on("message", () => release.resolve())
+const { accounts } = providerHost
 providerHost.accountCapabilities.register({
   provider: "cross-profile-fixture",
   label: "fixture",
@@ -19,7 +19,7 @@ providerHost.accountCapabilities.register({
   listAccounts: async () => [],
   captureAccount: async () => {},
   credentialRevision: async () => "fixture-credentials",
-      accountEnv: async (name, base) => {
+  accountEnv: async (name, base) => {
     if (name) await access(join(root, name))
     process.send?.("validated")
     return base
@@ -35,20 +35,20 @@ providerHost.accountCapabilities.register({
 })
 try {
   if (action === "remove")
-    await removeAccount("cross-profile-fixture", "victim")
+    await accounts.remove("cross-profile-fixture", "victim")
   else if (action === "hold") {
     // Another Mako with a session running on the selected account: it lets
     // go when told and, finding the removal another host asked for, finishes it.
-    const launch = await resolveAccountLaunch("cross-profile-fixture", {}, { holder: { kind: "session", binding: "worker-session" } })
+    const launch = await accounts.launch("cross-profile-fixture", {}, { holder: { kind: "session", binding: "worker-session" } })
     const removed = Promise.withResolvers<string>()
-    onAccountRemoval((_harness, _name, event) => removed.resolve(event.status))
+    accounts.onRemoval((_harness, _name, event) => removed.resolve(event.status))
     process.send?.("holding")
     await release.promise
     launch.hold?.release()
     process.send?.(await removed.promise)
   } else {
     process.send?.("selecting")
-    await selectAccount("cross-profile-fixture", "victim")
+    await accounts.select("cross-profile-fixture", "victim")
   }
   process.send?.("success")
 } catch {

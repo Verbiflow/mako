@@ -13,7 +13,6 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { openCodeRecordLocator } from "./resume-store.js"
 import { applyThreadEnvironment } from "@mako/host/workspaces"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import { traceProviderLaunch } from "../../provider-launch.js"
 import { accessModeId, type AccessTier } from "@mako/host/contracts/access"
 import type { LiveActionResult } from "@mako/host/contracts/live-actions"
 import type { LiveSessionState, PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -78,7 +77,7 @@ interface Turn {
 
 interface Live {
   state: LiveSessionState
-  emit: NonNullable<ProviderStartOptions["emit"]>
+  emit: ProviderStartOptions["emit"]
   api: Api
   cwd: string
   /** The launch environment, which says where OpenCode keeps its state. */
@@ -122,7 +121,6 @@ type Engine = LiveEngineApi<Live>
 type ConnectedLive = Live & { root: string; catalog: OpenCodeCatalog; model: OpenCodeModelRef; interactions: OpenCodeInteractions }
 
 export interface OpenCodeDriverDependencies {
-  env(): Promise<NodeJS.ProcessEnv>
   approvalRoot(): Promise<string>
   /** The servers this host runs, which its sessions start on and the activity probe asks. */
   servers: OpenCodeServers
@@ -648,7 +646,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   return {
     provider: "opencode",
-    launchEnvironment: { kind: "prepared", via: "Native API launch consumes ProviderStartOptions.accountLaunch." },
+    launchEnvironment: { kind: "prepared", via: "Native API launch consumes AdmittedStartOptions.accountLaunch." },
     nativeIdentity: OPENCODE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: { kind: "accepted-message-id", evidence: "OpenCode v2 session.prompt returns the accepted inbox ID; the native user message stores that same ID. Commands without that receipt remain uncorrelated." },
@@ -700,9 +698,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     modes: openCodeModes,
     defaultMode: OPENCODE_DEFAULT_MODE,
     available: () => openCodeExecutable() !== null,
-    start: (requestedCwd, options) => cancellable(options.conversationId, signal => traceProviderLaunch("opencode", options.conversationId, async trace => {
+    start: (requestedCwd, options) => cancellable(options.conversationId, async signal => {
+      const { trace } = options
       if (sessions.get(options.conversationId)?.closed === false) throw new Error("This OpenCode binding is already connected")
-      const env = await trace.step("account", () => options.accountLaunch?.env ?? dependencies.env())
+      const { env } = options.accountLaunch
       delete env.CLAUDECODE
       delete env.CLAUDE_CODE_ENTRYPOINT
       const launchAccess = openCodeLaunchAccess(options.modeId, options.launchModeId)
@@ -715,7 +714,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const servers = await trace.step("mcp-preparation", () => mcpServers(options))
       const approvalRoot = await dependencies.approvalRoot()
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, servers: dependencies.servers, signal, fetch: dependencies.fetch })
-      const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch?.account, installation.command)
+      const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch.account, installation.command)
       context.runtime = reportedRuntime(api.health.version, "launched native API health.version")
       const live: Live = {
         api, cwd, env, emit: options.emit, launchAccess, capture: null, catalogGeneration: 0, turn: null, queue: Promise.resolve(),
@@ -826,7 +825,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         await api.close()
         throw error
       }
-    })),
+    }),
     async prompt(id, text, attachments, settings, dispatch) {
       const live = preparePrompt(dispatch, () => {
         const live = requireLive(id)

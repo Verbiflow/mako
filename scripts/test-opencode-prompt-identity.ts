@@ -7,6 +7,7 @@ import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
 import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 // Opt-in native proof: only its own isolated account/store and caller-assigned
 // Thread port. Not part of fast fixture gates; requires OpenCode v2 installed.
@@ -22,14 +23,14 @@ for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"
   await mkdir(env[name]!, { recursive: true })
 }
 const id = randomUUID()
-const driver = createOpenCodeDriver({ servers, env: async () => env, approvalRoot: async () => join(root, "approvals") })
+const driver = createOpenCodeDriver({ servers, approvalRoot: async () => join(root, "approvals") })
 const reader = new OpenCodeProvider(env.HOME, env)
 const reports: PromptDeliveryEvidence[] = []
 try {
-  const started = await driver.start(root, { conversationId: id, emit() {},
+  const started = await driver.start(root, admitted("opencode", { conversationId: id, emit() {},
     tuning: { model: process.env.MAKO_OPENCODE_MODEL ?? "opencode/space-bunny-free" },
     title: "Mako isolated prompt identity proof",
-  })
+  }, { env }))
   assert.ok(started.nativePath)
   await driver.prompt(id, "Reply with just OK. Do not run tools.", [], undefined, {
     operationId: randomUUID(), attemptId: randomUUID(), report: evidence => reports.push(evidence),

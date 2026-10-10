@@ -9,8 +9,8 @@ import { createServer } from "node:http"
 import { mock } from "node:test"
 import { parse } from "smol-toml"
 import { z } from "zod"
-import { assertAccountLaunch, captureAccount, resolveAccountLaunch, selectAccount } from "../electron/accounts.ts"
-import { cancelAccountLogin, startAccountLogin, submitAccountLoginCode, waitAccountLogin } from "../electron/account-login.ts"
+import { AccountLogins } from "../electron/account-login.ts"
+import { providerHost } from "../electron/providers/index.ts"
 import { accountDir } from "../electron/accounts-common.ts"
 import { claudeAccountCapability as claude } from "../electron/providers/claude/accounts.ts"
 import { codexAccountCapability } from "../electron/providers/codex/accounts.ts"
@@ -24,6 +24,9 @@ import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential }
 import { memorySecrets } from "@mako/host/base/secrets"
 import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
 import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const { accounts } = providerHost
+const logins = new AccountLogins(accounts)
 
 const processes = new DiscoveryProcesses()
 const codex = codexAccountCapability(processes)
@@ -134,7 +137,7 @@ else signIn();
     const filename = capability.provider === "claude" ? ".credentials.json" : "auth.json"
 
     loginEnv("hang")
-    const pending = await startAccountLogin(capability.provider)
+    const pending = await logins.start(capability.provider)
     assert.equal(pending.url, `https://sign-in.example.invalid/${capability.provider}?state=fixture`, "the card gets the CLI's sign-in page without terminal styling")
     assert.equal(pending.paste, capability.provider === "claude" ? "code" : undefined)
     assert.equal(pending.openPage, false, "the CLI opens its own page")
@@ -143,21 +146,21 @@ else signIn();
     assert.ok(pendingName, "the profile exists while the CLI signs it in")
     await assert.rejects(readFile(join(accountDir(capability.provider, pendingName), filename)), { code: "ENOENT" }, "preparing a login never copies another account's credentials")
     assert.deepEqual(await managedNames(capability), [], "an unfinished sign-in is never listed or selectable")
-    await cancelAccountLogin(pending.id)
-    assert.deepEqual(await waitAccountLogin(pending.id), { status: "cancelled" })
+    await logins.cancel(pending.id)
+    assert.deepEqual(await logins.wait(pending.id), { status: "cancelled" })
     assert.deepEqual(await managedDirs(capability.provider), [], "cancelling removes the half-made profile")
 
     loginEnv("fail")
-    await assert.rejects(startAccountLogin(capability.provider).then(login => waitAccountLogin(login.id)), /didn't finish/, "a failed CLI login is not an account")
+    await assert.rejects(logins.start(capability.provider).then(login => logins.wait(login.id)), /didn't finish/, "a failed CLI login is not an account")
     assert.deepEqual(await managedDirs(capability.provider), [], "a failed sign-in leaves no profile")
 
     loginEnv(capability.provider === "claude" ? "code" : undefined)
-    const login = await startAccountLogin(capability.provider)
+    const login = await logins.start(capability.provider)
     if (capability.provider === "claude") {
-      assert.throws(() => submitAccountLoginCode(login.id, "two words"), /whole code/)
-      submitAccountLoginCode(login.id, " fixture-code ")
-    } else assert.throws(() => submitAccountLoginCode(login.id, "fixture-code"), /doesn't take/)
-    const added = await waitAccountLogin(login.id)
+      assert.throws(() => logins.submitCode(login.id, "two words"), /whole code/)
+      logins.submitCode(login.id, " fixture-code ")
+    } else assert.throws(() => logins.submitCode(login.id, "fixture-code"), /doesn't take/)
+    const added = await logins.wait(login.id)
     assert.equal(added.status, "added")
     assert.ok(added.status === "added" && added.email === "separate@example.invalid")
     const name = added.status === "added" ? added.name : ""
@@ -170,8 +173,8 @@ else signIn();
 
     if (capability.provider === "claude") {
       loginEnv(undefined, "separate@example.invalid")
-      const again = await startAccountLogin("claude")
-      assert.deepEqual(await waitAccountLogin(again.id), { status: "duplicate", name, email: "separate@example.invalid" }, "signing the same account in twice keeps one")
+      const again = await logins.start("claude")
+      assert.deepEqual(await logins.wait(again.id), { status: "duplicate", name, email: "separate@example.invalid" }, "signing the same account in twice keeps one")
       assert.deepEqual(await managedDirs("claude"), [name])
     }
 
@@ -184,20 +187,20 @@ else signIn();
     }
     await assert.rejects(capability.accountEnv(name, process.env), /signed out/, "a signed-out account refuses new sessions instead of borrowing another login")
     loginEnv("fail")
-    await assert.rejects(startAccountLogin(capability.provider, name).then(login => waitAccountLogin(login.id)), /didn't finish/)
+    await assert.rejects(logins.start(capability.provider, name).then(login => logins.wait(login.id)), /didn't finish/)
     assert.deepEqual(await managedDirs(capability.provider), [name], "a failed renewal keeps the account")
     loginEnv(undefined, "separate@example.invalid")
-    const renewal = await startAccountLogin(capability.provider, name)
+    const renewal = await logins.start(capability.provider, name)
     assert.equal(renewal.renew, name)
-    assert.deepEqual(await waitAccountLogin(renewal.id), { status: "renewed", name, email: "separate@example.invalid" })
+    assert.deepEqual(await logins.wait(renewal.id), { status: "renewed", name, email: "separate@example.invalid" })
     assert.match(await readFile(join(dir, filename), "utf8"), /independent-native-login/)
     assert.equal((await capability.accountEnv(name, process.env))[capability.provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"], dir)
     loginEnv(undefined, "someone-else@example.invalid")
-    const switched = await startAccountLogin(capability.provider, name)
-    assert.deepEqual(await waitAccountLogin(switched.id), { status: "renewed", name, email: "someone-else@example.invalid", previousEmail: "separate@example.invalid" }, "a renewal as someone else says so")
+    const switched = await logins.start(capability.provider, name)
+    assert.deepEqual(await logins.wait(switched.id), { status: "renewed", name, email: "someone-else@example.invalid", previousEmail: "separate@example.invalid" }, "a renewal as someone else says so")
     loginEnv(undefined, "separate@example.invalid")
-    await waitAccountLogin((await startAccountLogin(capability.provider, name)).id)
-    await assert.rejects(startAccountLogin(capability.provider, "default"), /isn't one Mako keeps/, "the CLI's own login is not signed in again from Mako")
+    await logins.wait((await logins.start(capability.provider, name)).id)
+    await assert.rejects(logins.start(capability.provider, "default"), /isn't one Mako keeps/, "the CLI's own login is not signed in again from Mako")
   }
   loginEnv()
   for (const capability of [claude, codex]) {
@@ -207,20 +210,20 @@ else signIn();
     assert.equal(own[0]?.route, "native")
     assert.equal(own[0]?.email, "native@example.invalid", "the default is the ordinary login, not the config home the shell exported")
     assert.equal(own[0]?.dir, capability.provider === "claude" ? nativeClaude : nativeCodex)
-    await selectAccount(capability.provider, null)
-    const launch = await resolveAccountLaunch(capability.provider, process.env)
+    await accounts.select(capability.provider, null)
+    const launch = await accounts.launch(capability.provider, process.env)
     assert.equal(launch.account.name, "default")
     assert.equal(launch.account.dir, capability.provider === "claude" ? nativeClaude : nativeCodex)
     assert.equal(launch.env[capability.provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"], undefined)
     assert.equal(launch.env[capability.provider === "claude" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"], undefined)
     assert.equal(launch.env[capability.provider === "claude" ? "ANTHROPIC_BASE_URL" : "OPENAI_BASE_URL"], undefined)
-    await assertAccountLaunch(capability.provider, launch)
-    await captureAccount(capability.provider, "personal")
+    await accounts.assertLaunch(capability.provider, launch)
+    await accounts.capture(capability.provider, "personal")
     const saved = accountDir(capability.provider, "personal")
     const filename = capability.provider === "claude" ? ".credentials.json" : "auth.json"
     assert.match(await readFile(join(saved, filename), "utf8"), /native-/)
-    await selectAccount(capability.provider, "personal")
-    const managed = await resolveAccountLaunch(capability.provider, process.env)
+    await accounts.select(capability.provider, "personal")
+    const managed = await accounts.launch(capability.provider, process.env)
     assert.equal(managed.account.name, "personal")
     assert.equal(managed.env[capability.provider === "claude" ? "ANTHROPIC_BASE_URL" : "OPENAI_BASE_URL"], undefined)
     assert.equal((await capability.listAccounts("personal")).filter(account => account.active).length, 1)
@@ -233,33 +236,33 @@ else signIn();
       }
     }
     await write(capability.provider === "claude" ? claudeCredential("rotated") : codexCredential("rotated"))
-    await assertAccountLaunch(capability.provider, managed)
+    await accounts.assertLaunch(capability.provider, managed)
     const replacement = capability.provider === "claude" ? claudeCredential("another") : codexCredential("another", "account-other")
     await write(replacement)
     if (capability.provider === "claude")
       await writeFile(join(saved, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "account-other", emailAddress: "other@example.invalid" } }))
-    await assert.rejects(assertAccountLaunch(capability.provider, managed), /credentials changed/, "another login in the account's place is refused")
+    await assert.rejects(accounts.assertLaunch(capability.provider, managed), /credentials changed/, "another login in the account's place is refused")
     await capability.accountEnv("personal", process.env)
     assert.equal(await readFile(join(saved, filename), "utf8"), replacement, "routing never overwrites native refreshes with a stale source copy")
-    await selectAccount(capability.provider, null)
+    await accounts.select(capability.provider, null)
   }
 
   // The default's revision follows the ordinary login; another config home in the launch env is not it.
   for (const capability of [claude, codex]) {
     const env = { PATH: process.env.PATH, [capability.provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"]: elsewhere }
-    const launch = await resolveAccountLaunch(capability.provider, env)
+    const launch = await accounts.launch(capability.provider, env)
     const filename = capability.provider === "claude" ? ".credentials.json" : "auth.json"
     await writeFile(join(elsewhere, filename), capability.provider === "claude" ? claudeCredential("elsewhere-rotated") : codexCredential("elsewhere-rotated"))
-    await assertAccountLaunch(capability.provider, launch)
+    await accounts.assertLaunch(capability.provider, launch)
     if (capability.provider === "claude") {
       stores["Claude Code-credentials"] = claudeCredential("native-rotated")
       await saveStore()
     } else await writeFile(join(nativeCodex, "auth.json"), codexCredential("native-rotated"))
-    await assertAccountLaunch(capability.provider, launch)
+    await accounts.assertLaunch(capability.provider, launch)
     if (capability.provider === "claude")
       await writeFile(join(root, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "native-other", emailAddress: "native@example.invalid" } }))
     else await writeFile(join(nativeCodex, "auth.json"), codexCredential("native-rotated", "account-other"))
-    await assert.rejects(assertAccountLaunch(capability.provider, launch), /credentials changed/)
+    await assert.rejects(accounts.assertLaunch(capability.provider, launch), /credentials changed/)
   }
 
   for (const [capability, relative, env] of [
@@ -270,9 +273,9 @@ else signIn();
     const path = join(root, relative)
     await mkdir(join(path, ".."), { recursive: true })
     await writeFile(path, "one")
-    const launch = await resolveAccountLaunch(capability.provider, env)
+    const launch = await accounts.launch(capability.provider, env)
     await writeFile(path, "two")
-    await assert.rejects(assertAccountLaunch(capability.provider, launch), /credentials changed/)
+    await assert.rejects(accounts.assertLaunch(capability.provider, launch), /credentials changed/)
   }
 
   // A CLI refreshing its own login is the same account: the next prompt goes. Another account in its place does not.
@@ -285,11 +288,11 @@ else signIn();
   for (const [capability, relative, env, login] of refreshes) {
     const path = join(root, relative)
     await writeFile(path, login("first"))
-    const launch = await resolveAccountLaunch(capability.provider, env)
+    const launch = await accounts.launch(capability.provider, env)
     await writeFile(path, login("refreshed"))
-    await assertAccountLaunch(capability.provider, launch)
+    await accounts.assertLaunch(capability.provider, launch)
     await writeFile(path, login("refreshed", "user-2"))
-    await assert.rejects(assertAccountLaunch(capability.provider, launch), /credentials changed/, `${capability.provider}: another account is refused`)
+    await assert.rejects(accounts.assertLaunch(capability.provider, launch), /credentials changed/, `${capability.provider}: another account is refused`)
   }
   const cursorSecrets = memorySecrets()
   const cursorKeys = new CursorAccountKeys(cursorSecrets)
@@ -435,12 +438,12 @@ else signIn();
 `, { mode: 0o700 })
   process.env.XAI_API_KEY = "wrong-api-identity"
   loginEnv("address", "grok@example.invalid")
-  const grokLogin = await startAccountLogin("grok")
+  const grokLogin = await logins.start("grok")
   assert.equal(grokLogin.paste, "address")
   assert.equal(grokLogin.pasteOnly, undefined, "Grok's page usually hands back by itself")
-  assert.throws(() => submitAccountLoginCode(grokLogin.id, "not-an-address"), /address bar/)
-  submitAccountLoginCode(grokLogin.id, "http://127.0.0.1:56121/callback?code=fixture")
-  const grokAdded = await waitAccountLogin(grokLogin.id)
+  assert.throws(() => logins.submitCode(grokLogin.id, "not-an-address"), /address bar/)
+  logins.submitCode(grokLogin.id, "http://127.0.0.1:56121/callback?code=fixture")
+  const grokAdded = await logins.wait(grokLogin.id)
   assert.equal(grokAdded.status, "added")
   const grokName = grokAdded.status === "added" ? grokAdded.name : ""
   assert.ok(grokAdded.status === "added" && grokAdded.email === "grok@example.invalid")
@@ -453,7 +456,7 @@ else signIn();
   assert.equal(lapsed?.email, "grok@example.invalid", "who the account was survives Grok deleting its refused login")
   await assert.rejects(grok.accountEnv(grokName, process.env), /signed out/)
   loginEnv(undefined, "grok@example.invalid")
-  assert.deepEqual(await waitAccountLogin((await startAccountLogin("grok", grokName)).id), { status: "renewed", name: grokName, email: "grok@example.invalid" })
+  assert.deepEqual(await logins.wait((await logins.start("grok", grokName)).id), { status: "renewed", name: grokName, email: "grok@example.invalid" })
   delete process.env.XAI_API_KEY
 
   // Devin: a terminal-only CLI and a pasted code, checked with Devin's own server.
@@ -487,17 +490,17 @@ process.stdin.on('data', chunk => {
 setInterval(() => {}, 1000);
 `, { mode: 0o700 })
     process.env.DEVIN_CLI_PATH = join(bin, "devin")
-    const refused = await startAccountLogin("devin")
+    const refused = await logins.start("devin")
     assert.equal(refused.url, "https://app.devin.example.invalid/auth?state=fixture", "a terminal hyperlink still names its page")
     assert.equal(refused.openPage, true, "Devin prints its page without opening it")
     assert.equal(refused.paste, "code")
     assert.equal(refused.pasteOnly, true)
-    submitAccountLoginCode(refused.id, "wrong-code")
-    await assert.rejects(waitAccountLogin(refused.id), /didn't accept that code/)
+    logins.submitCode(refused.id, "wrong-code")
+    await assert.rejects(logins.wait(refused.id), /didn't accept that code/)
     assert.deepEqual(await managedDirs("devin"), [], "a refused code leaves no profile")
-    const devinLogin = await startAccountLogin("devin")
-    submitAccountLoginCode(devinLogin.id, "fixture-code")
-    const devinAdded = await waitAccountLogin(devinLogin.id)
+    const devinLogin = await logins.start("devin")
+    logins.submitCode(devinLogin.id, "fixture-code")
+    const devinAdded = await logins.wait(devinLogin.id)
     assert.equal(devinAdded.status, "added", "a CLI that keeps running after it signs in still finishes")
     const devinName = devinAdded.status === "added" ? devinAdded.name : ""
     assert.ok(devinAdded.status === "added" && devinAdded.email === "devin@example.invalid")
@@ -527,19 +530,19 @@ setInterval(() => {}, 1000);
     await assert.rejects(lstat(join(accountData, "some-tool")), { code: "ENOENT" }, "a link to a removed entry goes with it")
     assert.ok((await lstat(join(accountData, "made-by-a-tool"))).isDirectory(), "what a tool made in the folder is kept")
     assert.ok((await lstat(join(accountData, "devin", "cli"))).isSymbolicLink(), "a later launch keeps the same links")
-    await selectAccount("devin", devinName)
-    const devinLaunch = await resolveAccountLaunch("devin", { ...process.env, WINDSURF_API_KEY: "wrong-api-identity" })
+    await accounts.select("devin", devinName)
+    const devinLaunch = await accounts.launch("devin", { ...process.env, WINDSURF_API_KEY: "wrong-api-identity" })
     assert.equal(devinLaunch.account.name, devinName)
     assert.ok(!Object.entries(devinLaunch.env).some(([key, value]) => key === "WINDSURF_API_KEY" || value?.includes("devin-fixture-key")), "the launch Devin's ACP and headless runs share carries no key")
     assert.equal(devinLaunch.env.XDG_DATA_HOME, accountData)
-    await selectAccount("devin", null)
+    await accounts.select("devin", null)
     assert.equal((await devin.accountUsage(devinName)).status, "ok")
-    const devinRenewal = await startAccountLogin("devin", devinName)
-    submitAccountLoginCode(devinRenewal.id, "fixture-code")
-    assert.deepEqual(await waitAccountLogin(devinRenewal.id), { status: "renewed", name: devinName, email: "devin@example.invalid" })
+    const devinRenewal = await logins.start("devin", devinName)
+    logins.submitCode(devinRenewal.id, "fixture-code")
+    assert.deepEqual(await logins.wait(devinRenewal.id), { status: "renewed", name: devinName, email: "devin@example.invalid" })
     await assert.rejects(lstat(join(accountDir("devin", devinName), "renewal")), { code: "ENOENT" }, "the renewal folder is gone once its login moved in")
-    const devinCancelled = await startAccountLogin("devin", devinName)
-    await cancelAccountLogin(devinCancelled.id)
+    const devinCancelled = await logins.start("devin", devinName)
+    await logins.cancel(devinCancelled.id)
     assert.match(await readFile(join((await devin.accountEnv(devinName, process.env)).XDG_DATA_HOME ?? "", "devin", "credentials.toml"), "utf8"), /devin-fixture-key/, "a cancelled renewal keeps the old login")
     await devin.removeAccount(devinName)
     assert.ok((await lstat(join(userData, "devin", "cli"))).isDirectory(), "removing an account leaves the user's Devin sessions")
@@ -555,9 +558,9 @@ setInterval(() => {}, 1000);
   assert.notEqual(previousSettings, await claude.credentialRevision("personal", process.env), "settings auth changes invalidate warm admission")
   await assert.rejects(claude.accountEnv("personal", process.env), /home settings override/)
   await writeFile(join(nativeClaude, "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://fixture.invalid" } }))
-  await assert.rejects(startAccountLogin("claude"), /home settings override/)
+  await assert.rejects(logins.start("claude"), /home settings override/)
   assert.deepEqual(await managedDirs("claude"), [(await managedNames(claude))[0]], "a refused sign-in leaves no profile")
-  await assert.rejects(captureAccount("claude", "unsafe-import"), /home settings override/)
+  await assert.rejects(accounts.capture("claude", "unsafe-import"), /home settings override/)
   await rm(join(nativeClaude, "settings.json"))
 
   const legacyHome = join(root, "legacy-config")
@@ -594,7 +597,7 @@ setInterval(() => {}, 1000);
     }, "a denied authoritative store cannot fall back to stale file credentials or retain secret native output")
     await assert.rejects(claude.credentialRevision("personal", process.env), /Could not read macOS Keychain/, "permission failure is not a signed-out or plaintext fallback state")
     delete process.env.MAKO_FIXTURE_KEYCHAIN_DENIED
-    await captureAccount("codex", "secure")
+    await accounts.capture("codex", "secure")
     const config = parse(await readFile(join(accountDir("codex", "secure"), "config.toml"), "utf8"))
     assert.equal(config.cli_auth_credentials_store, "file")
     assert.equal(config.model, "fixture-model")

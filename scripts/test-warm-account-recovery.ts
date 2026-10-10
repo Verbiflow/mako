@@ -6,7 +6,7 @@ import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { ExecutionAccountChanged, selectAccount } from "../electron/accounts.ts"
+import { ExecutionAccountChanged } from "../electron/accounts.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
@@ -44,19 +44,19 @@ try {
     let closeEntered = false
     let deliveryFailure: "accepted" | "uncertain" | undefined
     let expected: string | undefined
-    const unregister = providerHost.accountCapabilities.register({
+    const host = createProviderHost()
+    const unregister = host.accountCapabilities.register({
       provider, mode: "selectable", label: provider, loginCommand: "fixture",
       listAccounts: async () => expected ? [{ harness: provider, name: "mismatch", email: expected, dir: root, active: true }] : [], accountEnv: async (name, base) => ({ ...base, FIXTURE_ACCOUNT: name ?? "default" }),
       selectedAccount: name => ({ name: name ?? "default", dir: root }),
       credentialRevision: async () => revision, accountUsage: async () => ({ status: "unavailable" }),
       captureAccount: async () => {}, removeAccount: async () => ({}),
     })
-    const host = createProviderHost()
     host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
         opens++
         event = options.emit
-        const account = options.accountLaunch!.account
+        const account = options.accountLaunch.account
         const context = launchContext("fixture-transport", { kind: "reported", via: "simulated initialization" }, account)
         context.identity = { kind: "reported", principal: account.name, backend: "fixture", via: "simulated initialization" }
         context.runtime = { kind: "reported", version: "fixture-one", via: "fixture" }
@@ -98,11 +98,11 @@ try {
     })
     const input = async (text: string) => { const requestId = randomUUID(); owner.submit(id, requestId, text); await until(() => owner.snapshot(id)?.requests.find(request => request.id === requestId)?.status === "completed"); return requestId }
     try {
-      await selectAccount(provider, "one")
+      await host.accounts.select(provider, "one")
       await owner.start(provider, root, { conversationId: id })
       await until(() => owner.snapshot(id)?.session.status === "ready")
       await input("seed")
-      await selectAccount(provider, "two")
+      await host.accounts.select(provider, "two")
       const second = await input("after selection")
       assert.equal(opens, 2, `${original.provider}: changed account reopens once`)
       assert.equal(closes, 1)
@@ -121,7 +121,7 @@ try {
       const running = randomUUID()
       owner.submit(id, running, "keep running")
       await until(() => owner.snapshot(id)?.session.status === "running")
-      await selectAccount(provider, "three")
+      await host.accounts.select(provider, "three")
       const queued = randomUUID()
       owner.submit(id, queued, "wait behind work")
       await delay(5)
@@ -207,7 +207,7 @@ try {
       // conversation stays usable and its process retires, so the next
       // message launches with whatever the user signs in or chooses.
       expected = "expected@example.com"
-      await selectAccount(provider, "mismatch")
+      await host.accounts.select(provider, "mismatch")
       const other = randomUUID()
       const sentBefore = sends
       await owner.start(provider, root, { conversationId: other })

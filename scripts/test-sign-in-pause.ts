@@ -6,7 +6,6 @@ import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { selectAccount } from "../electron/accounts.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
@@ -49,19 +48,19 @@ try {
     const emitters = new Map<string, (event: LiveDriverEvent) => void>()
     const sessions = new Map<string, LiveSessionState>()
     const sent: string[] = []
-    const unregister = providerHost.accountCapabilities.register({
+    const host = createProviderHost()
+    const unregister = host.accountCapabilities.register({
       provider, mode: "selectable", label: provider, loginCommand: "fixture",
       listAccounts: async () => [], accountEnv: async (name, base) => ({ ...base, FIXTURE_ACCOUNT: name ?? "default" }),
       selectedAccount: name => ({ name: name ?? "default", dir: root }),
       credentialRevision: async () => revision, accountUsage: async () => ({ status: "unavailable" }),
       captureAccount: async () => {}, removeAccount: async () => ({}),
     })
-    const host = createProviderHost()
     host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
         opens++
         if (refuseStart) throw new Error(`The selected ${label} account is signed out. Sign in again in Settings → Agents.`)
-        const account = options.accountLaunch!.account
+        const account = options.accountLaunch.account
         const context = launchContext("fixture-transport", { kind: "reported", via: "simulated initialization" }, account)
         context.store = { kind: "located", path: nativePath }
         const session: LiveSessionState = { id: options.conversationId, harness: provider, nativeId: options.resume ?? `native-${options.conversationId}`, nativePath, cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [], executionContext: context }
@@ -101,6 +100,7 @@ try {
     const owner = (): LiveConversations => new LiveConversations({ root: journals, appPath: root, driver: () => driver,
       history: async () => null, emit: () => {}, providerIdleMs: 600_000, providerWarmLimit: 20, autoContinueDelayMs: 10,
       checkpoint: async () => "fixture-checkpoint", resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+      signInState: (harness, account) => host.accounts.signInState(harness, account),
     })
     let live = owner()
     const id = randomUUID()
@@ -109,7 +109,7 @@ try {
     const userBlocks = (requestId: string, conversation = id) =>
       live.snapshot(conversation)?.blocks.filter((block) => block.type === "user" && block.requestId === requestId).length
     try {
-      await selectAccount(provider, "one")
+      await host.accounts.select(provider, "one")
       await live.start(provider, root, { conversationId: id })
       await until(() => live.snapshot(id)?.session.status === "ready", `${label}: ready`)
       const seed = randomUUID()

@@ -1,20 +1,19 @@
 import { applyControlEnvironment } from "@mako/host/control"
 import { applyThreadEnvironment } from "@mako/host/workspaces"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { resolveAccountLaunch } from "../../accounts.js"
 import type { ClaudeSdkConfiguration } from "./sdk-driver.js"
 import { acpMcpServers, MAKO_TOOL_TIMEOUT_MS } from "@mako/host/tools"
-import { conversationServers, type ProviderStartOptions } from "../live-driver.js"
+import { conversationServers, type AdmittedStartOptions } from "../live-driver.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
 import { claudeRuntime } from "./runtime.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
 
 export async function claudeSdkOptions(
   cwd: string,
-  input: Omit<ProviderStartOptions, "emit">,
+  input: Omit<AdmittedStartOptions, "emit" | "observeUsage" | "trace">,
   trace: ProviderLaunchTrace
 ): Promise<ClaudeSdkConfiguration> {
-  const { env, account } = await trace.step("account", () => input.accountLaunch ?? resolveAccountLaunch("claude", process.env))
+  const { env, account } = input.accountLaunch
   applyControlEnvironment(env, input.conversationTools?.control)
   applyThreadEnvironment(env, input.threadEnvironment)
   const runtime = trace.sync("runtime-discovery", () => claudeRuntime(env))

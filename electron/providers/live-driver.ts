@@ -12,6 +12,9 @@ import type { ProviderCapability } from "./registry.js"
 import type { ToolGrant } from "@mako/host/tools"
 import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
+import type { AccountLaunch } from "../accounts.js"
+import type { UsageAmendment } from "../account-usage-readings.js"
+import type { ProviderLaunchTrace } from "../provider-launch.js"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/mcp-reach"
 import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "@mako/host/contracts/execution-context"
 import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "@mako/host/contracts/native-prompt-identity"
@@ -185,11 +188,8 @@ export function conversationServers(tools: ConversationTools): Array<{ name: str
   return servers
 }
 
-/** Host-only launch credentials. Never included in the renderer wire contract or journals. */
+/** What a conversation owner starts a session with. Host-only: never in the renderer wire contract or journals. */
 export interface ProviderStartOptions extends LiveStartOptions {
-  /** Prepared by shared execution admission. Adapters must use this environment
-   * instead of resolving the global account a second time. Host-only. */
-  accountLaunch?: import("../accounts.js").AccountLaunch
   /** Known native occurrences from this binding, including answered ones. Keep
    * identities on callback replay; observe only, never send saved answers again. */
   observedApprovals?: import("@mako/host/contracts/approval-response").NativeApprovalIdentity[]
@@ -204,6 +204,16 @@ export interface ProviderStartOptions extends LiveStartOptions {
   conversationTools?: ConversationTools
   /** Set on the agent process with `applyThreadEnvironment`, beside the control environment. */
   threadEnvironment?: ThreadEnvironment
+}
+
+/** What a driver's own start receives: the owner's options and the account admission launched it on. */
+export interface AdmittedStartOptions extends ProviderStartOptions {
+  /** This launch's trace, opened by admission; the driver records its phases on it. */
+  trace: ProviderLaunchTrace
+  /** The account's environment, held while the session runs. Use it; never resolve the selection again. */
+  accountLaunch: AccountLaunch
+  /** Amends that account's usage from limits the session reported, so its meter moves without a request. */
+  observeUsage(amend: UsageAmendment): void
 }
 
 /**
@@ -237,7 +247,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
    * opening/resuming, and protect against the native CLI as well as Mako.
    * Failed acquisition must leave no executing session behind. Native writes
    * must themselves remain excluded/fenced; a host assertion is not a lock. */
-  startExclusive?(cwd: string, options: ProviderStartOptions): Promise<{
+  startExclusive?(cwd: string, options: AdmittedStartOptions): Promise<{
     session: LiveSessionState
     lease: {
       /** Fail if the native authority no longer grants this executor ownership. */
@@ -274,7 +284,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
   backgroundStop: BackgroundStop
   turnRecovery: TurnRecovery
   available(appPath: string): boolean
-  start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
+  start(cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState>
   /**
    * Resolving this call is not a receipt. Report native evidence through the
    * attempt-scoped dispatch, and keep the receipt and process-death promises
@@ -303,6 +313,11 @@ export interface ProviderLiveDriver extends ProviderCapability {
   setMode(id: string, modeId: string): Promise<void>
   /** As the host quits: close every session still open, ending its process the way its own client does. */
   stop?(): void
+}
+
+/** A registered driver as the host hands it out: admission chooses each start's account. */
+export type AdmittedLiveDriver = Omit<ProviderLiveDriver, "start"> & {
+  start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
 }
 
 export interface ProviderSteerInput {

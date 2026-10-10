@@ -18,6 +18,7 @@ import type { LiveSessionMode, LiveSessionState } from "@mako/host/contracts/pro
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type {
   ProviderLiveDriver,
+  AdmittedStartOptions,
   ProviderStartOptions,
   ProviderSteerResult,
 } from "../live-driver.js"
@@ -31,7 +32,7 @@ import { ClaudeDecoder } from "./decoder.js"
 import { claudeContextBreakdown } from "./context-breakdown.js"
 import { mergeWindows } from "@mako/host/contracts/account-usage"
 import { deliverDecoded, type DecodedSink } from "@mako/host/contracts/native-decoding"
-import type { SelectedAccount, UsageWindow } from "@mako/host/contracts/accounts"
+import type { SelectedAccount } from "@mako/host/contracts/accounts"
 import { nativeCapture, type NativeCapture } from "../../native-capture.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
@@ -39,7 +40,7 @@ import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalD
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../../provider-startup.js"
-import { traceProviderLaunch, type ProviderLaunchTrace } from "../../provider-launch.js"
+import type { ProviderLaunchTrace } from "../../provider-launch.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { CLAUDE_AUTH_LOG, claudeAuthDiagnostics } from "./auth-diagnostics.js"
 import { claudeConfigDir, type ClaudeCredentialState } from "./accounts.js"
@@ -79,15 +80,9 @@ interface Receipt {
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
 }
-/** A turn reported where its account stands: the meter moves without a request. */
-function observeLimits(live: Live, windows: UsageWindow[]): void {
-  void import("../../accounts.js").then((accounts) =>
-    accounts.observeAccountUsage("claude", live.account, (previous) => mergeWindows(previous, windows, Date.now())))
-}
-
 interface Live {
-  /** The account this session spends, resolved beside its start. */
-  account: string
+  /** Amends the launch account's usage: a turn reporting its limits moves the meter without a request. */
+  observeUsage: AdmittedStartOptions["observeUsage"]
   compaction?: { actionId: string; runId: string; confirmed: boolean }
   decoder: ClaudeDecoder
   sink?: DecodedSink<never>
@@ -101,7 +96,7 @@ interface Live {
   disposeApprovals(): Promise<void>
   authDiagnostics: ReturnType<typeof claudeAuthDiagnostics>
   transcript: ClaudeTranscript
-  emit: NonNullable<ProviderStartOptions["emit"]>
+  emit: ProviderStartOptions["emit"]
   promptReceipt?: { id: string; dispatch: PromptDispatch }
   receipts: Map<string, Receipt>
   closed: boolean
@@ -118,7 +113,7 @@ export interface ClaudeSdkConfiguration {
 
 export interface ClaudeSdkDependencies {
   available(): boolean
-  configure(cwd: string, options: ProviderStartOptions, trace: ProviderLaunchTrace): Promise<ClaudeSdkConfiguration>
+  configure(cwd: string, options: AdmittedStartOptions, trace: ProviderLaunchTrace): Promise<ClaudeSdkConfiguration>
   /** Claude's SDK is loaded by the first query, so asking for one is async. */
   query(input: {
     prompt: AsyncIterable<SDKUserMessage>
@@ -172,7 +167,7 @@ function acknowledge(live: Live, message: SDKMessage): void {
 /** What the decoder makes of a message reaches the session; plan-limit windows move the account's meter. */
 function decode(engine: Engine, live: Live, message: SDKMessage): void {
   if (live.capture) live.capture.record(JSON.parse(JSON.stringify(message)))
-  live.sink ??= engine.sink(live, { effect: () => undefined, usage: (windows) => observeLimits(live, windows) })
+  live.sink ??= engine.sink(live, { effect: () => undefined, usage: (windows) => live.observeUsage((previous) => mergeWindows(previous, windows, Date.now())) })
   deliverDecoded(live.decoder.decode(message), live.sink)
 }
 
@@ -334,7 +329,7 @@ export function createClaudeSdkDriver(
   }
   return {
     provider: "claude",
-    launchEnvironment: { kind: "prepared", via: "SDK configuration consumes ProviderStartOptions.accountLaunch." },
+    launchEnvironment: { kind: "prepared", via: "SDK configuration consumes AdmittedStartOptions.accountLaunch." },
     nativeIdentity: CLAUDE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
@@ -371,7 +366,8 @@ export function createClaudeSdkDriver(
     modes: CLAUDE_MODES,
     defaultMode: "default",
     available: () => dependencies.available(),
-    start: (cwd, options) => traceProviderLaunch("claude", options.conversationId, async trace => {
+    start: async (cwd, options) => {
+      const { trace } = options
       const conversationId = options.conversationId
       if (
         starting.has(options.conversationId) ||
@@ -497,7 +493,7 @@ export function createClaudeSdkDriver(
       processGone = (detail) => void disconnect(engine, live, detail)
       const context = launchContext("claude-agent-sdk", CLAUDE_NATIVE_IDENTITY, account, config.pathToClaudeCodeExecutable)
       const live: Live = {
-        account: account.name,
+        observeUsage: options.observeUsage,
         query,
         exited: () => exited,
         input,
@@ -584,7 +580,7 @@ export function createClaudeSdkDriver(
         clearTimeout(timer)
         startupWatch?.dispose()
       }
-    }),
+    },
     async prompt(id, text, attachments, settings, dispatch) {
       const { live, content } = await preparePromptAsync(dispatch, async () => {
         const live = requireLive(id)

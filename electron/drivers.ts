@@ -29,7 +29,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { assertAccountLaunch, resolveAccountLaunch, switchSuggestion, type AccountLaunch } from "./accounts.js"
+import type { AccountLaunch } from "./accounts.js"
 import type { AccountHold } from "./account-holds.js"
 import { resumable, type ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { reconnectRefusal } from "./live-transfers.js"
@@ -282,7 +282,7 @@ async function launch(
   let executionContext: ExecutionContext
   let accountLaunch: AccountLaunch
   try {
-    const launch = await resolveAccountLaunch(harness, process.env, { holder: { kind: "run" } })
+    const launch = await providerHost.accounts.launch(harness, process.env, { holder: { kind: "run" } })
     accountLaunch = launch
     accountHold = launch.hold
     assertPreparation()
@@ -335,7 +335,7 @@ async function launch(
     if (commandEnv) env = { ...env, ...commandEnv }
     executable = resolveExecutable(command, env)
     if (!executable) throw new Error(`${harness} is not installed`)
-    await assertAccountLaunch(harness, accountLaunch)
+    await providerHost.accounts.assertLaunch(harness, accountLaunch)
     assertPreparation()
     child = spawn(executable, args, {
       cwd,
@@ -379,7 +379,7 @@ async function launch(
   // The moment someone spends from an account is the moment its headroom is
   // worth a look. Suggest, never switch: money moves are the user's.
   if (providerHost.accountCapabilities.get(harness)?.mode === "selectable") {
-    void switchSuggestion(harness)
+    void providerHost.accounts.switchSuggestion(harness)
       .then((message) => {
         if (message) emit({ type: "notice", level: "info", message })
       })

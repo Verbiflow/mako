@@ -20,11 +20,10 @@ import { execFile, type ChildProcessWithoutNullStreams } from "node:child_proces
 import { homedir } from "node:os"
 import { promisify } from "node:util"
 import type { AccountHarness, AccountLogin, AccountLoginResult } from "@mako/host/contracts/accounts"
-import { accountLoginLanded, discardAccountLogin, finishAccountLogin, prepareAccountLogin } from "./accounts.js"
+import type { HarnessAccounts } from "./accounts.js"
 import { environmentForExecutable } from "@mako/host/base/executable"
 import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "./providers/account-capability.js"
 import { spawnProviderProcess } from "./providers/provider-process.js"
-import { providerHost } from "./providers/index.js"
 import { onLinux, onMac, onWindows } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
@@ -60,12 +59,6 @@ interface RunningLogin {
   result: Promise<AccountLoginResult>
   done: boolean
   cancel(): void
-}
-
-const logins = new Map<string, RunningLogin>()
-
-function label(harness: AccountHarness): string {
-  return providerHost.accountCapabilities.get(harness)?.label ?? harness
 }
 
 function terminate(child: ChildProcessWithoutNullStreams): void {
@@ -202,134 +195,144 @@ function taskSession(launch: AccountLoginTask): Session {
   return { announced, ended, stop: () => controller.abort() }
 }
 
-/**
- * Start a sign-in for `harness`: into a new profile, or into the account
- * `renew` names when its login expired. Resolves once the provider has named
- * its sign-in page (or has had time to), with what the card needs to show;
- * `waitAccountLogin` resolves when it ends.
- */
-export async function startAccountLogin(harness: AccountHarness, renew?: string): Promise<AccountLogin> {
-  // One per provider: a second would race the first for the CLI's callback port.
-  for (const login of logins.values())
-    if (login.info.harness === harness && !login.done) await cancelAccountLogin(login.info.id)
-  const target: AccountLoginTarget = renew === undefined
-    ? { name: `account-${randomUUID().slice(0, 8)}`, renew: false }
-    : { name: renew, renew: true }
-  const { launch, previousEmail } = await prepareAccountLogin(harness, target)
-  const id = randomUUID()
-  let session: Session
-  try {
-    session = launch.kind === "task"
-      ? taskSession(launch)
-      : commandSession(harness, launch, () => accountLoginLanded(harness, target))
-  } catch (error) {
-    await discardAccountLogin(harness, target)
-    throw error
+/** This host's running sign-ins, one per provider, each ending added, renewed, cancelled or failed. */
+export class AccountLogins {
+  private readonly logins = new Map<string, RunningLogin>()
+  private readonly accounts: HarnessAccounts
+
+  constructor(accounts: HarnessAccounts) {
+    this.accounts = accounts
   }
 
-  let cancelled = false
-  let expired = false
-  const timer = setTimeout(() => { expired = true; session.stop() }, LOGIN_TIMEOUT_MS)
-  const name = label(harness)
-  const again = target.renew ? "Sign in again" : "Add the account again"
-
-  const result = session.ended.then(async (ending): Promise<AccountLoginResult> => {
-    clearTimeout(timer)
+  /**
+   * Start a sign-in for `harness`: into a new profile, or into the account
+   * `renew` names when its login expired. Resolves once the provider has named
+   * its sign-in page (or has had time to), with what the card needs to show;
+   * `wait` resolves when it ends.
+   */
+  async start(harness: AccountHarness, renew?: string): Promise<AccountLogin> {
+    // One per provider: a second would race the first for the CLI's callback port.
+    for (const login of this.logins.values())
+      if (login.info.harness === harness && !login.done) await this.cancel(login.info.id)
+    const target: AccountLoginTarget = renew === undefined
+      ? { name: `account-${randomUUID().slice(0, 8)}`, renew: false }
+      : { name: renew, renew: true }
+    const { launch, previousEmail } = await this.accounts.prepareLogin(harness, target)
+    const id = randomUUID()
+    let session: Session
     try {
-      if (cancelled || expired) {
-        await discardAccountLogin(harness, target)
-        if (expired) throw new Error(`${name} sign-in timed out. ${again} when you're ready.`)
-        return { status: "cancelled" }
-      }
-      if (ending.kind !== "finished") {
-        await discardAccountLogin(harness, target)
-        if (ending.kind === "refused")
-          throw new Error(`${name} didn't accept that code. ${again} and paste the newest code the page shows.`)
-        throw new Error(ending.detail ? `${name} sign-in didn't finish: ${ending.detail}` : `${name} sign-in didn't finish. Try again.`)
-      }
-      try {
-        const options: Parameters<typeof finishAccountLogin>[2] = { confirmed: ending.landed }
-        if (previousEmail !== undefined) options.previousEmail = previousEmail
-        if (launch.kind === "command" && launch.statusArgs) {
-          const statusArgs = [...launch.statusArgs]
-          options.verify = async (env) => {
-            await run(launch.executable, statusArgs, {
-              cwd: homedir(),
-              env: environmentForExecutable(launch.executable, env),
-              timeout: 20_000,
-            }).catch(() => {
-              throw new Error(`${name} finished, but the login didn't check out. ${again}.`)
-            })
-          }
-        }
-        return await finishAccountLogin(harness, target, options)
-      } catch (failure) {
-        await discardAccountLogin(harness, target).catch(() => {})
-        throw failure
-      }
-    } finally {
-      login.done = true
-      setTimeout(() => logins.delete(id), FINISHED_KEPT_MS).unref()
+      session = launch.kind === "task"
+        ? taskSession(launch)
+        : commandSession(harness, launch, () => this.accounts.loginLanded(harness, target))
+    } catch (error) {
+      await this.accounts.discardLogin(harness, target)
+      throw error
     }
-  })
-  // A sign-in nobody is waiting on still settles; its failure is the waiter's to show.
-  result.catch(() => {})
 
-  const info: AccountLogin = {
-    id,
-    harness,
-    openPage: launch.kind === "task" || launch.opensBrowser === false,
+    let cancelled = false
+    let expired = false
+    const timer = setTimeout(() => { expired = true; session.stop() }, LOGIN_TIMEOUT_MS)
+    const name = this.accounts.label(harness)
+    const again = target.renew ? "Sign in again" : "Add the account again"
+
+    const result = session.ended.then(async (ending): Promise<AccountLoginResult> => {
+      clearTimeout(timer)
+      try {
+        if (cancelled || expired) {
+          await this.accounts.discardLogin(harness, target)
+          if (expired) throw new Error(`${name} sign-in timed out. ${again} when you're ready.`)
+          return { status: "cancelled" }
+        }
+        if (ending.kind !== "finished") {
+          await this.accounts.discardLogin(harness, target)
+          if (ending.kind === "refused")
+            throw new Error(`${name} didn't accept that code. ${again} and paste the newest code the page shows.`)
+          throw new Error(ending.detail ? `${name} sign-in didn't finish: ${ending.detail}` : `${name} sign-in didn't finish. Try again.`)
+        }
+        try {
+          const options: Parameters<HarnessAccounts["finishLogin"]>[2] = { confirmed: ending.landed }
+          if (previousEmail !== undefined) options.previousEmail = previousEmail
+          if (launch.kind === "command" && launch.statusArgs) {
+            const statusArgs = [...launch.statusArgs]
+            options.verify = async (env) => {
+              await run(launch.executable, statusArgs, {
+                cwd: homedir(),
+                env: environmentForExecutable(launch.executable, env),
+                timeout: 20_000,
+              }).catch(() => {
+                throw new Error(`${name} finished, but the login didn't check out. ${again}.`)
+              })
+            }
+          }
+          return await this.accounts.finishLogin(harness, target, options)
+        } catch (failure) {
+          await this.accounts.discardLogin(harness, target).catch(() => {})
+          throw failure
+        }
+      } finally {
+        login.done = true
+        setTimeout(() => this.logins.delete(id), FINISHED_KEPT_MS).unref()
+      }
+    })
+    // A sign-in nobody is waiting on still settles; its failure is the waiter's to show.
+    result.catch(() => {})
+
+    const info: AccountLogin = {
+      id,
+      harness,
+      openPage: launch.kind === "task" || launch.opensBrowser === false,
+    }
+    if (target.renew) info.renew = target.name
+    if (launch.kind === "command" && launch.paste) {
+      info.paste = launch.paste
+      if (launch.pasteOnly) info.pasteOnly = true
+    }
+    const login: RunningLogin = {
+      info,
+      session,
+      result,
+      done: false,
+      cancel: () => { cancelled = true; session.stop() },
+    }
+    this.logins.set(id, login)
+
+    let waited: ReturnType<typeof setTimeout> | undefined
+    const url = await Promise.race([
+      session.announced,
+      new Promise<undefined>((resolve) => { waited = setTimeout(() => resolve(undefined), URL_WAIT_MS) }),
+    ])
+    clearTimeout(waited)
+    if (url) login.info.url = url
+    // A provider that failed before the card could show reports why here.
+    if (login.done) await result
+    return { ...login.info }
   }
-  if (target.renew) info.renew = target.name
-  if (launch.kind === "command" && launch.paste) {
-    info.paste = launch.paste
-    if (launch.pasteOnly) info.pasteOnly = true
+
+  /** How the sign-in ended; a failure rejects with what to tell the user. */
+  async wait(id: string): Promise<AccountLoginResult> {
+    const login = this.logins.get(id)
+    if (!login) throw new Error("That sign-in already ended. Refresh to see your accounts.")
+    return login.result
   }
-  const login: RunningLogin = {
-    info,
-    session,
-    result,
-    done: false,
-    cancel: () => { cancelled = true; session.stop() },
+
+  /** What the sign-in page showed, or the address the browser ended on, for a provider that reads one. */
+  submitCode(id: string, code: string): void {
+    const login = this.logins.get(id)
+    if (!login || login.done) throw new Error("That sign-in already ended. Start it again.")
+    if (!login.session.paste) throw new Error(`${this.accounts.label(login.info.harness)} doesn't take anything pasted.`)
+    const clean = code.trim()
+    if (!clean || /\s/.test(clean))
+      throw new Error(login.info.paste === "address" ? "Paste the whole address from the browser's address bar." : "Paste the whole code from the sign-in page.")
+    if (login.info.paste === "address" && !/^https?:\/\//.test(clean))
+      throw new Error("Paste the address from the browser's address bar, starting with http.")
+    login.session.paste(clean)
   }
-  logins.set(id, login)
 
-  let waited: ReturnType<typeof setTimeout> | undefined
-  const url = await Promise.race([
-    session.announced,
-    new Promise<undefined>((resolve) => { waited = setTimeout(() => resolve(undefined), URL_WAIT_MS) }),
-  ])
-  clearTimeout(waited)
-  if (url) login.info.url = url
-  // A provider that failed before the card could show reports why here.
-  if (login.done) await result
-  return { ...login.info }
-}
-
-/** How the sign-in ended; a failure rejects with what to tell the user. */
-export async function waitAccountLogin(id: string): Promise<AccountLoginResult> {
-  const login = logins.get(id)
-  if (!login) throw new Error("That sign-in already ended. Refresh to see your accounts.")
-  return login.result
-}
-
-/** What the sign-in page showed, or the address the browser ended on, for a provider that reads one. */
-export function submitAccountLoginCode(id: string, code: string): void {
-  const login = logins.get(id)
-  if (!login || login.done) throw new Error("That sign-in already ended. Start it again.")
-  if (!login.session.paste) throw new Error(`${label(login.info.harness)} doesn't take anything pasted.`)
-  const clean = code.trim()
-  if (!clean || /\s/.test(clean))
-    throw new Error(login.info.paste === "address" ? "Paste the whole address from the browser's address bar." : "Paste the whole code from the sign-in page.")
-  if (login.info.paste === "address" && !/^https?:\/\//.test(clean))
-    throw new Error("Paste the address from the browser's address bar, starting with http.")
-  login.session.paste(clean)
-}
-
-/** Stop a sign-in; a new profile is removed. Stopping one that ended changes nothing. */
-export async function cancelAccountLogin(id: string): Promise<void> {
-  const login = logins.get(id)
-  if (!login) return
-  if (!login.done) login.cancel()
-  await login.result.catch(() => {})
+  /** Stop a sign-in; a new profile is removed. Stopping one that ended changes nothing. */
+  async cancel(id: string): Promise<void> {
+    const login = this.logins.get(id)
+    if (!login) return
+    if (!login.done) login.cancel()
+    await login.result.catch(() => {})
+  }
 }

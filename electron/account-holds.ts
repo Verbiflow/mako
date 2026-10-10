@@ -39,8 +39,6 @@ interface Entry {
   holder: AccountHolder
 }
 
-const held = new Map<string, { provider: string; name: string; entries: Set<Entry> }>()
-const releasedListeners = new Set<(provider: string, name: string) => void>()
 const HOST_STARTED_AT = Math.round(Date.now() - process.uptime() * 1000)
 const LIVENESS_TIMEOUT_MS = 2_000
 
@@ -63,102 +61,108 @@ function leasePath(pid: number): string {
   return join(holdsDir(), `${pid}.json`)
 }
 
-/** Rewritten only when an account gains its first holder or loses its last. */
-function writeLease(): void {
-  const path = leasePath(process.pid)
-  try {
-    if (!held.size) {
-      rmSync(path, { force: true })
-      return
+/** The accounts this host's running work holds, and the lease that tells other hosts. */
+export class AccountHolds {
+  private readonly held = new Map<string, { provider: string; name: string; entries: Set<Entry> }>()
+  private readonly releasedListeners = new Set<(provider: string, name: string) => void>()
+
+  hold(provider: string, name: string, holder: AccountHolder): AccountHold {
+    const key = accountKey(provider, name)
+    let account = this.held.get(key)
+    const first = !account
+    if (!account) {
+      account = { provider, name, entries: new Set() }
+      this.held.set(key, account)
     }
-    mkdirSync(holdsDir(), { recursive: true, mode: 0o700 })
-    const temporary = `${path}.tmp`
-    writeFileSync(temporary, JSON.stringify({
-      version: 1,
-      pid: process.pid,
-      startedAt: HOST_STARTED_AT,
-      accounts: [...held.keys()],
-    }), { mode: 0o600 })
-    renameSync(temporary, path)
-  } catch (error) {
-    hostWarn("accounts", "account lease could not be written", { error: error instanceof Error ? error.message : String(error) })
+    const entry: Entry = { holder }
+    account.entries.add(entry)
+    if (first) this.writeLease()
+    let released = false
+    return {
+      provider,
+      name,
+      release: () => {
+        if (released) return
+        released = true
+        const current = this.held.get(key)
+        if (!current?.entries.delete(entry) || current.entries.size) return
+        this.held.delete(key)
+        this.writeLease()
+        for (const listener of this.releasedListeners) listener(provider, name)
+      },
+    }
   }
-}
 
-export function holdAccount(provider: string, name: string, holder: AccountHolder): AccountHold {
-  const key = accountKey(provider, name)
-  let account = held.get(key)
-  const first = !account
-  if (!account) {
-    account = { provider, name, entries: new Set() }
-    held.set(key, account)
+  /** This host's holders of one account. */
+  holders(provider: string, name: string): AccountHolder[] {
+    return [...(this.held.get(accountKey(provider, name))?.entries ?? [])].map((entry) => entry.holder)
   }
-  const entry: Entry = { holder }
-  account.entries.add(entry)
-  if (first) writeLease()
-  let released = false
-  return {
-    provider,
-    name,
-    release: () => {
-      if (released) return
-      released = true
-      const current = held.get(key)
-      if (!current?.entries.delete(entry) || current.entries.size) return
-      held.delete(key)
-      writeLease()
-      for (const listener of releasedListeners) listener(provider, name)
-    },
+
+  /** Which held account a live binding runs on, if any. */
+  binding(binding: string): { provider: string; name: string } | undefined {
+    for (const account of this.held.values())
+      for (const entry of account.entries)
+        if (entry.holder.kind === "session" && entry.holder.binding === binding)
+          return { provider: account.provider, name: account.name }
+    return undefined
   }
-}
 
-/** This host's holders of one account. */
-export function accountHolders(provider: string, name: string): AccountHolder[] {
-  return [...(held.get(accountKey(provider, name))?.entries ?? [])].map((entry) => entry.holder)
-}
+  /** Called after an account's last holder on this host lets go. */
+  onReleased(listener: (provider: string, name: string) => void): () => void {
+    this.releasedListeners.add(listener)
+    return () => this.releasedListeners.delete(listener)
+  }
 
-/** Which held account a live binding runs on, if any. */
-export function bindingAccount(binding: string): { provider: string; name: string } | undefined {
-  for (const account of held.values())
-    for (const entry of account.entries)
-      if (entry.holder.kind === "session" && entry.holder.binding === binding)
-        return { provider: account.provider, name: account.name }
-  return undefined
-}
+  /**
+   * Whether another live host holds the account. A host that cannot be checked
+   * counts as holding it: removal waits rather than guessing.
+   */
+  async heldElsewhere(provider: string, name: string): Promise<boolean> {
+    const key = accountKey(provider, name)
+    const files = await readdir(holdsDir()).catch(() => [])
+    for (const file of files) {
+      if (!file.endsWith(".json") || file === `${process.pid}.json`) continue
+      const path = join(holdsDir(), file)
+      let lease: z.infer<typeof Lease>
+      try {
+        lease = Lease.parse(JSON.parse(await readFile(path, "utf8")))
+      } catch {
+        continue
+      }
+      let alive: boolean
+      try {
+        alive = await processIdentityMatches({ pid: lease.pid, startedAt: lease.startedAt, signal: AbortSignal.timeout(LIVENESS_TIMEOUT_MS) })
+      } catch {
+        alive = true
+      }
+      if (!alive) {
+        await rm(path, { force: true })
+        continue
+      }
+      if (lease.accounts.includes(key)) return true
+    }
+    return false
+  }
 
-/** Called after an account's last holder on this host lets go. */
-export function onAccountReleased(listener: (provider: string, name: string) => void): () => void {
-  releasedListeners.add(listener)
-  return () => releasedListeners.delete(listener)
-}
-
-/**
- * Whether another live host holds the account. A host that cannot be checked
- * counts as holding it: removal waits rather than guessing.
- */
-export async function heldElsewhere(provider: string, name: string): Promise<boolean> {
-  const key = accountKey(provider, name)
-  const files = await readdir(holdsDir()).catch(() => [])
-  for (const file of files) {
-    if (!file.endsWith(".json") || file === `${process.pid}.json`) continue
-    const path = join(holdsDir(), file)
-    let lease: z.infer<typeof Lease>
+  /** Rewritten only when an account gains its first holder or loses its last. */
+  private writeLease(): void {
+    const path = leasePath(process.pid)
     try {
-      lease = Lease.parse(JSON.parse(await readFile(path, "utf8")))
-    } catch {
-      continue
+      if (!this.held.size) {
+        rmSync(path, { force: true })
+        return
+      }
+      mkdirSync(holdsDir(), { recursive: true, mode: 0o700 })
+      const temporary = `${path}.tmp`
+      writeFileSync(temporary, JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        startedAt: HOST_STARTED_AT,
+        accounts: [...this.held.keys()],
+      }), { mode: 0o600 })
+      renameSync(temporary, path)
+    } catch (error) {
+      hostWarn("accounts", "account lease could not be written", { error: error instanceof Error ? error.message : String(error) })
     }
-    let alive: boolean
-    try {
-      alive = await processIdentityMatches({ pid: lease.pid, startedAt: lease.startedAt, signal: AbortSignal.timeout(LIVENESS_TIMEOUT_MS) })
-    } catch {
-      alive = true
-    }
-    if (!alive) {
-      await rm(path, { force: true })
-      continue
-    }
-    if (lease.accounts.includes(key)) return true
   }
-  return false
 }

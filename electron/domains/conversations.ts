@@ -19,7 +19,6 @@ import { providerHost } from "../providers/index.js"
 import { resumes } from "../providers/live-capabilities.js"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "@mako/host/threads"
-import { bindingAccountEnv } from "../accounts.js"
 import { resolveHarnessLaunch, resolveNativeLaunch } from "../harnesses.js"
 import { bindDrivers, nativeStopToken, resumeNative, startFresh, threadRun, waitForNativeRun } from "../drivers.js"
 import { TransferInputSchema } from "@mako/host/contracts/conversation-control"
@@ -86,7 +85,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       return driver?.resume.kind === "native" ? driver.resume.checkpoint(path) : Promise.resolve(undefined)
     },
     nativePath: (session) => catalog.nativePath(session),
-    accountEnv: bindingAccountEnv,
+    accountEnv: (binding) => providerHost.accounts.bindingEnv(binding),
+    signInState: (harness, account) => providerHost.accounts.signInState(harness, account),
     emitSession: async (provider, thread) => {
       const emitter = providerHost.sessionEmitters.get(provider)
       return emitter ? emitter.emit(thread) : null

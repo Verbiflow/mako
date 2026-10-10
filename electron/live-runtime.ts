@@ -11,7 +11,7 @@ import type {
   ConversationControl,
 } from "@mako/host/contracts/conversation-control"
 import type {
-  ProviderLiveDriver,
+  AdmittedLiveDriver,
   ConversationTools,
 } from "./providers/live-driver.js"
 import type { LiveJournal } from "./live-journal.js"
@@ -23,7 +23,7 @@ import type { PlanBuild } from "@mako/host/contracts/plan-builds"
 import type { ResidencyBudget } from "@mako/host/contracts/residency"
 import type { FailureBoundary } from "@mako/host/base/error-message"
 export interface ProviderConnection {
-  driver: ProviderLiveDriver
+  driver: AdmittedLiveDriver
   session: LiveSessionState
 }
 
@@ -39,13 +39,13 @@ export interface Resident {
   snapshot: LiveSnapshot
   journalSnapshot?: LiveSnapshot
   journal: LiveJournal
-  driver: ProviderLiveDriver | null
+  driver: AdmittedLiveDriver | null
   storageFault?: boolean
   generation: number
   opening: boolean
   openingOperation?: Promise<void>
   /** A driver start still in its native setup; Close cancels it instead of waiting it out. */
-  starting?: { driver: ProviderLiveDriver; bindingId: string }
+  starting?: { driver: AdmittedLiveDriver; bindingId: string }
   /** Cleanup of bindings whose process exited by itself; a start of the same binding waits for it. */
   exited?: Map<string, Promise<void>>
   pendingCharacters: number
@@ -104,13 +104,15 @@ export interface Dependencies {
   nativePath?(session: LiveSessionState): string | undefined
   /** The environment of the account a binding ran on, to find its native session; host-only. */
   accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
+  /** The account a harness has selected and a digest of `account`'s credentials. Without it, work paused on a sign-out waits to be resumed by hand. */
+  signInState?(harness: string, account: string): Promise<{ selected: string; credential: string }>
   /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   /** The same folder in the project a since-removed worktree holding `cwd` was made from; undefined while `cwd` is there. */
   projectFolderOfRemoved?(cwd: string): string | undefined
   /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
   settled?(conversationId: string): void
-  driver(provider: string): ProviderLiveDriver | undefined
+  driver(provider: string): AdmittedLiveDriver | undefined
   /** Writes a conversation into the provider's own session store; null when it has no writer. */
   emitSession?(provider: string, thread: Thread): Promise<EmitResult | null>
   history(path: string, before?: number): Promise<ThreadPage | null>
@@ -171,7 +173,7 @@ export interface LiveAccess {
   ): (event: LiveDriverEvent) => void
   nativeStart(
     resident: Resident,
-    driver: ProviderLiveDriver,
+    driver: AdmittedLiveDriver,
     bindingId: string,
     start: () => Promise<LiveSessionState>
   ): Promise<LiveSessionState>

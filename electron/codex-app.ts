@@ -8,7 +8,7 @@ import { CodexPermissionObserver, codexApprovalEnvironment } from "./providers/c
 import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import { preparePrompt, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
-import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
+import type { ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./providers/codex/agents.js"
 import { CodexRolloutCalls } from "./providers/codex/rollout-calls.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
@@ -21,13 +21,12 @@ import type {
   ProviderSteerResult,
 } from "./providers/live-driver.js"
 import { resolveCodexExecutable } from "./providers/codex/executable.js"
-import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderStartOptions } from "./providers/live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions } from "./providers/live-driver.js"
 import { hostWarn } from "@mako/host/base/host-log"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
-import { resolveAccountLaunch, observeAccountUsage } from "./accounts.js"
 import { mergeWindows } from "@mako/host/contracts/account-usage"
 import { CodexDecoder } from "./providers/codex/decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
@@ -144,23 +143,12 @@ export function createCodexEngine() {
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
 
-  function codexAppStart(
-    cwd: string,
-    options: ProviderStartOptions
-  ): Promise<LiveSessionState> {
-    return traceProviderLaunch("codex", options.conversationId, trace => startCodex(cwd, options, trace))
-  }
-
-  async function startCodex(
-    cwd: string,
-    options: ProviderStartOptions,
-    trace: ProviderLaunchTrace
-  ): Promise<LiveSessionState> {
+  async function startCodex(cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState> {
+    const { trace } = options
     const id = options.conversationId
     const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
     const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? Promise.resolve({ cwd: workingDir, generatedAt: Date.now(), servers: [], providers: [] }))
-    const { env, account: configuredAccount } = await trace.step("account", () => options.accountLaunch ?? resolveAccountLaunch("codex", process.env))
-    const account = Promise.resolve(configuredAccount.name)
+    const { env, account: configuredAccount } = options.accountLaunch
     if (options.conversationTools)
       env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
     applyControlEnvironment(env, options.conversationTools?.control)
@@ -250,10 +238,7 @@ export function createCodexEngine() {
         },
         unhandled: (kind, reason, raw) =>
           raw === undefined ? engine.unhandled(live, kind) : engine.unknown(live, kind, reason ?? "unknown", raw),
-        usage: (windows) => {
-          void account.then((name) =>
-            observeAccountUsage("codex", name, (previous) => mergeWindows(previous, windows, Date.now())))
-        },
+        usage: (windows) => options.observeUsage((previous) => mergeWindows(previous, windows, Date.now())),
         rewound: (run) => emit({ type: "live-rewound", id: live.id, run }),
         observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
         observeAgents: (item, replay, toolId) => {
@@ -726,7 +711,7 @@ export function createCodexEngine() {
   }
 
   return {
-    start: codexAppStart,
+    start: startCodex,
     prompt: codexAppPrompt,
     setMode: codexAppSetMode,
     permission: codexAppPermission,

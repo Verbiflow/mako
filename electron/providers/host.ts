@@ -1,6 +1,5 @@
 import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpSource, ProviderSkillSource } from "@mako/host/tools"
 import type { ProviderArtifactPreview } from "@mako/host/workspaces"
-import type { ProviderLiveDriver } from "./live-driver.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderConnectionCapability } from "./connection-capability.js"
@@ -13,9 +12,9 @@ import type { ProviderUpdateSource } from "./update-source.js"
 import type { ProviderUsageHistory } from "@mako/host/usage"
 import { ProviderRegistry } from "./registry.js"
 import { DiscoveryProcesses } from "./discovery-process.js"
-import { validateLiveDriver } from "./live-driver.js"
-import { withNativeExclusion } from "./native-exclusion.js"
-import { withExecutionAdmission } from "./execution-admission.js"
+import { LiveDrivers } from "./live-drivers.js"
+import { accountAdmission } from "./execution-admission.js"
+import { HarnessAccounts } from "../accounts.js"
 
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
@@ -26,7 +25,7 @@ export interface ProviderHost {
   skillEditing: ProviderRegistry<ProviderEditingCapability>
   mcpEditing: ProviderRegistry<ProviderEditingCapability>
   artifactPreviews: ProviderRegistry<ProviderArtifactPreview>
-  liveDrivers: ProviderRegistry<ProviderLiveDriver>
+  liveDrivers: LiveDrivers
   /** Each harness's native-event decoder, for fixtures and the decode tool. */
   decoders: ProviderRegistry<ProviderDecoderSource>
   nativeRunners: ProviderRegistry<NativeRunner>
@@ -37,6 +36,8 @@ export interface ProviderHost {
   skillSources: ProviderRegistry<ProviderSkillSource>
   sessionEmitters: ProviderRegistry<ProviderSessionEmitter>
   accountCapabilities: ProviderRegistry<ProviderAccountCapability>
+  /** The accounts each harness can run on, over `accountCapabilities`. */
+  accounts: HarnessAccounts
   /** Transports with their own sign-in, shown and driven from Settings. */
   connections: ProviderRegistry<ProviderConnectionCapability>
   /** How each provider's runtime updates — and whether Mako can run it. */
@@ -50,6 +51,8 @@ export interface ProviderHost {
 export type ProviderModule = (host: ProviderHost) => void
 
 export function createProviderHost(): ProviderHost {
+  const accountCapabilities = new ProviderRegistry<ProviderAccountCapability>()
+  const accounts = new HarnessAccounts(accountCapabilities)
   return {
     harnesses: new ProviderRegistry(),
     hooks: new ProviderRegistry(),
@@ -58,7 +61,7 @@ export function createProviderHost(): ProviderHost {
     skillEditing: new ProviderRegistry(),
     mcpEditing: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
-    liveDrivers: new ProviderRegistry(validateLiveDriver, driver => withExecutionAdmission(withNativeExclusion(driver))),
+    liveDrivers: new LiveDrivers(accountAdmission(accounts)),
     decoders: new ProviderRegistry(),
     nativeRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),
@@ -70,7 +73,8 @@ export function createProviderHost(): ProviderHost {
     connections: new ProviderRegistry(),
     updateSources: new ProviderRegistry(),
     usageHistories: new ProviderRegistry(),
-    accountCapabilities: new ProviderRegistry(),
+    accountCapabilities,
+    accounts,
     discovery: new DiscoveryProcesses(),
   }
 }

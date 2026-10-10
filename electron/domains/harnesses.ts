@@ -10,10 +10,10 @@ import { assessProviderResume } from "../provider-recovery.js"
 import { RuntimeUpdates } from "../runtime-updates.js"
 import { resumableHarnesses } from "../drivers.js"
 import { harnessProfile, harnessProfiles, harnessProfilesNow, onHarnessProfile, refreshHarnessProfiles } from "../harnesses.js"
-import { accountCatalog, accountUsage, captureAccount, keepAccount, onAccountUsage, removeAccount, selectAccount, useResetCredit } from "../accounts.js"
+import type { HarnessAccounts } from "../accounts.js"
 import { type AccountHarness, type AccountProvider } from "@mako/host/contracts/accounts"
 import { accountRemovalSessions } from "../account-removal-sessions.js"
-import { cancelAccountLogin, startAccountLogin, submitAccountLoginCode, waitAccountLogin } from "../account-login.js"
+import { AccountLogins } from "../account-login.js"
 import type { ProviderConnectionAction } from "@mako/host/contracts/provider-connection"
 import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadCatalog } from "@mako/host/threads"
@@ -27,6 +27,9 @@ export interface Harnesses {
    * them: every host on this machine launches the same binaries.
    */
   updates: RuntimeUpdates
+  /** The accounts each harness runs on, their usage and what holds them. */
+  accounts: HarnessAccounts
+  logins: AccountLogins
   accountRemoval: ReturnType<typeof accountRemovalSessions>
   /** Whether a native session can be resumed live, or why not. */
   assessResume(binding: ProviderBinding): Promise<ResumeVerdict>
@@ -56,11 +59,14 @@ export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): 
       void refreshHarnessProfiles(provider)
     },
   })
-  onAccountUsage((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
+  const { accounts } = providerHost
+  accounts.usage.onChange((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
   onHarnessProfile(({ profile, cwd }) => emit({ type: "harness-profile", profile, cwd }))
   return {
     updates,
-    accountRemoval: accountRemovalSessions(live, (harness, name, event) => emit({ type: "account-removal", harness, name, event })),
+    accounts,
+    logins: new AccountLogins(accounts),
+    accountRemoval: accountRemovalSessions(accounts, live, (harness, name, event) => emit({ type: "account-removal", harness, name, event })),
     async assessResume(binding) {
       // Closed native records may be relocated; neither path grants a reopen.
       const current = binding.nativeId
@@ -114,18 +120,19 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
     })
   }
   /* Harness accounts: several logins per CLI, Orca-style isolated homes. */
-  methods.handle("mako:accounts", () => accountCatalog())
-  methods.handle("mako:account-login-start", (harness: AccountHarness, renew?: string) => startAccountLogin(harness, renew))
-  methods.handle("mako:account-login-wait", (id: string) => waitAccountLogin(id))
-  methods.handle("mako:account-login-code", (id: string, code: string) => submitAccountLoginCode(id, code))
-  methods.handle("mako:account-login-cancel", (id: string) => cancelAccountLogin(id))
-  methods.handle("mako:account-capture", (harness: AccountHarness, name: string) => captureAccount(harness, name))
-  methods.handle("mako:account-select", (harness: AccountHarness, name: string | null) => selectAccount(harness, name))
-  methods.handle("mako:account-remove", (harness: AccountHarness, name: string) => removeAccount(harness, name))
+  const { accounts, logins } = harnesses
+  methods.handle("mako:accounts", () => accounts.catalog())
+  methods.handle("mako:account-login-start", (harness: AccountHarness, renew?: string) => logins.start(harness, renew))
+  methods.handle("mako:account-login-wait", (id: string) => logins.wait(id))
+  methods.handle("mako:account-login-code", (id: string, code: string) => logins.submitCode(id, code))
+  methods.handle("mako:account-login-cancel", (id: string) => logins.cancel(id))
+  methods.handle("mako:account-capture", (harness: AccountHarness, name: string) => accounts.capture(harness, name))
+  methods.handle("mako:account-select", (harness: AccountHarness, name: string | null) => accounts.select(harness, name))
+  methods.handle("mako:account-remove", (harness: AccountHarness, name: string) => accounts.remove(harness, name))
   methods.handle("mako:account-removal-plan", (harness: AccountHarness, name: string) => harnesses.accountRemoval.plan(harness, name))
-  methods.handle("mako:account-keep", (harness: AccountHarness, name: string) => keepAccount(harness, name))
-  methods.handle("mako:account-usage", (harness: AccountProvider, name: string) => accountUsage(harness, name))
-  methods.handle("mako:account-reset", (harness: AccountProvider, name: string, attempt: string) => useResetCredit(harness, name, attempt))
+  methods.handle("mako:account-keep", (harness: AccountHarness, name: string) => accounts.keep(harness, name))
+  methods.handle("mako:account-usage", (harness: AccountProvider, name: string) => accounts.usage.read(harness, name))
+  methods.handle("mako:account-reset", (harness: AccountProvider, name: string, attempt: string) => accounts.usage.useResetCredit(harness, name, attempt))
 
   // The picker opens on what is known; each provider's discovery arrives as
   // its own event, so the slowest CLI no longer hides the rest.

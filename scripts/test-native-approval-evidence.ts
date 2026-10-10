@@ -40,7 +40,7 @@ try {
       turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider, available: () => true,
       async start(cwd, options) {
-        emit = options.emit!
+        emit = options.emit
         recoveredIdentities = options.observedApprovals ?? []
         // As every real driver does: a resumed session names the source it reopened.
         return { id, nativeId: "native-session", nativePath: options.resume ? options.threadPath : undefined, cwd, harness: provider, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] } satisfies LiveSessionState

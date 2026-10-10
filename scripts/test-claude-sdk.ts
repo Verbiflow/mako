@@ -30,6 +30,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { claudeAuthCause, claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
 import type { ClaudeCredentialState } from "../electron/providers/claude/accounts.ts"
 import { installHostLog, flushHostLog, type HostLogFields } from "@mako/host/base/host-log"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 const authLogRoot = await mkdtemp(join(tmpdir(), "mako-claude-auth-diagnostics-"))
 installHostLog(join(authLogRoot, "host.log"))
@@ -142,10 +143,10 @@ const dependencies: ClaudeSdkDependencies = {
   },
 }
 const driver = createClaudeSdkDriver(dependencies)
-await driver.start("/tmp", {
+await driver.start("/tmp", admitted("claude", {
   conversationId: "sdk-fixture",
   emit: (event) => events.push(event),
-})
+}))
 const delivery: PromptDeliveryEvidence[] = []
 const attemptId = randomUUID()
 await driver.prompt("sdk-fixture", "Begin", [], undefined, { operationId: randomUUID(), attemptId, report: (evidence) => delivery.push(evidence) })
@@ -237,7 +238,7 @@ await assert.rejects(
     configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: configDir } }, account: { name: "fixture-launch" } }),
     query: async (options) => ({ ...(await dependencies.query(options)), [Symbol.asyncIterator]: dying }),
   })
-  await dyingDriver.start("/tmp/work", { conversationId, emit: (event) => deaths.push(event) })
+  await dyingDriver.start("/tmp/work", admitted("claude", { conversationId, emit: (event) => deaths.push(event) }))
   await dyingDriver.prompt(conversationId, "Begin", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
   const before = deaths.length
   fail?.(new Error("Claude Code process terminated by signal SIGKILL"))
@@ -267,7 +268,7 @@ await assert.rejects(
     query: async (options) => ({ ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
       close: () => messages.close(), interrupt: async () => {} }),
   })
-  await stopDriver.start("/tmp/work", { conversationId, emit: (event) => stops.push(event) })
+  await stopDriver.start("/tmp/work", admitted("claude", { conversationId, emit: (event) => stops.push(event) }))
   await stopDriver.prompt(conversationId, "sleep 90", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
   await stopDriver.cancel(conversationId)
   const stopped = stops.findLast((event) => event.type === "live-session")
@@ -298,7 +299,7 @@ await assert.rejects(
     hooks = options.options.hooks
     return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
-  await hookDriver.start("/tmp/work", { conversationId: "hook-fixture", emit: (event) => events.push(event) })
+  await hookDriver.start("/tmp/work", admitted("claude", { conversationId: "hook-fixture", emit: (event) => events.push(event) }))
   const submitted = hooks?.UserPromptSubmit?.at(-1)?.hooks[0]
   assert.ok(submitted, "the transcript hook listens to UserPromptSubmit")
   await submitted({ hook_event_name: "UserPromptSubmit", session_id: "hook-fixture", transcript_path: "/claude/projects/-tmp-work/hook-fixture.jsonl", cwd: "/tmp/work", prompt: "Begin" }, undefined, { signal: new AbortController().signal })
@@ -322,10 +323,10 @@ const racing = createClaudeSdkDriver({
     return dependencies.query(options)
   },
 })
-const starting = racing.start("/tmp", {
+const starting = racing.start("/tmp", admitted("claude", {
   conversationId: "closing",
   emit: () => {},
-})
+}))
 racing.close("closing")
 configured?.()
 await assert.rejects(starting, /closed while configuring/)
@@ -403,7 +404,7 @@ for (const confirmed of [true, false]) {
     postCompact = options.options.hooks?.PostCompact?.at(-1)?.hooks[0]
     return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
-  await compactDriver.start("/disposable", { conversationId: "compact-fixture", emit: (event) => compactEvents.push(event) })
+  await compactDriver.start("/disposable", admitted("claude", { conversationId: "compact-fixture", emit: (event) => compactEvents.push(event) }))
   assert.ok(compactDriver.compaction?.kind === "supported")
   await compactDriver.compaction.start("compact-fixture", "compact-action")
   const command = await input?.next()
@@ -500,7 +501,7 @@ console.log("PASS: Claude compaction requires a manual boundary and the matching
   const backgroundDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
     return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
-  await backgroundDriver.start("/disposable", { conversationId: "background-fixture", emit: (event) => backgroundEvents.push(event) })
+  await backgroundDriver.start("/disposable", admitted("claude", { conversationId: "background-fixture", emit: (event) => backgroundEvents.push(event) }))
   const reported = () => backgroundEvents.findLast((event) => event.type === "live-session")?.session.backgroundTasks
   const changed = (tasks: { task_id: string; task_type: string; description: string; ambient?: boolean }[]) =>
     messages.send({ type: "system", subtype: "background_tasks_changed", tasks, uuid: randomUUID(), session_id: "background-fixture" })
@@ -565,7 +566,7 @@ const assistant: SDKAssistantMessage = {
       interrupt: async () => { onInterrupt?.(); await delay(5) } }
   } })
   let onInterrupt: (() => void) | undefined
-  await turnDriver.start("/disposable", { conversationId: "turn-fixture", emit: (event) => turnEvents.push(event) })
+  await turnDriver.start("/disposable", admitted("claude", { conversationId: "turn-fixture", emit: (event) => turnEvents.push(event) }))
   const session = () => turnEvents.findLast((event) => event.type === "live-session")?.session
   const opened = () => turnEvents.flatMap((event) =>
     event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : []).filter((update) => update.kind === "provider-turn")
@@ -657,7 +658,7 @@ console.log("PASS: A turn Claude starts after a background task opens with its c
   const noticeDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
     return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
-  await noticeDriver.start("/disposable", { conversationId: "notice-fixture", emit: (event) => noticeEvents.push(event) })
+  await noticeDriver.start("/disposable", admitted("claude", { conversationId: "notice-fixture", emit: (event) => noticeEvents.push(event) }))
   const session = () => noticeEvents.findLast((event) => event.type === "live-session")?.session
   const updates = () => noticeEvents.flatMap((event) =>
     event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
@@ -1019,7 +1020,7 @@ try {
   const replayDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
     return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
   } })
-  await replayDriver.start("/disposable", { conversationId: "steer-replay", emit: (event) => replayEvents.push(event) })
+  await replayDriver.start("/disposable", admitted("claude", { conversationId: "steer-replay", emit: (event) => replayEvents.push(event) }))
   const session = () => replayEvents.findLast((event) => event.type === "live-session")?.session
   const steering = replayDriver.steering
   assert.ok(steering.kind === "supported")

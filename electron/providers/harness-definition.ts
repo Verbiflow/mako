@@ -258,7 +258,7 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   }
   const absent: HarnessRecord["absent"] = {}
   const install = <T extends ProviderCapability>(
-    registry: ProviderRegistry<T>,
+    registry: Pick<ProviderRegistry<T>, "register">,
     family: HarnessFamily,
     value: T | Absent
   ) => {

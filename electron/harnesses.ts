@@ -1,4 +1,3 @@
-import { accountEnv } from "./accounts.js"
 import { realpath } from "node:fs/promises"
 import { resolveHarnessTuning, withCatalogDefaults } from "./harness-models.js"
 import type { NativeRunOptions } from "./providers/native-runner.js"
@@ -197,7 +196,7 @@ async function loadProfile(
   const loader = providerHost.profiles.get(harness)
   if (!loader) return unknownProviderProfile(harness, "Unknown provider")
   const revision = profileRevision(harness)
-  const env = await accountEnv(harness, process.env)
+  const env = await providerHost.accounts.env(harness, process.env)
   assertProfileRevision(harness, revision)
   const accountKey = loader.cacheKey(env)
   let scope = cwd

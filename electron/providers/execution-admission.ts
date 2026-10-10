@@ -1,27 +1,33 @@
-import type { AccountLaunch } from "../accounts.js"
+import { traceProviderLaunch } from "../provider-launch.js"
+import { ExecutionIdentityMismatch, type AccountLaunch, type HarnessAccounts } from "../accounts.js"
+import type { UsageAmendment } from "../account-usage-readings.js"
 import type { ExecutionContext } from "@mako/host/contracts/execution-context"
 import { confirmAccount } from "@mako/host/base/execution-context"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import type { ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
+import type { AdmittedLiveDriver, ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
 import { preparePrompt, preparePromptAsync } from "./prompt-dispatch.js"
 
-interface AccountAdmission {
+export interface AccountAdmission {
   /** Holds the account for `binding` until the launch's `hold` is released. */
   resolve(provider: string, binding: string): Promise<AccountLaunch>
   assertCurrent(provider: string, launch: AccountLaunch): Promise<void>
   /** The email listed for the launch account, compared with what the native process reports. */
   principal(provider: string, launch: AccountLaunch): Promise<string | undefined>
-  mismatch(principal: string, expected: string): Promise<Error>
+  mismatch(principal: string, expected: string): Error
+  /** A session's own report of its launch account's limits. */
+  observeUsage(provider: string, launch: AccountLaunch, amend: UsageAmendment): void
 }
 
-const accounts: AccountAdmission = {
-  resolve: async (provider, binding) => (await import("../accounts.js")).resolveAccountLaunch(provider, process.env, { holder: { kind: "session", binding } }),
-  assertCurrent: async (provider, launch) => (await import("../accounts.js")).assertAccountLaunch(provider, launch),
-  principal: async (provider, launch) => launch.selection.kind === "unavailable"
-    ? undefined
-    : (await import("../accounts.js")).accountPrincipal(provider, launch.account.name),
-  mismatch: async (principal, expected) => new (await import("../accounts.js")).ExecutionIdentityMismatch(principal, expected),
+/** Admission as the host's accounts decide it. */
+export function accountAdmission(accounts: HarnessAccounts): AccountAdmission {
+  return {
+    resolve: (provider, binding) => accounts.launch(provider, process.env, { holder: { kind: "session", binding } }),
+    assertCurrent: (provider, launch) => accounts.assertLaunch(provider, launch),
+    principal: async (provider, launch) => launch.selection.kind === "unavailable" ? undefined : accounts.principal(provider, launch.account.name),
+    mismatch: (principal, expected) => new ExecutionIdentityMismatch(principal, expected),
+    observeUsage: (provider, launch, amend) => accounts.usage.observe(provider, launch.account.name, amend),
+  }
 }
 
 interface Owner {
@@ -55,7 +61,7 @@ function confirmed(owner: Owner, session: LiveSessionState): LiveSessionState {
  * external-CLI exclusion. No checks run on streamed tokens. The launch
  * account stays held while its owner exists, so removing it waits for the
  * process; an owner whose cleanup failed may still have one and keeps it. */
-export function withExecutionAdmission(driver: ProviderLiveDriver, admission: AccountAdmission = accounts): ProviderLiveDriver {
+export function withExecutionAdmission(driver: ProviderLiveDriver, admission: AccountAdmission): AdmittedLiveDriver {
   const owners = new Map<string, Owner>()
   const release = (id: string, owner: Owner): void => {
     if (owners.get(id) !== owner) return
@@ -71,8 +77,8 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     if (owners.has(id)) return Promise.reject(new Error("This binding already has an execution owner."))
     const emit = (event: LiveDriverEvent) =>
       options.emit(event.type === "live-session" && owners.get(id) === owner ? { ...event, session: confirmed(owner, event.session) } : event)
-    const owner: Owner = { opening: Promise.resolve().then(async () => {
-      const launch = await admission.resolve(driver.provider, id)
+    const owner: Owner = { opening: Promise.resolve().then(() => traceProviderLaunch(driver.provider, id, async (trace) => {
+      const launch = await trace.step("account", () => admission.resolve(driver.provider, id))
       // Kept before any check can throw, so a superseded open still releases its hold.
       owner.launch = launch
       current(id, owner)
@@ -89,10 +95,14 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
       })
       let session: LiveSessionState
       try {
-        session = await driver.start(cwd, { ...options, emit, accountLaunch: {
-          env: { ...launch.env }, account: { ...launch.account }, selection: { ...launch.selection },
-          credential: launch.credential && { ...launch.credential },
-        } })
+        session = await driver.start(cwd, {
+          ...options, emit, trace,
+          accountLaunch: {
+            env: { ...launch.env }, account: { ...launch.account }, selection: { ...launch.selection },
+            credential: launch.credential && { ...launch.credential },
+          },
+          observeUsage: (amend) => admission.observeUsage(driver.provider, launch, amend),
+        })
       } catch (error) {
         // A rejected handshake may already own a child. Release only after
         // cleanup succeeds; a concurrent Close owns and drains its own path.
@@ -119,7 +129,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
         throw error
       }
       return confirmed(owner, session)
-    }) }
+    })) }
     owners.set(id, owner)
     void owner.opening.catch(() => {
       if (!owner.closing && !owner.cleanupFailed) release(id, owner)
@@ -164,7 +174,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     const expected = await owner.expected
     current(id, owner)
     const confirmation = owner.identity && confirmAccount(owner.identity, expected)
-    if (confirmation?.kind === "differs") throw await admission.mismatch(confirmation.principal, confirmation.expected)
+    if (confirmation?.kind === "differs") throw admission.mismatch(confirmation.principal, confirmation.expected)
     return owner
   }
   const steering = driver.steering

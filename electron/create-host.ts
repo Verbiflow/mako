@@ -18,7 +18,6 @@ import { installProviderChildren } from "@mako/host/base/provider-children"
 import { closeRepositories } from "@mako/git"
 import { watchWake } from "@mako/host/base/wake"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "@mako/host/usage"
-import { accountUsageSpent, completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
 import { abortNative, nativeLifecycleWork, nativeStopToken, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
 import { providerHost } from "./providers/index.js"
@@ -80,7 +79,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     route: async (channel, args) => conversations ? conversations.route(channel, args) : { handled: false },
     presentHistory: (value) => conversations ? conversations.history.present(value) : value,
   })
-  const spent = spendWatch((id) => conversations?.live.session(id)?.harness, accountUsageSpent)
+  const spent = spendWatch((id) => conversations?.live.session(id)?.harness, (harness) => providerHost.accounts.usage.spent(harness))
   function emit(event: HostEvent, client?: string): void {
     if (closing) return
     const limits = spent(event)
@@ -243,7 +242,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       admission,
     })
     const { live, native } = conversations
-    void completePendingRemovals().catch((error) =>
+    void harnesses.accounts.completePendingRemovals().catch((error) =>
       hostWarn("accounts", "pending removals could not be read", { error: error instanceof Error ? error.message : String(error) })
     )
     trace("journals ready")

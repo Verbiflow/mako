@@ -18,6 +18,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 const servers = new OpenCodeServers()
 
@@ -370,7 +371,6 @@ process.stdin.on("end", () => process.exit(0))
   const reply = (data: JsonValue | McpServer[]) => new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } })
   const driver = createOpenCodeDriver({
     servers,
-    env: async () => ({ ...env }),
     approvalRoot: async () => join(home, "approvals"),
     fetch: async (input, init) => {
       const { pathname } = new URL(String(input))
@@ -414,7 +414,7 @@ process.stdin.on("end", () => process.exit(0))
   const activities = () => emitted.flatMap(item => item.type === "live-activity" ? [item.activity] : [])
   const session = () => emitted.flatMap(item => item.type === "live-session" ? [item.session] : []).at(-1)
   try {
-    const started = await driver.start(home, { conversationId: id, emit: item => { emitted.push(item) } })
+    const started = await driver.start(home, admitted("opencode", { conversationId: id, emit: item => { emitted.push(item) } }, { env }))
     assert.equal(started.status, "ready", started.error)
     const assistantMessageID = "msg_a"
     push(event("session.execution.started", { sessionID: root }))

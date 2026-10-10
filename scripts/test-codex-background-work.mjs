@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-codex-background-test-"))
@@ -50,11 +51,11 @@ async function check() {
 
   async function open(first = "start") {
     const id = randomUUID()
-    await codex.start(root, {
+    await codex.start(root, admitted("codex", {
       conversationId: id,
       emit: (event) => events.push(event),
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
-    })
+    }))
     const session = () => events.findLast((event) => event.type === "live-session" && event.session.id === id)?.session
     const texts = () => events.flatMap((event) => event.id !== id ? [] : event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
       .filter((update) => update.kind === "text").map((update) => update.text)

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 // Failures every harness must survive, through each registered harness's real
 // driver against a stand-in native process that speaks its protocol:
@@ -151,7 +152,7 @@ async function main() {
     opencode: await (async () => {
       const { createOpenCodeDriver } = await load("providers/opencode/live-driver.js")
       const { OpenCodeServers } = await load("providers/opencode/servers.js")
-      const driver = createOpenCodeDriver({ servers: new OpenCodeServers(), env: async () => ({ ...process.env }), approvalRoot: async () => join(root, "opencode-approvals") })
+      const driver = createOpenCodeDriver({ servers: new OpenCodeServers(), approvalRoot: async () => join(root, "opencode-approvals") })
       return {
         unproven: {
           exitAfterHandoff: "OpenCode's client decodes every API response with its own schemas, so a stand-in needs its v2 API; scripts/test-opencode-live.ts kills the real server mid-turn",
@@ -200,8 +201,7 @@ async function main() {
     const id = randomUUID()
     const events = []
     const emit = (event) => events.push({ at: performance.now(), event })
-    const accountLaunch = { env: { ...process.env }, account: { name: "default" }, selection: { kind: "unavailable" } }
-    const started = settled(standIn.start(settings.dir, { conversationId: id, emit, mcpSnapshot, accountLaunch }))
+    const started = settled(standIn.start(settings.dir, admitted(provider, { conversationId: id, emit, mcpSnapshot })))
     const pids = await until(`${provider} stand-in launched`, () => readFile(settings.pids, "utf8").then(JSON.parse, () => undefined))
     const sessions = () => events.filter(({ event }) => event.type === "live-session" && event.session.id === id)
     return { id, standIn, events, started, pids, sessions, session: () => sessions().at(-1)?.event.session }

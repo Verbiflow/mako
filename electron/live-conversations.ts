@@ -1,9 +1,9 @@
 import { LiveQuestions } from "./live-questions.js"
 import { disconnectedContext } from "@mako/host/base/execution-context"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch, signInState } from "./accounts.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.js"
 import type { AccountRemovalSession, AccountRemovalWait } from "@mako/host/contracts/accounts"
 import { holdForSignIn, releaseSignIn, signInPause } from "@mako/host/contracts/sign-in-hold"
-import type { ProviderLiveDriver } from "./providers/live-driver.js"
+import type { AdmittedLiveDriver } from "./providers/live-driver.js"
 import { resumes } from "./providers/live-capabilities.js"
 import { verifyRecoveredSession } from "./provider-recovery.js"
 import { retireQuestionsForInput } from "@mako/host/contracts/live-questions"
@@ -1058,7 +1058,7 @@ export class LiveConversations {
   }
 
   /** A process that exited by itself still owns its binding and account until its driver closes it. */
-  private releaseExited(resident: Resident, driver: ProviderLiveDriver, conversation: string, bindingId: string): void {
+  private releaseExited(resident: Resident, driver: AdmittedLiveDriver, conversation: string, bindingId: string): void {
     const cleanup = Promise.resolve()
       .then(() => driver.close(bindingId))
       .catch((error) => hostWarn("live", "an exited session's cleanup failed", { conversation, harness: driver.provider, error: errorMessage({ error }) }))
@@ -1070,7 +1070,7 @@ export class LiveConversations {
   /** Every native start, so Close can cancel its setup and a reconnect never races the exited process's cleanup. */
   private async nativeStart(
     resident: Resident,
-    driver: ProviderLiveDriver,
+    driver: AdmittedLiveDriver,
     bindingId: string,
     start: () => Promise<LiveSessionState>
   ): Promise<LiveSessionState> {
@@ -1087,7 +1087,7 @@ export class LiveConversations {
   /** Start the conversation's first native session; its outcome lands on the resident. */
   private launch(
     resident: Resident,
-    driver: ProviderLiveDriver,
+    driver: AdmittedLiveDriver,
     provider: string,
     cwd: string,
     options: LiveStartOptions,
@@ -1224,6 +1224,8 @@ export class LiveConversations {
 
   /** Completes a new hold: a launch refused before it ran names no account, so it is the one selected. */
   private async recordSignInCredential(resident: Resident, hold: SignInHold): Promise<void> {
+    const signInState = this.dependencies.signInState
+    if (!signInState) return
     try {
       let state = await signInState(hold.harness, hold.account || "default")
       const account = hold.account || state.selected
@@ -1249,7 +1251,8 @@ export class LiveConversations {
     const resident = this.require(id)
     const pause = signInPause(resident.snapshot.requests)
     if (!pause) return null
-    if (!pause.hold.credential) {
+    const signInState = this.dependencies.signInState
+    if (!pause.hold.credential || !signInState) {
       await this.recordSignInCredential(resident, pause.hold)
       return "signed-out"
     }

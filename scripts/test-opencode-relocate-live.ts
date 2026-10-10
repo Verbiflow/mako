@@ -12,6 +12,7 @@ import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 import { accessModeId } from "@mako/host/contracts/access"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 // An OpenCode session going on in another folder, as a Thread's move into its
 // worktree needs: real OpenCode v2 through Mako's driver, in disposable
@@ -34,7 +35,7 @@ const main = join(root, "main")
 const worktree = join(root, "worktree")
 await mkdir(main)
 await mkdir(worktree)
-const driver = createOpenCodeDriver({ servers, env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
+const driver = createOpenCodeDriver({ servers, approvalRoot: async () => join(root, "approvals") })
 
 function conversation() {
   const id = randomUUID()
@@ -68,17 +69,17 @@ const chats: string[] = []
 try {
   const first = conversation()
   chats.push(first.id)
-  const opened = await driver.start(main, { conversationId: first.id, emit: first.emit, tuning: { model }, title: "Relocate", modeId: accessModeId("full") })
+  const opened = await driver.start(main, admitted("opencode", { conversationId: first.id, emit: first.emit, tuning: { model }, title: "Relocate", modeId: accessModeId("full") }, { env }))
   const told = await turn(first, `Remember this word: ${word}. Reply with exactly: noted`)
   assert.equal(told.state.lastStop, "end_turn", told.state.error)
   await driver.close(first.id)
 
   const moved = conversation()
   chats.push(moved.id)
-  const again = await driver.start(worktree, {
+  const again = await driver.start(worktree, admitted("opencode", {
     conversationId: moved.id, emit: moved.emit, tuning: { model }, title: "Relocate", modeId: accessModeId("full"),
     resume: opened.nativeId!, threadPath: opened.nativePath!,
-  })
+  }, { env }))
   assert.equal(again.nativeId, opened.nativeId, "the same native session goes on")
   const recall = await turn(moved, "Use the bash tool to run exactly: pwd\nThen reply with the word I asked you to remember, and nothing else.")
   assert.equal(recall.state.lastStop, "end_turn", recall.state.error)
@@ -93,10 +94,10 @@ try {
   const seed = seeded(thread, await opencode.read(emitted.path))
   const seededChat = conversation()
   chats.push(seededChat.id)
-  await driver.start(main, {
+  await driver.start(main, admitted("opencode", {
     conversationId: seededChat.id, emit: seededChat.emit, tuning: { model }, title: "Seeded", modeId: accessModeId("full"),
     resume: emitted.sessionId, threadPath: emitted.path,
-  })
+  }, { env }))
   const answered = await turn(seededChat, "Reply with exactly: noted")
   assert.equal(answered.state.lastStop, "end_turn", answered.state.error)
   await driver.close(seededChat.id)

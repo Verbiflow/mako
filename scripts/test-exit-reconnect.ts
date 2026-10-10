@@ -41,7 +41,7 @@ try {
       available: () => true,
       async start(_cwd, options) {
         log.push(options.resume ? `start resume ${options.resume}` : "start")
-        emits.set(options.conversationId, options.emit!)
+        emits.set(options.conversationId, options.emit)
         return session(options.conversationId)
       },
       async prompt(id, text, _attachments, _settings, dispatch) {
@@ -64,7 +64,8 @@ try {
       },
       assertCurrent: async () => {},
       principal: async () => undefined,
-      mismatch: async (principal, expected) => new Error(`${principal} is not ${expected}`),
+      mismatch: (principal, expected) => new Error(`${principal} is not ${expected}`),
+      observeUsage: () => {},
     })
     const owner = new LiveConversations({
       root: join(root, provider), appPath: root, driver: () => guarded, history: async () => null, emit: () => {},

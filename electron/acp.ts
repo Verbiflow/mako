@@ -1,11 +1,10 @@
 import { applyControlEnvironment } from "@mako/host/control"
 import { applyThreadEnvironment } from "@mako/host/workspaces"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
-import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
-import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderStartOptions, type ProviderSteerInput, type ProviderSteerResult } from "./providers/live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type ProviderSteerInput, type ProviderSteerResult } from "./providers/live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction, compactionOutcome } from "./acp-compaction.js"
@@ -58,7 +57,6 @@ import type {
   SessionModeState,
   SessionNotification,
 } from "@agentclientprotocol/sdk"
-import { resolveAccountLaunch } from "./accounts.js"
 import { launchContext, reportedRuntime } from "@mako/host/base/execution-context"
 import { ACP_NATIVE_IDENTITY } from "./providers/acp-live-driver.js"
 import { readRuntimeVersion } from "./runtime-updates.js"
@@ -295,18 +293,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
    * this, which makes "keep working on this exact session, interactively" real
    * rather than a transcript hand-off.
    */
-  function liveStart(
-    cwd: string,
-    options: ProviderStartOptions
-  ): Promise<LiveSessionState> {
-    return traceProviderLaunch(harness, options.conversationId, trace => startAcp(cwd, options, trace))
-  }
-
-  async function startAcp(
-    cwd: string,
-    options: ProviderStartOptions,
-    trace: ProviderLaunchTrace
-  ): Promise<LiveSessionState> {
+  async function startAcp(cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState> {
+    const { trace } = options
     const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, RequestError } =
       await trace.step("sdk-load", () => heavy.acpSdk.load(`${harness} session`))
     const policy = source.access
@@ -320,7 +308,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const launchTier = requestedAccess ?? policy?.default
     const launchAccess =
       launchTier && policy?.launch?.includes(launchTier) ? launchTier : null
-    const { env, account } = await trace.step("account", () => options.accountLaunch ?? resolveAccountLaunch(harness, process.env))
+    const { env, account } = options.accountLaunch
     const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
     const launchOptions: AcpLaunchOptions = {
       cwd: workingDir,
@@ -1138,7 +1126,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
   }
 
   return {
-    start: liveStart,
+    start: startAcp,
     prompt: livePrompt,
     compact: liveCompact,
     steer: liveSteer,

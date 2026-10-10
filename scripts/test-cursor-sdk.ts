@@ -18,6 +18,7 @@ import {
 } from "../electron/providers/cursor/sdk/wire.ts"
 import { MAX_STREAMED_TOOL_OUTPUT, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 const run = { agent_id: "agent-1", run_id: "run-1" } as const
 
@@ -695,7 +696,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const activity: string[] = []
   let lastStop: string | undefined
   try {
-    await driver.start(root, {
+    await driver.start(root, admitted("cursor", {
       conversationId: id,
       emit(event) {
         if (event.type === "live-update" && event.update.kind === "event") {
@@ -705,7 +706,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
         if (event.type === "live-activity") activity.push(event.activity?.kind ?? "idle")
         if (event.type === "live-session") lastStop = event.session.lastStop
       },
-    })
+    }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
     const summary = (text: string) => (turn: string): SdkEvent => ({ event: "message", turn, message: { ...run, type: "task", text } })
     const delta = (type: "summary-started" | "summary-completed") => (turn: string): SdkEvent => ({ event: "delta", turn, delta: { type } })
     const turn = async (lines: ((turn: string) => SdkEvent)[], result: Partial<SdkRunResult> = {}) => {

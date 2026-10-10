@@ -205,7 +205,7 @@ assert.deepEqual(
 
 // OpenCode: Plan and custom primary agents are native; Build is hidden behind
 // the ask/edits/full rulesets its session launches with.
-const openCodeDriver = createOpenCodeDriver({ servers, env: async () => ({}), approvalRoot: async () => "/nonexistent" })
+const openCodeDriver = createOpenCodeDriver({ servers, approvalRoot: async () => "/nonexistent" })
 const openCodeLadder = openCodeSessionModes([
   { id: "build", name: "build" },
   { id: "plan", name: "plan" },

@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-startup-gate-"))
 process.env.MAKO_LIFECYCLE_ROOT = root
@@ -61,14 +62,14 @@ async function checkMcpStartup() {
       },
     }
     await assert.rejects(
-      acp.start(process.env.MAKO_LIFECYCLE_ROOT, options),
+      acp.start(process.env.MAKO_LIFECYCLE_ROOT, admitted("startup-gate", options)),
       /MCP readiness gate/
     )
     await assert.rejects(
-      createCodexEngine().start(process.env.MAKO_LIFECYCLE_ROOT, {
+      createCodexEngine().start(process.env.MAKO_LIFECYCLE_ROOT, admitted("codex", {
         ...options,
         conversationId: randomUUID(),
-      }),
+      })),
       /MCP readiness gate/
     )
     assert.equal(calls, 2)

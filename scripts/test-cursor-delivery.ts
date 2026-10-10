@@ -21,6 +21,7 @@ import type {
   SdkResult,
   SdkModelListItem,
 } from "../electron/providers/cursor/sdk/wire.ts"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 type FixtureAnswers = {
   [M in SdkMethod]?: () => SdkResult<M> | Promise<SdkResult<M>>
@@ -110,7 +111,7 @@ try {
   const delayed = createCursorSdkDriver({ auth, stateRoot: () => root, home: root, client: () => delayedClient, models: async () => [{ id: "fixture-model", displayName: "Fixture" }] })
   const delayedId = randomUUID()
   let ready = false
-  const starting = delayed.start(root, { conversationId: delayedId, emit() {} }).then(state => { ready = true; return state })
+  const starting = delayed.start(root, admitted("cursor", { conversationId: delayedId, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } })).then(state => { ready = true; return state })
   await opened.promise
   await tick()
   assert.equal(ready, false, "native open cannot admit input before effective identity settles")
@@ -120,7 +121,7 @@ try {
   assert.equal(identified.executionContext?.sourceImport?.source, "/native/previous-import.db", "a previously indexed import retains native provenance even when no new copy occurred")
   assert.equal(identified.executionContext?.sourceImport?.revision, "verified-snapshot-head", "the parent retains the child snapshot revision")
   await delayed.close(delayedId)
-  await driver.start(root, { conversationId: id, emit() {} })
+  await driver.start(root, admitted("cursor", { conversationId: id, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   const pending = driver.prompt(id, "first", [], undefined, dispatch())
   await tick()
   assert.equal(sends, 1)
@@ -143,7 +144,7 @@ try {
   assert.equal(evidence.at(-1)?.kind, "not-accepted")
   assert.equal(sends, 1, "preflight refusal cannot send")
   await driver.close(id)
-  await driver.start(root, { conversationId: id, emit() {} })
+  await driver.start(root, admitted("cursor", { conversationId: id, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   const lost = driver.prompt(id, "lost reply", [], undefined, dispatch())
   const rejected = assert.rejects(lost, /reply lost/)
   await tick()
@@ -177,9 +178,9 @@ try {
     models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
   })
   const stalledId = randomUUID()
-  await stalled.start(root, { conversationId: stalledId, emit(event) {
+  await stalled.start(root, admitted("cursor", { conversationId: stalledId, emit(event) {
     if (event.type === "live-session") states.push(event.session)
-  } })
+  } }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   const nativeId = states.at(-1)?.nativeId
   assert.ok(nativeId)
   const running = stalled.prompt(stalledId, "work", [], undefined, dispatch())
@@ -244,10 +245,10 @@ try {
     models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
   })
   const orphanId = randomUUID()
-  await orphan.start(root, { conversationId: orphanId, emit(event) {
+  await orphan.start(root, admitted("cursor", { conversationId: orphanId, emit(event) {
     if (event.type === "live-session") orphanStates.push(event.session)
     else orphanUpdates.push(JSON.stringify(event))
-  } })
+  } }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
 
   childActive = { turn: "orphan", runId: "orphan-run" }
   const refusal: PromptDeliveryEvidence[] = []
@@ -330,9 +331,9 @@ try {
     models: async () => planModels,
   })
   const planId = randomUUID()
-  await planned.start(root, { conversationId: planId, emit(event) {
+  await planned.start(root, admitted("cursor", { conversationId: planId, emit(event) {
     if (event.type === "live-session") planStates.push(event.session)
-  } })
+  } }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   assert.ok(planStates.at(-1)?.configOptions.some((option) => option.id === "plan" && option.role === "plan"),
     "every Cursor model offers plan mode")
   const defaultTurn = dispatch()

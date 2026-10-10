@@ -73,7 +73,7 @@ try {
         db.exec(`DELETE FROM ${pending}`)
       }
       if (layout === "mixed-v2") {
-        const located = createOpenCodeDriver({ servers, env: async () => ({}), approvalRoot: async () => root })
+        const located = createOpenCodeDriver({ servers, approvalRoot: async () => root })
         const resume = located.resume
         assert.ok(resume.kind === "native" && resume.locate)
         assert.equal(await resume.locate({ ...binding, path: undefined }, root, { OPENCODE_DB: path }), binding.path, "a binding that lost its path finds its record by native ID in the configured store")

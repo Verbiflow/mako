@@ -6,6 +6,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 // Resuming a thread Codex archived: Codex refuses until it's unarchived, and
 // Mako leaves the archive to Codex. The refusal reaches the caller and no
@@ -49,12 +50,12 @@ async function check() {
     process.env.MAKO_CODEX_ARCHIVED_LOG = log
     process.env.MAKO_CODEX_ARCHIVED_MISSING = missing ? "1" : "0"
     const id = randomUUID()
-    const opened = codex.start(root, {
+    const opened = codex.start(root, admitted("codex", {
       conversationId: id,
       emit: () => {},
       resume: thread,
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
-    })
+    }))
     const outcome = await opened.then((state) => ({ state }), (error) => ({ error }))
     await codex.close(id)
     return { ...outcome, calls: (await readFile(log, "utf8")).trim().split("\n") }

@@ -56,10 +56,8 @@ export const installCodex: ProviderModule = (host) => {
     skills: codexSkillSource,
     sessionEmitter: {
       provider: "codex",
-      // Loaded on use: `accounts` reaches the provider registry this module is part of.
       emit: async (thread) => {
-        const { accountEnv } = await import("../../accounts.js")
-        const store = (await accountEnv("codex", process.env)).CODEX_HOME || undefined
+        const store = (await host.accounts.env("codex", process.env)).CODEX_HOME || undefined
         return emitCodexSession(thread, { store, codexModelProvider: await codexModelProvider(store ?? join(homedir(), ".codex")) })
       },
     },

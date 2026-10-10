@@ -8,6 +8,7 @@ import { CursorSdkAuth, type CursorSdkSpawnOptions } from "../electron/providers
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
 import { memorySecrets } from "@mako/host/base/secrets"
 import type { SdkMethod, SdkResult, SdkModelListItem } from "../electron/providers/cursor/sdk/wire.ts"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 type FixtureAnswers = { [K in SdkMethod]?: () => SdkResult<K> }
 
@@ -117,15 +118,15 @@ const driver = createCursorSdkDriver({ auth, stateRoot: () => root, home: root, 
 try {
   // Display discovery fills the same provider-owned cache used by the actual driver.
   await shared(keyA, async () => catalog(keyA.CURSOR_API_KEY), true)
-  const a = await driver.start(root, { conversationId: "A", emit() {} })
+  const a = await driver.start(root, admitted("cursor", { conversationId: "A", emit() {} }, { env }))
   assert.equal(a.settings?.model, keyA.CURSOR_API_KEY)
   assert.equal(requests.length, 0, "startup reuses native display discovery")
   env = keyB
-  const b = await driver.start(root, { conversationId: "B", emit() {} })
+  const b = await driver.start(root, admitted("cursor", { conversationId: "B", emit() {} }, { env }))
   assert.equal(b.settings?.model, keyB.CURSOR_API_KEY, "same public identity cannot reuse another credential's models")
   assert.deepEqual(requests, [keyB.CURSOR_API_KEY])
   env = keyA
-  await driver.start(root, { conversationId: "A2", emit() {} })
+  await driver.start(root, admitted("cursor", { conversationId: "A2", emit() {} }, { env }))
   assert.deepEqual(requests, [keyB.CURSOR_API_KEY])
 } finally {
   for (const id of ["A", "B", "A2"]) await driver.close(id)

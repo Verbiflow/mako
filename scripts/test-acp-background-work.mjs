@@ -8,6 +8,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-acp-background-test-"))
@@ -65,11 +66,11 @@ async function check() {
     }, { processes: providerHost.discovery, servesMcp: () => false })
     const id = randomUUID()
     const events = []
-    await acp.start(root, {
+    await acp.start(root, admitted(provider, {
       conversationId: id,
       emit: (event) => events.push(event),
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
-    })
+    }))
     const session = () => events.findLast((event) => event.type === "live-session")?.session
     const texts = () => events.flatMap((event) => event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
       .filter((update) => update.kind === "text").map((update) => update.text)

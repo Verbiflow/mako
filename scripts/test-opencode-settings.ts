@@ -8,6 +8,7 @@ import { resolveSessionSettings } from "@mako/sessions/settings"
 import { openCodeProfileLoader } from "../electron/providers/opencode/profile.ts"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
 import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 const servers = new OpenCodeServers()
 
@@ -45,7 +46,7 @@ if (process.argv.includes("--live")) {
     env[name] = join(root, name)
     await mkdir(env[name]!, { recursive: true })
   }
-  const driver = createOpenCodeDriver({ servers, env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
+  const driver = createOpenCodeDriver({ servers, approvalRoot: async () => join(root, "approvals") })
   const conversationId = randomUUID()
   try {
     const started = Date.now()
@@ -54,7 +55,7 @@ if (process.argv.includes("--live")) {
     assert.ok(profile.models.length > 0, "a fresh OpenCode home reports its models")
     assert.ok(profile.settings?.model, profile.configurationError)
     const expected = resolveSessionSettings({ models: profile.models, context: "new", phase: "launch", defaults: profile.settings })
-    const session = await driver.start(root, { conversationId, emit() {}, tuning: expected.settings })
+    const session = await driver.start(root, admitted("opencode", { conversationId, emit() {}, tuning: expected.settings }, { env }))
     console.log(`OpenCode discovery (${discoveryMs} ms, ${profile.models.length} models): ${JSON.stringify(expected.settings)}; native session: ${JSON.stringify(session.settings)}`)
     assert.equal(session.settings?.model, expected.settings.model)
     assert.equal(session.settings?.options?.effort, expected.settings.options?.effort)

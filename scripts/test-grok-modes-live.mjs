@@ -13,6 +13,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const installed = () => { try { execFileSync("grok", ["--version"], { stdio: "ignore" }); return true } catch { return false } }
@@ -98,10 +99,10 @@ async function check() {
         setTimeout(() => grok.respondPermission(id, event.request.id, { kind: "choice", optionId }), 50)
       }
     }
-    const started = await grok.start(cwd, {
+    const started = await grok.start(cwd, admitted("grok", {
       ...options, conversationId: id, emit,
       mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
-    })
+    }))
     const session = () => events.findLast((event) => event.type === "live-session")?.session ?? started
     const prompt = async (text) => {
       await grok.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
