@@ -13,7 +13,7 @@ import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { startCocoaFixture } from "./lib/cocoa-fixture.mjs"
 import { sampleFrontmost, frontmostPid } from "./lib/control-fixture.mjs"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
+import { ensureCuaEmbedded, stopCuaEmbedded } from "@mako/host/control/cua-embedded"
 import { environmentForExecutable } from "@mako/host/base/executable"
 import { mediaExecutable } from "../packages/control-runtime/dist/control-media.js"
 

@@ -11,9 +11,9 @@ import {
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
-import { headlessNodeExecutable } from "@mako/host/base/headless-node"
-import { onMac, onWindows } from "@mako/host/base/platform"
-import type { BrowserExtensionSetup } from "@mako/host/contracts/browser-extension"
+import { headlessNodeExecutable } from "../base/headless-node.js"
+import { onMac, onWindows } from "../base/platform.js"
+import type { BrowserExtensionSetup } from "../contracts/browser-extension.js"
 
 const manifestSchema = z.object({ key: z.string().min(1) })
 

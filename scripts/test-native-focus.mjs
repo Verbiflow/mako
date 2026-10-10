@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
+import { ensureCuaEmbedded, stopCuaEmbedded } from "@mako/host/control/cua-embedded"
 import { resolveExecutable } from "@mako/host/base/executable"
 
 const exec = promisify(execFile)

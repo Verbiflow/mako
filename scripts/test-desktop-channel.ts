@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
 import type { DesktopFrame } from "@mako/host/contracts/desktop-channel"
-import { DesktopChannel } from "../electron/desktop-channel.ts"
+import { DesktopChannel } from "@mako/host/control/desktop-channel"
 import { DesktopLink, type DesktopHandlers, type DesktopLinkOptions } from "../electron/desktop-link.ts"
 import { startWebHost } from "@mako/host/transport/server"
 

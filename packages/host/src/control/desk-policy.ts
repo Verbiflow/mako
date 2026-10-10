@@ -1,4 +1,4 @@
-import { DESK_HOST, DESK_SCHEME } from "@mako/host/contracts/desk-url"
+import { DESK_HOST, DESK_SCHEME } from "../contracts/desk-url.js"
 
 /**
  * Which URLs a hidden desk window may show. The window carries Mako's

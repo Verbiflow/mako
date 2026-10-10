@@ -296,7 +296,7 @@ async function main(app) {
             await until("cancelled native turn settled", snapshot, value => value?.session.status !== "running" && value.requests[1]?.status === "interrupted")
           }
           if (cancelTool) {
-            const { processIdentityMatches } = await import(join(repo, "dist-electron/providers/process-liveness.js"))
+            const { processIdentityMatches } = await import(join(repo, "packages/host/dist/base/process-liveness.js"))
             await until("cancelled native foreground child ended", () => processIdentityMatches({ pid: nativeChild.pid, startedAt: nativeChild.startedAt, signal: AbortSignal.timeout(2000) }), alive => !alive, 10000)
             foregroundChildAgeAtEndMs = Date.now() - nativeChild.startedAt
             if (foregroundChildAgeAtEndMs >= 25000) throw new Error("Foreground child may have reached its 30-second natural exit; cancellation did not prove early termination")

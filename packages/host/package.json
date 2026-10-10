@@ -9,6 +9,8 @@
     "./contracts/*": "./dist/contracts/*.js",
     "./application": "./dist/application/index.js",
     "./application/*": "./dist/application/*.js",
+    "./control": "./dist/control/index.js",
+    "./control/*": "./dist/control/*.js",
     "./terminals": "./dist/terminals/index.js",
     "./terminals/*": "./dist/terminals/*.js",
     "./transport": "./dist/transport/index.js",

@@ -1,13 +1,13 @@
 import { ControlFault } from "@mako/control/control"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
-import { hostWarn } from "@mako/host/base/host-log"
+import { hostWarn } from "../base/host-log.js"
 import {
   ControlWorkers,
   startDesktopControlSession,
   type ControlLaunch,
 } from "@mako/control-runtime/session"
-import { trackProviderChild } from "@mako/host/base/provider-children"
-import type { ControlCredentials } from "./control-service.js"
+import { trackProviderChild } from "../base/provider-children.js"
+import type { ControlCredentials } from "./service.js"
 
 type Session = Awaited<ReturnType<typeof startDesktopControlSession>>
 type NativeDriver = { driver: string; socket: string }

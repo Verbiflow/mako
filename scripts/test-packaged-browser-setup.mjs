@@ -19,7 +19,7 @@ const app = resolve(appArgument)
 const archive = join(app, "Contents/Resources/app.asar")
 const modulePath = moduleArgument
   ? resolve(moduleArgument)
-  : join(archive, "dist-electron/browser-extension-setup.js")
+  : join(archive, "node_modules/@mako/host/dist/control/browser-extension-setup.js")
 const { prepareBrowserExtension } = await import(pathToFileURL(modulePath).href)
 const home = await mkdtemp(join(tmpdir(), "mako-packaged-browser-setup-"))
 const executable = join(app, "Contents/MacOS/Mako")

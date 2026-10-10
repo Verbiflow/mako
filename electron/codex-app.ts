@@ -1,4 +1,4 @@
-import { applyControlEnvironment } from "./control-launch.js"
+import { applyControlEnvironment } from "@mako/host/control"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "@mako/host/base/execution-context"
 import { CODEX_NATIVE_IDENTITY } from "./providers/codex/live-driver.js"
 import { applyThreadEnvironment } from "./thread-environment.js"

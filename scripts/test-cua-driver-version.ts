@@ -9,7 +9,7 @@ import {
   forgetCuaDriverStatus,
   parseCuaDriverVersion,
   updateCuaDriver,
-} from "../electron/cua-driver-version.js"
+} from "@mako/host/control/cua-driver-version"
 
 assert.equal(parseCuaDriverVersion("cua-driver 0.19.3\n"), "0.19.3")
 assert.equal(parseCuaDriverVersion("cua-driver v0.28.0 — driver"), "0.28.0")

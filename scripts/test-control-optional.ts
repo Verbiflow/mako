@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { ControlFault } from "@mako/control/control"
-import { ControlSessions } from "../electron/control-sessions.js"
+import { ControlSessions } from "@mako/host/control/sessions"
 
 const stale = new ControlSessions(async () => undefined, async () => {
   throw new ControlFault("incompatible-session", "CLI and running engine builds differ.", "not-dispatched")

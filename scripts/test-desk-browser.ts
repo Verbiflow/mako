@@ -6,8 +6,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
-import { DeskBrowser, type DeskPage } from "../electron/desk-browser.js"
-import { deskUrlPolicy } from "../electron/desk-browser-policy.js"
+import { DeskBrowser, type DeskPage } from "@mako/host/control/desk-browser"
+import { deskUrlPolicy } from "@mako/host/control/desk-policy"
 import {
   guardDeskNavigation,
   type DeskNavigationEvent,
@@ -21,7 +21,7 @@ import {
   readDevRendererRegistration,
   watchDevRendererRegistration,
   type DevRendererRegistration,
-} from "../electron/dev-renderer-registration.js"
+} from "@mako/host/control/dev-renderer-registration"
 import { deskFile } from "../electron/desk-scheme.js"
 import { deskPreviewFile, resolveDeskPreviewUrl } from "@mako/host/contracts/desk-url"
 import {

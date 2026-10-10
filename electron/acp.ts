@@ -1,4 +1,4 @@
-import { applyControlEnvironment } from "./control-launch.js"
+import { applyControlEnvironment } from "@mako/host/control"
 import { applyThreadEnvironment } from "./thread-environment.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"

@@ -7,7 +7,7 @@ import {
   BrowserTargetSchema,
   BrowserFault,
 } from "@mako/control-runtime/contracts"
-import { startControlService } from "../electron/control-service.js"
+import { startControlService } from "@mako/host/control/service"
 import { browserControlClient } from "@mako/control-runtime/host"
 import { browserFixture } from "./browser-control-fixture.js"
 import type { JsonValue } from "@mako/host/contracts/json"

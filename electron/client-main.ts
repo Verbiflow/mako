@@ -32,7 +32,7 @@ import { DesktopLink } from "./desktop-link.js"
 import { deskPageAnswers, machineAnswers } from "./desktop-answers-electron.js"
 import { desktopUpdates, type DesktopUpdates } from "./desktop-updates-electron.js"
 import { packagedDistribution } from "@mako/host/application/distribution"
-import { deskUrlPolicy } from "./desk-browser-policy.js"
+import { deskUrlPolicy } from "@mako/host/control/desk-policy"
 import { guardDeskNavigation } from "./desk-browser-navigation.js"
 import { installAutomation } from "./automation.js"
 

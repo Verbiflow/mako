@@ -1,6 +1,6 @@
 import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { cocoaFixtureSource as cocoaSource } from "./lib/cocoa-fixture.mjs"
-import { Appshots } from "../dist-electron/appshots.js"
+import { Appshots } from "@mako/host/control/appshots"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -15,9 +15,9 @@ import {
   cuaEmbeddedPid,
   ensureCuaEmbedded,
   stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
+} from "@mako/host/control/cua-embedded"
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
-import { startControlService } from "../dist-electron/control-service.js"
+import { startControlService } from "@mako/host/control/service"
 import {
   frontmostPid,
   sampleFrontmost,

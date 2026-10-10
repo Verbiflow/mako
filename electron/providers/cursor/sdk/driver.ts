@@ -1,5 +1,5 @@
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
-import { applyControlEnvironment } from "../../../control-launch.js"
+import { applyControlEnvironment } from "@mako/host/control"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "@mako/host/base/execution-context"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { applyThreadEnvironment } from "../../../thread-environment.js"

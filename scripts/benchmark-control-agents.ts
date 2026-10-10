@@ -41,7 +41,7 @@ import {
   cuaEmbeddedPid,
   ensureCuaEmbedded,
   stopCuaEmbedded,
-} from "../electron/cua-embedded.js"
+} from "@mako/host/control/cua-embedded"
 import { resolveExecutable } from "@mako/host/base/executable"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import {

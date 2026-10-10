@@ -11,15 +11,13 @@ import { applySkillSync, previewSkillRemove, previewSkillSync } from "../skill-s
 import { workspaceTools, within } from "../workspace-tools.js"
 import { pullRequestTools } from "../pull-request-tools.js"
 import { githubStatus, listBranchPulls } from "../github.js"
-import { cuaDriverStatus } from "../cua-driver-version.js"
 import { resolveExecutable } from "@mako/host/base/executable"
-import { computerPermissions } from "../computer-permissions.js"
 import { presentMachine } from "@mako/host/base/machine"
 import type { LiveConversations } from "../live-conversations.js"
 import type { AgentHost } from "../host.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { McpSyncTarget, SkillSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
-import type { Control } from "./control.js"
+import { computerPermissions, cuaDriverStatus, type Control } from "@mako/host/control"
 import type { Workspaces, WorkspaceMovers } from "./workspaces.js"
 
 /** The `mako` server every agent calls: the workspace, its apps and its pull requests. */

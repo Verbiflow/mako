@@ -6,14 +6,14 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { readFile } from "node:fs/promises"
 import { setTimeout as delay } from "node:timers/promises"
-import { ControlSessions } from "../electron/control-sessions.js"
-import { startControlService } from "../electron/control-service.js"
+import { ControlSessions } from "@mako/host/control/sessions"
+import { startControlService } from "@mako/host/control/service"
 import { BrowserService } from "@mako/control-runtime/browser"
 import { browserFixture } from "./browser-control-fixture.js"
 import {
   applyControlEnvironment,
   controlLine,
-} from "../electron/control-launch.js"
+} from "@mako/host/control/launch"
 const run = promisify(execFile)
 const fixture = await browserFixture()
 const browsers = new BrowserService([fixture.definition])

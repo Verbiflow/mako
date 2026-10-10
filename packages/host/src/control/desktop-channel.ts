@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { LineAssembler } from "@mako/sessions"
 import type { WindowCapturer } from "./appshots.js"
-import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
+import type { UpdateState } from "../contracts/automations-usage-updates.js"
 import {
   DESKTOP_CALLS,
   DESKTOP_LINE_LIMIT,
@@ -15,9 +15,9 @@ import {
   type DesktopParams,
   type DesktopResult,
   type DesktopRole,
-} from "@mako/host/contracts/desktop-channel"
+} from "../contracts/desktop-channel.js"
 import type { DeskPage } from "./desk-browser.js"
-import { hostLog, hostWarn } from "@mako/host/base/host-log"
+import { hostLog, hostWarn } from "../base/host-log.js"
 
 type JsonObject = DesktopResult<"desk-page-send">
 

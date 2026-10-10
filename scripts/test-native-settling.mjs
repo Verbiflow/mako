@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
+} from "@mako/host/control/cua-embedded"
 import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"

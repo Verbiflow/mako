@@ -18,7 +18,7 @@ import {
   type BrowserFocusPolicy,
 } from "../packages/control-runtime/src/browser-service.js"
 import { controlSessionProbe, type SessionProbe } from "./lib/control-session-probe.ts"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "../electron/cua-embedded.js"
+import { ensureCuaEmbedded, stopCuaEmbedded } from "@mako/host/control/cua-embedded"
 import { resolveExecutable } from "@mako/host/base/executable"
 import {
   BrowserCommandSchema,

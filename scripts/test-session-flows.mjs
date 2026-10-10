@@ -101,7 +101,7 @@ async function main(app) {
   const { WorkspaceSnapshots } = await load("dist-electron/workspace-snapshots.js")
   const { installHostLog } = await load("packages/host/dist/base/host-log.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")
-  const { installProviderChildren } = await load("dist-electron/provider-children.js")
+  const { installProviderChildren } = await load("packages/host/dist/base/provider-children.js")
   installHostLog(join(root, "host.log"))
   installProviderChildren(join(root, "profile"))
 

@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import type { WebSocket, WebSocketServer } from "ws"
 import { z } from "zod"
-import { configuredListenPort } from "@mako/host/base/listen-port"
+import { configuredListenPort } from "../base/listen-port.js"
 import type { LocalBrowser } from "@mako/control-runtime/desktop"
-import type { JsonObject } from "@mako/host/contracts/json"
-import { heavy } from "@mako/host/base/heavy-packages"
+import type { JsonObject } from "../contracts/json.js"
+import { heavy } from "../base/heavy-packages.js"
 
 /**
  * One hidden window of Mako's own interface, driven through Chrome's protocol.

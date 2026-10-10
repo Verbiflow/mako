@@ -17,7 +17,7 @@ import { webHostProxy } from "./web-dev-proxy.mjs"
 import { manualDevUpdates } from "./dev-updates.mjs"
 import { buildPreload } from "../scripts/build-preload.mjs"
 import { createHash } from "node:crypto"
-import { publishDevRendererRegistration } from "../dist-electron/dev-renderer-registration.js"
+import { publishDevRendererRegistration } from "@mako/host/control/dev-renderer-registration"
 import { replaceDevHost } from "./dev-host-replacement.mjs"
 
 // ORCA: Electron-based hosts leak this. If it stays set, Electron boots as Node

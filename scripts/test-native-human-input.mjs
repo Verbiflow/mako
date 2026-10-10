@@ -6,7 +6,7 @@ import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
+import { ensureCuaEmbedded, stopCuaEmbedded } from "@mako/host/control/cua-embedded"
 import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 

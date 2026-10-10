@@ -9,7 +9,7 @@ owns the work and acceptance gates.
 ## Baseline before the revised MCP decision
 
 At the start of this investigation, source and signed candidate `0d02dc53d0a315ff` have no Local Control skill
-and no public Local Control MCP adapter. `electron/control-launch.ts` prepends the
+and no public Local Control MCP adapter. `packages/host/src/control/launch.ts` prepends the
 task CLI to PATH, sets its session file and supplies a short `<mako-local-control>`
 prompt paragraph. It says to read `--help`, use composable commands or `exec`,
 verify results and avoid replaying unknown outcomes. `live-conversations.ts`

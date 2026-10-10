@@ -7,7 +7,7 @@ import { promisify } from "node:util"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
+} from "@mako/host/control/cua-embedded"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
 const driver = process.env.MAKO_TEST_DRIVER

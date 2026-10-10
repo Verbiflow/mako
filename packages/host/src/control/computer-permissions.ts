@@ -3,12 +3,12 @@ import { unlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { packagedDistribution } from "@mako/host/application"
-import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "@mako/host/application"
-import type { MakoComputerPermissions } from "@mako/host/contracts/mcp-skills-integrations"
-import { hostEnvironment } from "@mako/host/base/host-environment"
-import { presentMachine } from "@mako/host/base/machine"
-import { onMac } from "@mako/host/base/platform"
+import { packagedDistribution } from "../application/index.js"
+import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "../application/index.js"
+import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
+import { hostEnvironment } from "../base/host-environment.js"
+import { presentMachine } from "../base/machine.js"
+import { onMac } from "../base/platform.js"
 
 const execute = promisify(execFile)
 

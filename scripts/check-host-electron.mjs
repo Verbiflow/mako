@@ -8,7 +8,7 @@ import { entry, hostGraph } from "./lib/host-graph.mjs"
  * a Mac, plain Node on a Linux machine with no display. It loads no Electron
  * at all. What only Electron's main process can do belongs to the desktop app
  * (electron/client-main.ts), which the host asks on /desktop
- * (electron/desktop-channel.ts).
+ * (packages/host/src/control/desktop-channel.ts).
  *
  * Two checks. Every file in @mako/host, loaded or not, names neither package,
  * not even for a type: the package installs where Electron doesn't. Electron's
@@ -29,7 +29,7 @@ const failures = []
 for (const file of packageFiles) {
   const { importedFiles } = ts.preProcessFile(await readFile(file, "utf8"), true, true)
   for (const { fileName } of importedFiles)
-    if (electron.has(fileName)) failures.push(`${file} imports ${fileName}. @mako/host imports nothing from Electron; ask the desktop app on /desktop (electron/desktop-channel.ts) for what only Electron can do.`)
+    if (electron.has(fileName)) failures.push(`${file} imports ${fileName}. @mako/host imports nothing from Electron; ask the desktop app on /desktop (packages/host/src/control/desktop-channel.ts) for what only Electron can do.`)
     else if (fileName === "original-fs" && file !== physicalFiles) failures.push(`${file} imports original-fs. Read the disk as it is through ${physicalFiles}, which works under plain Node too.`)
 }
 
@@ -54,7 +54,7 @@ const chain = (file) => {
 }
 const loading = [...parent.keys()].filter((file) => own(file) && importsElectron(file)).sort()
 for (const file of loading)
-  failures.push(`${file} imports Electron, and the host loads it: ${chain(file)}. Ask the desktop app on /desktop (electron/desktop-channel.ts) for what only Electron can do.`)
+  failures.push(`${file} imports Electron, and the host loads it: ${chain(file)}. Ask the desktop app on /desktop (packages/host/src/control/desktop-channel.ts) for what only Electron can do.`)
 for (const failure of failures) console.error(failure)
 if (failures.length) process.exit(1)
 console.log(`host electron imports: none in ${packageFiles.length} @mako/host files or ${parent.size} loaded files`)

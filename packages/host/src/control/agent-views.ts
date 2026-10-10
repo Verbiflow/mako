@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { setTimeout as delay } from "node:timers/promises"
-import { AGENT_VIEWS_ENV } from "@mako/host/contracts/desktop-channel"
+import { AGENT_VIEWS_ENV } from "../contracts/desktop-channel.js"
 import type { DesktopChannel } from "./desktop-channel.js"
-import { hostLog, hostWarn } from "@mako/host/base/host-log"
+import { hostLog, hostWarn } from "../base/host-log.js"
 
 /** Electron starts, loads the desktop's main process and attaches in about a second; this allows for a cold, busy machine. */
 const ATTACH_TIMEOUT_MS = 30_000

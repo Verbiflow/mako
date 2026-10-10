@@ -1,4 +1,4 @@
-import { applyControlEnvironment } from "../../control-launch.js"
+import { applyControlEnvironment } from "@mako/host/control"
 import { applyThreadEnvironment } from "../../thread-environment.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { resolveAccountLaunch } from "../../accounts.js"

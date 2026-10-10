@@ -59,7 +59,10 @@ reached: the socket server and the method table, and the wire's client end
 which the desktop imports by file and another host through the entry.
 `application/` is the host's own life: its lifecycle (quit, restart, install
 and what each waits for), its updates and local builds, and the installer that
-replaces the app after the host quits. The package reaches its own files
+replaces the app after the host quits. `control/` is browser and computer use:
+the browsers agents drive, the computer-use driver, the previews of both, and
+the host's end of `/desktop` (`desktop-channel.ts`), on which it asks the
+desktop app for what only Electron can do. The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.
 

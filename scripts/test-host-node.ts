@@ -3,13 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ComputerDriverClient } from "@mako/control-runtime/host"
-import { Appshots, type WindowCapturer } from "../electron/appshots.ts"
-import { computerPermissions } from "../electron/computer-permissions.ts"
+import { Appshots, type WindowCapturer } from "@mako/host/control/appshots"
+import { computerPermissions } from "@mako/host/control/computer-permissions"
 import { fileResponse, localFile } from "../electron/file-response.ts"
 import { onMac } from "@mako/host/base/platform"
 import { hostCommand } from "@mako/host/transport/service"
-import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "../electron/agent-views.ts"
-import { DesktopChannel } from "../electron/desktop-channel.ts"
+import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "@mako/host/control/agent-views"
+import { DesktopChannel } from "@mako/host/control/desktop-channel"
 
 /**
  * The host as Node: how a launcher starts it, and the host's own answers

@@ -11,7 +11,7 @@ const host = join(root, packaged ? "node_modules/@mako/host/dist" : "packages/ho
 const { BrowserService } = await import(pathToFileURL(join(runtime, "browser-service.js")).href)
 const { BrowserCommandSchema } = await import(pathToFileURL(join(runtime, "contracts.js")).href)
 const { extensionBrowsers } = await import(pathToFileURL(join(runtime, "browser-extension-registration.js")).href)
-const { ControlPreviews } = await import(pathToFileURL(join(root, "dist-electron/control-previews.js")).href)
+const { ControlPreviews } = await import(pathToFileURL(join(root, "packages/host/dist/control/previews.js")).href)
 const { startWebHost } = await import(pathToFileURL(join(host, "transport/server.js")).href)
 const { hostCallInput } = await import(pathToFileURL(join(host, "contracts/host-call-inputs.js")).href)
 

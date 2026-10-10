@@ -73,7 +73,7 @@ async function runElectron() {
   const { discoverMcpRegistry } =
     await import("../dist-electron/mcp-registry.js")
   const { ensureCuaEmbedded, stopCuaEmbedded } =
-    await import("../dist-electron/cua-embedded.js")
+    await import("@mako/host/control/cua-embedded")
   const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
   const { bindCodexApp, stopCodexApps } =
     await import("../dist-electron/codex-app.js")
@@ -97,7 +97,7 @@ async function runElectron() {
   const catalog = defaultCatalog()
   const { BrowserService } = await import("../packages/control-runtime/dist/browser-service.js")
   const { startControlService } =
-    await import("../dist-electron/control-service.js")
+    await import("@mako/host/control/service")
   const { extensionBrowsers } =
     await import("../packages/control-runtime/dist/browser-extension-registration.js")
   const browser = new BrowserService(
@@ -112,8 +112,8 @@ async function runElectron() {
     browserOperations.push({ conversationId, action: command.action })
     return value
   }
-  const { ControlSessions } = await import("../dist-electron/control-sessions.js")
-  const { controlLine } = await import("../dist-electron/control-launch.js")
+  const { ControlSessions } = await import("@mako/host/control/sessions")
+  const { controlLine } = await import("@mako/host/control/launch")
   const { resolveExecutable } = await import("@mako/host/base/executable")
   const runtimeSnapshot = await snapshotControlRuntime(root)
   const sessions = new ControlSessions(async () => {

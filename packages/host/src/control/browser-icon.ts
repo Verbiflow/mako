@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { promisify } from "node:util"
-import { onMac } from "@mako/host/base/platform"
+import { onMac } from "../base/platform.js"
 
 const execute = promisify(execFile)
 const icons = new Map<

@@ -8,7 +8,7 @@ import { join, resolve } from "node:path"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
+} from "@mako/host/control/cua-embedded"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 

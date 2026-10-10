@@ -71,7 +71,7 @@ import type { NativeActivity, NativeActivityObservation } from "@mako/host/contr
 import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart, drawnWhileOpening } from "@mako/sessions/live-content"
 import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "@mako/host/contracts/live-conversations"
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, STOPPED_CALL_NOTE, TurnSteps } from "./interrupted-turn.js"
-import { controlNote } from "./control-launch.js"
+import { controlNote } from "@mako/host/control"
 import { classifyProviderFailure, classifyStartFailure } from "@mako/host/contracts/provider-failure"
 import { carriedUsage, restorableTotals, spendBetween } from "./session-usage.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type ContextBreakdown } from "@mako/host/contracts/providers-acp"

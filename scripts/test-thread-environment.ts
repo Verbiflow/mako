@@ -12,7 +12,7 @@ import { mkdirSync, realpathSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
 import { AppKeySchema, THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "@mako/host/contracts/thread-environments"
-import { controlNote } from "../electron/control-launch.js"
+import { controlNote } from "@mako/host/control/launch"
 import { ThreadEnvironments, applyThreadEnvironment, folderApp, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadStore } from "../electron/thread-store.js"
 

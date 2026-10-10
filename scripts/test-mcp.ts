@@ -22,7 +22,7 @@ import {
   cuaEmbeddedSocket,
   ensureCuaEmbedded,
   stopCuaEmbedded,
-} from "../electron/cua-embedded.js"
+} from "@mako/host/control/cua-embedded"
 import { atomicJsonMcpMerge, mergeJsonMcpConfig } from "../electron/mcp-sync.js"
 import {
   type McpDiscoveredDefinition,

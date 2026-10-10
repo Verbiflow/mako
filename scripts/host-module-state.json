@@ -34,25 +34,12 @@
     "launch",
     "runtime"
   ],
-  "electron/browser-icon.ts": [
-    "icons"
-  ],
   "electron/codex-app.ts": [
     "closingSessions",
     "sendEvent"
   ],
   "electron/container-runtime.ts": [
     "endpoint"
-  ],
-  "electron/cua-driver-version.ts": [
-    "cache"
-  ],
-  "electron/cua-embedded.ts": [
-    "daemon",
-    "restarts",
-    "starting",
-    "stderr",
-    "stops"
   ],
   "electron/drivers.ts": [
     "closing",
@@ -242,6 +229,19 @@
   ],
   "packages/host/src/contracts/residency.ts": [
     "measures"
+  ],
+  "packages/host/src/control/browser-icon.ts": [
+    "icons"
+  ],
+  "packages/host/src/control/cua-driver-version.ts": [
+    "cache"
+  ],
+  "packages/host/src/control/cua-embedded.ts": [
+    "daemon",
+    "restarts",
+    "starting",
+    "stderr",
+    "stops"
   ],
   "packages/sessions/src/catalog.ts": [
     "workspaceRoots"
