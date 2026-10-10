@@ -9,8 +9,8 @@ import {
   validTimestamp,
   type JsonlReader,
   type UsageEvent,
+  type ProviderUsageHistory,
 } from "../../usage-scan.js"
-import type { ProviderUsageHistory } from "../usage-history.js"
 
 /** Codex's own counts, as the rollout reports them: `input` includes both caches. */
 const RawCodexUsageSchema = z.object({

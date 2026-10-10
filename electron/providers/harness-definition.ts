@@ -18,7 +18,7 @@ import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderRegistry, ProviderCapability } from "./registry.js"
 import type { ProviderSessionEmitter } from "./session-emitter.js"
 import type { ProviderUpdateSource } from "./update-source.js"
-import type { ProviderUsageHistory } from "./usage-history.js"
+import type { ProviderUsageHistory } from "../usage-scan.js"
 /**
  * Why a harness has no capability for a family: the harness itself has no
  * such thing, or it has one Mako does not drive yet. The second is a gap.

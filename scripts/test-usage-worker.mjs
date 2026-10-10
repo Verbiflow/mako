@@ -8,7 +8,7 @@ import { UsageReader } from "../dist-electron/usage-reader.js"
 import { UsageLedger } from "../dist-electron/usage-ledger.js"
 import { usageSummary } from "../dist-electron/usage.js"
 import { providerHost } from "../dist-electron/providers/index.js"
-import { usageHarnesses } from "../dist-electron/usage.js"
+import { usageHarnesses } from "../dist-electron/providers/usage-harnesses.js"
 import { closeRepositories, openRepository, text } from "@mako/git"
 
 const root = await mkdtemp(join(tmpdir(), "mako-usage-worker-"))
@@ -17,7 +17,8 @@ const data = {
   ledgerPath: join(root, "ledger.sqlite"), sessionsRoot: join(root, "sessions"),
   homeRoot: join(root, "home"), conversationsRoot: join(root, "conversations"), env: {}, now,
 }
-const reader = new UsageReader(data)
+const worker = new URL("../dist-electron/usage-worker.js", import.meta.url)
+const reader = new UsageReader(worker, data)
 
 /** Measures responsiveness through the final synchronous work, not just the I/O before it. */
 async function measure(work) {
@@ -78,14 +79,14 @@ try {
 
   // Constructor failure rejects the waiting call; a subsequent explicit read starts a fresh worker.
   const missing = join(root, "missing")
-  const recovery = new UsageReader({ ...data, ledgerPath: join(missing, "ledger.sqlite") })
+  const recovery = new UsageReader(worker, { ...data, ledgerPath: join(missing, "ledger.sqlite") })
   try {
     await assert.rejects(recovery.read(), /unable to open database/)
     await mkdir(missing)
     assert.equal((await recovery.read()).total.messages, 0)
   } finally { await recovery.close() }
 
-  const closing = new UsageReader(data)
+  const closing = new UsageReader(worker, data)
   const interrupted = closing.read()
   const rejected = assert.rejects(interrupted, /closed/)
   await closing.close()

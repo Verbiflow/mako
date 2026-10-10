@@ -23,7 +23,7 @@ import { watchWake } from "@mako/host/base/wake"
 import { installTelemetry } from "./ipc/telemetry.js"
 import { installCloudAccountIpc, type CloudAccount } from "./ipc/cloud-account.js"
 import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./automations.js"
-import { completePendingRemovals } from "./accounts.js"
+import { accountUsageSpent, completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
 import { abortNative, nativeLifecycleWork, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
 import { threadEnvironmentInstructions } from "./thread-environment.js"
@@ -87,7 +87,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     route: async (channel, args) => conversations ? conversations.route(channel, args) : { handled: false },
     presentHistory: (value) => conversations ? conversations.history.present(value) : value,
   })
-  const spent = spendWatch((id) => conversations?.live.session(id)?.harness)
+  const spent = spendWatch((id) => conversations?.live.session(id)?.harness, accountUsageSpent)
   function emit(event: HostEvent, client?: string): void {
     if (closing) return
     const limits = spent(event)
@@ -257,7 +257,10 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     declareControlMethods(methods, control, environment.appRoot, config.executable)
     declareToolMethods(methods, { tools, control, workspace })
     declareTerminalMethods(methods, terminals)
-    const usage = declareUsageMethods(methods, environment.dataRoot)
+    const usage = declareUsageMethods(methods, {
+      dataRoot: environment.dataRoot,
+      worker: new URL("./usage-worker.js", import.meta.url),
+    })
     declareConversationMethods(methods, {
       conversations,
       threads,

@@ -2,7 +2,6 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { MethodTable } from "@mako/host/base/methods"
 import { UsageReader } from "../usage-reader.js"
-import { accountUsageSpent } from "../accounts.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 /** A session write older than this is the catalog catching up, not use. */
@@ -10,16 +9,21 @@ const RECENT_WRITE_MS = 2 * 60_000
 /** A harness busy outside Mako writes constantly; its limits are read again at most this often. */
 const STORE_SPEND_THROTTLE_MS = 60_000
 
-/** The usage ledger, read on first ask. Returns what closes it. */
 /** The usage ledger, opened by the first `mako:usage` call. */
 export interface Usage {
   close(): Promise<void>
 }
 
-export function declareUsageMethods(methods: MethodTable, dataRoot: string): Usage {
+export interface UsageDeps {
+  dataRoot: string
+  /** The script the ledger is read in, off the host; see `UsageReader`. */
+  worker: URL
+}
+
+export function declareUsageMethods(methods: MethodTable, { dataRoot, worker }: UsageDeps): Usage {
   let reader: UsageReader | undefined
   methods.handle("mako:usage", () => {
-    reader ??= new UsageReader({
+    reader ??= new UsageReader(worker, {
       ledgerPath: join(dataRoot, "usage-ledger.sqlite"),
       sessionsRoot: join(homedir(), ".mako", "sessions"),
       homeRoot: homedir(),
@@ -33,9 +37,13 @@ export function declareUsageMethods(methods: MethodTable, dataRoot: string): Usa
 /**
  * Every harness's turn ends here, live or headless; its limits moved. So
  * does any write to its session store, from Mako or a terminal elsewhere.
- * Returns the event to send when a harness's limits are worth reading again.
+ * Returns the event to send when a harness's limits are worth reading again:
+ * `spent` drops its readings and says whether, at most once per `throttle` ms.
  */
-export function spendWatch(harnessOf: (conversationId: string) => string | undefined): (event: HostEvent) => HostEvent | undefined {
+export function spendWatch(
+  harnessOf: (conversationId: string) => string | undefined,
+  spent: (harness: string, throttle?: number) => boolean,
+): (event: HostEvent) => HostEvent | undefined {
   /** Live sessions mid-turn, by id, with the harness that is spending. */
   const spending = new Map<string, string>()
   return (event) => {
@@ -52,6 +60,6 @@ export function spendWatch(harnessOf: (conversationId: string) => string | undef
       ended = event.ref.harness
       throttle = STORE_SPEND_THROTTLE_MS
     }
-    return ended !== undefined && accountUsageSpent(ended, throttle) ? { type: "account-usage-spent", harness: ended } : undefined
+    return ended !== undefined && spent(ended, throttle) ? { type: "account-usage-spent", harness: ended } : undefined
   }
 }

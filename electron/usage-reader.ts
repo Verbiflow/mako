@@ -17,9 +17,14 @@ export class UsageReader {
   private closed = false
   private stopping: Promise<void> | undefined
 
+  private readonly entry: URL
   private readonly data: UsageWorkerData
 
-  constructor(data: UsageWorkerData) { this.data = data }
+  /** `entry` is the worker's script: it supplies the harnesses and answers with `usageSummary`. */
+  constructor(entry: URL, data: UsageWorkerData) {
+    this.entry = entry
+    this.data = data
+  }
 
   /** Concurrent views share one read; the next read resumes the durable ledger's cursors. */
   read(): Promise<UsageSummary> {
@@ -45,7 +50,7 @@ export class UsageReader {
   }
 
   private start(): Worker {
-    const reader = new Worker(new URL("./usage-worker.js", import.meta.url), {
+    const reader = new Worker(this.entry, {
       workerData: this.data,
       resourceLimits: { maxOldGenerationSizeMb: 768 },
     })

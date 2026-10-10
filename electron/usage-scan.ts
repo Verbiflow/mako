@@ -88,6 +88,17 @@ export interface UsageScan {
   unreadable(path: string, reason: string): void
 }
 
+/**
+ * Reads what a harness's own store says its sessions spent. A harness whose
+ * store keeps no token counts declares none; the usage table then shows
+ * what Mako measured while running it.
+ */
+export interface ProviderUsageHistory {
+  provider: string
+  /** Records its calls since `scan.since`, through `scan.jsonl` or `scan.store` so a summary reads only what changed. */
+  scan(scan: UsageScan): Promise<void>
+}
+
 /** Every `.jsonl` file under `roots` modified at or after `since`, newest first; a hard-linked file once. */
 export async function discover(roots: readonly string[], since: number, name?: string): Promise<FileCandidate[]> {
   const files: FileCandidate[] = []

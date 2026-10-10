@@ -11,8 +11,8 @@ import {
   usageCounts,
   type JsonlReader,
   type UsageEvent,
+  type ProviderUsageHistory,
 } from "../../usage-scan.js"
-import type { ProviderUsageHistory } from "../usage-history.js"
 
 /** Grok writes each session's live transcript here; its siblings repeat it or hold no usage. */
 const GROK_UPDATES = "updates.jsonl"

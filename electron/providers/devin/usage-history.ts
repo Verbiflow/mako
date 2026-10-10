@@ -5,8 +5,7 @@ import { devinCliDirectory } from "@mako/sessions"
 import { DevinStoredCall, devinStoredTokens } from "@mako/sessions/harnesses"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
-import { tokenTotal, usageCounts, yieldToMain, type UsageEvent, type UsageScan } from "../../usage-scan.js"
-import type { ProviderUsageHistory } from "../usage-history.js"
+import { tokenTotal, usageCounts, yieldToMain, type UsageEvent, type UsageScan, type ProviderUsageHistory } from "../../usage-scan.js"
 
 export const devinUsageHistory: ProviderUsageHistory = {
   provider: "devin",

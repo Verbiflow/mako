@@ -11,8 +11,8 @@ import {
   validTimestamp,
   type JsonlReader,
   type UsageEvent,
+  type ProviderUsageHistory,
 } from "../../usage-scan.js"
-import type { ProviderUsageHistory } from "../usage-history.js"
 
 export const claudeUsageHistory: ProviderUsageHistory = {
   provider: "claude",

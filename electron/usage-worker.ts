@@ -1,8 +1,9 @@
 import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
 import { providerHost } from "./providers/index.js"
+import { usageHarnesses } from "./providers/usage-harnesses.js"
 import { UsageLedger } from "./usage-ledger.js"
-import { usageHarnesses, usageSummary } from "./usage.js"
+import { usageSummary } from "./usage.js"
 import { UsageWorkerDataSchema, type UsageWorkerReply } from "./usage-worker-contract.js"
 
 const port = parentPort

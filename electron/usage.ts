@@ -6,9 +6,6 @@ import { exclusiveTokens, tokenCount } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import { objectValue, stringValue } from "@mako/host/base/json-values"
 import { hostWarn } from "@mako/host/base/host-log"
-import { harnessLabel } from "./providers/harness-descriptors.js"
-import type { ProviderHost } from "./providers/host.js"
-import type { ProviderUsageHistory } from "./providers/usage-history.js"
 import type { UsageSummary, UsageTotals } from "@mako/host/contracts/automations-usage-updates"
 import { UsageLedger } from "./usage-ledger.js"
 import { estimateUsageCost } from "./usage-pricing.js"
@@ -23,6 +20,7 @@ import {
   validTimestamp,
   yieldToMain,
   type JsonlReader,
+  type ProviderUsageHistory,
   type UsageEvent,
   type UsageScan,
 } from "./usage-scan.js"
@@ -41,15 +39,6 @@ export interface UsageHarness {
   label: string
   /** How its own store's records are read; without one, Mako's measurements are the record. */
   history?: ProviderUsageHistory
-}
-
-/** Every installed harness, as `usageSummary` counts it. */
-export function usageHarnesses(host: ProviderHost): UsageHarness[] {
-  return host.harnesses.list().map(({ provider }) => ({
-    provider,
-    label: harnessLabel(host, provider),
-    history: host.usageHistories.get(provider),
-  }))
 }
 
 export interface UsageSummaryOptions {
