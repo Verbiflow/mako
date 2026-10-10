@@ -32,6 +32,12 @@ interface WorktreesState {
    * on screen, and the branch. Neither runs Git.
    */
   outside: readonly OutsideWorktree[]
+  /**
+   * Thread checkouts of a project folder holding several repositories, as the
+   * host named them on listed sessions, removed ones too: a live conversation
+   * left in one after its removal still files under the project.
+   */
+  mirrors: readonly LinkedCheckout[]
   /** New with every list and every change to the chats, so what groups by folder regroups. */
   folderMap: FolderMap
 }
@@ -80,21 +86,30 @@ function outsideOf(heads: CheckoutHeads, refs: readonly ThreadRef[], worktrees: 
   return [...found.values()]
 }
 
+function mirrorsOf(refs: readonly ThreadRef[]): LinkedCheckout[] {
+  const found = new Map<string, LinkedCheckout>()
+  for (const ref of refs) for (const linked of ref.worktrees ?? []) if (linked.mirrors) found.set(plainPath(linked.path), linked)
+  return [...found.values()]
+}
+
 function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
   const chats = chatFoldersStore.get()
-  const outside = outsideOf(checkoutHeadsStore.get().heads, threadsStore.get().threads, worktrees)
+  const { threads } = threadsStore.get()
+  const outside = outsideOf(checkoutHeadsStore.get().heads, threads, worktrees)
+  const mirrors = mirrorsOf(threads)
   return {
     worktrees,
     outside,
+    mirrors,
     folderMap: (path) => {
-      const found = worktreeAt(outside, path)
+      const found = worktreeAt(outside, path) ?? worktreeAt(mirrors, path)
       return projectFolder(worktrees, path) ?? (found ? `${found.worktree.repoRoot}${found.inside}` : chatGroupOf(path, chats))
     },
   }
 }
 
-function outsideKey(outside: readonly OutsideWorktree[]): string {
-  return outside.map((worktree) => `${worktree.path}\n${worktree.branch ?? ""}`).join("\n")
+function placesKey({ outside, mirrors }: Pick<WorktreesState, "outside" | "mirrors">): string {
+  return [...outside.map((worktree) => `${worktree.path}\n${worktree.branch ?? ""}`), ...mirrors.map((mirror) => `${mirror.path}\n${mirror.repoRoot}`)].join("\n")
 }
 
 export const worktreesStore = createStore<WorktreesState>(stateOf([]))
@@ -113,7 +128,7 @@ chatFoldersStore.subscribe(() => worktreesStore.set(stateOf(worktreesStore.get()
 function refreshOutside(): void {
   const current = worktreesStore.get()
   const next = stateOf(current.worktrees)
-  if (outsideKey(next.outside) !== outsideKey(current.outside)) worktreesStore.set(next)
+  if (placesKey(next) !== placesKey(current)) worktreesStore.set(next)
 }
 checkoutHeadsStore.subscribe(refreshOutside)
 let listed = threadsStore.get().threads
