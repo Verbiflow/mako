@@ -20,8 +20,7 @@ import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "@mako/host
 import { installProviderChildren } from "@mako/host/base/provider-children"
 import { closeRepositories } from "@mako/git"
 import { watchWake } from "@mako/host/base/wake"
-import { installTelemetry } from "./ipc/telemetry.js"
-import { installCloudAccountIpc, type CloudAccount } from "./ipc/cloud-account.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "@mako/host/usage"
 import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./automations.js"
 import { accountUsageSpent, completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
@@ -40,7 +39,6 @@ import { openConversations, bindNativeRuns, declareConversationMethods, type Con
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "@mako/host/tools"
 import { declareGitMethods } from "@mako/host/git"
 import { openTerminals, declareTerminalMethods } from "@mako/host/terminals"
-import { declareUsageMethods, spendWatch } from "./domains/usage.js"
 import { declareApplicationMethods, Updates, type Application } from "@mako/host/application"
 
 /** What runs the host: the process's lifecycle, which stops it once for a client, a signal or idleness. */
@@ -157,7 +155,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       web?.terminal({ type: "wake" })
       cloud?.wake()
     })
-    const telemetry = await installTelemetry(methods, {
+    const telemetry = await declareTelemetryMethods(methods, {
       fixture: fixtureDesk,
       token: () => cloud?.token() ?? Promise.resolve(undefined),
       account: () => cloud?.id() ?? Promise.resolve(undefined),
@@ -168,7 +166,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         threads: catalog.list().length,
       }),
     })
-    cloud = installCloudAccountIpc(methods, {
+    cloud = declareCloudAccountMethods(methods, {
       emit,
       fixture: fixtureDesk,
       signedIn: () => void telemetry.signedIn(),

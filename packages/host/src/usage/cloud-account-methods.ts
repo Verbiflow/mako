@@ -1,17 +1,17 @@
 import { execFile } from "node:child_process"
 import { hostname } from "node:os"
 import { promisify } from "node:util"
-import { cloudUrl } from "@mako/host/base/build-identity"
-import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "../cloud-account.js"
-import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
-import { hostEnvironment } from "@mako/host/base/host-environment"
-import { hostLog } from "@mako/host/base/host-log"
-import { adoptLegacySecrets, hostSecrets } from "@mako/host/base/host-secrets"
-import { memorySecrets } from "@mako/host/base/secrets"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { MethodTable } from "@mako/host/base/methods"
-import { presentMachine } from "@mako/host/base/machine"
-import { onMac, systemName, systemVersion } from "@mako/host/base/platform"
+import { cloudUrl } from "../base/build-identity.js"
+import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
+import type { DiagnosticEvents } from "../contracts/telemetry.js"
+import { hostEnvironment } from "../base/host-environment.js"
+import { hostLog } from "../base/host-log.js"
+import { adoptLegacySecrets, hostSecrets } from "../base/host-secrets.js"
+import { memorySecrets } from "../base/secrets.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { MethodTable } from "../base/methods.js"
+import { presentMachine } from "../base/machine.js"
+import { onMac, systemName, systemVersion } from "../base/platform.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
 export interface CloudAccount {
@@ -28,7 +28,7 @@ export interface CloudAccount {
  * The Mako account, against the cloud `cloudUrl()` names; a build without one says so and offers nothing.
  * A fixture desk signs in only to a cloud on this Mac and keeps the sign-in in memory, so its profile isn't written.
  */
-export function installCloudAccountIpc(methods: MethodTable, {
+export function declareCloudAccountMethods(methods: MethodTable, {
   emit,
   fixture,
   signedIn,

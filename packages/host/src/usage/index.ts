@@ -1,8 +1,26 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { MethodTable } from "@mako/host/base/methods"
-import { UsageReader } from "../usage-reader.js"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { MethodTable } from "../base/methods.js"
+import { UsageReader } from "./reader.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+
+export { declareTelemetryMethods } from "./telemetry-methods.js"
+export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
+export type { HostTelemetry } from "./host-telemetry.js"
+export type { UsageHarness } from "./summary.js"
+export type { UsageTokenCounts } from "./pricing.js"
+export {
+  fingerprint,
+  parseObject,
+  tokenTotal,
+  usageCounts,
+  validTimestamp,
+  yieldToMain,
+  type JsonlReader,
+  type ProviderUsageHistory,
+  type UsageEvent,
+  type UsageScan,
+} from "./scan.js"
 
 /** A session write older than this is the catalog catching up, not use. */
 const RECENT_WRITE_MS = 2 * 60_000

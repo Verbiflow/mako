@@ -18,7 +18,9 @@
     "./tools": "./dist/tools/index.js",
     "./tools/*": "./dist/tools/*.js",
     "./transport": "./dist/transport/index.js",
-    "./transport/*": "./dist/transport/*.js"
+    "./transport/*": "./dist/transport/*.js",
+    "./usage": "./dist/usage/index.js",
+    "./usage/*": "./dist/usage/*.js"
   },
   "files": [
     "dist"

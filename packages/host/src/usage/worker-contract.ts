@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { UsageSummarySchema } from "@mako/host/contracts/automations-usage-updates"
+import { UsageSummarySchema } from "../contracts/automations-usage-updates.js"
 
 export const UsageWorkerDataSchema = z.object({
   ledgerPath: z.string().min(1),

@@ -3,16 +3,16 @@ import { claudeTranscriptRoots } from "@mako/sessions"
 import { z } from "zod"
 import { claudeHourCacheWrites, claudeTokens, ClaudeUsage } from "@mako/sessions/harnesses"
 import { objectValue, stringValue } from "@mako/host/base/json-values"
-import type { UsageTokenCounts } from "../../usage-pricing.js"
 import {
   fingerprint,
   parseObject,
   tokenTotal,
   validTimestamp,
   type JsonlReader,
-  type UsageEvent,
   type ProviderUsageHistory,
-} from "../../usage-scan.js"
+  type UsageEvent,
+  type UsageTokenCounts,
+} from "@mako/host/usage"
 
 export const claudeUsageHistory: ProviderUsageHistory = {
   provider: "claude",

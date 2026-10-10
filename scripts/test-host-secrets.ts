@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { userRootFor } from "@mako/host/base/host-environment"
-import { cloudLegacyFiles, cloudSignInName } from "../electron/cloud-account.ts"
+import { cloudLegacyFiles, cloudSignInName } from "@mako/host/usage/cloud-account"
 import { openHostSecrets } from "@mako/host/base/host-secrets"
 import { CursorAccountKeys, CursorCredentialStore, cursorLegacyFiles } from "../electron/providers/cursor/sdk/credentials.ts"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"

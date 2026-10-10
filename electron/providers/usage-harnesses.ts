@@ -1,4 +1,4 @@
-import type { UsageHarness } from "../usage.js"
+import type { UsageHarness } from "@mako/host/usage"
 import { harnessLabel } from "./harness-descriptors.js"
 import type { ProviderHost } from "./host.js"
 

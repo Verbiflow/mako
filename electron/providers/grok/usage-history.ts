@@ -12,7 +12,7 @@ import {
   type JsonlReader,
   type UsageEvent,
   type ProviderUsageHistory,
-} from "../../usage-scan.js"
+} from "@mako/host/usage"
 
 /** Grok writes each session's live transcript here; its siblings repeat it or hold no usage. */
 const GROK_UPDATES = "updates.jsonl"

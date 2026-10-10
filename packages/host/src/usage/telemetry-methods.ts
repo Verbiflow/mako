@@ -1,22 +1,22 @@
 import { join } from "node:path"
-import { buildIdentity, cloudUrl } from "@mako/host/base/build-identity"
-import type { TelemetryApp } from "@mako/host/contracts/telemetry"
-import { crashIdAt, crashesAfter } from "@mako/host/base/crash"
-import { packagedDistribution } from "@mako/host/application"
-import { hostLog } from "@mako/host/base/host-log"
-import { HostTelemetry, type HostTelemetrySources } from "../host-telemetry.js"
-import { unknownKinds } from "@mako/host/base/native-unknown"
-import { Telemetry, telemetryOff } from "../telemetry.js"
-import { telemetryMachineId } from "@mako/host/base/machine-id"
-import type { MethodTable } from "@mako/host/base/methods"
-import { hostEnvironment } from "@mako/host/base/host-environment"
-import { systemName, systemVersion } from "@mako/host/base/platform"
+import { buildIdentity, cloudUrl } from "../base/build-identity.js"
+import type { TelemetryApp } from "../contracts/telemetry.js"
+import { crashIdAt, crashesAfter } from "../base/crash.js"
+import { packagedDistribution } from "../application/index.js"
+import { hostLog } from "../base/host-log.js"
+import { HostTelemetry, type HostTelemetrySources } from "./host-telemetry.js"
+import { unknownKinds } from "../base/native-unknown.js"
+import { Telemetry, telemetryOff } from "./telemetry.js"
+import { telemetryMachineId } from "../base/machine-id.js"
+import type { MethodTable } from "../base/methods.js"
+import { hostEnvironment } from "../base/host-environment.js"
+import { systemName, systemVersion } from "../base/platform.js"
 
 /**
  * Telemetry for this host's profile, and Settings → Privacy's two channels.
  * A fixture desk sends only with `MAKO_TELEMETRY=on`, and then keeps its install ID in memory, as it writes nothing.
  */
-export async function installTelemetry(methods: MethodTable, {
+export async function declareTelemetryMethods(methods: MethodTable, {
   fixture,
   token,
   ...sources

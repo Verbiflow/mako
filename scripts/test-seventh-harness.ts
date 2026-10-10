@@ -17,7 +17,7 @@ import { byDefault, harnessLacks, implemented } from "../electron/providers/live
 import { describeHarnesses, harnessLabel } from "../electron/providers/harness-descriptors.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import { usageSummary } from "../electron/usage.ts"
+import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "../electron/providers/usage-harnesses.ts"
 import { sectionKeywords, type SettingsSection } from "../src/components/settings/sections/manifest.ts"
 import { HarnessIcon, ProviderIcon } from "../src/components/ui/provider-icon.tsx"

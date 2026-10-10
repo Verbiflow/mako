@@ -11,7 +11,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { spendBetween } from "../electron/session-usage.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import { usageSummary } from "../electron/usage.ts"
+import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "../electron/providers/usage-harnesses.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 

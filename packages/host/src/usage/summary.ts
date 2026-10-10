@@ -4,11 +4,11 @@ import { basename, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { exclusiveTokens, tokenCount } from "@mako/sessions/harnesses"
 import { z } from "zod"
-import { objectValue, stringValue } from "@mako/host/base/json-values"
-import { hostWarn } from "@mako/host/base/host-log"
-import type { UsageSummary, UsageTotals } from "@mako/host/contracts/automations-usage-updates"
-import { UsageLedger } from "./usage-ledger.js"
-import { estimateUsageCost } from "./usage-pricing.js"
+import { objectValue, stringValue } from "../base/json-values.js"
+import { hostWarn } from "../base/host-log.js"
+import type { UsageSummary, UsageTotals } from "../contracts/automations-usage-updates.js"
+import { UsageLedger } from "./ledger.js"
+import { estimateUsageCost } from "./pricing.js"
 import {
   DAYS,
   discover,
@@ -23,7 +23,7 @@ import {
   type ProviderUsageHistory,
   type UsageEvent,
   type UsageScan,
-} from "./usage-scan.js"
+} from "./scan.js"
 
 interface Bucket extends UsageTotals {
   key: string

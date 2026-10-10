@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite"
-import type { JsonValue } from "@mako/host/contracts/json"
-import type { UsageEvent } from "./usage-scan.js"
+import type { JsonValue } from "../contracts/json.js"
+import type { UsageEvent } from "./scan.js"
 
 /** Where a file's last read stopped, and the reader's state there. */
 export interface FileCursor {

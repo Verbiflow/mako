@@ -19,10 +19,10 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { PrincipalIdSchema } from "@mako/host/contracts/thread-identity"
 import type { TelemetryBatch } from "@mako/host/contracts/telemetry"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
-import { HostTelemetry, type HostTelemetrySources } from "../electron/host-telemetry.ts"
+import { HostTelemetry, type HostTelemetrySources } from "@mako/host/usage/host-telemetry"
 import { hashMachineId } from "@mako/host/base/machine-id"
-import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "../electron/telemetry.ts"
-import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "../electron/telemetry-events.ts"
+import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
+import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "@mako/host/usage/telemetry-events"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-telemetry-"))
 after(() => rm(scratch, { recursive: true, force: true }))

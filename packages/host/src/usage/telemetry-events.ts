@@ -1,9 +1,9 @@
-import type { LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
-import type { DiagnosticEvents, ProductEvents, TelemetryTokens, TurnTuning } from "@mako/host/contracts/telemetry"
-import type { CrashReport } from "@mako/host/contracts/crash-report"
-import type { UnknownKind } from "@mako/host/base/native-unknown"
+import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
+import type { LiveSessionState } from "../contracts/providers-acp.js"
+import type { HarnessUpdates } from "../contracts/harness-updates.js"
+import type { DiagnosticEvents, ProductEvents, TelemetryTokens, TurnTuning } from "../contracts/telemetry.js"
+import type { CrashReport } from "../contracts/crash-report.js"
+import type { UnknownKind } from "../base/native-unknown.js"
 
 /**
  * Mako's own state as telemetry events: code identifiers, counts and

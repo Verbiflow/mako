@@ -10,7 +10,7 @@ import {
   type JsonlReader,
   type UsageEvent,
   type ProviderUsageHistory,
-} from "../../usage-scan.js"
+} from "@mako/host/usage"
 
 /** Codex's own counts, as the rollout reports them: `input` includes both caches. */
 const RawCodexUsageSchema = z.object({

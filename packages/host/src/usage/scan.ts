@@ -1,9 +1,9 @@
 import { open, readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
-import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
-import { objectValue, stringValue } from "@mako/host/base/json-values"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
+import { objectValue, stringValue } from "../base/json-values.js"
 import type { HarnessTokens } from "@mako/sessions/harnesses"
-import type { UsageTokenCounts } from "./usage-pricing.js"
+import type { UsageTokenCounts } from "./pricing.js"
 
 /**
  * What every reader of a harness's usage records shares: which files it

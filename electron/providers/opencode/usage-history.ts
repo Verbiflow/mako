@@ -7,7 +7,7 @@ import { z } from "zod"
 import { numberValue, objectValue, stringValue } from "@mako/host/base/json-values"
 import { type JsonObject } from "@mako/host/contracts/json"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
-import { parseObject, tokenTotal, usageCounts, yieldToMain, type UsageEvent, type UsageScan, type ProviderUsageHistory } from "../../usage-scan.js"
+import { parseObject, tokenTotal, usageCounts, yieldToMain, type UsageEvent, type UsageScan, type ProviderUsageHistory } from "@mako/host/usage"
 
 const OpenCodeRowSchema = z.object({
   id: z.string(),

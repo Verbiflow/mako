@@ -71,7 +71,12 @@ skills, hooks and commands, copied between harnesses, the plugins, and the
 `mako` and `mako-computer` servers each agent is handed. Each harness declares
 where it keeps its MCP servers and skills in the shapes `tools/` names
 (`ProviderMcpSource`, `ProviderSkillSource`); `ToolHarnesses` is what Tools
-reads of them, and `openTools` builds the registries from it. The package declares
+reads of them, and `openTools` builds the registries from it. `usage/` is what
+the harnesses spent and what Mako reports: the usage ledger, its pricing and
+the scan of each harness's own store (`ProviderUsageHistory`), telemetry, and
+the Mako cloud account. The ledger is read off the host, in a worker whose
+script composition names (`electron/usage-worker.ts`, which supplies the
+harnesses). The package declares
 every package it imports (`scripts/check-host-dependencies.mjs`). The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.

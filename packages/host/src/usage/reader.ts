@@ -1,6 +1,6 @@
 import { Worker } from "node:worker_threads"
-import type { UsageSummary } from "@mako/host/contracts/automations-usage-updates"
-import { UsageWorkerReplySchema, type UsageWorkerData } from "./usage-worker-contract.js"
+import type { UsageSummary } from "../contracts/automations-usage-updates.js"
+import { UsageWorkerReplySchema, type UsageWorkerData } from "./worker-contract.js"
 
 interface Pending {
   promise: Promise<UsageSummary>
