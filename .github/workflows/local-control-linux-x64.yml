@@ -94,8 +94,9 @@ jobs:
           docker build --platform linux/amd64 -f runtime/control/Dockerfile --target acceptance -t mako-cloud-control:acceptance "$RUNNER_TEMP/cloud-control"
       - name: Standalone lifecycle and complete-job acceptance
         run: |
-          mkdir -p evidence/cloud-runtime
-          docker run --rm --init --network none --platform linux/amd64 --user "$(id -u):$(id -g)" --entrypoint node \
+          # The image's own user, as in production: dbus-daemon refuses a user with no passwd entry.
+          mkdir -p evidence/cloud-runtime && chmod 0777 evidence/cloud-runtime
+          docker run --rm --init --network none --platform linux/amd64 --entrypoint node \
             -v "$PWD/scripts/test-cloud-control.mjs:/tmp/test-cloud-control.mjs:ro" \
             -v "$PWD/scripts/linux-control/fixture.py:/tmp/fixture.py:ro" \
             -v "$PWD/evidence/cloud-runtime:/evidence" -e MAKO_RUNTIME_EVIDENCE=/evidence \
@@ -105,8 +106,8 @@ jobs:
         run: |
           set -o pipefail
           for suite in linux native-linux; do
-            mkdir -p "evidence/cloud-runtime/cli-$suite"
-            docker run --rm --init --network none --platform linux/amd64 --shm-size=1g --user "$(id -u):$(id -g)" --entrypoint node \
+            mkdir -p "evidence/cloud-runtime/cli-$suite" && chmod 0777 "evidence/cloud-runtime/cli-$suite"
+            docker run --rm --init --network none --platform linux/amd64 --shm-size=1g --entrypoint node \
               -v "$PWD/scripts/test-control-cli-$suite.mjs:/tmp/cli-acceptance.mjs:ro" \
               -v "$PWD/scripts/linux-control/fixture.py:/tmp/fixture.py:ro" \
               -v "$PWD/evidence/cloud-runtime/cli-$suite:/evidence" -e MAKO_RUNTIME_EVIDENCE=/evidence \
