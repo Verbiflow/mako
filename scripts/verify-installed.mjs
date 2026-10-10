@@ -4,8 +4,8 @@ import { copyFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promis
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
-import { probeRuntime } from "../dist-electron/runtime-connection.js"
-import { runtimeLocation } from "../dist-electron/runtime-service.js"
+import { probeRuntime } from "@mako/host/transport/connection"
+import { runtimeLocation } from "@mako/host/transport/service"
 import { providerHost } from "../dist-electron/providers/index.js"
 
 // The standard installed check until successive hosts land: the packaged

@@ -13,7 +13,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { verifyLocalCandidate } from "./local-updates.js"
 import { resolveExecutable } from "@mako/host/base/executable"
-import { runtimeLocation } from "./runtime-service.js"
+import { runtimeLocation } from "@mako/host/transport"
 import {
   desktopLaunchEnvironment,
   unregisterBundle,

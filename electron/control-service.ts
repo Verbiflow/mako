@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
-import { configuredListenPort } from "./listen-port.js"
+import { configuredListenPort } from "@mako/host/base/listen-port"
 import type { ControlPreviews } from "./control-previews.js"
 import {
   ComputerObservationSchema,

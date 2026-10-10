@@ -6,9 +6,9 @@ import { tmpdir } from "node:os"
 import { z } from "zod"
 import type { OwnerResolution } from "@mako/host/contracts/thread-continuation"
 import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "./session-memory.js"
-import { ensureRuntime, runtimeLocation } from "./runtime-service.js"
+import { ensureRuntime, invokeRuntime, probeRuntime, runtimeLocation, subscribeRuntime } from "@mako/host/transport"
 import { hostReplacementPending } from "./local-update-installer.js"
-import { invokeRuntime, probeRuntime, subscribeRuntime, RuntimeDisconnectedError } from "./runtime-connection.js"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { hostHistoryPaging } from "@mako/host/base/host-client"
 
 const snapshotIdentity = z.object({

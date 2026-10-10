@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { localRuntime } from "./install-local-mac.mjs"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
-import { invokeRuntime } from "../dist-electron/runtime-connection.js"
+import { invokeRuntime } from "@mako/host/transport/connection"
 import { startCocoaFixture } from "./lib/cocoa-fixture.mjs"
 import { sampleFrontmost } from "./lib/control-fixture.mjs"
 

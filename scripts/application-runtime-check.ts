@@ -6,12 +6,12 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { NativeRequests } from "../electron/native-requests.js"
 import { installApplicationIpc } from "../electron/ipc/application.js"
-import { HostMethods } from "../electron/host-methods.js"
-import { startWebHost } from "../electron/web-host.js"
+import { HostMethods } from "@mako/host/transport/methods"
+import { startWebHost } from "@mako/host/transport/server"
 import {
   invokeRuntime,
   subscribeRuntime,
-} from "../electron/runtime-connection.js"
+} from "@mako/host/transport/connection"
 import {
   LifecycleStateSchema,
   type LifecycleAction,

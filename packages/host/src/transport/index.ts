@@ -1,0 +1,10 @@
+/**
+ * How a host is reached: the socket it serves and the method table every
+ * domain declares on, and the other end of the same wire, which a host uses
+ * to start, find and call another. A client outside the host imports the
+ * file it needs, so a desktop loads the wire's client end without the server.
+ */
+export { HostMethods, type HostMethodsOptions, type RoutedCall } from "./methods.js"
+export { startWebHost, type HostInvoke } from "./server.js"
+export { invokeRuntime, probeRuntime, runtimeInfo, settleRuntime, subscribeRuntime } from "./connection.js"
+export { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeLocation } from "./service.js"

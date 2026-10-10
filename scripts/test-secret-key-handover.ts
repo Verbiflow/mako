@@ -8,7 +8,7 @@ import { dataKeyPath, openHostSecrets, type SecretKeyHandover } from "@mako/host
 import { handOverSecretKey, SecretKeyLink } from "../electron/secret-key-link.ts"
 import { aesSealer, fileSecrets, SecretUnavailable, wrappedKey } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
-import { startWebHost } from "../electron/web-host.ts"
+import { startWebHost } from "@mako/host/transport/server"
 
 /**
  * A host under the Helper in Node mode can't reach the keychain; the desktop

@@ -53,7 +53,10 @@ Inside the package, `contracts/` is the wire and imports only itself;
 reports, the platform, secrets, the lifecycle, the scheduler, the lock, heavy
 packages) and imports only itself and the contracts. Each domain is a folder
 that reaches another domain only through its entry, `<domain>/index.ts`, and
-files directly in `src/` compose the host. The package reaches its own files
+files directly in `src/` compose the host. `transport/` is how a host is
+reached: the socket server and the method table, and the wire's client end
+(`connection.ts`, and `service.ts` for where a host lives and how it starts),
+which the desktop imports by file and another host through the entry. The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.
 
@@ -75,8 +78,8 @@ once every service exists, so no handler sees a half-built host. Where two
 domains need each other, `createHost` passes a getter (`live: () =>
 conversations?.live`) rather than a domain importing another's files.
 
-- **Methods.** `HostMethods` (`host-methods.ts`) is the one table every
-  transport calls. `methods.handle("mako:…", (…args) => …)` parses the
+- **Methods.** `HostMethods` (`packages/host/src/transport/methods.ts`) is
+  the one table every transport calls. `methods.handle("mako:…", (…args) => …)` parses the
   arguments with the generated schema, refuses outside a fixture desk's
   allowlist, routes a call about another host's conversation there, and pages
   history. Declaring a method twice throws. A contract method no domain
@@ -383,7 +386,7 @@ nothing and showed
 file that was one directory away. Electron's IPC wrapper is stripped in
 `createMakoBridge` so no host error reaches a reader wearing a channel name,
 and so the desktop and local-web transports say the same thing; the error
-object is never replaced, because `runtime-retry.ts` decides by `instanceof`.
+object is never replaced, because `host-call-recovery.ts` decides by `instanceof`.
 `scripts/test-file-open.ts` covers both halves.
 
 ## Never lose a paragraph
@@ -1139,7 +1142,8 @@ and `test-composer-settings.ts` cover these.
 When the host closes for a restart, install or quit it answers every pending
 call with `host-restarting` (`packages/host/src/contracts/host-connection.ts`) instead of
 resetting the connection. The client turns that, and a dropped socket, into
-`RuntimeDisconnectedError`; `electron/runtime-retry.ts` repeats a call once
+`RuntimeDisconnectedError`; `packages/host/src/contracts/host-call-recovery.ts`
+repeats a call once
 the event stream reattaches according to one table,
 `packages/host/src/contracts/host-call-policy.ts`: `read` channels change nothing;
 `replay` channels are mutations the host settles by a caller-minted id (a

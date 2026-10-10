@@ -6,8 +6,8 @@ import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promis
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { startWebHost } from "../dist-electron/web-host.js"
-import { runtimeLocation } from "../dist-electron/runtime-service.js"
+import { startWebHost } from "@mako/host/transport/server"
+import { runtimeLocation } from "@mako/host/transport/service"
 import { z } from "zod"
 
 const root = await mkdtemp(join(tmpdir(), "mako-desktop-crashes-"))

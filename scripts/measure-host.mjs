@@ -11,9 +11,9 @@ import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs, promisify } from "node:util"
 import { encodeRuntimeCall } from "@mako/host/contracts/runtime"
-import { runtimeLocation } from "../dist-electron/runtime-service.js"
+import { runtimeLocation } from "@mako/host/transport/service"
 import { headlessNodeExecutable } from "@mako/host/base/headless-node"
-import { subscribeRuntime } from "../dist-electron/runtime-connection.js"
+import { subscribeRuntime } from "@mako/host/transport/connection"
 
 /**
  * Measures a host the way its clients see it, in a throwaway profile: time

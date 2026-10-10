@@ -3,8 +3,8 @@ import { once } from "node:events"
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runtimeLocation } from "../dist-electron/runtime-service.js"
-import { probeRuntime } from "../dist-electron/runtime-connection.js"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { probeRuntime } from "@mako/host/transport/connection"
 import { spawnHost } from "./lib/host-launch.mjs"
 
 // The host must shut down, with cleanup, on the signals a session ending, a

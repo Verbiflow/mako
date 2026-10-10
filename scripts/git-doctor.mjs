@@ -9,8 +9,8 @@
 // Exits 1 when the held status differs from Git's.
 import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
-import { appDataFolder, runtimeDataRoot, runtimeLocation } from "../dist-electron/runtime-service.js"
-import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
+import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { invokeRuntime, settleRuntime } from "@mako/host/transport/connection"
 import { gitActivity, openRepositories, openRepository } from "@mako/git"
 
 const path = resolve(process.argv[2] ?? process.cwd())

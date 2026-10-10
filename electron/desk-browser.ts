@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import type { WebSocket, WebSocketServer } from "ws"
 import { z } from "zod"
-import { configuredListenPort } from "./listen-port.js"
+import { configuredListenPort } from "@mako/host/base/listen-port"
 import type { LocalBrowser } from "@mako/control-runtime/desktop"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { heavy } from "@mako/host/base/heavy-packages"

@@ -7,7 +7,7 @@ import { Appshots, type WindowCapturer } from "../electron/appshots.ts"
 import { computerPermissions } from "../electron/computer-permissions.ts"
 import { fileResponse, localFile } from "../electron/file-response.ts"
 import { onMac } from "@mako/host/base/platform"
-import { hostCommand } from "../electron/runtime-service.ts"
+import { hostCommand } from "@mako/host/transport/service"
 import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "../electron/agent-views.ts"
 import { DesktopChannel } from "../electron/desktop-channel.ts"
 

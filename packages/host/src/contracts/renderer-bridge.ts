@@ -95,7 +95,7 @@ export function createMakoBridge(transport: BridgeTransport) {
    * already throws the host's message alone, so unwrapping here is also what
    * makes the two clients say the same thing.
    *
-   * The error object itself is never replaced: `runtime-retry.ts` and the web
+   * The error object itself is never replaced: `host-call-recovery.ts` and the web
    * transport decide what to do by `instanceof`, so only the message is
    * rewritten, and only when the prefix is actually there.
    */

@@ -1,15 +1,14 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions"
-import { CORRELATION_HEADER, RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue, type RuntimeCall } from "@mako/host/contracts/runtime"
-import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { CORRELATION_HEADER, RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue, type RuntimeCall } from "../contracts/runtime.js"
+import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { z } from "zod"
-import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
-import { requestRuntimePreview } from "./runtime-preview.js"
+import { hostCallReplay } from "../contracts/host-call-policy.js"
+import { requestRuntimePreview } from "./preview.js"
 
-import { readRuntimeResponse, RuntimeResponseLimitError, type RuntimeTransfer } from "./runtime-response.js"
+import { readRuntimeResponse, RuntimeResponseLimitError, type RuntimeTransfer } from "./response.js"
 
-export { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 
 // No socket, a socket nobody accepts on, or a plain file where the socket was: nothing listens.
 const REFUSED = new Set(["ECONNREFUSED", "ENOENT", "ENOTSOCK"])

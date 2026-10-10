@@ -9,7 +9,7 @@ import { build } from 'esbuild'
 import { preview } from 'vite'
 import { webHostProxy } from '../electron/web-dev-proxy.mjs'
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia } from '@mako/control-runtime/contracts'
-import { invokeRuntime } from '../dist-electron/runtime-connection.js'
+import { invokeRuntime } from '@mako/host/transport/connection'
 
 const root = await mkdtemp(join(tmpdir(), 'mako-browser-delivery-'))
 const socket = join(root, 'host.sock')

@@ -163,7 +163,7 @@ export async function prepareToClose() {
   const { socket, host } = await localRuntime()
   if (!host?.methods.includes("mako:lifecycle-command")) return
   const { invokeRuntime, RuntimeDisconnectedError } =
-    await import("../dist-electron/runtime-connection.js")
+    await import("@mako/host/transport/connection")
   const client = randomUUID()
   const state = z
     .object({ operation: z.object({ kind: z.string() }) })
@@ -250,7 +250,7 @@ export async function verifyStarted(candidate) {
     .object({ makoBuild: z.object({ id: z.string() }) })
     .parse(readLocalAppMetadata(candidate)).makoBuild.id
   const { invokeRuntime, RuntimeDisconnectedError } =
-    await import("../dist-electron/runtime-connection.js")
+    await import("@mako/host/transport/connection")
   const deadline = Date.now() + 45_000
   while (Date.now() < deadline) {
     const { host, socket } = await localRuntime()

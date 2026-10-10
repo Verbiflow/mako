@@ -15,7 +15,7 @@ import { DeskBrowser } from "../dist-electron/desk-browser.js"
 import { deskPageAnswers } from "../dist-electron/desktop-answers-electron.js"
 import { DesktopChannel } from "../dist-electron/desktop-channel.js"
 import { DesktopLink } from "../dist-electron/desktop-link.js"
-import { startWebHost } from "../dist-electron/web-host.js"
+import { startWebHost } from "@mako/host/transport/server"
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { BrowserCommandSchema } from "../packages/control-runtime/dist/contracts/browser-control.js"
 

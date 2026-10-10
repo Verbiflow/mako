@@ -8,7 +8,9 @@
     "./base/*": "./dist/base/*.js",
     "./contracts/*": "./dist/contracts/*.js",
     "./terminals": "./dist/terminals/index.js",
-    "./terminals/*": "./dist/terminals/*.js"
+    "./terminals/*": "./dist/terminals/*.js",
+    "./transport": "./dist/transport/index.js",
+    "./transport/*": "./dist/transport/*.js"
   },
   "files": [
     "dist"

@@ -8,11 +8,11 @@ import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import WebSocket from "ws"
 import { threadDebugPort } from "./thread-debug-port.mjs"
-import { runtimeLocation } from "../dist-electron/runtime-service.js"
+import { runtimeLocation } from "@mako/host/transport/service"
 import {
   runtimeInfo,
   invokeRuntime,
-} from "../dist-electron/runtime-connection.js"
+} from "@mako/host/transport/connection"
 
 assert.ok(process.argv[2], "Pass the packaged Mako.app to test")
 const launchServices = process.argv.includes("--launch-services")

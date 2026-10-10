@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { BuildIdentitySchema } from "@mako/host/contracts/app-lifecycle"
 import { RuntimeInfoSchema, RuntimeReplySchema } from "@mako/host/contracts/runtime"
-import { runtimeRequest } from "./runtime-connection.js"
+import { runtimeRequest } from "@mako/host/transport/connection"
 
 const installation = z.object({ build: BuildIdentitySchema.nullable() })
 

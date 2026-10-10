@@ -3,16 +3,16 @@ import {
   PREVIEW_MEDIA_TYPE,
   collectPreviewMedia,
 } from "@mako/control-runtime/contracts"
-import { RuntimeReplySchema, type RuntimeCall } from "@mako/host/contracts/runtime"
+import { RuntimeReplySchema, type RuntimeCall } from "../contracts/runtime.js"
 import {
   HOST_CLOSED_CODE,
   HOST_RESTARTING_CODE,
   RuntimeDisconnectedError,
-} from "@mako/host/contracts/host-connection"
+} from "../contracts/host-connection.js"
 import {
   readRuntimeResponse,
   type RuntimeTransfer,
-} from "./runtime-response.js"
+} from "./response.js"
 
 /** Read-only media uses the same private socket/client and registered host call.
  * It never enters the general JSON value parser or changes control retry rules. */

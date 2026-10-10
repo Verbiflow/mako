@@ -1,15 +1,5 @@
-import { HOST_CALL_REPLAY_WAIT_MS, hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "@mako/host/contracts/host-call-policy"
-import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
-
-/**
- * Calls the window may repeat once the shared host is back: reads, which
- * change nothing, and mutations the host settles by a caller-minted id, which
- * it answers with the first acceptance. Anything else is told its outcome is
- * unknown. The table itself lives in `contracts/host-call-policy.ts` so the
- * dev web bridge reads the same one.
- */
-export const recoverableHostCalls: ReadonlySet<string> = readOnlyHostCalls
-export { hostCallReplay, replayableHostCalls }
+import { HOST_CALL_REPLAY_WAIT_MS, hostCallReplay } from "./host-call-policy.js"
+import { RuntimeDisconnectedError } from "./host-connection.js"
 
 export interface RecoveryLink {
   /** Called once per dropped call, before any retry, so the window can show the reconnect banner. */

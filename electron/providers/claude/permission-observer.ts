@@ -8,7 +8,7 @@ import type { NativeApprovalDecision, NativeApprovalIdentity } from "@mako/host/
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { RetainedApprovalDecisions, readRetainedApprovalDecisions } from "../retained-approval-decisions.js"
 import { claudeTelemetryOptionsCompatible } from "./approval-telemetry-settings.js"
-import { configuredListenPort } from "../../listen-port.js"
+import { configuredListenPort } from "@mako/host/base/listen-port"
 
 const Envelope = z.object({ resourceLogs: z.array(z.object({ scopeLogs: z.array(z.object({
   logRecords: z.array(z.object({ attributes: z.array(z.object({

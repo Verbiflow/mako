@@ -6,7 +6,7 @@ import { environmentForExecutable } from "@mako/host/base/executable"
 import { ProviderStartupWatch } from "../../provider-startup.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
 import { isOpenCodeV2 } from "./version.js"
-import { configuredListenPort } from "../../listen-port.js"
+import { configuredListenPort } from "@mako/host/base/listen-port"
 import type { OpenCodeServers } from "./servers.js"
 
 const Ready = z.object({ url: z.string().url() }).transform(({ url }) => {

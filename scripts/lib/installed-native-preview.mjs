@@ -39,7 +39,7 @@ if (process.versions.electron && process.env.MAKO_NATIVE_PREVIEW) {
 
 async function runNativePreview() {
   const { app, BrowserWindow, ipcMain } = await import("electron")
-  const { invokeRuntime, invokeRuntimePreview, subscribeRuntime } = await import("../../dist-electron/runtime-connection.js")
+  const { invokeRuntime, invokeRuntimePreview, subscribeRuntime } = await import("@mako/host/transport/connection")
   const options = JSON.parse(process.env.MAKO_NATIVE_PREVIEW)
   app.setPath("userData", join(options.root, "native-viewer-profile"))
   await app.whenReady()

@@ -11,7 +11,7 @@ import {
 const target = "/Applications/Mako.app"
 
 async function dataRoot() {
-  const { runtimeDataRoot } = await import("../dist-electron/runtime-service.js")
+  const { runtimeDataRoot } = await import("@mako/host/transport/service")
   return runtimeDataRoot(join(homedir(), "Library/Application Support"), {})
 }
 
@@ -23,8 +23,8 @@ async function dataRoot() {
  */
 export async function localRuntime() {
   const { settleRuntime } =
-    await import("../dist-electron/runtime-connection.js")
-  const { runtimeLocation } = await import("../dist-electron/runtime-service.js")
+    await import("@mako/host/transport/connection")
+  const { runtimeLocation } = await import("@mako/host/transport/service")
   const { socket } = runtimeLocation(await dataRoot())
   const probe = await settleRuntime(socket)
   return {

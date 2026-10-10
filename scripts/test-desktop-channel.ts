@@ -8,7 +8,7 @@ import type { UpdateState } from "@mako/host/contracts/automations-usage-updates
 import type { DesktopFrame } from "@mako/host/contracts/desktop-channel"
 import { DesktopChannel } from "../electron/desktop-channel.ts"
 import { DesktopLink, type DesktopHandlers, type DesktopLinkOptions } from "../electron/desktop-link.ts"
-import { startWebHost } from "../electron/web-host.ts"
+import { startWebHost } from "@mako/host/transport/server"
 
 /**
  * A host under Node asks the desktop app for what only Electron's main

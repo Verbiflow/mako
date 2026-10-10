@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { ProviderStartupWatch, exitDescription, stderrDetail } from "../electron/provider-startup.ts"
 import { errorMessage } from "../electron/live-runtime.ts"
-import { configuredListenPort } from "../electron/listen-port.ts"
+import { configuredListenPort } from "@mako/host/base/listen-port"
 
 assert.equal(configuredListenPort("MAKO_OPENCODE_API_PORT", {}), 0)
 assert.equal(configuredListenPort("MAKO_OPENCODE_API_PORT", { MAKO_OPENCODE_API_PORT: "20025" }), 20025)

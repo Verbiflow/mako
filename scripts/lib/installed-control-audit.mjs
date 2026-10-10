@@ -7,7 +7,7 @@ import { readControlSession, invokeControlSession } from "@mako/control-runtime/
 import { localRuntime } from "../install-local-mac.mjs"
 import { readLocalAppMetadata } from "../local-app-metadata.mjs"
 import { resolveLocalIdentity, verifyLocalSignature } from "../mac-local-signing.mjs"
-import { invokeRuntime } from "../../dist-electron/runtime-connection.js"
+import { invokeRuntime } from "@mako/host/transport/connection"
 
 export async function installedControlAudit(sessionFile) {
   const app = "/Applications/Mako.app"

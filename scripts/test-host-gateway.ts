@@ -15,12 +15,12 @@ import { fromHostOperation, hostOperationName, hostOperations, toHostOperation, 
 import { encodeRuntimeCall, runtimeFailure, type RuntimeReply, type RuntimeValue } from "@mako/host/contracts/runtime"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { gatewayHostCalls } from "../electron/gateway-client.ts"
-import { gatewayClientId, serveHostThroughGateway } from "../electron/gateway-host.ts"
+import { gatewayClientId, serveHostThroughGateway } from "@mako/host/transport/gateway"
 import { hostCorrelation, withHostClient } from "@mako/host/base/host-client"
 import { flushHostLog, hostLog, installHostLog } from "@mako/host/base/host-log"
-import { invokeRuntime } from "../electron/runtime-connection.ts"
-import { invokeWithRecovery, type RecoveryLink } from "../electron/runtime-retry.ts"
-import { startWebHost, type HostInvoke } from "../electron/web-host.ts"
+import { invokeRuntime } from "@mako/host/transport/connection"
+import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
+import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-host-gateway-"))
 const logPath = join(scratch, "host.log")

@@ -6,13 +6,10 @@ import { createServer, request } from "node:http"
 import { randomUUID } from "node:crypto"
 import { brotliCompressSync } from "node:zlib"
 import { z } from "zod"
-import { startWebHost } from "../electron/web-host.js"
-import {
-  invokeRuntime,
-  runtimeRequest,
-  RuntimeDisconnectedError,
-} from "../electron/runtime-connection.js"
-import type { RuntimeTransfer } from "../electron/runtime-response.js"
+import { startWebHost } from "@mako/host/transport/server"
+import { invokeRuntime, runtimeRequest } from "@mako/host/transport/connection"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import type { RuntimeTransfer } from "@mako/host/transport/response"
 
 const root = await mkdtemp(join(tmpdir(), "mako-runtime-response-"))
 const socket = join(root, "host.sock")

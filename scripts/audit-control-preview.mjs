@@ -54,7 +54,7 @@ if (process.versions.electron) {
     ...(process.env.MAKO_CONTROL_MEDIA_ROOT ? [join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffmpeg"), join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffprobe")] : []),
     "src/components/inspector/control-preview-image.tsx",
     "src/lib/control-preview-painter.ts", "src/lib/control-preview-decoder.ts",
-    "dist-electron/control-previews.js", "dist-electron/runtime-connection.js",
+    "dist-electron/control-previews.js", "packages/host/dist/transport/connection.js",
   ]
   const identity = async () => Object.fromEntries(await Promise.all(identityPaths.map(async path =>
     [path, createHash("sha256").update(await readFile(path)).digest("hex")]
@@ -162,7 +162,7 @@ async function audit() {
   const { BrowserCommandSchema } =
     await import("@mako/control-runtime/contracts")
   const { invokeRuntime, invokeRuntimePreview, runtimeInfo, subscribeRuntime } =
-    await import("../dist-electron/runtime-connection.js")
+    await import("@mako/host/transport/connection")
   let sizing
   const installedSession = process.env.MAKO_PREVIEW_INSTALLED_SESSION
   const installed = installedSession

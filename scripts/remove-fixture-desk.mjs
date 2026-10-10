@@ -20,13 +20,13 @@ const LEAVE_MS = 20_000
 const TERM_MS = 10_000
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const built = (name) => join(root, "dist-electron", name)
-if (!existsSync(built("runtime-service.js"))) {
+const built = (name) => join(root, "packages/host/dist/transport", name)
+if (!existsSync(built("service.js"))) {
   console.log("Nothing to remove: no desk was built in this checkout, so none ran from it.")
   process.exit(0)
 }
-const { appDataFolder, fixtureCheckout, fixtureProfile, runtimeDataRoot, runtimeLocation } = await import(pathToFileURL(built("runtime-service.js")).href)
-const { probeRuntime } = await import(pathToFileURL(built("runtime-connection.js")).href)
+const { appDataFolder, fixtureCheckout, fixtureProfile, runtimeDataRoot, runtimeLocation } = await import(pathToFileURL(built("service.js")).href)
+const { probeRuntime } = await import(pathToFileURL(built("connection.js")).href)
 
 const named = process.argv.indexOf("--profile")
 const profile = named >= 0 ? process.argv[named + 1] : fixtureProfile(root, process.env)

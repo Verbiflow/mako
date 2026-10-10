@@ -8,8 +8,8 @@ import { join } from "node:path"
 import { providerHost } from "../electron/providers/index"
 import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
 import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
-import { invokeRuntime } from "../electron/runtime-connection"
-import { startWebHost } from "../electron/web-host"
+import { invokeRuntime } from "@mako/host/transport/connection"
+import { startWebHost } from "@mako/host/transport/server"
 import type { LiveSnapshot, LiveStartOptions } from "@mako/host/contracts/live-conversations"
 
 const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")

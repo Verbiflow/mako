@@ -1,12 +1,14 @@
-import type { ConversationRoutingResult } from "./shared-conversations.js"
-import { withHostClient, hostHistoryPaging } from "@mako/host/base/host-client"
-import { breadcrumb } from "@mako/host/base/crash"
-import { hostCallInput, hostChannels, isHostChannel, type HostArguments, type HostChannel } from "@mako/host/contracts/host-call-inputs"
-import type { MethodTable } from "@mako/host/base/methods"
-import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
-import { CLIENT_CALL_ON_SOCKET, isClientCall } from "@mako/host/contracts/client-calls"
-import { HostCallLifetime } from "./host-call-lifetime.js"
+import { withHostClient, hostHistoryPaging } from "../base/host-client.js"
+import { breadcrumb } from "../base/crash.js"
+import { hostCallInput, hostChannels, isHostChannel, type HostArguments, type HostChannel } from "../contracts/host-call-inputs.js"
+import type { MethodTable } from "../base/methods.js"
+import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixture-desk-policy.js"
+import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.js"
+import { HostCallLifetime } from "./call-lifetime.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
+
+/** Whether another host answered a call, and its answer. */
+export type RoutedCall = { handled: false } | { handled: true; value: unknown }
 
 /** Where each domain declares the methods it answers. */
 export interface HostMethodsOptions {
@@ -16,7 +18,7 @@ export interface HostMethodsOptions {
    */
   fixtureDesk: boolean
   /** A call about a conversation another host owns is answered there. */
-  route(channel: HostChannel, args: unknown[]): Promise<ConversationRoutingResult>
+  route(channel: HostChannel, args: unknown[]): Promise<RoutedCall>
   /** A history-paging client gets each reply's history as pages. */
   presentHistory<Result>(value: Result): Result
 }
