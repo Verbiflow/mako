@@ -11,6 +11,8 @@ export type HostStopReason =
   | { kind: "idle" }
   /** A client asked: quit, install an update and quit, or restart on the current build. */
   | { kind: "request"; action: "quit" | "install" | "restart" }
+  /** The host couldn't start; the process ends with code 1 once cleanup is done. */
+  | { kind: "failed"; error: string }
 
 export type StopSignal = "SIGTERM" | "SIGINT" | "SIGHUP"
 
@@ -43,7 +45,7 @@ export function hostLifecycle(options: HostLifecycleOptions): HostLifecycle {
       state = { kind: "stopping", reason }
       options.log("stopping", reasonFields(reason))
       stopped = (async () => {
-        let code = 0
+        let code = reason.kind === "failed" ? 1 : 0
         // The call that asked for the stop answers before cleanup closes host calls.
         await new Promise((done) => setImmediate(done))
         try {
@@ -63,11 +65,12 @@ export function hostLifecycle(options: HostLifecycleOptions): HostLifecycle {
 }
 
 /** What the log records of a stop. */
-export type StopFields = { signal: StopSignal } | { reason: "idle" | "quit" | "install" | "restart" }
+export type StopFields = { signal: StopSignal } | { reason: "idle" | "quit" | "install" | "restart" } | { reason: "failed"; error: string }
 
 function reasonFields(reason: HostStopReason): StopFields {
   if (reason.kind === "signal") return { signal: reason.signal }
   if (reason.kind === "request") return { reason: reason.action }
+  if (reason.kind === "failed") return { reason: "failed", error: reason.error }
   return { reason: reason.kind }
 }
 
