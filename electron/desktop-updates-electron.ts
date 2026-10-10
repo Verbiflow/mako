@@ -109,5 +109,15 @@ export function desktopUpdates({ version, supported, quitting, changed }: Deskto
 function notesFrom(notes: ReleaseNotes): string | undefined {
   if (!notes) return undefined
   const text = Array.isArray(notes) ? notes.map((entry) => entry.note ?? "").join("\n") : notes
-  return text.replace(/<[^>]+>/g, "").trim().slice(0, 4000) || undefined
+  return plainText(text).trim().slice(0, 4000) || undefined
+}
+
+/** Release notes arrive as HTML and are shown as text, so no tag survives, nested or unclosed ones included. */
+function plainText(html: string): string {
+  let text = html
+  for (let previous = ""; previous !== text;) {
+    previous = text
+    text = text.replace(/<[^<>]*>/g, "")
+  }
+  return text.replace(/[<>]/g, "")
 }

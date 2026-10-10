@@ -45,7 +45,7 @@ try {
   // With no Electron to start, agents read that Mako's own windows need the desktop app.
   const channel = new DesktopChannel()
   const noDesktop = new AgentViewsApp({ channel, launch: () => undefined })
-  await assert.rejects(noDesktop.ready(), new RegExp(NO_DESKTOP_WINDOWS.replace(/[.']/g, "\\$&")))
+  await assert.rejects(noDesktop.ready(), { message: NO_DESKTOP_WINDOWS })
   noDesktop.close()
   await assert.rejects(noDesktop.ready(), /closing/)
   channel.close()
