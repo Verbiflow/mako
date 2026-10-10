@@ -1,13 +1,4 @@
 {
-  "electron/drivers.ts": [
-    "closing",
-    "emit",
-    "freshCounter",
-    "hooks",
-    "preparingRuns",
-    "runs",
-    "stopping"
-  ],
   "electron/providers/index.ts": [
     "providerHost"
   ],

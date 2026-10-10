@@ -20,7 +20,7 @@ import { resumes } from "../providers/live-capabilities.js"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "@mako/host/threads"
 import type { HarnessProfiles } from "../harness-profiles.js"
-import { bindDrivers, nativeStopToken, resumeNative, startFresh, threadRun, waitForNativeRun } from "../drivers.js"
+import { NativeRuns } from "../native-runs.js"
 import { TransferInputSchema } from "@mako/host/contracts/conversation-control"
 import type { HostTelemetry } from "@mako/host/usage"
 import type { Harnesses } from "./harnesses.js"
@@ -37,6 +37,8 @@ import { installTranscriptDocumentIpc } from "../ipc/transcript-document.js"
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
   live: LiveConversations
+  /** Headless native runs, one writer per native session. */
+  runs: NativeRuns
   native: NativeRequests
   continuation: ContinuationPlanner<unknown>
   /** Replies with their history as pages, for clients that page it. */
@@ -122,13 +124,30 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       message: `Workspace rewind recovery needs attention: ${error instanceof Error ? error.message : String(error)}`,
     })
   )
+  // Headless runs report to every window, and claim their session in the ledger while they run.
+  const runs = new NativeRuns(providerHost, emit, {
+    admission: deps.admission,
+    assessResume: (ref) => harnesses.assessResume({
+      id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
+      coveredBlocks: 0, includesBase: false,
+    }),
+    claimSession: (ref) => {
+      if (!memory) throw new Error("Native session ownership is unavailable. Retry after the host reconnects.")
+      const owner = randomUUID()
+      memory.hold(ref.harness, ref.nativeId, owner)
+      return () => memory.release(ref.harness, ref.nativeId, owner)
+    },
+    // A native reply runs with exactly these settings; the ledger keeps them
+    // for a store that records none, the way a live session's report is kept.
+    prepared: (ref, settings) => memory?.remember(ref.harness, ref.nativeId, { settings }),
+  })
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
     read: async (path) => (await catalog.open(path))?.ref ?? null,
-    running: (path) => threadRun(path)?.status === "running",
+    running: (path) => runs.state(path)?.status === "running",
     execute: async (ref, text, tuning) => {
       const selected = await harnesses.profiles.resolveNativeLaunch(ref.harness, ref.cwd, tuning)
-      await resumeNative(ref, text, { ...selected, captureOutput: true })
-      const result = await waitForNativeRun(ref.path)
+      await runs.resume(ref, text, { ...selected, captureOutput: true })
+      const result = await runs.wait(ref.path)
       if (result.state.status !== "done")
         throw new Error(result.state.error ?? "Native execution did not complete")
     },
@@ -151,11 +170,12 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       return driver ? { available: driver.available(config.environment.appRoot), canResume: resumes(driver) } : null
     },
     nativeInstalled: (provider) => providerHost.nativeRunners.get(provider)?.available() ?? false,
-    running: (path) => threadRun(path)?.status === "running",
+    running: (path) => runs.state(path)?.status === "running",
     external: (path) => catalog.activity()[path]?.status ?? null,
   })
   return {
     live,
+    runs,
     native,
     continuation,
     history,
@@ -179,27 +199,6 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   }
 }
 
-/** Headless native runs report to every window, and claim their session in the ledger while they run. */
-export function bindNativeRuns(threads: Threads, harnesses: Harnesses, admission: Admission, emit: (event: HostEvent) => void): void {
-  const { memory } = threads
-  bindDrivers(emit, {
-    admission,
-    assessResume: (ref) => harnesses.assessResume({
-      id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
-      coveredBlocks: 0, includesBase: false,
-    }),
-    claimSession: (ref) => {
-      if (!memory) throw new Error("Native session ownership is unavailable. Retry after the host reconnects.")
-      const owner = randomUUID()
-      memory.hold(ref.harness, ref.nativeId, owner)
-      return () => memory.release(ref.harness, ref.nativeId, owner)
-    },
-    // A native reply runs with exactly these settings; the ledger keeps them
-    // for a store that records none, the way a live session's report is kept.
-    prepared: (ref, settings) => memory?.remember(ref.harness, ref.nativeId, { settings }),
-  })
-}
-
 export interface ConversationMethodsDeps {
   conversations: Conversations
   /** Validates each launch's settings against the harness's discovered models. */
@@ -221,7 +220,7 @@ export interface ConversationMethodsDeps {
 /** Starting, continuing, steering and moving conversations, live or headless. */
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
   const { conversations, profiles, threads, workspaces, movers, lifecycle, telemetry, files, emit } = deps
-  const { live, native, continuation, history } = conversations
+  const { live, runs, native, continuation, history } = conversations
   installTranscriptDocumentIpc(methods, { snapshot: (id) => live.snapshot(id), openThread: (path) => threads.catalog.open(path) })
   const { worktrees, environments } = workspaces
   const worktreeMove = () => {
@@ -399,11 +398,11 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:harness-start", async (harness: string, prompt: string, options?: SessionSettings) => {
     const cwd = await deps.workspace()
     const tuning = await profiles.resolveNativeLaunch(harness, cwd, options)
-    return { run: await startFresh(harness, cwd, prompt, tuning), cwd }
+    return { run: await runs.startFresh(harness, cwd, prompt, tuning), cwd }
   })
-  methods.handle("mako:thread-run", (path: string) => threadRun(path))
+  methods.handle("mako:thread-run", (path: string) => runs.state(path))
   methods.handle("mako:thread-abort-run", async (path: string) => {
-    const token = nativeStopToken(path)
+    const token = runs.stopToken(path)
     if (token) await lifecycle.stop({ kind: "native", path, token })
   })
   methods.handle("mako:provider-residency", () => live.residency())

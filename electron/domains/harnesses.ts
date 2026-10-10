@@ -8,7 +8,7 @@ import { toolHarnesses } from "../providers/tool-harnesses.js"
 import type { ToolHarnesses } from "@mako/host/tools"
 import { assessProviderResume } from "../provider-recovery.js"
 import { RuntimeUpdates } from "../runtime-updates.js"
-import { resumableHarnesses } from "../drivers.js"
+import { nativeHarnesses } from "../native-runs.js"
 import { HarnessProfiles } from "../harness-profiles.js"
 import { ProviderProfileCache } from "../provider-profile-cache.js"
 import type { HarnessAccounts } from "../accounts.js"
@@ -85,7 +85,7 @@ export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): 
     },
     installed: () => [
       ...new Set([
-        ...resumableHarnesses(),
+        ...nativeHarnesses(providerHost.nativeRunners),
         ...providerHost.liveDrivers
           .list()
           .filter((driver) => driver.available(appRoot))
@@ -156,7 +156,7 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
   methods.handle("mako:harness-descriptors", () =>
     describeHarnesses(providerHost, {
       live: (provider) => providerHost.liveDrivers.get(provider)?.available(appRoot) === true,
-      resumable: new Set(resumableHarnesses()),
+      resumable: new Set(nativeHarnesses(providerHost.nativeRunners)),
     })
   )
   methods.handle("mako:harness-tuning", async (harness: string, cwd?: string, force?: boolean) =>

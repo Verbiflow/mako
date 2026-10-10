@@ -87,10 +87,10 @@ export default defineConfig([
           patterns: [
             {
               group: [
-                "../harnesses.js",
-                "../../harnesses.js",
-                "../drivers.js",
-                "../../drivers.js",
+                "../harness-profiles.js",
+                "../../harness-profiles.js",
+                "../native-runs.js",
+                "../../native-runs.js",
               ],
               message:
                 "Provider capabilities cannot import their consumers; move shared mechanics under electron/providers/.",

@@ -19,7 +19,7 @@ import { closeRepositories } from "@mako/git"
 import { watchWake } from "@mako/host/base/wake"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "@mako/host/usage"
 import { resolveHarnessTuning } from "./harness-models.js"
-import { abortNative, nativeLifecycleWork, nativeStopToken, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
+import { nativeHarnesses } from "./native-runs.js"
 import { providerHost } from "./providers/index.js"
 import { threadHarnesses } from "./providers/thread-harnesses.js"
 import { machineOffer, hostMachine } from "@mako/host/base/machine"
@@ -28,7 +28,7 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { openThreads, declareThreadMethods } from "@mako/host/threads"
 import { controlLine, openControl, declareControlMethods, type ControlService } from "@mako/host/control"
 import { openHarnesses, declareHarnessMethods } from "./domains/harnesses.js"
-import { openConversations, bindNativeRuns, declareConversationMethods, type Conversations } from "./domains/conversations.js"
+import { openConversations, declareConversationMethods, type Conversations } from "./domains/conversations.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "@mako/host/tools"
 import { declareGitMethods } from "@mako/host/git"
 import { openTerminals, declareTerminalMethods } from "@mako/host/terminals"
@@ -182,19 +182,6 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         threads: catalog.list().length,
       }),
     })
-    const workspaceAutomations = new Automations({
-      watch,
-      emit,
-      launch: async (cwd, prompt) => {
-        if (fixtureDesk) throw new Error("The fixture desk runs no automations")
-        const resumable = new Set(resumableHarnesses())
-        const profile = (await harnesses.profiles.all()).find((candidate) => candidate.available && resumable.has(candidate.id))
-        if (!profile) throw new Error("No provider is available for this automation")
-        telemetry.feature("automation.ran", profile.id)
-        await startFresh(profile.id, cwd, prompt, resolveHarnessTuning(profile, undefined))
-      },
-    })
-    automations = workspaceAutomations
     cloud = declareCloudAccountMethods(methods, {
       emit,
       fixture: fixtureDesk,
@@ -241,7 +228,20 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       settled: (id) => movers?.moves.settled(id),
       admission,
     })
-    const { live, native } = conversations
+    const { live, runs, native } = conversations
+    const workspaceAutomations = new Automations({
+      watch,
+      emit,
+      launch: async (cwd, prompt) => {
+        if (fixtureDesk) throw new Error("The fixture desk runs no automations")
+        const resumable = new Set(nativeHarnesses(providerHost.nativeRunners))
+        const profile = (await harnesses.profiles.all()).find((candidate) => candidate.available && resumable.has(candidate.id))
+        if (!profile) throw new Error("No provider is available for this automation")
+        telemetry.feature("automation.ran", profile.id)
+        await runs.startFresh(profile.id, cwd, prompt, resolveHarnessTuning(profile, undefined))
+      },
+    })
+    automations = workspaceAutomations
     void harnesses.accounts.completePendingRemovals().catch((error) =>
       hostWarn("accounts", "pending removals could not be read", { error: error instanceof Error ? error.message : String(error) })
     )
@@ -250,7 +250,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       threads,
       live,
       native,
-      nativeStops: { token: nativeStopToken, abort: abortNative },
+      nativeStops: { token: (path) => runs.stopToken(path), abort: (path, token) => runs.abort(path, token) },
       homes: workspaces.environments,
       emit,
     })
@@ -312,7 +312,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     application = declareApplicationMethods(methods, {
       live,
       native,
-      nativeRuns: { lifecycleWork: nativeLifecycleWork, abort: abortNative },
+      nativeRuns: { lifecycleWork: () => runs.lifecycleWork(), abort: (path, token) => runs.abort(path, token) },
       admission,
       updates,
       wake,
@@ -345,8 +345,6 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     trace("updates ready")
     catalog.start()
     trace("catalog starting")
-    bindNativeRuns(threads, harnesses, admission, emit)
-    trace("drivers ready")
     // The last host's readings paint first; this host's own run a few seconds
     // behind startup, and hourly for the public versions.
     await harnesses.updates.load()
@@ -359,7 +357,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       jobs.stop()
       const callsDrained = methods.close()
       // The native launcher closes its own admission before anything it uses goes.
-      const providersDrained = Promise.all([stopDrivers(), harnesses.profiles.stop()])
+      const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop()])
       void providersDrained.catch(() => {})
       closeRepositories()
       application?.dispose()
