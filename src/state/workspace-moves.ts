@@ -1,6 +1,6 @@
 import { toast } from "sonner"
-import type { HostEvent } from "../../electron/contracts/host-events-boot.ts"
-import type { WorkspaceMoveAnswer, WorkspaceMoveRequest, WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { WorkspaceMoveAnswer, WorkspaceMoveRequest, WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"

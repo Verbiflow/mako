@@ -1,9 +1,9 @@
 import type { MethodTable } from "../host-methods.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { ThreadStore } from "../thread-store.js"
-import type { ThreadGroup } from "../contracts/thread-groups.js"
-import type { ThreadPurpose } from "../contracts/thread-purposes.js"
-import { ThreadIdSchema, type ThreadPlacement } from "../contracts/thread-identity.js"
+import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
+import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
+import { ThreadIdSchema, type ThreadPlacement } from "@mako/host/contracts/thread-identity"
 
 /**
  * A window's view of multi-Session Threads: the groups to draw, and a new

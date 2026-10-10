@@ -1,15 +1,15 @@
-import type { ForkInput } from "./contracts/conversation-control.js"
+import type { ForkInput } from "@mako/host/contracts/conversation-control"
 import {
   RewindInputSchema,
   type RewindInput,
   type RewindPlan,
   type RewindPreview,
   type RunSnapshots,
-} from "./contracts/workspace-snapshots.js"
+} from "@mako/host/contracts/workspace-snapshots"
 import { TreeComparison } from "@mako/git"
 import { treeDiff, treeFiles } from "./host-git.js"
-import type { GitDiff, GitFile } from "./contracts/git-workspace-search.js"
-import type { LiveRequest, LiveSnapshot } from "./contracts/live-conversations.js"
+import type { GitDiff, GitFile } from "@mako/host/contracts/git-workspace-search"
+import type { LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"
 
 /** Turns kept open for reading their files; each holds one object reader. */

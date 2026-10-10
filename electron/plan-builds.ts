@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
-import { MAX_PLAN_BUILDS, PlanBuildsSchema, type PlanBuild, type PlanBuildClaim, type PlanBuildTarget, type PlanBuilds as PlanBuildsState } from "./contracts/plan-builds.js"
+import { MAX_PLAN_BUILDS, PlanBuildsSchema, type PlanBuild, type PlanBuildClaim, type PlanBuildTarget, type PlanBuilds as PlanBuildsState } from "@mako/host/contracts/plan-builds"
 
 interface Deps {
   file: string

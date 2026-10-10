@@ -7,7 +7,7 @@ import { useSession } from "@/state/session"
 import { openSessionDraft, sessionDraftKey, threadGroupsStore } from "@/state/thread-groups"
 import { newSessionInThread } from "@/state/thread-sessions"
 import { useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
-import { gitActionPrompt, gitCommands, pullSetupReason, type GitAction, type GitCommand } from "../../electron/contracts/git-actions"
+import { gitActionPrompt, gitCommands, pullSetupReason, type GitAction, type GitCommand } from "@mako/host/contracts/git-actions"
 
 /**
  * Put a message in the composer that asks the Thread's agent to take a Git

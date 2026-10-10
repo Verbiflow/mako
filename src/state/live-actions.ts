@@ -3,7 +3,7 @@ import { toast } from "sonner"
 import { z } from "zod"
 import { getMako } from "@/lib/bridge"
 import type { LiveActionInput } from "@/lib/types"
-import { actionRetainsInput } from "../../electron/contracts/operation-recovery"
+import { actionRetainsInput } from "@mako/host/contracts/operation-recovery"
 import { applyLiveSnapshot } from "./live-recovery"
 
 // Older desktop preloads still route every action through live-action. Read

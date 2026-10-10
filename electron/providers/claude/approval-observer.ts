@@ -3,8 +3,8 @@ import { stat } from "node:fs/promises"
 import { z } from "zod"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { readLineBatch } from "@mako/sessions/jsonl"
-import type { NativeApprovalDecision, NativeApprovalIdentity } from "../../contracts/approval-response.js"
-import type { LivePermissionRequest, LivePermissionResponse } from "../../contracts/providers-acp.js"
+import type { NativeApprovalDecision, NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
+import type { LivePermissionRequest, LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 
 const resultSchema = z.object({ answers: z.record(z.string(), z.string()), questions: z.array(z.object({ question: z.string() })).min(1) })

@@ -1,5 +1,5 @@
-import { capabilityText } from "../../../electron/contracts/harness-capabilities"
-import { compactionAvailable } from "../../../electron/contracts/recovery"
+import { capabilityText } from "@mako/host/contracts/harness-capabilities"
+import { compactionAvailable } from "@mako/host/contracts/recovery"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
 import { descriptorFor } from "@/state/descriptors"

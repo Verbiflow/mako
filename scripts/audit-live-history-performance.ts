@@ -4,7 +4,7 @@ import { mock } from "node:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import { LiveHistoryReader } from "../electron/live-history-reader"
-import type { LiveHistoryRead } from "../electron/contracts/live-history"
+import type { LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { auditId, auditSnapshot, auditStats } from "./performance-audit-fixtures"
 const evidence = process.env.MAKO_PERFORMANCE_EVIDENCE ?? "docs/audits/2026-09-23/live-history-performance"
 await mkdir(evidence, { recursive: true })

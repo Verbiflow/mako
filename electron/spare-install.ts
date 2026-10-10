@@ -1,6 +1,6 @@
 import { lstat, readlink, unlink } from "node:fs/promises"
 import { installCommand, installsDue, movableInstalls, spareInstalls, THREAD_PLACEHOLDER } from "./checkout-install.js"
-import type { AppKey } from "./contracts/thread-environments.js"
+import type { AppKey } from "@mako/host/contracts/thread-environments"
 import { memoryPressure, runKey, type MemoryPressure, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import { projectRoot, type Recipe } from "./thread-recipe.js"
 import { ownPackages } from "./worktree-carry.js"

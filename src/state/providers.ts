@@ -3,7 +3,7 @@ import type { HarnessProfile } from "@/lib/types"
 import type {
   HarnessUpdateInfo,
   HarnessUpdates,
-} from "../../electron/contracts/harness-updates"
+} from "@mako/host/contracts/harness-updates"
 import { createHook, createStore } from "@/state/store"
 
 export interface DaemonInfo {

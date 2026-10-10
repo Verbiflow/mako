@@ -5,8 +5,8 @@ import {
   accessTierInfo,
   accessTierOfModeId,
   type AccessTier,
-} from "./contracts/access.js"
-import type { LiveSessionMode } from "./contracts/providers-acp.js"
+} from "@mako/host/contracts/access"
+import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
 
 /**
  * How one ACP provider's modes sit on the shared access ladder.

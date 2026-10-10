@@ -1,5 +1,5 @@
 import { GitBranchIcon } from "lucide-react"
-import type { ThreadWorktree, WorktreeStartReceipt } from "../../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeStartReceipt } from "@mako/host/contracts/thread-worktrees"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 function readyIn(ms: number): string {

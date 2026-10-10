@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readdirSync } from "node:fs"
 import { resolveSessionSettings, type SessionModel } from "@mako/sessions/settings"
-import { workDefault, workDefaultProblems, type HarnessDefaults } from "../electron/contracts/harness-defaults.ts"
+import { workDefault, workDefaultProblems, type HarnessDefaults } from "@mako/host/contracts/harness-defaults"
 import { providerHost } from "../electron/providers/index.ts"
 import { MODEL_CATALOG_ROOT, recordedCatalog } from "./model-catalogs.ts"
 

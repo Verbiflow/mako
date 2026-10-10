@@ -1,7 +1,7 @@
 import { Worker } from "node:worker_threads"
 import { z } from "zod"
-import type { ProviderBinding } from "../../contracts/conversation-control.js"
-import { NativeQuestionHistorySchema, type NativeQuestionHistory } from "../../contracts/live-questions.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
+import { NativeQuestionHistorySchema, type NativeQuestionHistory } from "@mako/host/contracts/live-questions"
 
 const reply = z.union([
   z.object({ id: z.number().int(), entries: NativeQuestionHistorySchema }),

@@ -3,11 +3,11 @@ import {
   MAKO_THREAD_SERVER,
   isMakoManagedServer,
   reachableMcpServers,
-} from "../../electron/contracts/mcp-reach"
+} from "@mako/host/contracts/mcp-reach"
 import {
   UNIVERSAL_SKILL_PROVIDER,
   skillDelivery,
-} from "../../electron/contracts/skill-reach"
+} from "@mako/host/contracts/skill-reach"
 import { fuzzy } from "./fuzzy"
 import type {
   McpRegistrySnapshot,

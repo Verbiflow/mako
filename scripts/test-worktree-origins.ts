@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { WorktreeOrigins } from "../electron/worktree-origins.js"
-import { PROJECT_CHECKOUT_FILE } from "../electron/contracts/thread-worktrees.js"
+import { PROJECT_CHECKOUT_FILE } from "@mako/host/contracts/thread-worktrees"
 
 /**
  * Which worktree a session's folder is in, against real repositories:

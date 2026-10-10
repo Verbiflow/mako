@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
 import { mock } from "node:test"
-import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "../electron/contracts/workspace-moves.ts"
+import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "@mako/host/contracts/workspace-moves"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 
 // The composer's offer to move the Thread onto its own branch says, before

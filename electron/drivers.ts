@@ -22,7 +22,7 @@
  */
 
 import { assertLifecycleAdmission } from "./application-lifecycle.js"
-import type { LifecycleWork } from "./contracts/app-lifecycle.js"
+import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import { randomUUID } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
@@ -31,7 +31,7 @@ import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { assertAccountLaunch, resolveAccountLaunch, switchSuggestion, type AccountLaunch } from "./accounts.js"
 import type { AccountHold } from "./account-holds.js"
-import { resumable, type ResumeVerdict } from "./contracts/conversation-control.js"
+import { resumable, type ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { reconnectRefusal } from "./live-transfers.js"
 import { providerHost } from "./providers/index.js"
 import {
@@ -42,11 +42,11 @@ import {
 } from "./providers/native-runner.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { launchContext } from "./execution-context.js"
-import type { ExecutionContext } from "./contracts/execution-context.js"
-import { ExecutionCredentialSchema } from "./contracts/execution-context.js"
+import type { ExecutionContext } from "@mako/host/contracts/execution-context"
+import { ExecutionCredentialSchema } from "@mako/host/contracts/execution-context"
 import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
-import type { ThreadRunState } from "./contracts/conversation-session.js"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { ThreadRunState } from "@mako/host/contracts/conversation-session"
 import {
   environmentForExecutable,
   resolveExecutable,

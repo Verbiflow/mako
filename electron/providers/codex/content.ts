@@ -1,4 +1,4 @@
-import type { JsonObject } from "../../contracts/json.js"
+import type { JsonObject } from "@mako/host/contracts/json"
 import type { AttachmentContent } from "@mako/sessions"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"

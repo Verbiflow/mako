@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { claudeHooks, claudeCommands } from "../electron/providers/claude/authoring.ts"
 import { openCodeCommands } from "../electron/providers/opencode/authoring.ts"
 import { nativeAuthoringCatalog, writeNativeAuthoring } from "../electron/native-authoring.ts"
-import { hostCallReplay } from "../electron/contracts/host-call-policy.ts"
+import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 
 const root = await mkdtemp(join(tmpdir(), "mako-authoring-"))
 try {

@@ -12,8 +12,8 @@ import type {
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { PlanningCapability, ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { elicitationQuestion, elicitationContent } from "../electron/acp-elicitation.ts"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noAcpCapabilities, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 // Native enum titles may be blank. Display the value without changing its wire identity.

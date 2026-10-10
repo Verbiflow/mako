@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CheckoutHeadService, locateCheckout } from "../electron/checkout-heads.js"
-import type { CheckoutHead, CheckoutHeads } from "../electron/contracts/checkout-heads.js"
+import type { CheckoutHead, CheckoutHeads } from "@mako/host/contracts/checkout-heads"
 import { moveablePlace } from "../electron/workspace-tools.js"
 
 const unused = () => Promise.reject(new Error("not called"))

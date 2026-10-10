@@ -16,8 +16,8 @@ import {
   mcpTransportsFor,
   projectedMcpServers,
   reachableMcpServers,
-} from "../electron/contracts/mcp-reach.ts"
-import type { McpRegistrySnapshot, McpServerRecord, SkillRecord, SkillRegistrySnapshot } from "../electron/contracts/mcp-skills-integrations.ts"
+} from "@mako/host/contracts/mcp-reach"
+import type { McpRegistrySnapshot, McpServerRecord, SkillRecord, SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 
 /* Tokens ------------------------------------------------------------------ */
 

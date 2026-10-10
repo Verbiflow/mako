@@ -8,9 +8,9 @@ import { randomUUID } from "node:crypto"
 import { abortNative, nativeStopToken, bindDrivers, resumeNative, waitForNativeRun, threadRun, nativeLifecycleWork } from "../electron/drivers.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { SessionMemory } from "../electron/session-memory.ts"
-import type { ResumeVerdict } from "../electron/contracts/conversation-control.ts"
+import type { ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadRef } from "@mako/sessions"
-import { ExecutionContextSchema } from "../electron/contracts/execution-context.ts"
+import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-admission-"))
 const provider = "native-admission-fixture"

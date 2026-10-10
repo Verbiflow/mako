@@ -4,7 +4,7 @@ import type { CollabAgentTool } from "./generated/v2/CollabAgentTool.js"
 import type { CollabAgentToolCallStatus } from "./generated/v2/CollabAgentToolCallStatus.js"
 import type { SubAgentActivityKind } from "./generated/v2/SubAgentActivityKind.js"
 import type { ThreadItem } from "./generated/v2/ThreadItem.js"
-import type { NativeAgentObservation } from "../../contracts/native-agents.js"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 /**
  * Every collab tool and call status in the generated protocol, so

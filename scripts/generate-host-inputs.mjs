@@ -3,13 +3,25 @@ import { format, resolveConfig } from "prettier"
 import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
-const configFile = ts.readConfigFile("tsconfig.electron.json", ts.sys.readFile)
-const config = ts.parseJsonConfigFileContent(
-  configFile.config,
-  ts.sys,
-  process.cwd()
-)
-const program = ts.createProgram(config.fileNames, config.options)
+/**
+ * Handlers and the client call list live in electron/ and in @mako/host's
+ * sources, so one program reads both, the package from source rather than
+ * through its built declarations.
+ */
+const parse = (path) =>
+  ts.getParsedCommandLineOfConfigFile(path, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: (diagnostic) => { throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")) } })
+const electron = parse("tsconfig.electron.json")
+const host = parse("packages/host/tsconfig.json")
+const hostSource = resolve("packages/host/src")
+const program = ts.createProgram([...electron.fileNames, ...host.fileNames], {
+  ...electron.options,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  paths: { "@mako/host/*": [`${hostSource}/*`] },
+  rootDir: undefined,
+  outDir: undefined,
+  noEmit: true,
+})
 const checker = program.getTypeChecker()
 const inputs = new Map()
 /** A primitive alias keeps its name only where it's written, so a property's declared type is read too. */
@@ -110,7 +122,7 @@ const sources = program
   .getSourceFiles()
   .filter(
     (file) =>
-      file.fileName.startsWith(resolve("electron")) &&
+      (file.fileName.startsWith(resolve("electron")) || file.fileName.startsWith(hostSource)) &&
       !file.fileName.endsWith("host-call-inputs.ts")
   )
 /**
@@ -129,7 +141,7 @@ for (const file of sources) {
   }
   collect(file, false)
 }
-if (!clientCalls.size) throw new Error("No CLIENT_CALLS list in electron/")
+if (!clientCalls.size) throw new Error("No CLIENT_CALLS list in the host's sources")
 for (const file of sources) {
   const visit = (node) => {
     if (
@@ -228,7 +240,7 @@ export function hostCallInput<Channel extends HostChannel>(channel: Channel): Ho
   return schema as HostCallInput<Channel>
 }
 `
-const file = "electron/contracts/host-call-inputs.ts"
+const file = "packages/host/src/contracts/host-call-inputs.ts"
 const options = await resolveConfig(file)
 const output = await format(source, { ...options, filepath: file })
 if (process.argv.includes("--check")) {

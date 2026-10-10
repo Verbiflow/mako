@@ -26,15 +26,27 @@ provider reports exact numbers (Settings > Usage), never as a per-thread panel.
 
 One direction of knowledge, no exceptions:
 
-1. **Host** (`electron/`) owns the agent runtime and git. It speaks one wire
-   contract, the modules in `electron/contracts/`, and nothing else crosses
-   the boundary. Import the contract module that declares a name; there is
-   no barrel.
+1. **Host** (`@mako/host` in `packages/host/`, and the parts of `electron/`
+   that haven't moved there yet) owns the agent runtime and git. It speaks
+   one wire contract, the modules in `packages/host/src/contracts/`
+   (`@mako/host/contracts/<name>`), and nothing else crosses the boundary.
+   Import the contract module that declares a name; there is no barrel.
 2. **State** (`src/state/`) is React-free. `store.ts` is the observable;
    `session.ts` applies host events and owns every mutation the UI can make.
 3. **Components** (`src/components/`) are presentation. They read through
    selectors and call domain actions in `src/state/`. Components and desk code
    never import `src/lib/bridge.ts`; ESLint enforces that boundary.
+
+Outside `packages/host`, code imports the host by name (`@mako/host/…`),
+never through a relative path into it. What runs TypeScript reads it from
+source: tsx, Vite and the renderer's and scripts' typechecks, through the
+`paths` in `tsconfig.json`, `tsconfig.app.json` and `tsconfig.scripts.json`
+and Vite's alias, so a test or the desk sees an edit without a build.
+Compiled JavaScript (`dist-electron/`, the packaged app) reads its `dist/`
+through the package's `exports`, as `tsconfig.electron.json` does through its
+project reference. The renderer reaches only `@mako/host/contracts/*`. The
+package imports nothing from Electron, not even a type:
+`scripts/check-host-electron.mjs` and ESLint fail on it.
 
 ## How the host is put together
 
@@ -91,7 +103,7 @@ Live tests take the executable from the same resolvers (`devinExecutable()`).
 Live native messages are decoded by a pure decoder per harness, declared as
 the `decoder` family of its `HarnessDefinition` (or `absent` with a reason).
 A decoder turns one native message into the shared `Decoded` events in
-`electron/contracts/native-decoding.ts` and touches no process, clock or host,
+`packages/host/src/contracts/native-decoding.ts` and touches no process, clock or host,
 so recorded messages always decode the same way. An empty list means "known,
 deliberately silent"; `unknown` carries the raw record, which the engine
 keeps (first of each kind per host life) in `native-unknown.jsonl` beside the
@@ -929,12 +941,12 @@ that menu and may dismiss it before capture. Typing `$` anywhere or `/` at the
 start of an empty draft opens one capability menu listing every installed
 skill and the MCP servers the _selected_ provider will have: servers from the
 same reach predicate the host projects into a launch
-(`electron/contracts/mcp-reach.ts`). Mako's managed servers wear the fin. A
+(`packages/host/src/contracts/mcp-reach.ts`). Mako's managed servers wear the fin. A
 pick inserts plain text in the sigil typed (`$name`, `/name`, `$mcp:server`);
 sentence punctuation after a token stays prose. `scripts/test-composer-capabilities.ts` covers the tokens,
 reach, and ranking.
 
-A `$skill` reaches whichever provider answers. `electron/contracts/skill-reach.ts`
+A `$skill` reaches whichever provider answers. `packages/host/src/contracts/skill-reach.ts`
 is the one rule: a skill under the provider's own roots is `native` (the
 message points at it), one found only under another provider's roots or the
 universal `.agents/skills` is a `handover` (the host reads SKILL.md and the
@@ -1053,7 +1065,7 @@ second host when attachment fails.
 To look at the interface without being able to change anything, run
 `npm run desk:fixture`. It serves a web page on a `fixture-<checkout>` profile,
 starts no desktop window, and its host refuses every host call outside
-`electron/contracts/fixture-desk-policy.ts` from every client: the page proxy,
+`packages/host/src/contracts/fixture-desk-policy.ts` from every client: the page proxy,
 Electron windows on its socket, and its own hidden desk windows that agents
 drive. Writes, provider calls, git, terminals and unknown calls fail with
 `fixture-refused` before their arguments are parsed. It still reads the real
@@ -1116,11 +1128,11 @@ rejection is still fatal.
 and `test-composer-settings.ts` cover these.
 
 When the host closes for a restart, install or quit it answers every pending
-call with `host-restarting` (`electron/contracts/host-connection.ts`) instead of
+call with `host-restarting` (`packages/host/src/contracts/host-connection.ts`) instead of
 resetting the connection. The client turns that, and a dropped socket, into
 `RuntimeDisconnectedError`; `electron/runtime-retry.ts` repeats a call once
 the event stream reattaches according to one table,
-`electron/contracts/host-call-policy.ts`: `read` channels change nothing;
+`packages/host/src/contracts/host-call-policy.ts`: `read` channels change nothing;
 `replay` channels are mutations the host settles by a caller-minted id (a
 request, conversation, transfer, action or fork id) or whose repeat reaches
 the same end state (cancel, close, set a mode), so the host answers a repeat
@@ -1239,7 +1251,7 @@ preferences sync between windows; draft text and preview layout remain separate.
 
 ## Access tiers and steering
 
-`electron/contracts/access.ts` is the one ladder: plan, chat, ask, edits, auto,
+`packages/host/src/contracts/access.ts` is the one ladder: plan, chat, ask, edits, auto,
 full, deny. A provider mode carries the tier it implements (`access`) and who
 makes it true (`enforcement`): the provider itself or a native launch setting.
 The picker orders by tier and shows the provider's own name beside it. Never
@@ -1371,7 +1383,7 @@ refreshes can sign the user out. `--start-only` is free and shows launch
 notices.
 
 How a catalogued thread is continued is the host's decision, not the
-renderer's. `electron/contracts/thread-continuation.ts` turns one ref plus
+renderer's. `packages/host/src/contracts/thread-continuation.ts` turns one ref plus
 what only the host knows — the live driver, the installed CLI, a run that
 owns the path, another process in the store — into a `ContinuationPlan`:
 `live` with the id to load, `native`, `handoff` with a reason, or `refused`
@@ -1458,7 +1470,7 @@ covers it.
 
 Every Session also has an execution owner (this device or a named cloud
 runtime) and a generation that rises on every owner change, including to
-nobody while in transit (`electron/contracts/thread-execution.ts`, the
+nobody while in transit (`packages/host/src/contracts/thread-execution.ts`, the
 `executions` and `moves` tables). Ownership changes only when the owner
 releases and the destination claims. No timeout, heartbeat or lost connection
 moves it. `LiveMoves` (`electron/live-moves.ts`) gates `drain`, `wakeNow`,
@@ -1487,7 +1499,7 @@ rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.
 
 A saved binding's fate is a `ResumeVerdict`
-(`electron/contracts/conversation-control.ts`), not a boolean: `resumable`
+(`packages/host/src/contracts/conversation-control.ts`), not a boolean: `resumable`
 with the record `same` or `moved`, `held` by a named owner, or `unavailable`
 with a reason. Ownership and content are separate questions because they
 were once one, and a host that died mid-turn could never reconnect: the
@@ -1759,7 +1771,7 @@ they finish; Restore and explicit queue Resume remain available.
 
 An interrupted request already represented in the transcript needs only a stopped
 marker on its exchange, and the marker says who stopped it. A request's
-`interruption` (`electron/contracts/live-conversations.ts`) carries a reason
+`interruption` (`packages/host/src/contracts/live-conversations.ts`) carries a reason
 and the moment: `stopped` is the user's Stop; `host-quit` is written by
 `LiveConversations.stop()` for every turn still dispatching when the host
 closes for a quit, restart or install; `host-crashed` is what the next host
@@ -1805,7 +1817,7 @@ nothing is queued behind it, `LiveConversations` stamps its interruption
 with `autoContinue: { at }` and, `AUTO_CONTINUE_DELAY_MS` (2 s) later, admits
 a request carrying `continueTurnPrompt("connection-lost")` under the
 interrupted turn's own `tuning`, marked `continues: { requestId, reason,
-auto: true }` (`electron/contracts/turn-continuation.ts` holds the prompt,
+auto: true }` (`packages/host/src/contracts/turn-continuation.ts` holds the prompt,
 the delay and `autoContinueCandidate`). One attempt per turn: a continuation
 that drops again is never a candidate, nor is a turn something already
 continues, so the second drop leaves the manual offer. The timer re-checks
@@ -1884,7 +1896,7 @@ the agent runs a shell command, and requires the reopened session to finish
 the turn with one continuation and send nothing more.
 
 A failed turn carries a `failure` kind decided once on the host
-(`electron/contracts/provider-failure.ts`, no imports, shared with the
+(`packages/host/src/contracts/provider-failure.ts`, no imports, shared with the
 renderer): `transcript-rejected` (the model API refused the session's saved
 history, OpenCode's null `encrypted_content` reasoning replay), `context-exhausted`,
 `auth`, `rate-limited`, `provider-unavailable`, `network`, `resume-failed`,
@@ -1900,7 +1912,7 @@ description. `test-provider-failure.ts` covers the texts, priority,
 retriability and start failures.
 
 Every `ChatMessage` projected from a native store carries a `MessageAnchor`
-(`electron/contracts/message-anchor.ts`): the entry's index plus the
+(`packages/host/src/contracts/message-anchor.ts`): the entry's index plus the
 provider's own id and timestamp when the store records them. Fork and
 transcript bundling name the answer by its anchor, and `resolveAnchor` finds
 it in a page by id, else by timestamp and kind (nearest the remembered index
@@ -2021,7 +2033,7 @@ for the rest of the host's life). The public version is
 `registry.npmjs.org/<pkg>/latest` with a four-second deadline and a bounded
 body, held an hour, a failure ten minutes; it never blocks the installed
 reading and leaves it standing with `latestError` beside it. Versions are
-ordered by `compareVersions` in `electron/contracts/runtime-version.ts`, the
+ordered by `compareVersions` in `packages/host/src/contracts/runtime-version.ts`, the
 same function on both sides, so `0.154.0-alpha.6.2` is behind `0.154.0`
 everywhere. The channel is read off the binary's real path in evidence
 order — another app's registry, an app bundle, the CLI's own install root,

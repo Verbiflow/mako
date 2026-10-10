@@ -8,7 +8,7 @@ import { projectAcp } from "@/state/live-projection"
 import { replaceAcpConversation } from "@/state/acp-state"
 import { subscribeThreadCache, sweepThreadResidency } from "@/state/thread-viewing"
 import { liveToolFinished } from "@mako/sessions/live-content"
-import { liveContentWeight, residencyPlan, type ResidencyBudget } from "../../electron/contracts/residency"
+import { liveContentWeight, residencyPlan, type ResidencyBudget } from "@mako/host/contracts/residency"
 
 /**
  * What this window holds of conversations off screen; see `ResidencyBudget`.

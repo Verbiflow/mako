@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util"
-import { retireQuestionsForInput } from "./contracts/live-questions.js"
-import type { LiveRequest } from "./contracts/live-conversations.js"
+import { retireQuestionsForInput } from "@mako/host/contracts/live-questions"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { createHash } from "node:crypto"
 import {
   LiveActionInputSchema,
@@ -8,11 +8,11 @@ import {
   type LiveAction,
   type LiveActionInput,
   type LiveActionResult,
-} from "./contracts/live-actions.js"
+} from "@mako/host/contracts/live-actions"
 import {
   compactionAvailable,
   COMPACTION_CONFIRMATION_MS,
-} from "./contracts/recovery.js"
+} from "@mako/host/contracts/recovery"
 import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"
 
 /** Durable command receipts. A retry returns its receipt and never repeats a provider write. */

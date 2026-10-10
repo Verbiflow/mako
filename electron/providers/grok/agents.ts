@@ -4,7 +4,7 @@ import { dirname, join } from "node:path"
 import { setImmediate as yieldToHost } from "node:timers/promises"
 import { z } from "zod"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
-import type { NativeAgentObservation } from "../../contracts/native-agents.js"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import type { AcpAgentObserver } from "../acp-source.js"
 
 const identity = z.string().uuid()

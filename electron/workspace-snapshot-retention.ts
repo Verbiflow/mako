@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { WorkspaceSnapshotSchema } from "./contracts/workspace-snapshots.js"
+import { WorkspaceSnapshotSchema } from "@mako/host/contracts/workspace-snapshots"
 import { snapshotPayloadBytes } from "./workspace-snapshot-git.js"
 
 const oid = z.string().regex(/^[a-f0-9]{40,64}$/)

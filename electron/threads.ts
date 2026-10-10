@@ -52,17 +52,17 @@ import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { retainUnread } from "./native-unknown.js"
 import { readConversationFile } from "./host-workspace.js"
-import { threadFileWorkspace } from "./contracts/thread-file-workspace.js"
+import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import { annotate as annotateLineage, loadLineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
 import type { ThreadStore } from "./thread-store.js"
 import type { ThreadEnvironments } from "./thread-environment.js"
-import type { Actor } from "./contracts/thread-identity.js"
+import type { Actor } from "@mako/host/contracts/thread-identity"
 import {
   resolveAnchor,
   type MessageAnchor,
-} from "./contracts/message-anchor.js"
+} from "@mako/host/contracts/message-anchor"
 import { tmpdir } from "node:os"
 import { ProviderActivityEngine } from "./provider-activity-engine.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
@@ -83,10 +83,10 @@ import {
   refreshDaemonLoginJob,
   setDaemonLogin,
 } from "./daemon-login.js"
-import type { ExternalThreadActivity, HostEvent } from "./contracts/host-events-boot.js"
-import type { FileContents } from "./contracts/git-workspace-search.js"
-import type { ThreadFileContext, ThreadInlineContext } from "./contracts/conversation-session.js"
-import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "./contracts/thread-list.js"
+import type { ExternalThreadActivity, HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { FileContents } from "@mako/host/contracts/git-workspace-search"
+import type { ThreadFileContext, ThreadInlineContext } from "@mako/host/contracts/conversation-session"
+import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "@mako/host/contracts/thread-list"
 
 const TEMPORARY_ROOTS = [
   tmpdir(),

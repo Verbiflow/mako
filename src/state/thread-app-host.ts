@@ -1,7 +1,7 @@
 import { toast } from "sonner"
 import { getMako } from "@/lib/bridge"
 import { installThreadAppDriver, putAppMarks, putRoom, putThreadApp, targetOf, threadAppStore, type AppPhase, type ThreadAppView } from "@/state/thread-app"
-import type { AppActionOutcome, AppOutputCursor } from "../../electron/contracts/thread-app"
+import type { AppActionOutcome, AppOutputCursor } from "@mako/host/contracts/thread-app"
 
 /** While something is changing, the control follows it closely; otherwise it looks now and then. */
 const BUSY_MS = 1_000

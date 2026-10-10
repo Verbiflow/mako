@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process"
 import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { WatchEvent } from "../electron/contracts/watcher-child.ts"
+import type { WatchEvent } from "@mako/host/contracts/watcher-child"
 import { parcelBackend } from "../electron/watch-backend.ts"
 import { useWatchBackend } from "../electron/tree-watcher.ts"
 

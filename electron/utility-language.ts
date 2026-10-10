@@ -14,7 +14,7 @@ import {
   type LanguageModel,
 } from "ai"
 import type { z } from "zod"
-import type { UtilityConnectionInput } from "./contracts/utility-models.js"
+import type { UtilityConnectionInput } from "@mako/host/contracts/utility-models"
 import { UtilityModelError } from "./utility-model-error.js"
 
 /**

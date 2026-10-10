@@ -1,5 +1,5 @@
-import { HOST_CALL_REPLAY_WAIT_MS, hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "./contracts/host-call-policy.js"
-import { RuntimeDisconnectedError } from "./contracts/host-connection.js"
+import { HOST_CALL_REPLAY_WAIT_MS, hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "@mako/host/contracts/host-call-policy"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 
 /**
  * Calls the window may repeat once the shared host is back: reads, which

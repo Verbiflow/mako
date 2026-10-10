@@ -1,6 +1,6 @@
 import { errorMessage, type FailureBoundary } from "../live-runtime.js"
 import type { UUID } from "node:crypto"
-import type { PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
+import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 
 /** One Mako operation and one durably recorded attempt; not a native deduplication guarantee. */
 export interface PromptDispatch {

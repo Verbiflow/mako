@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { connect } from "node:net"
 import { basename, join } from "node:path"
-import { ThreadIdSchema, type ThreadId } from "./contracts/thread-identity.js"
-import { worktreeCheckout, worktreeSlug } from "./contracts/thread-worktrees.js"
+import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
+import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
 import {
   AppKeySchema,
   THREAD_HOST_SUFFIX,
@@ -14,7 +14,7 @@ import {
   type ThreadEnvironment,
   type ThreadEnvironmentValues,
   type ThreadRecipeProcess,
-} from "./contracts/thread-environments.js"
+} from "@mako/host/contracts/thread-environments"
 import type { ThreadStore } from "./thread-store.js"
 import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "./thread-recipe.js"
 import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"

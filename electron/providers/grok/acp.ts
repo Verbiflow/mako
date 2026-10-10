@@ -14,7 +14,7 @@ import { GROK_TRANSCRIPTS, grokSessionSource, relocateGrokSession } from "./sess
 import { GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { resolveExecutable } from "../../executable.js"
 import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
-import type { AccessTier } from "../../contracts/access.js"
+import type { AccessTier } from "@mako/host/contracts/access"
 import { fileResumeEvidence } from "../../native-continuation.js"
 import { grokProcessProbe } from "./process-probe.js"
 
@@ -249,4 +249,4 @@ export const grokAcpSource: ProviderAcpSource = {
     return launch
   },
 }
-import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"

@@ -4,7 +4,7 @@ import type { CodexDecoded, CodexEffect } from "./providers/codex/decoder.js"
 import { z } from "zod"
 import { CodexIdentityResponseSchema, CodexInitializeSchema } from "./providers/codex/native-context.js"
 import { isNumber, stringValue, type JsonRpcId } from "./codex-app-json.js"
-import { type JsonObject, type JsonValue } from "./contracts/json.js"
+import { type JsonObject, type JsonValue } from "@mako/host/contracts/json"
 import {
   parseJsonRpcEnvelope,
   parseObjectResult,
@@ -13,7 +13,7 @@ import {
   parseSteerResponse,
   type JsonRpcEnvelope,
 } from "./codex-app-parse.js"
-import { deliverDecoded, type DecodedSink } from "./contracts/native-decoding.js"
+import { deliverDecoded, type DecodedSink } from "@mako/host/contracts/native-decoding"
 import { codexRolloutDue } from "./providers/codex/rollout-calls.js"
 import type {
   PendingRpc,
@@ -27,7 +27,7 @@ import type {
 
 export { boundedText } from "./codex-app-json.js"
 export type { JsonRpcId } from "./codex-app-json.js"
-export type { JsonObject, JsonScalar, JsonValue } from "./contracts/json.js"
+export type { JsonObject, JsonScalar, JsonValue } from "@mako/host/contracts/json"
 export type {
   ItemTracker,
   PendingRpc,

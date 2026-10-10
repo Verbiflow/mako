@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { MessageAnchorSchema, resolveAnchor } from "../electron/contracts/message-anchor.js"
+import { MessageAnchorSchema, resolveAnchor } from "@mako/host/contracts/message-anchor"
 import { LiveConversations } from "../electron/live-conversations.js"
-import type { ThreadEntry, ThreadRef } from "../electron/contracts/conversation-session.js"
+import type { ThreadEntry, ThreadRef } from "@mako/host/contracts/conversation-session"
 
 type Entry = { kind: string; id?: string; at?: string }
 const user = (id?: string, at?: string): Entry => ({ kind: "user", id, at })

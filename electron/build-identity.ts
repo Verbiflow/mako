@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
-import { BuildIdentitySchema, type BuildIdentity } from "./contracts/app-lifecycle.js"
+import { BuildIdentitySchema, type BuildIdentity } from "@mako/host/contracts/app-lifecycle"
 import { hostEnvironment } from "./host-environment.js"
 
 /**

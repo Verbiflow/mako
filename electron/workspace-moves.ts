@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { z } from "zod"
-import type { WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "./contracts/workspace-moves.js"
+import type { WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "@mako/host/contracts/workspace-moves"
 
 export interface MoveSource {
   cwd: string

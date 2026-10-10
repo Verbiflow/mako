@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
-import type { JsonValue } from "./contracts/json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 
 export {
   discoverMcpRegistry,

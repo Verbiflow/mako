@@ -3,7 +3,7 @@ import { viewer } from "@/state/viewer"
 import { useAcp, activeLiveAcp, acp } from "@/state/acp"
 import { useHarnessLabels } from "@/components/rail/harness-meta"
 import { Notice, NoticeAction, type NoticeTone } from "@/components/ui/notice"
-import { describeTransferRecovery } from "../../../electron/contracts/operation-recovery"
+import { describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
 
 /** Only transfer changes wake this row; token updates retain control identity. */
 export function TransferStatus({ history = false }: { history?: boolean }) {

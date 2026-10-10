@@ -1,0 +1,24 @@
+{
+  "name": "@mako/host",
+  "version": "0.1.0",
+  "license": "Elastic-2.0",
+  "description": "Mako's host: the plain Node program that runs the coding agents, their Threads and worktrees, and serves every client. It imports nothing from Electron.",
+  "type": "module",
+  "exports": {
+    "./contracts/*": "./dist/contracts/*.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsgo -b"
+  },
+  "dependencies": {
+    "@mako/control-runtime": "0.1.0",
+    "@mako/protocol": "0.1.0",
+    "@mako/sessions": "0.1.0",
+    "mime": "^4.1.0",
+    "text-extensions": "^3.1.0",
+    "zod": "4.4.3"
+  }
+}

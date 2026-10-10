@@ -109,7 +109,7 @@ export interface ToolCall {
    * Present while `result` is only the head of the output. The row asks for
    * the rest when it opens; a tool view can show `rest.length` meanwhile.
    */
-  rest?: import("../../electron/contracts/conversation-session").ToolContentRest
+  rest?: import("@mako/host/contracts/conversation-session").ToolContentRest
 }
 
 export interface ToolViewProps {

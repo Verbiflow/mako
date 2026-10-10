@@ -1,7 +1,7 @@
 import type { MethodTable } from "../host-methods.js"
 import type { DeskApp } from "../environment-tools.js"
-import { AppOutputKeySchema, type AppActionOutcome, type AppMark, type AppOutputChunk, type AppOutputCursor, type AppProbeView, type RoomView, type ThreadAppView } from "../contracts/thread-app.js"
-import type { ProjectAppSetup } from "../contracts/project-app.js"
+import { AppOutputKeySchema, type AppActionOutcome, type AppMark, type AppOutputChunk, type AppOutputCursor, type AppProbeView, type RoomView, type ThreadAppView } from "@mako/host/contracts/thread-app"
+import type { ProjectAppSetup } from "@mako/host/contracts/project-app"
 
 /**
  * A folder's app for the strip and the terminal dock: its view, its buttons, and what it printed. `target` is the one the person picked.

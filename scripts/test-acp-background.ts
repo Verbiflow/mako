@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import type { SessionNotification, ToolCallStatus } from "@agentclientprotocol/sdk"
-import type { JsonObject } from "../electron/contracts/json.ts"
+import type { JsonObject } from "@mako/host/contracts/json"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 

@@ -10,8 +10,8 @@ import type { WorkspaceMoves } from "./workspace-moves.js"
 import { git } from "@mako/git"
 import { checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
 import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
-import { gitActionPrompt } from "./contracts/git-actions.js"
-import type { ThreadWorktree, WorktreeBranchPull } from "./contracts/thread-worktrees.js"
+import { gitActionPrompt } from "@mako/host/contracts/git-actions"
+import type { ThreadWorktree, WorktreeBranchPull } from "@mako/host/contracts/thread-worktrees"
 
 type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "remove" | "review" | "update" | "summary">
 

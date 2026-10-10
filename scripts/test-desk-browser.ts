@@ -28,7 +28,7 @@ import {
   BrowserCommandSchema,
   BrowserTargetSchema,
 } from "../packages/control-runtime/src/contracts/browser-control.js"
-import type { JsonObject } from "../electron/contracts/json.js"
+import type { JsonObject } from "@mako/host/contracts/json"
 
 const screenshotPixels = (await sharp({ create: { width: 1600, height: 1000, channels: 3, background: "white" } }).png().toBuffer()).toString("base64")
 

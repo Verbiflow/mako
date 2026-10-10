@@ -18,8 +18,8 @@ import {
   SKILL_HANDOVER_LIMIT,
   skillDelivery,
   skillDeliveryOrigin,
-} from "./contracts/skill-reach.js"
-import type { SkillOrigin, SkillProvider, SkillProviderStatus, SkillRecord, SkillReference, SkillRegistrySnapshot, SkillScope, SkillSyncTarget } from "./contracts/mcp-skills-integrations.js"
+} from "@mako/host/contracts/skill-reach"
+import type { SkillOrigin, SkillProvider, SkillProviderStatus, SkillRecord, SkillReference, SkillRegistrySnapshot, SkillScope, SkillSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
 import { heavy } from "./heavy-packages.js"
 
 const MAX_SKILL_FILES = 1024

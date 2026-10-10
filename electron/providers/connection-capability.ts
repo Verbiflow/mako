@@ -2,7 +2,7 @@ import type {
   ProviderConnection,
   ProviderConnectionAction,
   ProviderConnectionState,
-} from "../contracts/provider-connection.js"
+} from "@mako/host/contracts/provider-connection"
 import type { ProviderCapability } from "./registry.js"
 
 /**

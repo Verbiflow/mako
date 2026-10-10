@@ -1,4 +1,4 @@
-import type { IntegrationCatalogSnapshot, IntegrationCategory, IntegrationConnection, IntegrationRecord, MakoComputerPermissions, McpProvider, McpRegistrySnapshot, McpServerRecord, CuaDriverStatus } from "./contracts/mcp-skills-integrations.js"
+import type { IntegrationCatalogSnapshot, IntegrationCategory, IntegrationConnection, IntegrationRecord, MakoComputerPermissions, McpProvider, McpRegistrySnapshot, McpServerRecord, CuaDriverStatus } from "@mako/host/contracts/mcp-skills-integrations"
 import type { BrowserControlStatus } from "@mako/control-runtime/contracts"
 
 interface Definition {

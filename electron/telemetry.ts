@@ -14,7 +14,7 @@ import {
   type TelemetryOff,
   type TelemetryProps,
   type TelemetryState,
-} from "./contracts/telemetry.js"
+} from "@mako/host/contracts/telemetry"
 import type { HostLogFields } from "./host-log.js"
 
 /**

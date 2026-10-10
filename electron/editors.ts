@@ -2,7 +2,7 @@ import { access } from "node:fs/promises"
 import { homedir } from "node:os"
 import { delimiter, join } from "node:path"
 import { spawn } from "node:child_process"
-import type { ExternalEditor } from "./contracts/git-workspace-search.js"
+import type { ExternalEditor } from "@mako/host/contracts/git-workspace-search"
 import { presentMachine } from "./machine.js"
 import { onMac } from "./platform.js"
 

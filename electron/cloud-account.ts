@@ -11,8 +11,8 @@ import {
   type CloudDevice,
   type CloudPerson,
   type CloudSignedOutNotice,
-} from "./contracts/cloud-account.js"
-import type { CloudRoute, DiagnosticEvents } from "./contracts/telemetry.js"
+} from "@mako/host/contracts/cloud-account"
+import type { CloudRoute, DiagnosticEvents } from "@mako/host/contracts/telemetry"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "./secrets.js"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */

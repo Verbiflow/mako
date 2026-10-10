@@ -1,9 +1,9 @@
 import type { ConversationRoutingResult } from "./shared-conversations.js"
 import { withHostClient, hostHistoryPaging } from "./host-client.js"
 import { breadcrumb } from "./crash.js"
-import { hostCallInput, hostChannels, isHostChannel, type HostArguments, type HostChannel } from "./contracts/host-call-inputs.js"
-import { FixtureDeskRefusedError, fixtureDeskRefusal } from "./contracts/fixture-desk-policy.js"
-import { CLIENT_CALL_ON_SOCKET, isClientCall } from "./contracts/client-calls.js"
+import { hostCallInput, hostChannels, isHostChannel, type HostArguments, type HostChannel } from "@mako/host/contracts/host-call-inputs"
+import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
+import { CLIENT_CALL_ON_SOCKET, isClientCall } from "@mako/host/contracts/client-calls"
 import { HostCallLifetime } from "./host-call-lifetime.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 

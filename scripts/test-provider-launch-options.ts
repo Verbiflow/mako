@@ -6,11 +6,11 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { providerHost } from "../electron/providers/index"
-import { hostCallInput } from "../electron/contracts/host-call-inputs"
-import { RuntimeCallSchema } from "../electron/contracts/runtime"
+import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
+import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
 import { invokeRuntime } from "../electron/runtime-connection"
 import { startWebHost } from "../electron/web-host"
-import type { LiveSnapshot, LiveStartOptions } from "../electron/contracts/live-conversations"
+import type { LiveSnapshot, LiveStartOptions } from "@mako/host/contracts/live-conversations"
 
 const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
 const stored = new Map<string, string>()

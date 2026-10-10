@@ -1,7 +1,7 @@
 import type { MethodTable } from "../host-methods.js"
 import type { ThreadWorktreeService } from "../thread-worktrees.js"
-import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
+import type { GitDiff } from "@mako/host/contracts/git-workspace-search"
+import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 
 interface PullLists {
   /** Open pull requests a new Thread can work on. */

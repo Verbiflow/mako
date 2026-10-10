@@ -1,32 +1,32 @@
 import { LiveQuestions } from "./live-questions.js"
 import { disconnectedContext } from "./execution-context.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, signInState } from "./accounts.js"
-import type { AccountRemovalSession, AccountRemovalWait } from "./contracts/accounts.js"
-import { holdForSignIn, releaseSignIn, signInPause } from "./contracts/sign-in-hold.js"
+import type { AccountRemovalSession, AccountRemovalWait } from "@mako/host/contracts/accounts"
+import { holdForSignIn, releaseSignIn, signInPause } from "@mako/host/contracts/sign-in-hold"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
 import { resumes } from "./providers/live-capabilities.js"
 import { verifyRecoveredSession } from "./provider-recovery.js"
-import { retireQuestionsForInput } from "./contracts/live-questions.js"
+import { retireQuestionsForInput } from "@mako/host/contracts/live-questions"
 import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
-import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "./contracts/prompt-delivery.js"
-import { nativePromptReference } from "./contracts/native-prompt-identity.js"
+import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
+import { nativePromptReference } from "@mako/host/contracts/native-prompt-identity"
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
-import type { LifecycleWork } from "./contracts/app-lifecycle.js"
+import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type {
   ConversationMemory,
   ProviderResidencyEntry,
   ProviderResidencySnapshot,
-} from "./contracts/provider-residency.js"
+} from "@mako/host/contracts/provider-residency"
 import {
   QueuedPromptEditSchema,
   type QueuedPromptEdit,
-} from "./contracts/live-queue.js"
+} from "@mako/host/contracts/live-queue"
 import {
   disconnectNativeAgents,
   isActiveNativeAgent,
   observeNativeAgent,
   NativeAgentObservationSchema,
-} from "./contracts/native-agents.js"
+} from "@mako/host/contracts/native-agents"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { captureNativeHistory, withSeed } from "./native-history.js"
 import { nativeRecord } from "./native-source.js"
@@ -34,8 +34,8 @@ import { capturedThread, prepareLiveContext, contextPrompt } from "./live-contex
 import { LiveTransfers, reconnectRefusal } from "./live-transfers.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
 import { LiveActions } from "./live-actions.js"
-import type { LiveActionInput } from "./contracts/live-actions.js"
-import type { RewindInput } from "./contracts/workspace-snapshots.js"
+import type { LiveActionInput } from "@mako/host/contracts/live-actions"
+import type { RewindInput } from "@mako/host/contracts/workspace-snapshots"
 import { LiveChildren } from "./live-children.js"
 import { LiveMoves, snapshotFacts } from "./live-moves.js"
 import { bindingPath, errorMessage } from "./live-runtime.js"
@@ -48,45 +48,45 @@ import type {
 import {
   ForkInputSchema,
   resumable,
-} from "./contracts/conversation-control.js"
-import { resolveAnchor } from "./contracts/message-anchor.js"
+} from "@mako/host/contracts/conversation-control"
+import { resolveAnchor } from "@mako/host/contracts/message-anchor"
 import type {
   ForkInput,
   TransferInput,
   ConversationControl,
   ProviderBinding,
-} from "./contracts/conversation-control.js"
+} from "@mako/host/contracts/conversation-control"
 import { liveEntries } from "./live-context.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import type { SessionFacts } from "./session-memory.js"
-import type { StartPurpose } from "./contracts/thread-purposes.js"
+import type { StartPurpose } from "@mako/host/contracts/thread-purposes"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { threadIdentity, type ThreadPage } from "@mako/sessions"
 import { z } from "zod"
-import type { LivePermissionResponse, PromptAttachment, LiveSessionState } from "./contracts/providers-acp.js"
-import type { LiveDriverEvent, LiveRequest, LiveSnapshot, LiveStartOptions, LiveSummary } from "./contracts/live-conversations.js"
-import type { NativeActivity, NativeActivityObservation } from "./contracts/native-activity.js"
+import type { LivePermissionResponse, PromptAttachment, LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { LiveDriverEvent, LiveRequest, LiveSnapshot, LiveStartOptions, LiveSummary } from "@mako/host/contracts/live-conversations"
+import type { NativeActivity, NativeActivityObservation } from "@mako/host/contracts/native-activity"
 import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart, drawnWhileOpening } from "@mako/sessions/live-content"
-import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "./contracts/live-conversations.js"
+import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "@mako/host/contracts/live-conversations"
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, STOPPED_CALL_NOTE, TurnSteps } from "./interrupted-turn.js"
 import { controlNote } from "./control-launch.js"
-import { classifyProviderFailure, classifyStartFailure } from "./contracts/provider-failure.js"
+import { classifyProviderFailure, classifyStartFailure } from "@mako/host/contracts/provider-failure"
 import { carriedUsage, restorableTotals, spendBetween } from "./session-usage.js"
-import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type ContextBreakdown } from "./contracts/providers-acp.js"
+import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type ContextBreakdown } from "@mako/host/contracts/providers-acp"
 import {
   AUTO_CONTINUE_DELAY_MS,
   autoContinueCandidate,
   continueTurnPrompt,
-} from "./contracts/turn-continuation.js"
+} from "@mako/host/contracts/turn-continuation"
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "./host-log.js"
-import { liveContentWeight, residencyPlan, type ResidencyPlan } from "./contracts/residency.js"
+import { liveContentWeight, residencyPlan, type ResidencyPlan } from "@mako/host/contracts/residency"
 import type { JournalFacts, SourceRef } from "./thread-store.js"
-import { SessionIdSchema, ThreadIdSchema, type Actor } from "./contracts/thread-identity.js"
+import { SessionIdSchema, ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
 
 /**
  * Whether a conversation can go on in another folder under its own native

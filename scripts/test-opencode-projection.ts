@@ -13,9 +13,9 @@ import { OpenCodeDecoder } from "../electron/providers/opencode/decoder.ts"
 import { createOpenCodeDriver, openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
 import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "../electron/providers/opencode/notices.ts"
 import { flushHostLog, installHostLog } from "../electron/host-log.ts"
-import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
-import type { ApprovalSubmission } from "../electron/contracts/approval-response.ts"
-import type { JsonValue } from "../electron/contracts/json.ts"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
 
 /** Native event data; an `undefined` field is one the native event leaves out. */

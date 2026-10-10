@@ -19,7 +19,7 @@ import {
 } from "@mako/sessions/codex-presentation"
 import { event, mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { boundedText, type JsonRpcId } from "../../codex-app-json.js"
-import { type JsonObject, type JsonValue } from "../../contracts/json.js"
+import { type JsonObject, type JsonValue } from "@mako/host/contracts/json"
 import {
   parseNotification,
   type PatchNotification,
@@ -28,11 +28,11 @@ import {
   type ToolOutputNotification,
 } from "../../codex-app-parse.js"
 import type { ItemTracker, ThreadItem, Turn } from "../../codex-app-types.js"
-import { decoded, type Decoded } from "../../contracts/native-decoding.js"
+import { decoded, type Decoded } from "@mako/host/contracts/native-decoding"
 import { MAX_STREAMED_TOOL_OUTPUT } from "@mako/sessions/live-content"
-import type { NativeActivityObservation } from "../../contracts/native-activity.js"
-import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
-import type { LiveSessionState, TokenCounts } from "../../contracts/providers-acp.js"
+import type { NativeActivityObservation } from "@mako/host/contracts/native-activity"
+import type { NativeQuestion, NativeQuestionAnswer } from "@mako/host/contracts/live-questions"
+import type { LiveSessionState, TokenCounts } from "@mako/host/contracts/providers-acp"
 import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../../session-usage.js"
 import type { CodexAgentItem } from "./agents.js"
 import { codexAnsweredQuestions, codexAsyncQuestion } from "./questions.js"

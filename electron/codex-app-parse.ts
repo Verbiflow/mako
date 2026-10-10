@@ -8,9 +8,9 @@ import { attachmentFromCodexContent } from "./providers/codex/content.js"
 import { z } from "zod"
 import { CodexFunctionOutputSchema, codexGeneratedImage } from "@mako/sessions/codex-presentation"
 import { codexTokens, CodexWireUsage } from "@mako/sessions/harnesses"
-import type { TokenCounts } from "./contracts/providers-acp.js"
+import type { TokenCounts } from "@mako/host/contracts/providers-acp"
 import { booleanValue, isJsonObject, numberValue, objectValue, stringValue, type JsonRpcId } from "./codex-app-json.js"
-import { type JsonObject, type JsonValue } from "./contracts/json.js"
+import { type JsonObject, type JsonValue } from "@mako/host/contracts/json"
 import type {
   ParseResult,
   ThreadItem,

@@ -14,7 +14,7 @@ import {
   onHarnessProfile,
   refreshHarnessProfiles,
 } from "../electron/harnesses.js"
-import type { HarnessProfile } from "../electron/contracts/providers-acp.js"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "mako-send-discovery-"))
 const workspace = (name: string) => join(workspaceRoot, name)

@@ -34,7 +34,7 @@ import {
   threadStatusPriority,
   threadsStore,
 } from "../src/state/threads.ts"
-import { threadList } from "../electron/contracts/thread-list.ts"
+import { threadList } from "@mako/host/contracts/thread-list"
 import { cacheOf, dropCache, writeCache } from "../src/state/tabs.ts"
 import {
   appendOptimisticReply,

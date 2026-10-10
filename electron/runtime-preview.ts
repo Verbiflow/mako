@@ -3,12 +3,12 @@ import {
   PREVIEW_MEDIA_TYPE,
   collectPreviewMedia,
 } from "@mako/control-runtime/contracts"
-import { RuntimeReplySchema, type RuntimeCall } from "./contracts/runtime.js"
+import { RuntimeReplySchema, type RuntimeCall } from "@mako/host/contracts/runtime"
 import {
   HOST_CLOSED_CODE,
   HOST_RESTARTING_CODE,
   RuntimeDisconnectedError,
-} from "./contracts/host-connection.js"
+} from "@mako/host/contracts/host-connection"
 import {
   readRuntimeResponse,
   type RuntimeTransfer,

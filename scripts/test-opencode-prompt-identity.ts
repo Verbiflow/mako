@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
-import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
+import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 
 // Opt-in native proof: only its own isolated account/store and caller-assigned
 // Thread port. Not part of fast fixture gates; requires OpenCode v2 installed.

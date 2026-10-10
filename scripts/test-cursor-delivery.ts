@@ -9,12 +9,12 @@ import { memorySecrets } from "../electron/secrets.ts"
 import { CursorSdkDisconnectedError, type CursorSdkExit } from "../electron/providers/cursor/sdk/client.ts"
 import { cursorProfileLoaderWith } from "../electron/providers/cursor/profile.ts"
 import { resolveHarnessTuning } from "../electron/harness-models.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import {
   createCursorSdkDriver,
   type CursorSdkLiveClient,
 } from "../electron/providers/cursor/sdk/driver.ts"
-import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
+import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import type {
   SdkEvent,
   SdkMethod,

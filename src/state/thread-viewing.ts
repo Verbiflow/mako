@@ -21,7 +21,7 @@ import { historyTurns, releaseEntries } from "@/state/transcript-residency"
 import { threadToMessages } from "@/lib/foreign-thread"
 import { toExchanges } from "@/lib/exchanges"
 import { foldTools } from "@/lib/tools"
-import { nativeHistoryRevision } from "../../electron/contracts/native-history"
+import { nativeHistoryRevision } from "@mako/host/contracts/native-history"
 
 /** The composer harness to give back when the viewer closes. */
 let harnessBeforeViewing: string | null = null

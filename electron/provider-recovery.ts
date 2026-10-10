@@ -1,8 +1,8 @@
-import type { ProviderBinding, ResumeVerdict } from "./contracts/conversation-control.js"
+import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { assessResumeEvidence } from "./native-continuation.js"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
 import { hostLog, hostWarn } from "./host-log.js"
-import type { LiveSessionState } from "./contracts/providers-acp.js"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { sameNativeSource } from "./native-source.js"
 import { assessExecutionContext } from "./execution-context.js"
 

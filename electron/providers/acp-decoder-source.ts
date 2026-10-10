@@ -3,7 +3,7 @@ import { z } from "zod"
 import { AcpDecoder } from "../acp-decoder.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "../acp-usage.js"
 import { SessionUsage, type UsageObservation } from "../session-usage.js"
-import { decoded, decodedNotices, type Decoded } from "../contracts/native-decoding.js"
+import { decoded, decodedNotices, type Decoded } from "@mako/host/contracts/native-decoding"
 import type { AcpAsk, ProviderAcpSource } from "./acp-source.js"
 import type { DecoderEffect, ProviderDecoderSource } from "./decoder-source.js"
 

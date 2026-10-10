@@ -1,4 +1,4 @@
-import type { WorktreeStanding, WorktreeStartPoint } from "./contracts/thread-worktrees.js"
+import type { WorktreeStanding, WorktreeStartPoint } from "@mako/host/contracts/thread-worktrees"
 import { git, run, succeeds } from "@mako/git"
 
 /** A fetch younger than this answers for the next one. */

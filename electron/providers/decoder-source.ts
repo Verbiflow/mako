@@ -1,5 +1,5 @@
-import type { JsonObject, JsonValue } from "../contracts/json.js"
-import type { Decoded } from "../contracts/native-decoding.js"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import type { Decoded } from "@mako/host/contracts/native-decoding"
 import type { ProviderCapability } from "./registry.js"
 
 /** A driver-only fact, as tools see it: named by its `type`. */

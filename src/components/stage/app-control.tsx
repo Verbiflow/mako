@@ -2,8 +2,8 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { CheckIcon, ChevronDownIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
-import type { SetupStep } from "../../../electron/contracts/thread-app"
-import { environmentRepairPrompt } from "../../../electron/contracts/thread-environments"
+import type { SetupStep } from "@mako/host/contracts/thread-app"
+import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import {
   ContextMenu,
   ContextMenuContent,

@@ -4,9 +4,9 @@ import { AccountSwitchNotice } from "../src/components/composer/account-notice"
 import { accountReading, stopSwitches, waitText } from "../src/lib/account-switch"
 import { accountsStore, type ProviderAccount } from "../src/state/accounts"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp-state"
-import type { ExecutionContext } from "../electron/contracts/execution-context"
-import type { LiveRequest } from "../electron/contracts/live-conversations"
-import type { LiveSessionState } from "../electron/contracts/providers-acp"
+import type { ExecutionContext } from "@mako/host/contracts/execution-context"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 /**
  * Accounts switch globally and never stick to a session: what the line above

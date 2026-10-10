@@ -14,7 +14,7 @@ import {
 } from "@/state/accounts"
 import type { AccountUsage, UsageWindow } from "@/lib/types"
 import { accountIdentity, authName, isSignedOut, providerName } from "@/lib/account-identity"
-import { bindingWindow, windowsAt } from "../../../electron/contracts/account-usage"
+import { bindingWindow, windowsAt } from "@mako/host/contracts/account-usage"
 import {
   balanceText,
   planText,

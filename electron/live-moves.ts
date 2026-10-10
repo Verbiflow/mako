@@ -1,6 +1,6 @@
-import type { ContextTransfer, ConversationControl } from "./contracts/conversation-control.js"
-import { pendingQuestion } from "./contracts/live-questions.js"
-import { isActiveNativeAgent } from "./contracts/native-agents.js"
+import type { ContextTransfer, ConversationControl } from "@mako/host/contracts/conversation-control"
+import { pendingQuestion } from "@mako/host/contracts/live-questions"
+import { isActiveNativeAgent } from "@mako/host/contracts/native-agents"
 import {
   executionRefusal,
   type ClaimReceipt,
@@ -9,12 +9,12 @@ import {
   type MoveId,
   type Refusal,
   type SessionExecution,
-} from "./contracts/thread-execution.js"
-import { SessionIdSchema, type Actor, type ThreadId } from "./contracts/thread-identity.js"
+} from "@mako/host/contracts/thread-execution"
+import { SessionIdSchema, type Actor, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { hostWarn } from "./host-log.js"
 import type { Dependencies, Resident } from "./live-runtime.js"
 import { errorMessage } from "./live-runtime.js"
-import type { LiveSnapshot } from "./contracts/live-conversations.js"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { JournalFacts, MoveBegan, ThreadStore } from "./thread-store.js"
 
 /** What the move logic may see and do in the conversation host. */

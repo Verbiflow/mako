@@ -1,4 +1,4 @@
-import type { HarnessPresentation } from "../../contracts/harness-presentation.js"
+import type { HarnessPresentation } from "@mako/host/contracts/harness-presentation"
 
 /** Devin's hexagons. */
 export const devinPresentation: HarnessPresentation = {

@@ -17,7 +17,7 @@ import {
   type SdkRunResult,
 } from "../electron/providers/cursor/sdk/wire.ts"
 import { MAX_STREAMED_TOOL_OUTPUT, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import { RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.ts"
+import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 
 const run = { agent_id: "agent-1", run_id: "run-1" } as const
 

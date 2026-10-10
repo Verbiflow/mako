@@ -1,6 +1,6 @@
 import { parse, type ParseError } from "jsonc-parser"
 import { z } from "zod"
-import type { AccessTier } from "../../contracts/access.js"
+import type { AccessTier } from "@mako/host/contracts/access"
 
 const Rule = z.looseObject({ action: z.string(), resource: z.string(), effect: z.enum(["ask", "allow", "deny"]) })
 const Agent = z.looseObject({ permissions: z.array(Rule).optional() })

@@ -14,7 +14,7 @@ import {
   cursorSdkStorePath,
   cursorStoreOrigin,
 } from "@mako/sessions"
-import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
 import { memorySecrets } from "../electron/secrets.ts"

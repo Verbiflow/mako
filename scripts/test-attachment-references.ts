@@ -18,7 +18,7 @@ import {
   type Attachment,
 } from "../src/lib/attachments.ts"
 import { SavedAttachmentSchema } from "../src/lib/draft-persistence.ts"
-import { PromptAttachmentSchema } from "../electron/contracts/prompt-attachments.ts"
+import { PromptAttachmentSchema } from "@mako/host/contracts/prompt-attachments"
 
 const image: Attachment = {
   id: "image",

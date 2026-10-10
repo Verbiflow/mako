@@ -1,6 +1,6 @@
 import type { ThreadRef } from "@mako/sessions"
 import { threadIdentity } from "@mako/sessions"
-import type { ExternalThreadActivity } from "./contracts/host-events-boot.js"
+import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { ProviderActivitySession } from "./providers/process-probe.js"
 
 /**

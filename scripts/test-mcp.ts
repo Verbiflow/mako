@@ -27,11 +27,11 @@ import { atomicJsonMcpMerge, mergeJsonMcpConfig } from "../electron/mcp-sync.js"
 import {
   type McpDiscoveredDefinition,
 } from "../electron/mcp-registry.js"
-import type { JsonValue } from "../electron/contracts/json.js"
-import type { McpProvider, McpRegistrySnapshot } from "../electron/contracts/mcp-skills-integrations.js"
+import type { JsonValue } from "@mako/host/contracts/json"
+import type { McpProvider, McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import { migrateRetiredMakoMcpFile } from "../electron/retired-mcp.js"
 import { conversationServers } from "../electron/providers/live-driver.js"
-import { projectedMcpServers, reachableMcpServers } from "../electron/contracts/mcp-reach.js"
+import { projectedMcpServers, reachableMcpServers } from "@mako/host/contracts/mcp-reach"
 
 function readFormat(provider: string) {
   const source = providerHost.mcpSources.get(provider)

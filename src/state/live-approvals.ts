@@ -1,8 +1,8 @@
 import { readLiveSnapshot } from "@/state/live-history"
 import { getMako } from "@/lib/bridge"
 import { applyLiveSnapshot } from "@/state/live-recovery"
-import { ANSWERED_DIFFERENTLY } from "../../electron/contracts/approval-response"
-import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
+import { ANSWERED_DIFFERENTLY } from "@mako/host/contracts/approval-response"
+import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { toast } from "sonner"
 
 /**

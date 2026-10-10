@@ -3,7 +3,7 @@ import type { LivePermissionRequest, LiveSessionMode, LiveSessionState } from ".
 import type { LiveAcpConversation } from "../src/state/acp-state.ts"
 import type { ModelOption } from "@mako/sessions/settings"
 import type { ProposedPlan } from "@mako/sessions/content"
-import { PlanBuildTargetSchema, type PlanBuild, type PlanBuildClaim } from "../electron/contracts/plan-builds.ts"
+import { PlanBuildTargetSchema, type PlanBuild, type PlanBuildClaim } from "@mako/host/contracts/plan-builds"
 
 // The renderer state layer is React-free, but modules read `window` at load.
 const bridge: Array<[string, unknown[]]> = []

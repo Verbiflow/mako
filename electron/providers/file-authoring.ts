@@ -3,7 +3,7 @@ import { lstat, mkdir, open, readdir, realpath, rename, unlink, writeFile } from
 import { dirname, isAbsolute, join, relative } from "node:path"
 import { lock } from "proper-lockfile"
 import { z } from "zod"
-import type { NativeAuthoringDocument } from "../contracts/native-authoring.js"
+import type { NativeAuthoringDocument } from "@mako/host/contracts/native-authoring"
 import type { ProviderAuthoringCapability } from "./editing-capability.js"
 import { onWindows } from "../platform.js"
 

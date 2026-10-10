@@ -1,4 +1,4 @@
-import { FIT_RUNS, type RoomApp, type RoomFit, type RoomView } from "../../electron/contracts/thread-app"
+import { FIT_RUNS, type RoomApp, type RoomFit, type RoomView } from "@mako/host/contracts/thread-app"
 import { formatAgo, formatBytes } from "@/state/thread-app"
 
 /**

@@ -6,12 +6,12 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations"
 import { LiveJournal } from "../electron/live-journal"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver"
-import type { LiveSnapshot } from "../electron/contracts/live-conversations"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
-import { liveContentWeight, residencyPlan } from "../electron/contracts/residency"
+import { liveContentWeight, residencyPlan } from "@mako/host/contracts/residency"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })

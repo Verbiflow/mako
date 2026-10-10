@@ -5,7 +5,7 @@ import { devinCliDirectory } from "@mako/sessions"
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
-import type { ProviderBinding } from "../../contracts/conversation-control.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { NativeResumeEvidence } from "../../native-continuation.js"
 
 const rowSchema = z.object({ main_chain_id: z.number().nullable(), model: z.string().nullable(), working_directory: z.string() })

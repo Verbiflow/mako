@@ -23,7 +23,8 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@mako/host/contracts/*": ["./packages/host/src/contracts/*"]
     }
   },
   "include": ["src"]

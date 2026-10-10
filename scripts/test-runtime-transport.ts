@@ -6,8 +6,8 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { startWebHost } from "../electron/web-host.ts"
 import { invokeRuntime, probeRuntime, runtimeInfo, settleRuntime, subscribeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection.ts"
-import { hostCallInput } from "../electron/contracts/host-call-inputs.ts"
-import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE } from "../electron/contracts/host-connection.ts"
+import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
+import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE } from "@mako/host/contracts/host-connection"
 
 const root = await mkdtemp(join(tmpdir(), "mako-wire-"))
 const socket = join(root, "host.sock")

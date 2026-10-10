@@ -1,4 +1,4 @@
-import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { codexQuestionAnswer } from "./questions.js"
 import { readCodexQuestionHistory } from "./question-reader.js"
 import { codexExecutableCandidates } from "./executable.js"
@@ -7,7 +7,7 @@ import { CODEX_PLAN_OPTION } from "@mako/sessions/model-catalog"
 import type { ProviderLiveDriver } from "../live-driver.js"
 import { fileResumeEvidence } from "../../native-continuation.js"
 import { codexProcessProbe } from "./process-probe.js"
-import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 
 export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server account/read" } as const
 

@@ -1,5 +1,5 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import type { NativeAgentObservation } from "../../contracts/native-agents.js"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 /** SDK task events own identity; ordinary background shell/MCP tasks are not agents. */
 export class ClaudeAgents {

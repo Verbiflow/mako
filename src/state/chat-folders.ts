@@ -1,4 +1,4 @@
-import { chatFolderOf } from "../../electron/contracts/chat-folders.ts"
+import { chatFolderOf } from "@mako/host/contracts/chat-folders"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { acpStore } from "@/state/acp-state"
 import { createHook, createStore } from "@/state/store"

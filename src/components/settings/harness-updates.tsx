@@ -9,7 +9,7 @@ import { providers, useProviders } from "@/state/providers"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { toast } from "sonner"
-import type { HarnessUpdateInfo } from "../../../electron/contracts/harness-updates"
+import type { HarnessUpdateInfo } from "@mako/host/contracts/harness-updates"
 
 /** An installation's version and update action stay beside its provider's account. */
 export function RuntimeRow({

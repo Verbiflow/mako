@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { performance } from "node:perf_hooks"
 import { readOpenCodeAgents } from "../electron/providers/opencode/agent-store.ts"
 import type * as Agents from "../electron/providers/opencode/agents.ts"
-import type { NativeAgentObservation } from "../electron/contracts/native-agents.ts"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 // Exercise the same compiled worker entry used by Electron, not a fake reader.
 const { OpenCodeAgents }: typeof Agents = await import(new URL("../dist-electron/providers/opencode/agents.js", import.meta.url).href)

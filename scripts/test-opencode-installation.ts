@@ -1,6 +1,6 @@
 import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
 import { openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
-import { accessModeId } from "../electron/contracts/access.ts"
+import { accessModeId } from "@mako/host/contracts/access"
 import assert from "node:assert/strict"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"

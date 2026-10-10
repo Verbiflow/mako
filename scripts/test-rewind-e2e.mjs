@@ -318,7 +318,7 @@ try {
     )
     const { assessProviderResume } =
       await import("../dist-electron/provider-recovery.js")
-    const { resumable } = await import("../dist-electron/contracts/conversation-control.js")
+    const { resumable } = await import("@mako/host/contracts/conversation-control")
     const { providerHost } = await import("../dist-electron/providers/index.js")
     await until(
       async () => resumable(await assessProviderResume(binding, providerHost.liveDrivers.get(provider)), "same"),

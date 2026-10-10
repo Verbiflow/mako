@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
-import { answerClientCall, CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, openableLink, socketCalls, type ClientAnswers } from "../electron/contracts/client-calls.ts"
-import { hostCallInput, hostChannels, isHostChannel } from "../electron/contracts/host-call-inputs.ts"
+import { answerClientCall, CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, openableLink, socketCalls, type ClientAnswers } from "@mako/host/contracts/client-calls"
+import { hostCallInput, hostChannels, isHostChannel } from "@mako/host/contracts/host-call-inputs"
 
 for (const call of CLIENT_CALLS) assert.ok(isHostChannel(call), `${call} is a host call`)
 

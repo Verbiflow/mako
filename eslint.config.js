@@ -44,6 +44,22 @@ export default defineConfig([
     },
   },
   {
+    files: ["packages/host/src/**/*.ts"],
+    extends: [js.configs.recommended, tseslint.configs.recommended],
+    languageOptions: { globals: globals.node },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            { name: "electron", message: "@mako/host imports nothing from Electron; ask the desktop app on /desktop." },
+            { name: "electron-updater", message: "@mako/host imports nothing from Electron; ask the desktop app on /desktop." },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["src/components/**/*.{ts,tsx}", "src/desk/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": [

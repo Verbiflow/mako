@@ -1,5 +1,5 @@
 import { answerLiveApproval } from "./live-approvals"
-import type { WorktreeStart } from "../../electron/contracts/thread-worktrees.ts"
+import type { WorktreeStart } from "@mako/host/contracts/thread-worktrees"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
 import { stagePrompt } from "@/state/acp-pending"
 import { autoContinuePending } from "@/state/prompt-delivery"

@@ -1,7 +1,7 @@
 import { Worker } from "node:worker_threads"
 import { openCodeDatabasePaths } from "@mako/sessions"
 import { z } from "zod"
-import { NativeAgentObservationSchema, type NativeAgentObservation } from "../../contracts/native-agents.js"
+import { NativeAgentObservationSchema, type NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 const reply = z.discriminatedUnion("kind", [z.object({ kind: z.literal("observed"), agents: z.array(NativeAgentObservationSchema) }), z.object({ kind: z.literal("unavailable") })])
 const sessionId = z.string().regex(/^ses_[a-zA-Z0-9]+$/)

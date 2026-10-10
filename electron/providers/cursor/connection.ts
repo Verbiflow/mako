@@ -1,7 +1,7 @@
 import type {
   ProviderConnectionAction,
   ProviderConnectionState,
-} from "../../contracts/provider-connection.js"
+} from "@mako/host/contracts/provider-connection"
 import type { ProviderConnectionCapability } from "../connection-capability.js"
 import type { CursorSdkAuth, CursorSdkAuthSnapshot } from "./sdk/auth.js"
 

@@ -2,8 +2,8 @@ import type {
   HarnessUpdateCommand,
   HarnessUpdateInfo,
   HarnessUpdates,
-} from "../../electron/contracts/harness-updates"
-import { versionBehind } from "../../electron/contracts/runtime-version"
+} from "@mako/host/contracts/harness-updates"
+import { versionBehind } from "@mako/host/contracts/runtime-version"
 
 /**
  * What one runtime row says, decided from the host's reading alone.

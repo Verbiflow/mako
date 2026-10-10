@@ -3,9 +3,9 @@ import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { z } from "zod"
 import { STEPS_FOLDER_VARIABLE, type CheckStep } from "./check-steps.js"
-import type { RecipeVersionView } from "./contracts/project-app.js"
-import { AppKeySchema, type AppKey, type ThreadEnvironment } from "./contracts/thread-environments.js"
-import { PROJECT_CHECKOUT_FILE } from "./contracts/thread-worktrees.js"
+import type { RecipeVersionView } from "@mako/host/contracts/project-app"
+import { AppKeySchema, type AppKey, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
+import { PROJECT_CHECKOUT_FILE } from "@mako/host/contracts/thread-worktrees"
 import { git } from "@mako/git"
 
 /**

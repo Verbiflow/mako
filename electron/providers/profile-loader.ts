@@ -1,8 +1,8 @@
 import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
-import type { HarnessProfile } from "../contracts/providers-acp.js"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import type { ProviderCapability } from "./registry.js"
 import { hostWarn } from "../host-log.js"
-import { workDefault, workDefaultProblems, type HarnessDefaults } from "../contracts/harness-defaults.js"
+import { workDefault, workDefaultProblems, type HarnessDefaults } from "@mako/host/contracts/harness-defaults"
 
 /** This query's owner, independent of a session's native execution authority.
  * Stop only this query's process on cancellation and await cleanup. A waiter

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { performance } from "node:perf_hooks"
-import { nativePromptReference, nativePromptRequestIds, NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
+import { nativePromptReference, nativePromptRequestIds, NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { projectLive } from "../src/state/live-projection.ts"
 import { reconcileMessages } from "../src/lib/reconcile.ts"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures.ts"

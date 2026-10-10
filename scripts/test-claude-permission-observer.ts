@@ -7,9 +7,9 @@ import { listenClaudePermissionDecisions } from "../electron/providers/claude/pe
 import { hasClaudeTelemetryConfiguration, claudeTelemetryOptionsCompatible, hasClaudeTelemetrySettings } from "../electron/providers/claude/approval-telemetry-settings.js"
 import { readRetainedApprovalDecisions, RetainedApprovalDecisions } from "../electron/providers/retained-approval-decisions.js"
 import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
-import type { NativeApprovalDecision } from "../electron/contracts/approval-response.js"
+import type { NativeApprovalDecision } from "@mako/host/contracts/approval-response"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.js"
-import type { LiveDriverEvent } from "../electron/contracts/live-conversations.js"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 
 const root = await mkdtemp(join(tmpdir(), "mako-claude-permission-observer-"))
 const sessionId = randomUUID()

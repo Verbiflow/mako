@@ -1,10 +1,10 @@
-import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { launchContext, reportedIdentity, reportedRuntime } from "../../execution-context.js"
-import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { join } from "node:path"
 import type {
   Options,
@@ -14,7 +14,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
-import type { LiveSessionMode, LiveSessionState } from "../../contracts/providers-acp.js"
+import type { LiveSessionMode, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type {
   ProviderLiveDriver,
@@ -29,9 +29,9 @@ import {
 } from "./input.js"
 import { ClaudeDecoder } from "./decoder.js"
 import { claudeContextBreakdown } from "./context-breakdown.js"
-import { mergeWindows } from "../../contracts/account-usage.js"
-import { deliverDecoded, type DecodedSink } from "../../contracts/native-decoding.js"
-import type { SelectedAccount, UsageWindow } from "../../contracts/accounts.js"
+import { mergeWindows } from "@mako/host/contracts/account-usage"
+import { deliverDecoded, type DecodedSink } from "@mako/host/contracts/native-decoding"
+import type { SelectedAccount, UsageWindow } from "@mako/host/contracts/accounts"
 import { nativeCapture, type NativeCapture } from "../../native-capture.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
@@ -383,7 +383,7 @@ export function createClaudeSdkDriver(
       const generation = Symbol()
       starting.set(options.conversationId, generation)
       const nativeId = options.fork ? options.conversationId : (options.resume ?? options.conversationId)
-      const publishDecision = (decision: import("../../contracts/approval-response.js").NativeApprovalDecision) => options.emit!({ type: "live-approval-decision", id: options.conversationId, decision })
+      const publishDecision = (decision: import("@mako/host/contracts/approval-response").NativeApprovalDecision) => options.emit!({ type: "live-approval-decision", id: options.conversationId, decision })
       const approvals = new ClaudeApprovalObserver(nativeId, options.observedApprovals ?? [], publishDecision)
       let config: Options
       let account: SelectedAccount

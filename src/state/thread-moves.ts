@@ -1,5 +1,5 @@
 import type { ThreadRef } from "@/lib/types"
-import { listedSession } from "../../electron/contracts/thread-list.ts"
+import { listedSession } from "@mako/host/contracts/thread-list"
 import { prefsStore, setPref } from "@/state/prefs"
 import { moveThreadTab } from "@/state/thread-tabs"
 import { followMovedThread } from "@/state/thread-viewing"

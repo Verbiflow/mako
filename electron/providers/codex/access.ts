@@ -4,8 +4,8 @@ import {
   accessTierInfo,
   accessTierOfModeId,
   type AccessTier,
-} from "../../contracts/access.js"
-import type { LiveSessionMode } from "../../contracts/providers-acp.js"
+} from "@mako/host/contracts/access"
+import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
 import type { TurnStartParams } from "./generated/v2/TurnStartParams.js"
 import type { AskForApproval } from "./generated/v2/AskForApproval.js"
 import type { ApprovalsReviewer } from "./generated/v2/ApprovalsReviewer.js"

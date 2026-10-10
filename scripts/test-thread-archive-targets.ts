@@ -3,11 +3,11 @@ import type { ThreadRef } from "@mako/sessions"
 import { railAnnouncement } from "../src/lib/rail-announcement.ts"
 import { acpStore } from "../src/state/acp-state.ts"
 import { applyThreadGroupChange } from "../src/state/thread-groups.ts"
-import { ThreadGroupSchema } from "../electron/contracts/thread-groups.ts"
+import { ThreadGroupSchema } from "@mako/host/contracts/thread-groups"
 import { wholeThreadTargets } from "../src/state/session-archive.ts"
 import { threadsStore } from "../src/state/threads.ts"
 import { archivedThread } from "../src/state/thread-lifecycle.ts"
-import { threadArchiveKey, threadShownKey } from "../electron/contracts/thread-lifecycle.ts"
+import { threadArchiveKey, threadShownKey } from "@mako/host/contracts/thread-lifecycle"
 
 // Archiving a Thread's row puts every Session of it away, not only the rows
 // a search or filter left showing: two catalog rows and a live conversation

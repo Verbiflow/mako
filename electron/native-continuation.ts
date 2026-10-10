@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { open, stat } from "node:fs/promises"
-import { compareNativeCheckpoint, resumable, type ProviderBinding, type ResumeVerdict } from "./contracts/conversation-control.js"
+import { compareNativeCheckpoint, resumable, type ProviderBinding, type ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ProviderProcessProbe } from "./providers/process-probe.js"
 
 const TAIL_BYTES = 64 * 1024

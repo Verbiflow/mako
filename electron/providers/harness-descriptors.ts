@@ -1,4 +1,4 @@
-import type { HarnessDescriptor } from "../contracts/providers-acp.js"
+import type { HarnessDescriptor } from "@mako/host/contracts/providers-acp"
 import type { ProviderHost } from "./host.js"
 
 /** The name Mako shows for a harness: its profile's label. */

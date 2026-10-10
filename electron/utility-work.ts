@@ -7,8 +7,8 @@ import {
   type UtilityTask,
   type UtilityTaskState,
   type UtilityWorkSettings,
-} from "./contracts/utility-work.js"
-import type { UtilityConnection } from "./contracts/utility-models.js"
+} from "@mako/host/contracts/utility-work"
+import type { UtilityConnection } from "@mako/host/contracts/utility-models"
 import { UtilityModelError } from "./utility-model-error.js"
 import { heavy } from "./heavy-packages.js"
 import { utilityProviders } from "./utility-models.js"

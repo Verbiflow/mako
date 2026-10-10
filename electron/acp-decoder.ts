@@ -1,7 +1,7 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk"
 import { AcpUpdateDecoder } from "@mako/sessions/acp-decoder"
-import type { JsonObject } from "./contracts/json.js"
-import type { LivePermissionResponse } from "./contracts/providers-acp.js"
+import type { JsonObject } from "@mako/host/contracts/json"
+import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { AcpAsk, AcpPlanDecoder, AcpVendorRequest, ProviderAcpSource } from "./providers/acp-source.js"
 
 /** What a plan approval asks when the agent gives it no title of its own. */

@@ -16,7 +16,7 @@ import {
 import { homedir, userInfo } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { promisify } from "node:util"
-import type { JsonValue } from "./contracts/json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { securityKeychain } from "./keychain.js"
 import { onMac } from "./platform.js"
 const run = promisify(execFile)

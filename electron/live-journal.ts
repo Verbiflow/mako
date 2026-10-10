@@ -1,8 +1,8 @@
-import { LiveInputQuestionSchema } from "./contracts/live-questions.js"
-import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "./contracts/approval-response.js"
-import { PromptDeliverySchema } from "./contracts/prompt-delivery.js"
-import { NativePromptReferenceSchema } from "./contracts/native-prompt-identity.js"
-import { NativeAgentRosterSchema } from "./contracts/native-agents.js"
+import { LiveInputQuestionSchema } from "@mako/host/contracts/live-questions"
+import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "@mako/host/contracts/approval-response"
+import { PromptDeliverySchema } from "@mako/host/contracts/prompt-delivery"
+import { NativePromptReferenceSchema } from "@mako/host/contracts/native-prompt-identity"
+import { NativeAgentRosterSchema } from "@mako/host/contracts/native-agents"
 import {
   ModelOptionSchema,
   SessionSettingsSchema,
@@ -12,12 +12,12 @@ import {
   ConversationControlSchema,
   NativeTotalsSchema,
   PromptAttachmentSchema,
-} from "./contracts/conversation-control.js"
+} from "@mako/host/contracts/conversation-control"
 import { mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { ExecutionContextSchema } from "./contracts/execution-context.js"
+import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
 import { ThreadEntrySchema, ThreadRefSchema } from "@mako/sessions"
 import {
   LiveBlockSchema,
@@ -26,12 +26,12 @@ import {
   growTool,
   type ToolGrowth,
 } from "@mako/sessions/live-content"
-import { RunSnapshotsSchema } from "./contracts/workspace-snapshots.js"
-import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "./contracts/live-conversations.js"
-import { PROVIDER_FAILURE_KINDS } from "./contracts/provider-failure.js"
-import { ActorSchema } from "./contracts/thread-identity.js"
-import { ACCESS_TIER_NAMES } from "./contracts/access.js"
-import type { LiveSessionMode } from "./contracts/providers-acp.js"
+import { RunSnapshotsSchema } from "@mako/host/contracts/workspace-snapshots"
+import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { PROVIDER_FAILURE_KINDS } from "@mako/host/contracts/provider-failure"
+import { ActorSchema } from "@mako/host/contracts/thread-identity"
+import { ACCESS_TIER_NAMES } from "@mako/host/contracts/access"
+import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),

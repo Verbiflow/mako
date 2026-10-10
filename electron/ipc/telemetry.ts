@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { buildIdentity, cloudUrl } from "../build-identity.js"
-import type { TelemetryApp } from "../contracts/telemetry.js"
+import type { TelemetryApp } from "@mako/host/contracts/telemetry"
 import { crashIdAt, crashesAfter } from "../crash.js"
 import { packagedDistribution } from "../distribution.js"
 import { hostLog } from "../host-log.js"

@@ -1,9 +1,9 @@
 import type { LiveConversations } from "./live-conversations.js"
 import type { NativeRequests } from "./native-requests.js"
 import type { ThreadArchives } from "./thread-archives.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
-import type { ThreadRef } from "./contracts/conversation-session.js"
-import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "./contracts/thread-lifecycle.js"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { ThreadRef } from "@mako/host/contracts/conversation-session"
+import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "@mako/host/contracts/thread-lifecycle"
 
 interface ThreadLifecycleDependencies {
   live: LiveConversations

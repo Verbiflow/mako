@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react"
-import type { OfficeFormat } from "../../../electron/contracts/file-preview"
+import type { OfficeFormat } from "@mako/host/contracts/file-preview"
 
 const OfficeDocument = lazy(() => import("./office-document"))
 export function OfficePreview({

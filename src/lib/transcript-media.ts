@@ -4,8 +4,8 @@ import { markdownFileTarget } from "./file-citations"
 
 // Preserve the public helper while sharing maintained MIME lookup with composer
 // and preview routing. No renderer-owned list of media extensions.
-export { fileMimeTypeForPath as mediaTypeForPath } from "../../electron/contracts/file-preview"
-import { fileMimeTypeForPath as mediaTypeForPath } from "../../electron/contracts/file-preview"
+export { fileMimeTypeForPath as mediaTypeForPath } from "@mako/host/contracts/file-preview"
+import { fileMimeTypeForPath as mediaTypeForPath } from "@mako/host/contracts/file-preview"
 
 export function markdownMedia(
   source: string,

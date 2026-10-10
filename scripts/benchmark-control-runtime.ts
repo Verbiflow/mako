@@ -25,7 +25,7 @@ import {
   BrowserTargetSchema,
   type BrowserCommand,
 } from "../packages/control-runtime/src/contracts/browser-control.js"
-import type { JsonValue } from "../electron/contracts/json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const RUNS = 20

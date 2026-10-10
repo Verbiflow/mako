@@ -2,7 +2,7 @@ import { open } from "node:fs/promises"
 import { join } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
-import { NativeApprovalIdentitySchema, type NativeApprovalIdentity, type NativeApprovalDecision } from "../../contracts/approval-response.js"
+import { NativeApprovalIdentitySchema, type NativeApprovalIdentity, type NativeApprovalDecision } from "@mako/host/contracts/approval-response"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 
 const id = z.string().min(1).max(512)

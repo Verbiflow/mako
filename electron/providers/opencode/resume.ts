@@ -1,7 +1,7 @@
 import { Worker } from "node:worker_threads"
 import { z } from "zod"
 import { inspectNativeSession } from "../../native-continuation.js"
-import type { ProviderBinding } from "../../contracts/conversation-control.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { NativeForkSource } from "../live-driver.js"
 import { openCodeProcessProbe } from "./process-probe.js"
 import { openCodeRecordLocator, type OpenCodeResumeRecord } from "./resume-store.js"

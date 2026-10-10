@@ -1,6 +1,6 @@
 import { toast } from "sonner"
-import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
-import type { ThreadAppView } from "../../electron/contracts/thread-app"
+import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
+import type { ThreadAppView } from "@mako/host/contracts/thread-app"
 import { appSetupContext } from "@/lib/app-setup-context"
 import type { AttachmentInput } from "@/lib/attachments"
 import { harnessLabel } from "@/lib/harness-label"

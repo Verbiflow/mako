@@ -6,7 +6,7 @@ import {
   noOp,
   type Capability,
   type LiveCapabilities,
-} from "../contracts/harness-capabilities.js"
+} from "@mako/host/contracts/harness-capabilities"
 import type { DriverAbsent, ProviderLiveDriver } from "./live-driver.js"
 
 export {
@@ -21,7 +21,7 @@ export {
   type Capability,
   type LiveCapabilities,
   type LiveCapabilityKey,
-} from "../contracts/harness-capabilities.js"
+} from "@mako/host/contracts/harness-capabilities"
 
 const absent = (value: DriverAbsent): Extract<Capability, { state: "absent" }> =>
   ({ state: "absent", by: value.kind === "unavailable" ? "harness" : "mako", reason: value.reason })

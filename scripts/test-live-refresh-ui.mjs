@@ -45,7 +45,7 @@ async function check() {
       const {acpStore}=await import('/src/state/acp-state.ts');
       const {applyLiveSnapshot,hydrateLive}=await import('/src/state/live-recovery.ts');
       const {hostConnectionStore}=await import('/src/state/host-connection.ts');
-      const {RuntimeDisconnectedError,HOST_OUTAGE_MESSAGE}=await import('/electron/contracts/host-connection.ts');
+      const {RuntimeDisconnectedError,HOST_OUTAGE_MESSAGE}=await import('/packages/host/src/contracts/host-connection.ts');
       const live=acpStore.get().conversations[acpStore.get().activeKey];
       window.refreshFixture=(await import('/src/dev/harness-fixtures.ts')).fixtureHarnesses.map(({provider:harness},index)=>({session:{...live.session,id:'00000000-0000-4000-8000-'+String(index+100).padStart(12,'0'),harness,title:'Retained conversation'},revision:1,epoch:'fixture',createdAt:1,base:null,blocks:live.blocks,requests:[],permissions:[]}));
       window.refreshFixture.forEach(s=>applyLiveSnapshot(s));

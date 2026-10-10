@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
 import type { ThreadEntry, ThreadPage } from "@mako/sessions"
-import type { ProviderBinding } from "./contracts/conversation-control.js"
-import { nativeHistoryRevision } from "./contracts/native-history.js"
-export { nativeHistoryRevision } from "./contracts/native-history.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
+import { nativeHistoryRevision } from "@mako/host/contracts/native-history"
+export { nativeHistoryRevision } from "@mako/host/contracts/native-history"
 
 type ReadPage = (path: string, before?: number) => Promise<ThreadPage | null>
 

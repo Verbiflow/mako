@@ -8,7 +8,7 @@ import {
   type LifecycleCommand,
   type LifecycleAction,
   type LifecycleWork,
-} from "../contracts/app-lifecycle.js"
+} from "@mako/host/contracts/app-lifecycle"
 import {
   assertUpdateReady,
   buildUpdate,
@@ -19,7 +19,7 @@ import {
 } from "../updates.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
-import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { abortNative, nativeLifecycleWork } from "../drivers.js"
 import { hostClient } from "../host-client.js"
 import type { MethodTable } from "../host-methods.js"

@@ -2,7 +2,7 @@ import type {
   AccountUsage,
   UsageBalance,
   UsageWindow,
-} from "../contracts/accounts.js"
+} from "@mako/host/contracts/accounts"
 import {
   jsonFields,
   numberValue,
@@ -10,8 +10,8 @@ import {
   stringValue,
   valueFields,
 } from "../accounts-common.js"
-import type { JsonValue } from "../contracts/json.js"
-import { orderWindows } from "../contracts/account-usage.js"
+import type { JsonValue } from "@mako/host/contracts/json"
+import { orderWindows } from "@mako/host/contracts/account-usage"
 
 function parseWindow(
   value: JsonValue | undefined,

@@ -4,7 +4,7 @@ import {
   type ElicitationContentValue,
   type ElicitationPropertySchema,
 } from "@agentclientprotocol/sdk"
-import type { LiveInputQuestion } from "./contracts/providers-acp.js"
+import type { LiveInputQuestion } from "@mako/host/contracts/providers-acp"
 
 function elicitationOptions(
   values: string[] | null | undefined,

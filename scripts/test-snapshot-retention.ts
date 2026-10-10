@@ -18,7 +18,7 @@ import { mock } from "node:test"
 import {
   RewindPlanSchema,
   type RewindPlan,
-} from "../electron/contracts/workspace-snapshots.js"
+} from "@mako/host/contracts/workspace-snapshots"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
 import {
   pruneSnapshotRecords,

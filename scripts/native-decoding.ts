@@ -1,8 +1,8 @@
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../electron/contracts/json.ts"
-import type { Decoded } from "../electron/contracts/native-decoding.ts"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import type { Decoded } from "@mako/host/contracts/native-decoding"
 import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "../electron/providers/decoder-source.ts"
 import { providerHost } from "../electron/providers/index.ts"
 

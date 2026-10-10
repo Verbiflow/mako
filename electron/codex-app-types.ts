@@ -5,8 +5,8 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import type { AttachmentContent, LineAssembler } from "@mako/sessions"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import type { JsonRpcId } from "./codex-app-json.js"
-import type { JsonObject, JsonValue } from "./contracts/json.js"
-import type { LiveSessionState } from "./contracts/providers-acp.js"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { TurnStartParams } from "./providers/codex/generated/v2/TurnStartParams.js"
 import type { AskForApproval } from "./providers/codex/generated/v2/AskForApproval.js"
@@ -199,13 +199,13 @@ export type ItemTracker = {
 }
 
 export interface ProtocolCallbacks {
-  observeQuestionAnswer?(answer: import("./contracts/live-questions.js").NativeQuestionAnswer): void
-  observeQuestion?(question: import("./contracts/live-questions.js").NativeQuestion): void
-  actionResult?(actionId: string, result: import("./contracts/live-actions.js").LiveActionResult): void
+  observeQuestionAnswer?(answer: import("@mako/host/contracts/live-questions").NativeQuestionAnswer): void
+  observeQuestion?(question: import("@mako/host/contracts/live-questions").NativeQuestion): void
+  actionResult?(actionId: string, result: import("@mako/host/contracts/live-actions").LiveActionResult): void
   handleFatal(message: string): void
   updateState(patch: Partial<LiveSessionState>): void
   emitUpdate(update: LiveUpdate): void
-  activity?(activity: import("./contracts/native-activity.js").NativeActivityObservation | null): void
+  activity?(activity: import("@mako/host/contracts/native-activity").NativeActivityObservation | null): void
   /** `id` is the native item or turn the marker stands for. */
   compacted?(compaction?: import("@mako/sessions/events").Compaction, id?: string): void
   /** A transcript marker: a warning, a failed turn, a review boundary. */
@@ -213,7 +213,7 @@ export interface ProtocolCallbacks {
   /** A notification or item the decoder has no meaning for, with its raw record. */
   unhandled?(kind: string, reason?: "unknown" | "unreadable", raw?: JsonValue): void
   /** `account/rateLimits/updated`: the windows the session's account just reported. */
-  usage?(windows: import("./contracts/accounts.js").UsageWindow[]): void
+  usage?(windows: import("@mako/host/contracts/accounts").UsageWindow[]): void
   /** Codex dropped its history from the turn `run` on. */
   rewound?(run: string): void
   observeAgents(item: CodexAgentItem, replay: boolean, toolId: string): void

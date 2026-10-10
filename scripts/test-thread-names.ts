@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import type { Actor } from "../electron/contracts/thread-identity.js"
+import type { Actor } from "@mako/host/contracts/thread-identity"
 import { ThreadStore } from "../electron/thread-store.js"
 
 /**

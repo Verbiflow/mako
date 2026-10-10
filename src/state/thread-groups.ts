@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { ThreadGroup, ThreadGroupChange } from "../../electron/contracts/thread-groups.ts"
+import type { ThreadGroup, ThreadGroupChange } from "@mako/host/contracts/thread-groups"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { readAttachmentDrafts, readDraftStorage, writeDraftStorage } from "@/lib/draft-persistence"
 import { draftsStore } from "@/state/drafts"

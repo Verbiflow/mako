@@ -1,4 +1,4 @@
-import type { HarnessPresentation } from "../../contracts/harness-presentation.js"
+import type { HarnessPresentation } from "@mako/host/contracts/harness-presentation"
 
 /** Codex's prompt inside OpenAI's cloud, in its violet-to-blue fill. */
 export const codexPresentation: HarnessPresentation = {

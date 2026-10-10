@@ -1,12 +1,12 @@
-import type { ResumeVerdict } from "./contracts/conversation-control.js"
+import type { ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadRef } from "@mako/sessions"
-import type { ExternalThreadActivity } from "./contracts/host-events-boot.js"
+import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import {
   planContinuation,
   type ContinuationPlan,
   type ContinuationResolution,
   type OwnerResolution,
-} from "./contracts/thread-continuation.js"
+} from "@mako/host/contracts/thread-continuation"
 
 /** Ownership is resolved once before consulting provider-native resume policy. */
 export interface ContinuationDependencies<Snapshot = unknown> {

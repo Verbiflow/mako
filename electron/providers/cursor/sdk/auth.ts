@@ -10,7 +10,7 @@ import {
   type StoredCursorCredential,
 } from "./credentials.js"
 import type { SdkEvent } from "./wire.js"
-import type { ExecutionCredential } from "../../../contracts/execution-context.js"
+import type { ExecutionCredential } from "@mako/host/contracts/execution-context"
 
 /** What a sign-in or probe needs from a child: a handshake, requests, and a close. */
 export type CursorSdkProbeClient = Pick<CursorSdkClient, "hello" | "request" | "close">

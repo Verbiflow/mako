@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { approvalAnswerDigest } from "./providers/approval-evidence.js"
 import { isDeepStrictEqual } from "node:util"
-import { ANSWERED_DIFFERENTLY, ApprovalSubmissionSchema, NativeApprovalDecisionSchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity, type ApprovalEndSource, type ApprovalOrigin, type ApprovalResponse, type ApprovalSubmission } from "./contracts/approval-response.js"
-import type { LivePermissionRequest, LivePermissionResponse } from "./contracts/providers-acp.js"
+import { ANSWERED_DIFFERENTLY, ApprovalSubmissionSchema, NativeApprovalDecisionSchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity, type ApprovalEndSource, type ApprovalOrigin, type ApprovalResponse, type ApprovalSubmission } from "@mako/host/contracts/approval-response"
+import type { LivePermissionRequest, LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { LiveAccess, Resident } from "./live-runtime.js"
-import type { ConversationControl } from "./contracts/conversation-control.js"
+import type { ConversationControl } from "@mako/host/contracts/conversation-control"
 
 /** Recovery reads unresolved evidence first, but observers also need answered
  * identities to recognize callbacks replayed by a replacement connection. */

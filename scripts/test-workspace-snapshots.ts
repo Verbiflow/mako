@@ -20,7 +20,7 @@ import { openRepository, TreeComparison } from "@mako/git"
 import {
   RewindPlanSchema,
   type RewindPlan,
-} from "../electron/contracts/workspace-snapshots.js"
+} from "@mako/host/contracts/workspace-snapshots"
 
 if (process.argv[2] === "--crash-after-files") {
   const child = new WorkspaceSnapshots(process.argv[3])

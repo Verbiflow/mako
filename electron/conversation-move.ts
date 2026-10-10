@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs"
 import { isAbsolute, join, relative } from "node:path"
-import type { ForkInput } from "./contracts/conversation-control.js"
-import type { LiveSnapshot } from "./contracts/live-conversations.js"
+import type { ForkInput } from "@mako/host/contracts/conversation-control"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 

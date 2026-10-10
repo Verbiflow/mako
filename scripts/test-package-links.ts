@@ -5,7 +5,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSy
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { installCommand } from "../electron/checkout-install.js"
-import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
+import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"

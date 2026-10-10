@@ -19,7 +19,7 @@ import {
   BuildIdentitySchema,
   type BuildIdentity,
   type LocalBuildState,
-} from "./contracts/app-lifecycle.js"
+} from "@mako/host/contracts/app-lifecycle"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
 import { text } from "@mako/git"

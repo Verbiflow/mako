@@ -2,7 +2,7 @@ import {
   diagnosticFormat,
   fileMimeTypeForPath,
   isTextFile,
-} from "../../electron/contracts/file-preview"
+} from "@mako/host/contracts/file-preview"
 import type { AttachmentKind } from "./attachments"
 
 /** Prompt transport policy; preview selection is a separate shared contract. */

@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { UtilityCatalog, UtilityCatalogInput, UtilityConnection, UtilityModel, UtilityProvider } from "./contracts/utility-models.js"
+import type { UtilityCatalog, UtilityCatalogInput, UtilityConnection, UtilityModel, UtilityProvider } from "@mako/host/contracts/utility-models"
 import type { UtilityModelStore } from "./utility-model-store.js"
 import { utilityProviders } from "./utility-models.js"
 

@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { resolve } from "node:path"
-import { NativeAuthoringFamilySchema, type NativeAuthoringCatalog, type NativeAuthoringTarget, type NativeAuthoringWrite, type NativeAuthoringRemove } from "./contracts/native-authoring.js"
+import { NativeAuthoringFamilySchema, type NativeAuthoringCatalog, type NativeAuthoringTarget, type NativeAuthoringWrite, type NativeAuthoringRemove } from "@mako/host/contracts/native-authoring"
 import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 

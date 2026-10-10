@@ -8,8 +8,8 @@ import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalD
 import { DevinApprovalObserver, readDevinApprovalDecisions } from "../electron/providers/devin/approval-observer.js"
 import { devinAcpSource } from "../electron/providers/devin/acp.js"
 import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
-import { describeApprovalResponse, type NativeApprovalDecision } from "../electron/contracts/approval-response.js"
-import type { LivePermissionRequest } from "../electron/contracts/providers-acp.js"
+import { describeApprovalResponse, type NativeApprovalDecision } from "@mako/host/contracts/approval-response"
+import type { LivePermissionRequest } from "@mako/host/contracts/providers-acp"
 import type { SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 

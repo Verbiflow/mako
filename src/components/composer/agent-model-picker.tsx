@@ -48,7 +48,7 @@ import {
 import { accounts, usageKey, useAccounts } from "@/state/accounts"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { accountIdentity } from "@/lib/account-identity"
-import type { AccountConfirmation } from "../../../electron/contracts/execution-context"
+import type { AccountConfirmation } from "@mako/host/contracts/execution-context"
 import { modelKey, usePrefs } from "@/state/prefs"
 import { providerProfileKey, providers, useProviders } from "@/state/providers"
 import { shallowEqual } from "@/state/store"

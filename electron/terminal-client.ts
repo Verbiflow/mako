@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { headlessNodeExecutable } from "./headless-node.js"
 import { ensurePrivateDirectory } from "./private-directory.js"
-import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "./contracts/terminal.js"
+import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "@mako/host/contracts/terminal"
 import {
   JsonLineDecoder,
   TERMINAL_DAEMON_VERSION,

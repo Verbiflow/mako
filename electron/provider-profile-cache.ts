@@ -7,7 +7,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { z } from "zod"
-import type { HarnessProfile } from "./contracts/providers-acp.js"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 
 const profileSchema = z.object({
   id: z.string(),

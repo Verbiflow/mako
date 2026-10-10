@@ -278,7 +278,7 @@ computer signs in to an account, its earlier anonymous events are joined to
 that account. Events wait up to 30 seconds and go in one request, sooner once
 50 are waiting. The code is in `electron/telemetry.ts` and
 `electron/machine-id.ts`, and the full list of events is in
-`electron/contracts/telemetry.ts`.
+`packages/host/src/contracts/telemetry.ts`.
 
 ## Development
 

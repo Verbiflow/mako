@@ -1,11 +1,11 @@
-import type { LiveSummary } from "../contracts/live-conversations.js"
-import type { ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
+import type { LiveSummary } from "@mako/host/contracts/live-conversations"
+import type { ThreadArchiveSnapshot } from "@mako/host/contracts/thread-lifecycle"
 import type { AgentHost } from "../host.js"
 import type { HostPool } from "../pool.js"
-import type { BootPayload, TabSnapshot } from "../contracts/host-events-boot.js"
-import type { ThinkingLevel } from "../contracts/conversation-session.js"
+import type { BootPayload, TabSnapshot } from "@mako/host/contracts/host-events-boot"
+import type { ThinkingLevel } from "@mako/host/contracts/conversation-session"
 import type { MethodTable } from "../host-methods.js"
-import type { MachineOffer } from "../contracts/machine-offer.js"
+import type { MachineOffer } from "@mako/host/contracts/machine-offer"
 
 export interface SessionIpcContext {
   archives?(): ThreadArchiveSnapshot

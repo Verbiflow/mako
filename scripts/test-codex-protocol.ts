@@ -13,7 +13,7 @@ import {
   type PermissionContext,
 } from "../electron/codex-app-permissions.ts"
 import { boundedText, numberValue } from "../electron/codex-app-json.ts"
-import { type JsonObject } from "../electron/contracts/json.ts"
+import { type JsonObject } from "@mako/host/contracts/json"
 import {
   parseJsonRpcEnvelope,
   parseNotification,
@@ -29,11 +29,11 @@ import {
   type ProtocolContext,
 } from "../electron/codex-app-protocol.ts"
 import { CodexRolloutCalls } from "../electron/providers/codex/rollout-calls.ts"
-import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { TranscriptEvent } from "@mako/sessions/events"
-import type { UsageWindow } from "../electron/contracts/accounts.ts"
+import type { UsageWindow } from "@mako/host/contracts/accounts"
 
 assert.deepEqual(parseJsonRpcEnvelope("not-json"), { kind: "invalid" })
 assert.deepEqual(parseJsonRpcEnvelope("[]"), { kind: "ignored" })

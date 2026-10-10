@@ -6,8 +6,8 @@ import { DatabaseSync } from "node:sqlite"
 import { mock } from "node:test"
 import { devinResumePolicy } from "../electron/providers/devin/resume.ts"
 import { assessResumeEvidence } from "../electron/native-continuation.ts"
-import { resumable } from "../electron/contracts/conversation-control.ts"
-import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
+import { resumable } from "@mako/host/contracts/conversation-control"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 
 const root = await mkdtemp(join(tmpdir(), "mako-devin-resume-"))
 const db = new DatabaseSync(join(root, "sessions.db"))

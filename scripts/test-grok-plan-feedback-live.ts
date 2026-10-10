@@ -15,7 +15,7 @@ import { planFeedbackOf } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import { acpAnswer } from "../electron/acp-decoder.ts"
 import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
-import type { JsonObject } from "../electron/contracts/json.ts"
+import type { JsonObject } from "@mako/host/contracts/json"
 import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 

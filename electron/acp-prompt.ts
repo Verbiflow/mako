@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url"
 import type { ContentBlock, PromptCapabilities } from "@agentclientprotocol/sdk"
-import type { PromptAttachment } from "./contracts/providers-acp.js"
+import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 
 /** A prompt as ACP content: an image inline where the agent reads images, any other staged file as a link to it. */
 export function acpPromptBlocks(text: string, attachments: readonly PromptAttachment[], capabilities: Pick<PromptCapabilities, "image">): ContentBlock[] {

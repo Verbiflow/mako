@@ -1,22 +1,22 @@
 import { resumes } from "./providers/live-capabilities.js"
-import { retireQuestionsForInput } from "./contracts/live-questions.js"
+import { retireQuestionsForInput } from "@mako/host/contracts/live-questions"
 import { knownApprovalOccurrences } from "./live-approvals.js"
-import { disconnectNativeAgents } from "./contracts/native-agents.js"
+import { disconnectNativeAgents } from "@mako/host/contracts/native-agents"
 import { createHash, randomUUID } from "node:crypto"
 import { access, realpath } from "node:fs/promises"
 import { join } from "node:path"
-import { TransferInputSchema, resumable } from "./contracts/conversation-control.js"
+import { TransferInputSchema, resumable } from "@mako/host/contracts/conversation-control"
 import type {
   TransferInput,
   ContextTransfer,
   ProviderBinding,
   ResumeVerdict,
-} from "./contracts/conversation-control.js"
+} from "@mako/host/contracts/conversation-control"
 import { captureNativeHistory, historyDigest } from "./native-history.js"
-import { heldReason } from "./contracts/session-hold.js"
-import type { Actor } from "./contracts/thread-identity.js"
-import type { TurnContinuation, LiveSnapshot } from "./contracts/live-conversations.js"
-import { classifyStartFailure } from "./contracts/provider-failure.js"
+import { heldReason } from "@mako/host/contracts/session-hold"
+import type { Actor } from "@mako/host/contracts/thread-identity"
+import type { TurnContinuation, LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
 import { hostLog, hostWarn } from "./host-log.js"
 import { verifyRecoveredSession } from "./provider-recovery.js"
 import { LiveRequestSchema } from "./live-journal.js"

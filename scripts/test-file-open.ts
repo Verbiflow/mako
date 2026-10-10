@@ -5,11 +5,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { promisify } from "node:util"
-import { createMakoBridge } from "../electron/contracts/renderer-bridge.ts"
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { WorkspaceGit } from "../electron/host-git.ts"
 import { readConversationFile, WorkspaceFiles } from "../electron/host-workspace.ts"
 import { inlineFileTarget } from "../src/lib/file-citations.ts"
-import { threadFileWorkspace } from "../electron/contracts/thread-file-workspace.ts"
+import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 
 /**

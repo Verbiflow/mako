@@ -1,4 +1,4 @@
-import { UNIVERSAL_SKILL_PROVIDER } from "../../electron/contracts/skill-reach"
+import { UNIVERSAL_SKILL_PROVIDER } from "@mako/host/contracts/skill-reach"
 import type {
   SkillOrigin,
   SkillProviderStatus,

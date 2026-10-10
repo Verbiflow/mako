@@ -1,7 +1,7 @@
 import type { BrowserWindow } from "electron"
 import { computerPermissions, requestComputerPermissions } from "./computer-permissions.js"
 import { electronPrivacy } from "./computer-permissions-electron.js"
-import type { DesktopFrame } from "./contracts/desktop-channel.js"
+import type { DesktopFrame } from "@mako/host/contracts/desktop-channel"
 import type { DeskPage } from "./desk-browser.js"
 import { deskPageForWindow } from "./desk-browser-window.js"
 import type { DesktopHandlers } from "./desktop-link.js"

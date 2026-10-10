@@ -7,8 +7,8 @@ import { installSessionIpc, type SessionIpcContext } from "../ipc/session.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
 import type { WakeWatch } from "../wake.js"
-import type { LifecycleAction } from "../contracts/app-lifecycle.js"
-import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { LifecycleAction } from "@mako/host/contracts/app-lifecycle"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 export type Application = ReturnType<typeof installApplicationIpc>
 

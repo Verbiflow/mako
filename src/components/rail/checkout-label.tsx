@@ -1,4 +1,4 @@
-import type { CheckoutHead } from "../../../electron/contracts/checkout-heads.ts"
+import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import { checkoutLabel } from "@/state/checkout-heads"
 import { cn } from "@/lib/utils"
 

@@ -12,7 +12,7 @@ import {
 } from "../electron/providers/harness-definition.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "../electron/providers/live-capabilities.ts"
-import { HARNESS_USAGE_KEYS } from "../electron/contracts/harness-usage.ts"
+import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
 import type { ProviderRegistry, ProviderCapability } from "../electron/providers/registry.ts"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"

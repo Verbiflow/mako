@@ -8,8 +8,8 @@ import { LiveConversations } from "../electron/live-conversations.ts"
 import { withExecutionAdmission } from "../electron/providers/execution-admission.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 // A harness process that dies after accepting a turn, through the real session
 // owner and real shared admission, for every registered harness and a future

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { stat } from "node:fs/promises"
 import { promisify } from "node:util"
-import type { CuaDriverStatus } from "./contracts/mcp-skills-integrations.js"
+import type { CuaDriverStatus } from "@mako/host/contracts/mcp-skills-integrations"
 
 const execute = promisify(execFile)
 

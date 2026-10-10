@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { SessionIdSchema, type Actor } from "../electron/contracts/thread-identity.js"
-import { MoveIdSchema, RuntimeIdSchema } from "../electron/contracts/thread-execution.js"
+import { SessionIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
+import { MoveIdSchema, RuntimeIdSchema } from "@mako/host/contracts/thread-execution"
 import {
   THREAD_STORE_SCHEMA,
   ThreadOperationConflictError,

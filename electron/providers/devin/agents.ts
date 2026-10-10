@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { DEVIN_AGENT_STARTS } from "@mako/sessions/harnesses"
-import type { NativeAgentObservation } from "../../contracts/native-agents.js"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import type { AcpAgentObserver } from "../acp-source.js"
 
 const id = z.string().min(1).max(512)

@@ -1,7 +1,7 @@
 import { readDiagnosticInput } from "./diagnostic-input"
 import { readDiagnosticDocument } from "./diagnostic-document"
 import { summarizeDiagnostic } from "./diagnostic-summary"
-import type { DiagnosticFormat } from "../../electron/contracts/file-preview"
+import type { DiagnosticFormat } from "@mako/host/contracts/file-preview"
 
 self.onmessage = async (
   event: MessageEvent<{ url: string; format: DiagnosticFormat }>

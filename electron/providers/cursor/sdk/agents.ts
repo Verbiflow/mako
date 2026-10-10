@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { isActiveNativeAgent, type NativeAgentObservation } from "../../../contracts/native-agents.js"
+import { isActiveNativeAgent, type NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import { toolTitle, type CursorSdkDelta, type CursorSdkMessage } from "@mako/sessions/cursor-sdk-content"
 
 type SubagentCall = Extract<CursorSdkDelta, { type: "subagent-call" }>

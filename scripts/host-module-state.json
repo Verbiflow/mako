@@ -53,10 +53,10 @@
   "electron/container-runtime.ts": [
     "endpoint"
   ],
-  "electron/contracts/host-call-inputs.ts": [
+  "packages/host/src/contracts/host-call-inputs.ts": [
     "built"
   ],
-  "electron/contracts/residency.ts": [
+  "packages/host/src/contracts/residency.ts": [
     "measures"
   ],
   "electron/crash.ts": [

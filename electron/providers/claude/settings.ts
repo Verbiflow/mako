@@ -1,6 +1,6 @@
 import { z } from "zod"
 import type { DiscoveryStream } from "../profile-transport.js"
-import type { JsonObject } from "../../contracts/json.js"
+import type { JsonObject } from "@mako/host/contracts/json"
 
 // Strip every unrelated effective setting here: this response may contain secrets.
 const EffectiveSettingsSchema = z.object({

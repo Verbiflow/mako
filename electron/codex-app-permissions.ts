@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto"
-import type { ApprovalSubmission, NativeApprovalIdentity } from "./contracts/approval-response.js"
+import type { ApprovalSubmission, NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
 import type { CodexApprovalCall, CodexApprovalChoice } from "./providers/codex/permission-observer.js"
 import { booleanValue, boundedText, objectValue, stringValue, type JsonRpcId } from "./codex-app-json.js"
-import { type JsonObject, type JsonValue } from "./contracts/json.js"
-import type { LivePermissionRequest, LivePermissionResponse } from "./contracts/providers-acp.js"
-import type { LiveDriverEvent } from "./contracts/live-conversations.js"
+import { type JsonObject, type JsonValue } from "@mako/host/contracts/json"
+import type { LivePermissionRequest, LivePermissionResponse } from "@mako/host/contracts/providers-acp"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 
 type CommandDecision =
   | "accept"

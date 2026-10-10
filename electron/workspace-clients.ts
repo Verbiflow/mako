@@ -1,5 +1,5 @@
 import { HostPool } from "./pool.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 export class WorkspaceClients {
   private readonly pools = new Map<string, HostPool>()

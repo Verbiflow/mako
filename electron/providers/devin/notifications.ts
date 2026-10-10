@@ -1,8 +1,8 @@
 import { z } from "zod"
 import { compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { devinCompactionRecord } from "@mako/sessions/harnesses"
-import type { JsonObject } from "../../contracts/json.js"
-import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
+import type { JsonObject } from "@mako/host/contracts/json"
+import type { NativeActivityObservation, NativeNotice } from "@mako/host/contracts/native-activity"
 import type { AcpNotificationDecoding } from "../acp-source.js"
 
 type Retrying = Extract<NativeActivityObservation, { kind: "retrying" }>

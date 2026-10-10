@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { LineAssembler } from "@mako/sessions"
 import type { WindowCapturer } from "./appshots.js"
-import type { UpdateState } from "./contracts/automations-usage-updates.js"
+import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
 import {
   DESKTOP_CALLS,
   DESKTOP_LINE_LIMIT,
@@ -15,7 +15,7 @@ import {
   type DesktopParams,
   type DesktopResult,
   type DesktopRole,
-} from "./contracts/desktop-channel.js"
+} from "@mako/host/contracts/desktop-channel"
 import type { DeskPage } from "./desk-browser.js"
 import { hostLog, hostWarn } from "./host-log.js"
 

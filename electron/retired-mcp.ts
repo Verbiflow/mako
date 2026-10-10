@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
-import type { JsonValue } from "./contracts/json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { onWindows } from "./platform.js"
 
 const retiredScripts = new Map<string, string>([

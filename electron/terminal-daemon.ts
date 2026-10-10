@@ -11,7 +11,7 @@ import {
 import { childProcessEnv } from "./accounts-common.js"
 import { TerminalHistoryFilter } from "./terminal-history-filter.js"
 import { killTerminalProcessGroups } from "./terminal-process-groups.js"
-import type { TerminalSession } from "./contracts/terminal.js"
+import type { TerminalSession } from "@mako/host/contracts/terminal"
 import {
   BoundedTerminalHistory,
   JsonLineDecoder,

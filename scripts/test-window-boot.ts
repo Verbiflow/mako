@@ -6,8 +6,8 @@ import { join, resolve } from "node:path"
 import { setImmediate as tick, setTimeout as delay } from "node:timers/promises"
 import { WorkspaceClients } from "../electron/workspace-clients.ts"
 import { WorkspaceGit } from "../electron/host-git.ts"
-import type { BootPayload, HostEvent } from "../electron/contracts/host-events-boot.ts"
-import type { GitStatus } from "../electron/contracts/git-workspace-search.ts"
+import type { BootPayload, HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-window-boot-")))
 const originalCwd = process.cwd()

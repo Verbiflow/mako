@@ -1,5 +1,5 @@
-import type { ThreadGroup } from "./contracts/thread-groups.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { hostWarn } from "./host-log.js"
 import type { ThreadStore } from "./thread-store.js"
 

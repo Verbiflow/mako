@@ -9,14 +9,14 @@ import { RuntimeUpdates } from "../runtime-updates.js"
 import { resumableHarnesses } from "../drivers.js"
 import { harnessProfile, harnessProfiles, harnessProfilesNow, onHarnessProfile, refreshHarnessProfiles } from "../harnesses.js"
 import { accountCatalog, accountUsage, captureAccount, keepAccount, onAccountUsage, removeAccount, selectAccount, useResetCredit } from "../accounts.js"
-import { type AccountHarness, type AccountProvider } from "../contracts/accounts.js"
+import { type AccountHarness, type AccountProvider } from "@mako/host/contracts/accounts"
 import { accountRemovalSessions } from "../account-removal-sessions.js"
 import { cancelAccountLogin, startAccountLogin, submitAccountLoginCode, waitAccountLogin } from "../account-login.js"
-import type { ProviderConnectionAction } from "../contracts/provider-connection.js"
-import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
+import type { ProviderConnectionAction } from "@mako/host/contracts/provider-connection"
+import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadCatalog } from "../threads.js"
 import type { LiveConversations } from "../live-conversations.js"
-import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 /** The six adapters as this host has them: their versions, accounts, and whether a session can resume. */
 export interface Harnesses {

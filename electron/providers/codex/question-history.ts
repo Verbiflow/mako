@@ -1,8 +1,8 @@
 import { open, stat } from "node:fs/promises"
 import { z } from "zod"
 import { parseLine, readLineBatch } from "@mako/sessions/jsonl"
-import type { ProviderBinding } from "../../contracts/conversation-control.js"
-import type { NativeQuestionHistory } from "../../contracts/live-questions.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
+import type { NativeQuestionHistory } from "@mako/host/contracts/live-questions"
 import { codexAnsweredQuestions, codexAsyncQuestion, CodexAsyncQuestionsSchema } from "./questions.js"
 
 const Completed = z.object({

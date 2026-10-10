@@ -37,7 +37,7 @@ async function check() {
   const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
   const { liveStart, livePrompt, liveCancel, liveClose, liveCompact, liveSetMode, liveSteer } = await import(join(repo, "dist-electron/acp.js"))
-  const { advancePromptDelivery } = await import(join(repo, "dist-electron/contracts/prompt-delivery.js"))
+  const { advancePromptDelivery } = await import(join(repo, "packages/host/dist/contracts/prompt-delivery.js"))
   const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
   const hostLogFile = join(root, "host.log")
   installHostLog(hostLogFile)

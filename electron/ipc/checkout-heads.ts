@@ -1,6 +1,6 @@
 import type { MethodTable } from "../host-methods.js"
 import type { CheckoutHeadService } from "../checkout-heads.js"
-import type { CheckoutHeads } from "../contracts/checkout-heads.js"
+import type { CheckoutHeads } from "@mako/host/contracts/checkout-heads"
 
 /** More folders than a rail shows; a longer list is a caller bug, not a bigger answer. */
 const MAX_FOLDERS = 200

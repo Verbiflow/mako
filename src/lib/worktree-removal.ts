@@ -1,4 +1,4 @@
-import { worktreeCheckout, type WorktreeDetail, type WorktreeLanding, type WorktreeSummary } from "../../electron/contracts/thread-worktrees.ts"
+import { worktreeCheckout, type WorktreeDetail, type WorktreeLanding, type WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 
 /** Landed by any route: Git's rules, or (`summary`) a pull request merged at the branch's tip. */
 export function landedFor(landing: WorktreeLanding, summary: Pick<WorktreeSummary, "landing"> | undefined): boolean {

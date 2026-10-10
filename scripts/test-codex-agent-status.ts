@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { CodexAgents } from "../electron/providers/codex/agents.ts"
 import { CodexAgentStatus, CodexAgentRunsSchema, type CodexAgentRun } from "../electron/providers/codex/agent-status.ts"
 import { parseNotification } from "../electron/codex-app-parse.ts"
-import type { NativeAgentObservation } from "../electron/contracts/native-agents.ts"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 async function until(check: () => boolean) {
   const end = Date.now() + 3000

@@ -1,7 +1,7 @@
 import type { OpenCodeClient } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
-import type { LiveSessionCommand } from "../../contracts/providers-acp.js"
+import type { LiveSessionCommand } from "@mako/host/contracts/providers-acp"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"

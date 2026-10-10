@@ -3,7 +3,7 @@ import { installGitIpc, openUtilityModels } from "../ipc/git.js"
 import { UtilityWork } from "../utility-work.js"
 import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "../github.js"
 import { mergePullRequest, openPullRequest, rerunFailedChecks } from "../pull-requests.js"
-import type { MergeMethod } from "../contracts/git-actions.js"
+import type { MergeMethod } from "@mako/host/contracts/git-actions"
 import type { ThreadWorktreeService } from "../thread-worktrees.js"
 import type { AgentHost } from "../host.js"
 

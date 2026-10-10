@@ -31,7 +31,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import type { ProviderBinding } from "./contracts/conversation-control.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type {
   AccountCatalog,
   AccountLoginResult,
@@ -44,7 +44,7 @@ import type {
   HarnessAccount,
   ResetCreditOutcome,
   SelectedAccount,
-} from "./contracts/accounts.js"
+} from "@mako/host/contracts/accounts"
 import {
   accountDir,
   accountsRoot,
@@ -76,7 +76,7 @@ import {
   hasReset,
   nextReset,
   windowsAt,
-} from "./contracts/account-usage.js"
+} from "@mako/host/contracts/account-usage"
 
 function selectableCapability(provider: string): SelectableAccountCapability {
   const capability = providerHost.accountCapabilities.get(provider)

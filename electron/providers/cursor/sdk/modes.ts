@@ -1,4 +1,4 @@
-import type { LiveSessionMode } from "../../../contracts/providers-acp.js"
+import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
 
 /**
  * The one mode a Cursor SDK session runs under: Agent, on the full tier.

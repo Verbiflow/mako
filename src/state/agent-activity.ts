@@ -2,7 +2,7 @@ import type { AcpBlock } from "@/lib/acp-blocks"
 import { liveToolIdentity } from "@/lib/tools"
 import { toolKindActivity } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
-import type { WorktreeStep } from "../../electron/contracts/thread-worktrees"
+import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
 
 export type AgentActivityKind = "working" | "connecting" | "reasoning" | "searching" | "executing" | "editing" | "responding" | "waiting" | "failed" | "complete" | "idle"
 

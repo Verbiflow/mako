@@ -33,7 +33,7 @@ export async function installStandIn({ load, providerHost, store }) {
   const { acpDecoderSource } = await load("dist-electron/providers/acp-decoder-source.js")
   const { fileResumeEvidence } = await load("dist-electron/native-continuation.js")
   const { availableProviderProfile } = await load("dist-electron/providers/profile-loader.js")
-  const { NO_NATIVE_PROMPT_IDENTITY } = await load("dist-electron/contracts/native-prompt-identity.js")
+  const { NO_NATIVE_PROMPT_IDENTITY } = await load("packages/host/dist/contracts/native-prompt-identity.js")
   mkdirSync(store, { recursive: true })
   const source = (nativeId) => join(store, `${nativeId}.jsonl`)
 

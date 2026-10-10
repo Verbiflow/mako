@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { LivePermissionResponse } from "../contracts/providers-acp.js"
+import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 
 /** The host and native adapters compare decisions without retaining answer text. */
 export function approvalAnswerDigest(response: LivePermissionResponse): string {

@@ -9,8 +9,8 @@ import { HostCallLifetime } from "../electron/host-call-lifetime.js"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { SessionMemory } from "../electron/session-memory.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 function deferred() {

@@ -16,9 +16,9 @@ import {
   type NotificationSubject,
 } from "@/state/notifications"
 import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/threads"
-import { describeProviderFailure } from "../../electron/contracts/provider-failure"
+import { describeProviderFailure } from "@mako/host/contracts/provider-failure"
 import { autoContinuePending } from "@/state/prompt-delivery"
-import { signInPause } from "../../electron/contracts/sign-in-hold"
+import { signInPause } from "@mako/host/contracts/sign-in-hold"
 
 export function updateLive(
   id: string,

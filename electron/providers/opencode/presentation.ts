@@ -1,4 +1,4 @@
-import type { HarnessPresentation } from "../../contracts/harness-presentation.js"
+import type { HarnessPresentation } from "@mako/host/contracts/harness-presentation"
 
 /** OpenCode's open square. */
 export const openCodePresentation: HarnessPresentation = {

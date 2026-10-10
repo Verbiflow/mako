@@ -3,7 +3,7 @@ import { dirname, join } from "node:path"
 import { parse as parseToml } from "smol-toml"
 import { z } from "zod"
 import { event, type TranscriptEvent } from "@mako/sessions/events"
-import type { AccessTier } from "../../contracts/access.js"
+import type { AccessTier } from "@mako/host/contracts/access"
 
 /**
  * What Grok's own and Claude Code's settings do to the access Mako selects.

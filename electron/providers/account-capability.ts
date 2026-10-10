@@ -5,7 +5,7 @@ import type {
   HarnessAccount,
   ResetCreditOutcome,
   SelectedAccount,
-} from "../contracts/accounts.js"
+} from "@mako/host/contracts/accounts"
 import type { ProviderCapability } from "./registry.js"
 
 interface AccountCapabilityBase

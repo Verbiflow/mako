@@ -4,7 +4,7 @@ import { AgentsToggle } from "@/components/inspector/agents-panel"
 import { useState } from "react"
 import { RadioGroup } from "radix-ui"
 import { CheckIcon, MoreHorizontalIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
-import { ACCESS_TIERS, accessTierInfo } from "../../../electron/contracts/access"
+import { ACCESS_TIERS, accessTierInfo } from "@mako/host/contracts/access"
 import type { LiveSessionMode } from "@/lib/types"
 import { usePrefs } from "@/state/prefs"
 import {

@@ -1,5 +1,5 @@
 import type { ProviderCapability } from "./registry.js"
-import type { NativeAuthoringDocument } from "../contracts/native-authoring.js"
+import type { NativeAuthoringDocument } from "@mako/host/contracts/native-authoring"
 
 /** The existing shared editor owns writes; adapters declare where they apply. */
 export interface ProviderEditingCapability extends ProviderCapability {

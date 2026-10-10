@@ -3,9 +3,9 @@ import { parseProse } from "../src/lib/parsed-markdown.ts"
 import { readDiagnosticInput } from "../src/lib/diagnostic-input.ts"
 import { mock } from "node:test"
 import { readDiagnosticDocument } from "../src/lib/diagnostic-document.ts"
-import type { DiagnosticFormat } from "../electron/contracts/file-preview.ts"
+import type { DiagnosticFormat } from "@mako/host/contracts/file-preview"
 import assert from "node:assert/strict"
-import { filePreviewFormat } from "../electron/contracts/file-preview.ts"
+import { filePreviewFormat } from "@mako/host/contracts/file-preview"
 import { classify } from "../src/lib/attachment-kind.ts"
 import {
   summarizeDiagnostic,

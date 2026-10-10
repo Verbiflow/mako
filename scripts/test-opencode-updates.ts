@@ -8,7 +8,7 @@ import {
   openCodeUpdateSource,
 } from "../electron/providers/opencode/updates.ts"
 import { isOpenCodeV2 } from "../electron/providers/opencode/version.ts"
-import { compareVersions } from "../electron/contracts/runtime-version.ts"
+import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { runtimeRowView } from "../src/lib/runtime-updates.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-updates-"))

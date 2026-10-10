@@ -14,7 +14,7 @@ import { devinMcpStartup } from "./mcp-startup.js"
 import { DevinPlans } from "./plans.js"
 import { hostWarn } from "../../host-log.js"
 import { devinCheckpoint, devinFork } from "./fork.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { heavy } from "../../heavy-packages.js"
 
 const { nativeSource, ...resume } = devinResumePolicy()

@@ -5,7 +5,7 @@ import { updatesStore } from "@/state/updates"
 import { bindTheme, prefsStore } from "@/state/prefs"
 import { getMako } from "@/lib/bridge"
 import { installMockBridge } from "./mock-bridge"
-import type { LifecycleState, LocalBuildState, UpdateInstallation } from "../../electron/contracts/app-lifecycle"
+import type { LifecycleState, LocalBuildState, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
 import "../index.css"
 
 installMockBridge()

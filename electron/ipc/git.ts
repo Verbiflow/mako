@@ -5,7 +5,7 @@ import { hostClient } from "../host-client.js"
 import { GitDrafting } from "../git-drafting.js"
 import { UtilityModelStore, utilityLegacyFiles } from "../utility-model-store.js"
 import type { UtilityWork } from "../utility-work.js"
-import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "../contracts/utility-work.js"
+import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "@mako/host/contracts/utility-work"
 import {
   legacyUtilityModelDirectory,
   migrateUtilityModels,
@@ -14,8 +14,8 @@ import {
 import { savedModelNamer, UtilityModelCatalog } from "../utility-model-catalog.js"
 import { hostLog, hostWarn } from "../host-log.js"
 import { z } from "zod"
-import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "../contracts/utility-models.js"
-import type { GitPushInput, GitRemoteInput } from "../contracts/git-workspace-search.js"
+import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "@mako/host/contracts/utility-models"
+import type { GitPushInput, GitRemoteInput } from "@mako/host/contracts/git-workspace-search"
 import type { MethodTable } from "../host-methods.js"
 import { hostEnvironment } from "../host-environment.js"
 

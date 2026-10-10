@@ -12,7 +12,7 @@ import {
   TERMINAL_FLOW_HIGH_BYTES,
   TERMINAL_OUTPUT_CHUNK_BYTES,
 } from "../electron/terminal-protocol.ts"
-import type { TerminalEvent } from "../electron/contracts/terminal.ts"
+import type { TerminalEvent } from "@mako/host/contracts/terminal"
 
 const root = await mkdtemp(join(tmpdir(), "mako-terminal-"))
 const stateDir = join(root, "state")

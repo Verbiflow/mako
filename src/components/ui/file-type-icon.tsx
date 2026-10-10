@@ -3,7 +3,7 @@ import {
   ImageIcon, Music2Icon, PresentationIcon, SheetIcon,
   type LucideIcon,
 } from "lucide-react"
-import { filePreviewFormat, type FilePreviewFormat } from "../../../electron/contracts/file-preview"
+import { filePreviewFormat, type FilePreviewFormat } from "@mako/host/contracts/file-preview"
 
 const marks = {
   image: ImageIcon,

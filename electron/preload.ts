@@ -1,9 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron"
 // The bridge alone: the other contracts' schemas are values, and bundling
 // them would put all of zod into every renderer's preload.
-import { createMakoBridge } from "./contracts/renderer-bridge.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
-import type { TerminalEvent } from "./contracts/terminal.js"
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { TerminalEvent } from "@mako/host/contracts/terminal"
 import { resolveDeskPreviewUrl } from "./desk-preview-url.js"
 
 // Sandboxed Electron preloads have Chromium's location even though this

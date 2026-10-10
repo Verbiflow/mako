@@ -1,6 +1,6 @@
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { tmpdir } from "node:os"
-import type { AccountUsage } from "../../contracts/accounts.js"
+import type { AccountUsage } from "@mako/host/contracts/accounts"
 import { claudeRuntime } from "./runtime.js"
 import { heavy } from "../../heavy-packages.js"
 

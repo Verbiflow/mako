@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import { legacyNamesIn, type LegacyFiles, type Secrets } from "./secrets.js"
-import type { UtilityConnection, UtilityConnectionInput, UtilityCredentialInput, UtilityModelSettings, UtilityProvider } from "./contracts/utility-models.js"
+import type { UtilityConnection, UtilityConnectionInput, UtilityCredentialInput, UtilityModelSettings, UtilityProvider } from "@mako/host/contracts/utility-models"
 import {
   connectionSchema,
   parseConnection,
@@ -13,7 +13,7 @@ import {
   UtilityModelError,
 } from "./utility-models.js"
 import { heavy } from "./heavy-packages.js"
-import { AUTOMATIC, HARNESS_ORDER_LIMIT, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "./contracts/utility-work.js"
+import { AUTOMATIC, HARNESS_ORDER_LIMIT, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "@mako/host/contracts/utility-work"
 
 const apiKeySchema = z
   .string()

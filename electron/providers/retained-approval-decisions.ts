@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, open, type FileHandle } from "node:fs/promises"
 import { join } from "node:path"
-import { NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity } from "../contracts/approval-response.js"
+import { NativeApprovalDecisionSchema, NativeApprovalIdentitySchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
 
 const MAX_BYTES = 2 * 1024 * 1024
 

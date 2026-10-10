@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
-import { hostCallInput } from "../electron/contracts/host-call-inputs.js"
-import { hostCallReplay } from "../electron/contracts/host-call-policy.js"
+import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
+import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 
 assert.deepEqual(
   hostCallInput("mako:thread-page").parse(["/real/session", undefined, 100]),
@@ -58,7 +58,7 @@ assert.deepEqual(hostCallInput("mako:live-steer-queued").parse(["conversation", 
 assert.throws(() => hostCallInput("mako:live-steer-queued").parse(["conversation", { ...queuedSteer, kind: "steer" }]))
 assert.equal(hostCallReplay("mako:live-steer-queued"), "replay", "queued steering retains its durable action id across a reconnect")
 
-const { createMakoBridge } = await import("../electron/contracts/renderer-bridge.js")
+const { createMakoBridge } = await import("@mako/host/contracts/renderer-bridge")
 const routed: string[] = []
 const bridge = createMakoBridge({
   invoke: async (channel) => { routed.push(channel); throw Error("routing probe") },

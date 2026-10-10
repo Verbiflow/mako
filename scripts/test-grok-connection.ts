@@ -8,7 +8,7 @@ import { grokUpdateEnvironment } from "../electron/providers/grok/index.ts"
 import { resolveExecutable } from "../electron/executable.ts"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import type { ProviderConnectionState } from "../electron/contracts/provider-connection.ts"
+import type { ProviderConnectionState } from "@mako/host/contracts/provider-connection"
 
 assert.deepEqual(
   grokConnectionState({

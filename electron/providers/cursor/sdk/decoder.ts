@@ -1,8 +1,8 @@
 import { cursorSdkReportedSettings } from "@mako/sessions"
 import type { SessionModel, SettingValue } from "@mako/sessions/settings"
-import type { Decoded } from "../../../contracts/native-decoding.js"
-import type { NativeAgentObservation } from "../../../contracts/native-agents.js"
-import type { LiveSessionState } from "../../../contracts/providers-acp.js"
+import type { Decoded } from "@mako/host/contracts/native-decoding"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { inclusiveTokens } from "@mako/sessions/harnesses"
 import { SessionUsage } from "../../../session-usage.js"
 import {

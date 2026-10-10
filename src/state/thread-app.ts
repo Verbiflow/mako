@@ -5,8 +5,8 @@ import { getMako } from "@/lib/bridge"
 import { actions } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
-import type { AppCheckStepView, AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProbeView, AppProcessView, RoomView, ThreadAppView } from "../../electron/contracts/thread-app"
-import type { ProjectAppSetup } from "../../electron/contracts/project-app"
+import type { AppCheckStepView, AppCheckView, AppMark, AppOutputKey, AppPrepareView, AppProbeView, AppProcessView, RoomView, ThreadAppView } from "@mako/host/contracts/thread-app"
+import type { ProjectAppSetup } from "@mako/host/contracts/project-app"
 
 /**
  * A folder's app, as the strip and the terminal dock show it. Keyed by the
@@ -27,7 +27,7 @@ export type {
   RoomFit,
   RoomView,
   ThreadAppView,
-} from "../../electron/contracts/thread-app"
+} from "@mako/host/contracts/thread-app"
 
 /** Starts, restarts and full checks run the folder's picked target (`targetOf`), for a recipe with targets. */
 export interface ThreadAppDriver {

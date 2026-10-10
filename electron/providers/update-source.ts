@@ -1,4 +1,4 @@
-import type { HarnessUpdateCommand } from "../contracts/harness-updates.js"
+import type { HarnessUpdateCommand } from "@mako/host/contracts/harness-updates"
 import type { ProviderCapability } from "./registry.js"
 
 /**

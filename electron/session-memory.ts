@@ -10,7 +10,7 @@ import {
   SessionSettingsSchema,
   type SessionSettings,
 } from "@mako/sessions/settings"
-import { heldReason } from "./contracts/session-hold.js"
+import { heldReason } from "@mako/host/contracts/session-hold"
 import { hostWarn } from "./host-log.js"
 import { enableSharedWal } from "./sqlite-wal.js"
 

@@ -7,7 +7,7 @@ import type {
   SDKAssistantMessage,
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk"
-import type { JsonValue } from "../electron/contracts/json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import {
   deliverLiveUpdates,

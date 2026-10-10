@@ -1,6 +1,6 @@
-import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../../electron/contracts/harness-capabilities"
-import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "../../electron/contracts/harness-usage"
-import { DECLARATION_SHOWS } from "../../electron/contracts/harness-unique"
+import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "@mako/host/contracts/harness-capabilities"
+import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@mako/host/contracts/harness-usage"
+import { DECLARATION_SHOWS } from "@mako/host/contracts/harness-unique"
 import type { HarnessDescriptor } from "@/lib/types"
 
 export type Standing = "works" | "own" | "lacks" | "gap"

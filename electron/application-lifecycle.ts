@@ -4,7 +4,7 @@ import type {
   LifecycleCommand,
   LifecycleState,
   LifecycleWork,
-} from "./contracts/app-lifecycle.js"
+} from "@mako/host/contracts/app-lifecycle"
 
 interface LifecycleDependencies {
   work(): LifecycleWork[]

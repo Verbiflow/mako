@@ -1,19 +1,19 @@
-import type { ApprovalSubmission } from "../contracts/approval-response.js"
+import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import { ApprovalEvidenceCapabilitySchema, type ApprovalEvidenceCapability } from "./approval-capability.js"
 import type { PromptDispatch } from "./prompt-dispatch.js"
-import type { NativeAgentObservation } from "../contracts/native-agents.js"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { ProviderBinding } from "../contracts/conversation-control.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { NativeResumeEvidence } from "../native-continuation.js"
-import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSessionMode, LiveSteering } from "../contracts/providers-acp.js"
-import type { LiveDriverEvent, LiveStartOptions } from "../contracts/live-conversations.js"
-import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
+import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSessionMode, LiveSteering } from "@mako/host/contracts/providers-acp"
+import type { LiveDriverEvent, LiveStartOptions } from "@mako/host/contracts/live-conversations"
+import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import type { ProviderCapability } from "./registry.js"
 import type { ControlLaunch } from "@mako/control-runtime/session"
-import type { ThreadEnvironment } from "../contracts/thread-environments.js"
-import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../contracts/mcp-reach.js"
-import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "../contracts/execution-context.js"
-import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "../contracts/native-prompt-identity.js"
+import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
+import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/mcp-reach"
+import { LaunchEnvironmentCapabilitySchema, NativeIdentityCapabilitySchema, NativeExclusionCapabilitySchema, type LaunchEnvironmentCapability, type NativeIdentityCapability, type NativeExclusionCapability } from "@mako/host/contracts/execution-context"
+import { NativePromptIdentityCapabilitySchema, type NativePromptIdentityCapability } from "@mako/host/contracts/native-prompt-identity"
 
 /** Admission resolves separately from the correlated live-action-result event.
  * A provider must confirm completion, failure, or cancellation; idle is not proof.
@@ -152,8 +152,8 @@ export type QuestionCapability =
   | {
       kind: "session"
       via: string
-      encodeAnswer(question: import("../contracts/live-questions.js").NativeQuestion, answers: Record<string, string[]>): string
-      history?(binding: ProviderBinding): Promise<import("../contracts/live-questions.js").NativeQuestionHistory>
+      encodeAnswer(question: import("@mako/host/contracts/live-questions").NativeQuestion, answers: Record<string, string[]>): string
+      history?(binding: ProviderBinding): Promise<import("@mako/host/contracts/live-questions").NativeQuestionHistory>
     }
   | DriverAbsent
 
@@ -162,7 +162,7 @@ export type NativeAgentsCapability = { kind: "observed"; via: string } | DriverA
 
 /** What fills the running session's context, by category. */
 export type ContextBreakdownCapability =
-  | { kind: "itemized"; via: string; read(id: string): Promise<import("../contracts/providers-acp.js").ContextBreakdown> }
+  | { kind: "itemized"; via: string; read(id: string): Promise<import("@mako/host/contracts/providers-acp").ContextBreakdown> }
   | DriverAbsent
 
 /** Changing the running session's mode. `single`: the harness runs one mode, and why. */
@@ -195,11 +195,11 @@ export interface ProviderStartOptions extends LiveStartOptions {
   accountLaunch?: import("../accounts.js").AccountLaunch
   /** Known native occurrences from this binding, including answered ones. Keep
    * identities on callback replay; observe only, never send saved answers again. */
-  observedApprovals?: import("../contracts/approval-response.js").NativeApprovalIdentity[]
+  observedApprovals?: import("@mako/host/contracts/approval-response").NativeApprovalIdentity[]
   /** Prior child identities for this exact resumed binding; states require fresh evidence. */
   observedAgents?: NativeAgentObservation[]
   /** The harness's last session totals for this exact resumed binding, which its process may restore. */
-  observedUsage?: import("../contracts/providers-acp.js").NativeTotals
+  observedUsage?: import("@mako/host/contracts/providers-acp").NativeTotals
   emit?: (event: LiveDriverEvent) => void
   mcpSnapshot?: () => Promise<McpRegistrySnapshot>
   fork?: NativeForkSource
@@ -255,7 +255,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
   approvalEvidence: ApprovalEvidenceCapability
   planning: PlanningCapability
   /** Hash the exact provider encoding before sending, without retaining answer text. */
-  approvalAnswerDigest?(request: import("../contracts/providers-acp.js").LivePermissionRequest, response: LivePermissionResponse): string | undefined
+  approvalAnswerDigest?(request: import("@mako/host/contracts/providers-acp").LivePermissionRequest, response: LivePermissionResponse): string | undefined
   /*
    * Each capability below is declared once, here: its implemented variant
    * carries what implements it, and an absent one says why. The catalog the

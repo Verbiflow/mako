@@ -1,6 +1,6 @@
 import { delimiter } from "node:path"
 import type { ControlLaunch } from "@mako/control-runtime/session"
-import type { ThreadEnvironment } from "./contracts/thread-environments.js"
+import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { threadEnvironmentInstructions } from "./thread-environment.js"
 
 /** Provider shell configuration only. Contains no browser/driver credentials. */

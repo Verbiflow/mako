@@ -1,5 +1,5 @@
 import type { ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
-import type { LiveSessionState } from "../contracts/providers-acp.js"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 type ExclusiveSession = Awaited<ReturnType<NonNullable<ProviderLiveDriver["startExclusive"]>>>
 

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { setTimeout as delay } from "node:timers/promises"
-import { AGENT_VIEWS_ENV } from "./contracts/desktop-channel.js"
+import { AGENT_VIEWS_ENV } from "@mako/host/contracts/desktop-channel"
 import type { DesktopChannel } from "./desktop-channel.js"
 import { hostLog, hostWarn } from "./host-log.js"
 

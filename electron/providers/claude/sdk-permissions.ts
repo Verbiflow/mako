@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto"
-import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/approval-response.js"
+import type { ApprovalSubmission, ApprovalEndSource } from "@mako/host/contracts/approval-response"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage } from "@mako/sessions/harnesses"
 import type { CanUseTool, OnElicitation, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import type { ClaudeApprovalObserver } from "./approval-observer.js"
 import type { ClaudePermissionObserver } from "./permission-observer.js"
-import type { LiveDriverEvent } from "../../contracts/live-conversations.js"
-import type { LivePermissionRequest, LivePermissionResponse } from "../../contracts/providers-acp.js"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LivePermissionRequest, LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { heavy } from "../../heavy-packages.js"
 
 const QuestionsSchema = z.object({

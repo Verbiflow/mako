@@ -1,5 +1,5 @@
 import { AgentHost, defaultWorkspace } from "./host.js"
-import type { HostEvent, TabSnapshot } from "./contracts/host-events-boot.js"
+import type { HostEvent, TabSnapshot } from "@mako/host/contracts/host-events-boot"
 
 /**
  * The open tabs.

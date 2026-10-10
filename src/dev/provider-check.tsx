@@ -12,7 +12,7 @@ import { threadsStore } from "@/state/thread-store"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
 import { getMako } from "@/lib/bridge"
-import type { HarnessUpdates } from "../../electron/contracts/harness-updates"
+import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
 import "../index.css"
 
 installMockBridge()

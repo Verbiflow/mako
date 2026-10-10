@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { LiveJournal } from "../electron/live-journal"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { ConversationControlSchema } from "../electron/contracts/conversation-control"
+import { ConversationControlSchema } from "@mako/host/contracts/conversation-control"
 import { auditSnapshot } from "./performance-audit-fixtures"
 
 const root = await mkdtemp(join(tmpdir(), "mako-journal-deltas-"))

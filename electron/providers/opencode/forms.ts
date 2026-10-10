@@ -1,7 +1,7 @@
 import { z } from "zod"
-import type { LiveInputQuestion, LivePermissionResponse } from "../../contracts/providers-acp.js"
+import type { LiveInputQuestion, LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { approvalAnswerDigest } from "../approval-evidence.js"
-import { activeInputQuestions } from "../../contracts/live-questions.js"
+import { activeInputQuestions } from "@mako/host/contracts/live-questions"
 
 const Option = z.object({ value: z.string(), label: z.string(), description: z.string().optional() })
 const Field = z.object({

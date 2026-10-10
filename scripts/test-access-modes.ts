@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { ApprovalEvidenceCapabilitySchema } from "../electron/providers/approval-capability.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "../electron/acp-access.ts"
-import { accessModeId } from "../electron/contracts/access.ts"
+import { accessModeId } from "@mako/host/contracts/access"
 import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
 import { CURSOR_SDK_MODES } from "../electron/providers/cursor/sdk/modes.ts"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"

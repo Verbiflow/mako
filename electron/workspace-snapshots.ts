@@ -23,7 +23,7 @@ import {
   type RewindPlan,
   type RewindPreview,
   type WorkspaceSnapshot,
-} from "./contracts/workspace-snapshots.js"
+} from "@mako/host/contracts/workspace-snapshots"
 
 import {
   SnapshotRecordSchema as RecordSchema,

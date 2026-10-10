@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { BuildIdentitySchema } from "./contracts/app-lifecycle.js"
-import { RuntimeInfoSchema, RuntimeReplySchema } from "./contracts/runtime.js"
+import { BuildIdentitySchema } from "@mako/host/contracts/app-lifecycle"
+import { RuntimeInfoSchema, RuntimeReplySchema } from "@mako/host/contracts/runtime"
 import { runtimeRequest } from "./runtime-connection.js"
 
 const installation = z.object({ build: BuildIdentitySchema.nullable() })

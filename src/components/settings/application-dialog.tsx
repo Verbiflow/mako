@@ -11,7 +11,7 @@ import { Action, IconAction } from "@/components/ui/kit"
 import { MakoTile } from "@/components/ui/mako-mark"
 import { Notice, NoticeAction } from "@/components/ui/notice"
 import { application, useApplication } from "@/state/application"
-import type { LifecycleWork } from "../../../electron/contracts/app-lifecycle"
+import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 
 const statusLabels = {
   running: "Working",

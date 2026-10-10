@@ -18,15 +18,15 @@ import {
   NATIVE_AGENT_LIMIT,
   type NativeAgent,
   type NativeAgentRoster,
-} from "../electron/contracts/native-agents.ts"
+} from "@mako/host/contracts/native-agents"
 import { ApplicationLifecycle } from "../electron/application-lifecycle.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { LiveJournal } from "../electron/live-journal.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type { HostEvent } from "../electron/contracts/host-events-boot.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const claude = new ClaudeAgents()

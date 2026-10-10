@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { NativeQuestionSchema, NativeQuestionAnswerSchema, NativeQuestionHistorySchema, type NativeQuestionAnswer, type NativeQuestion } from "./contracts/live-questions.js"
-import type { LivePermissionResponse } from "./contracts/providers-acp.js"
-import { ANSWERED_DIFFERENTLY } from "./contracts/approval-response.js"
-import type { LiveAction, LiveActionInput } from "./contracts/live-actions.js"
+import { NativeQuestionSchema, NativeQuestionAnswerSchema, NativeQuestionHistorySchema, type NativeQuestionAnswer, type NativeQuestion } from "@mako/host/contracts/live-questions"
+import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
+import { ANSWERED_DIFFERENTLY } from "@mako/host/contracts/approval-response"
+import type { LiveAction, LiveActionInput } from "@mako/host/contracts/live-actions"
 import type { LiveAccess, Resident } from "./live-runtime.js"
-import type { ProviderBinding } from "./contracts/conversation-control.js"
-import type { NativeQuestionHistory } from "./contracts/live-questions.js"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
+import type { NativeQuestionHistory } from "@mako/host/contracts/live-questions"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
 
 interface QuestionDelivery {

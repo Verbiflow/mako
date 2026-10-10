@@ -37,7 +37,7 @@ import {
   appendPlanContext,
   parsePlanContext,
 } from "../src/lib/proposed-plan.ts"
-import type { LiveDriverEvent, LiveSnapshot } from "../electron/contracts/live-conversations.ts"
+import type { LiveDriverEvent, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 
 const text =
   "# Route recovery\n\n1. Preserve the destination.\n2. Test expired sessions.\n"

@@ -10,8 +10,8 @@ import { ExecutionAccountChanged, selectAccount } from "../electron/accounts.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
-import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "../electron/execution-context.ts"
 
 const root = await mkdtemp(join(os.tmpdir(), "mako-warm-account-"))

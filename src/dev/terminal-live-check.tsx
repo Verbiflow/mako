@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client"
 import { Terminal } from "@xterm/xterm"
 import { TerminalPanel } from "@/components/inspector/terminal-panel"
 import { WorkspaceFocusContext } from "@/components/stage/workspace-focus-context"
-import { createMakoBridge } from "../../electron/contracts/renderer-bridge"
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { terminalActions, terminalStore } from "@/state/terminal"
 import "../index.css"
 

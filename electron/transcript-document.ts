@@ -1,6 +1,6 @@
 import { formatTranscript, type Thread, type ThreadEntry, type TranscriptDepth } from "@mako/sessions"
-import type { LiveSnapshot } from "./contracts/live-conversations.js"
-import type { TranscriptDocument, TranscriptSource } from "./contracts/transcript-document.js"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { TranscriptDocument, TranscriptSource } from "@mako/host/contracts/transcript-document"
 import { liveEntries } from "./live-context.js"
 
 /** What a transcript reads of a live conversation. */

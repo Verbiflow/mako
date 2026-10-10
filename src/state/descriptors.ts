@@ -1,5 +1,5 @@
 import type { HarnessDescriptor } from "@/lib/types"
-import type { HarnessDefaults } from "../../electron/contracts/harness-defaults"
+import type { HarnessDefaults } from "@mako/host/contracts/harness-defaults"
 import type { ThreadsState } from "@/state/thread-state"
 
 type WithDescriptors = Pick<ThreadsState, "descriptors">

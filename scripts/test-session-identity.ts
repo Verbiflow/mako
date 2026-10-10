@@ -9,8 +9,8 @@ import { applyLiveSnapshot, applyLiveBatch, hydrateLiveSummaries } from "../src/
 import { canonicalThreadRefs, selectAcpPresence, selectSessionOwners } from "../src/state/acp-presence.ts"
 import { threadStatus } from "../src/state/thread-status.ts"
 import { threadsStore } from "../src/state/thread-store.ts"
-import type { LiveSnapshot } from "../electron/contracts/live-conversations.ts"
-import type { ThreadRef } from "../electron/contracts/conversation-session.ts"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { ThreadRef } from "@mako/host/contracts/conversation-session"
 
 const id = "11111111-1111-4111-8111-111111111111"
 const nativeId = "22222222-2222-4222-8222-222222222222"

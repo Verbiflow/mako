@@ -83,7 +83,7 @@ async function runElectron() {
   const { nativeCheckpoint } = await import("../dist-electron/native-continuation.js")
   const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")
   const { resumable } =
-    await import("../dist-electron/contracts/conversation-control.js")
+    await import("@mako/host/contracts/conversation-control")
   const cuaRoot = join("/tmp", `mako-provider-cua-${String(process.pid)}`)
   if (controlMode) {
     await mkdir(cuaRoot, { recursive: true })

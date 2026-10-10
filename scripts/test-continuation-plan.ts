@@ -2,7 +2,7 @@ import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
 import { createContinuationPlanner } from "../electron/continuation.ts"
-import { planContinuation, type ContinuationInputs } from "../electron/contracts/thread-continuation.ts"
+import { planContinuation, type ContinuationInputs } from "@mako/host/contracts/thread-continuation"
 
 const ref: ThreadRef = { harness: "cursor", nativeId: "agent-1", path: "/home/.cursor/acp-sessions/agent-1/store.db", cwd: "/repo" }
 const inputs: ContinuationInputs = { live: { available: true, canResume: true }, nativeInstalled: true, running: false, external: null }

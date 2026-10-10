@@ -26,5 +26,5 @@ async function prune(sourceRoot, outputRoot, relative = "") {
   }
 }
 await prune("electron", "dist-electron")
-for (const name of ["lazy", "control", "control-runtime"])
+for (const name of ["lazy", "control", "control-runtime", "host"])
   await prune(`packages/${name}/src`, `packages/${name}/dist`)

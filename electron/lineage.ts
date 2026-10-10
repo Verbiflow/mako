@@ -6,7 +6,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { ThreadOrigin, ThreadRef } from "@mako/sessions"
-import type { JsonObject, JsonValue } from "./contracts/json.js"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import { hostEnvironment } from "./host-environment.js"
 
 interface LineageFile {

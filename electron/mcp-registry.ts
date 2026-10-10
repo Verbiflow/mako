@@ -9,13 +9,13 @@ import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
-import type { JsonObject, JsonValue } from "./contracts/json.js"
-import { projectedMcpServers } from "./contracts/mcp-reach.js"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import { projectedMcpServers } from "@mako/host/contracts/mcp-reach"
 import {
   migrateRetiredMakoMcpFile,
   retiredMakoMcp,
 } from "./retired-mcp.js"
-import type { McpProvider, McpRegistryProviderStatus, McpRegistrySnapshot, McpServerDefinition, McpServerOrigin, McpServerRecord, McpTransport } from "./contracts/mcp-skills-integrations.js"
+import type { McpProvider, McpRegistryProviderStatus, McpRegistrySnapshot, McpServerDefinition, McpServerOrigin, McpServerRecord, McpTransport } from "@mako/host/contracts/mcp-skills-integrations"
 
 const run = promisify(execFile)
 const SECRET_KEY =

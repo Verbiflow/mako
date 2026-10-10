@@ -1,5 +1,5 @@
 import { dirname, join, resolve } from "node:path"
-import type { McpScope, McpServerDefinition } from "../contracts/mcp-skills-integrations.js"
+import type { McpScope, McpServerDefinition } from "@mako/host/contracts/mcp-skills-integrations"
 import type { ProviderCapability } from "./registry.js"
 
 export interface ProviderAccountLocation {

@@ -1,15 +1,15 @@
 import { z } from "zod"
-import type { PromptAttachment, LiveSessionState } from "./contracts/providers-acp.js"
-import type { LiveSnapshot, LiveBatch, LiveDriverEvent, SignInResume } from "./contracts/live-conversations.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
-import type { McpRegistrySnapshot } from "./contracts/mcp-skills-integrations.js"
+import type { PromptAttachment, LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { LiveSnapshot, LiveBatch, LiveDriverEvent, SignInResume } from "@mako/host/contracts/live-conversations"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import type { EmitResult, Thread, ThreadPage } from "@mako/sessions"
 import type {
   ProviderBinding,
   ResumeVerdict,
   ContextTransfer,
   ConversationControl,
-} from "./contracts/conversation-control.js"
+} from "@mako/host/contracts/conversation-control"
 import type {
   ProviderLiveDriver,
   ConversationTools,
@@ -17,12 +17,12 @@ import type {
 import type { LiveJournal } from "./live-journal.js"
 import type { SessionMemory } from "./session-memory.js"
 import type { ThreadStore } from "./thread-store.js"
-import type { Actor } from "./contracts/thread-identity.js"
-import type { ThreadEnvironment } from "./contracts/thread-environments.js"
+import type { Actor } from "@mako/host/contracts/thread-identity"
+import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
-import type { PlanBuild } from "./contracts/plan-builds.js"
-import type { ResidencyBudget } from "./contracts/residency.js"
+import type { PlanBuild } from "@mako/host/contracts/plan-builds"
+import type { ResidencyBudget } from "@mako/host/contracts/residency"
 export interface ProviderConnection {
   driver: ProviderLiveDriver
   session: LiveSessionState

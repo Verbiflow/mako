@@ -1,5 +1,5 @@
 import { useThreads } from "@/state/thread-store"
-import type { HarnessMark } from "../../../electron/contracts/harness-presentation"
+import type { HarnessMark } from "@mako/host/contracts/harness-presentation"
 import { useId, type SVGProps } from "react"
 import { cn } from "@/lib/utils"
 

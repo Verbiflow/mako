@@ -9,10 +9,10 @@ import { notificationsStore } from "../src/state/notifications"
 import { threadsStore } from "../src/state/thread-store"
 import { fixtureDeclarations } from "../src/dev/harness-fixtures"
 import { promptDelivery, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
-import { holdForSignIn, releaseSignIn, signInPause } from "../electron/contracts/sign-in-hold"
-import { continueTurnPrompt } from "../electron/contracts/turn-continuation"
-import type { LiveRequest, SignInHold } from "../electron/contracts/live-conversations"
-import type { LiveSessionState } from "../electron/contracts/providers-acp"
+import { holdForSignIn, releaseSignIn, signInPause } from "@mako/host/contracts/sign-in-hold"
+import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
+import type { LiveRequest, SignInHold } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 /**
  * Work paused on a sign-out: the pure hold and release, and what the card

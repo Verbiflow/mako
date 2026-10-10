@@ -3,9 +3,9 @@ import type {
   SessionNotification,
 } from "@agentclientprotocol/sdk"
 import { COMPACTION_FAILED } from "@mako/sessions/events"
-import type { LiveActionResult } from "./contracts/live-actions.js"
-import type { NativeNotice } from "./contracts/native-activity.js"
-import { COMPACTION_CONFIRMATION_MS } from "./contracts/recovery.js"
+import type { LiveActionResult } from "@mako/host/contracts/live-actions"
+import type { NativeNotice } from "@mako/host/contracts/native-activity"
+import { COMPACTION_CONFIRMATION_MS } from "@mako/host/contracts/recovery"
 import type { UsageObservation } from "./session-usage.js"
 
 /** Protocol differences belong to the provider, not to the shared prompt loop. */

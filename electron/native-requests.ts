@@ -1,9 +1,9 @@
 import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
-import type { LifecycleWork } from "./contracts/app-lifecycle.js"
+import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import {
   QueuedPromptEditSchema,
   type QueuedPromptEdit,
-} from "./contracts/live-queue.js"
+} from "@mako/host/contracts/live-queue"
 import { createHash } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { copyFile, stat, writeFile } from "node:fs/promises"
@@ -14,11 +14,11 @@ import type { ThreadRef } from "@mako/sessions"
 import {
   NativeRequestInputSchema,
   NativeRequestSchema,
-} from "./contracts/native-requests.js"
+} from "@mako/host/contracts/native-requests"
 import type {
   NativeRequest,
   NativeRequestInput,
-} from "./contracts/native-requests.js"
+} from "@mako/host/contracts/native-requests"
 
 interface Dependencies {
   read(path: string): Promise<ThreadRef | null>

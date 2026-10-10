@@ -1,6 +1,6 @@
-import { accessModeId, accessTierInfo, accessTierOfModeId, type AccessTier } from "../../contracts/access.js"
+import { accessModeId, accessTierInfo, accessTierOfModeId, type AccessTier } from "@mako/host/contracts/access"
 import { OPENCODE_PLAN_AGENT } from "@mako/sessions"
-import type { LiveSessionMode } from "../../contracts/providers-acp.js"
+import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
 
 /** The native agent the launch presets configure. It is shown as the preset, never by name. */
 export const OPENCODE_BASE_AGENT = "build"

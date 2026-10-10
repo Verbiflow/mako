@@ -6,13 +6,13 @@ import { acpStore, carriedFailureSeen, replaceAcpConversation, updateAcpConversa
 import { syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { changesSession, requestsAfter, sessionAfter } from "../../electron/contracts/live-conversations"
+import { changesSession, requestsAfter, sessionAfter } from "@mako/host/contracts/live-conversations"
 import { projectLive } from "@/state/live-projection"
 import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
-import { isHostReconnectingError } from "../../electron/contracts/host-connection"
+import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
-import type { LiveHistoryCursor, LiveHistoryPage } from "../../electron/contracts/live-history"
+import type { LiveHistoryCursor, LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 
 const fetching = new Map<string, Promise<boolean>>()

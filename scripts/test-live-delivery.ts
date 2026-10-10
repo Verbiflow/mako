@@ -18,7 +18,7 @@ import {
   type LiveBlock,
   type LiveUpdate,
 } from "@mako/sessions/live-content"
-import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "../electron/contracts/live-conversations"
+import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "@mako/host/contracts/live-conversations"
 import { LiveJournal } from "../electron/live-journal"
 import type { ModelOption } from "@mako/sessions/settings"
 import { auditSnapshot } from "./performance-audit-fixtures"

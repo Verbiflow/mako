@@ -1,5 +1,5 @@
 import { accountHolders, bindingAccount, type AccountHolder } from "./account-holds.js"
-import type { AccountRemovalEvent, AccountRemovalPlan, AccountRemovalSession } from "./contracts/accounts.js"
+import type { AccountRemovalEvent, AccountRemovalPlan, AccountRemovalSession } from "@mako/host/contracts/accounts"
 import { accountRemovalHolders, onAccountRemoval } from "./accounts.js"
 
 interface Sessions {

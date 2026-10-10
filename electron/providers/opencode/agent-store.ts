@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
-import type { NativeAgentObservation } from "../../contracts/native-agents.js"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 const childRow = z.object({ id: z.string(), parent_id: z.string(), title: z.string().nullable(), time_idle: z.number().nullable(), idle_outcome: z.string().nullable() })
 const messageRow = z.object({ id: z.string(), seq: z.number(), time_created: z.number(), completed: z.number().nullable(), finish: z.string().nullable() })

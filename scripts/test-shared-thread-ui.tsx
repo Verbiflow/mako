@@ -87,7 +87,7 @@ const { hydrateLiveSummaries, applyLiveSnapshot } =
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const fixture = installMockBridge()
 const bridge = window.mako!
-const snapshot: import("../electron/contracts/live-conversations").LiveSnapshot = {
+const snapshot: import("@mako/host/contracts/live-conversations").LiveSnapshot = {
   session: {
     id: "019d0011-0000-4000-8000-000000000001",
     nativeId: "native-peer",
@@ -188,7 +188,7 @@ const second = {
 fixture.setLiveSnapshot(second)
 const waiting = new Map<
   string,
-  (snapshot: import("../electron/contracts/live-conversations").LiveSnapshot) => void
+  (snapshot: import("@mako/host/contracts/live-conversations").LiveSnapshot) => void
 >()
 bridge.liveAttach = (path) =>
   new Promise((resolve) => {
@@ -233,7 +233,7 @@ console.log(
 )
 
 // A row another running host owns opens straight into that conversation.
-type LiveSnapshot = import("../electron/contracts/live-conversations").LiveSnapshot
+type LiveSnapshot = import("@mako/host/contracts/live-conversations").LiveSnapshot
 const owned = {
   ...ref,
   path: "/fixture/owned.jsonl",
@@ -415,10 +415,10 @@ console.log(
 
 const { beginStart, launch } = await import("../src/state/acp-start")
 const { RuntimeDisconnectedError } =
-  await import("../electron/contracts/host-connection")
+  await import("@mako/host/contracts/host-connection")
 const { randomUUID } = await import("node:crypto")
 const redirectedId = randomUUID()
-const submittedStarts: import("../electron/contracts/live-conversations").LiveStartOptions[] = []
+const submittedStarts: import("@mako/host/contracts/live-conversations").LiveStartOptions[] = []
 bridge.liveSnapshot = async () => null
 bridge.resolveContinuation = async () => ({
   transport: "unavailable",
@@ -688,8 +688,8 @@ const sameStart = beginStart({
   hiddenUserPrompt: null,
 })
 let releaseStart:
-  ((value: import("../electron/contracts/live-conversations").LiveSnapshot) => void) | undefined
-let heldInput: import("../electron/contracts/live-conversations").LiveStartOptions | undefined
+  ((value: import("@mako/host/contracts/live-conversations").LiveSnapshot) => void) | undefined
+let heldInput: import("@mako/host/contracts/live-conversations").LiveStartOptions | undefined
 bridge.liveStart = async (_h, _c, input) => {
   heldInput = input
   return new Promise((resolve) => {

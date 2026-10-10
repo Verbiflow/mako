@@ -1,8 +1,8 @@
 import { z } from "zod"
 import { clientStorageScope } from "@/lib/client-storage-scope"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
-import { PromptAttachmentSchema } from "../../electron/contracts/prompt-attachments"
-import { hostCallInput } from "../../electron/contracts/host-call-inputs"
+import { PromptAttachmentSchema } from "@mako/host/contracts/prompt-attachments"
+import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
 
 const QueuedSchema = z.object({ kind: z.literal("queued"), startId: z.string(), requestId: z.string(),
   text: z.string(), attachments: z.array(PromptAttachmentSchema), tuning: SessionSettingsSchema.optional() })

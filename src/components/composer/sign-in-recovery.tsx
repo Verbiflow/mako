@@ -9,7 +9,7 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { signInRecovery, signInRecoveryKey, useSignInRecovery } from "@/state/sign-in-recovery"
 import { shallowEqual } from "@/state/store"
 import { cn } from "@/lib/utils"
-import { signInPause, type SignInPause } from "../../../electron/contracts/sign-in-hold"
+import { signInPause, type SignInPause } from "@mako/host/contracts/sign-in-hold"
 
 /**
  * The card above the composer while this session's work is paused because

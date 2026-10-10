@@ -1,6 +1,6 @@
 import type { MethodTable } from "../host-methods.js"
 import type { PlanBuilds } from "../plan-builds.js"
-import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds as PlanBuildsState } from "../contracts/plan-builds.js"
+import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds as PlanBuildsState } from "@mako/host/contracts/plan-builds"
 
 export function installPlanBuildsIpc(methods: MethodTable, builds: PlanBuilds) {
   methods.handle("mako:plan-builds", (): PlanBuildsState => builds.state())

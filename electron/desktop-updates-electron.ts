@@ -1,4 +1,4 @@
-import type { UpdateState } from "./contracts/automations-usage-updates.js"
+import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
 import { record } from "./crash.js"
 
 type Updater = typeof import("electron-updater").autoUpdater

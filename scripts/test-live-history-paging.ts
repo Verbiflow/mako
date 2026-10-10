@@ -5,9 +5,9 @@ import { z } from "zod"
 import { setImmediate as tick } from "node:timers/promises"
 import { LiveHistoryReader } from "../electron/live-history-reader"
 import { historyJsonChunks } from "../electron/live-history-json"
-import type { LiveSnapshot } from "../electron/contracts/live-conversations"
-import type { LiveHistoryRead, LiveHistoryPage } from "../electron/contracts/live-history"
-import type { MakoBridge } from "../electron/contracts/renderer-bridge"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { LiveHistoryRead, LiveHistoryPage } from "@mako/host/contracts/live-history"
+import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
 
 const samples: unknown[] = [null, false, 0, "", [undefined, undefined, null], { no: undefined, yes: ["a\n\"\\\t", "\ud800", "😀東京"] }]

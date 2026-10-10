@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { access } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { z } from "zod"
-import type { NotificationPermission } from "./contracts/notifications.js"
+import type { NotificationPermission } from "@mako/host/contracts/notifications"
 import { onMac } from "./platform.js"
 
 /**

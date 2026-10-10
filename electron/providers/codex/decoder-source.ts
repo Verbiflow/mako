@@ -1,8 +1,8 @@
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../../contracts/json.js"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import { parseThreadResponse } from "../../codex-app-parse.js"
-import { decoded } from "../../contracts/native-decoding.js"
-import type { LiveSessionState } from "../../contracts/providers-acp.js"
+import { decoded } from "@mako/host/contracts/native-decoding"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ProviderDecoderSource } from "../decoder-source.js"
 import {
   CODEX_DECODED_NOTIFICATIONS,

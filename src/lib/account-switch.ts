@@ -1,7 +1,7 @@
 import { accountIdentity } from "@/lib/account-identity"
 import type { ProviderAccount } from "@/state/accounts"
 import type { LiveAcpConversation } from "@/state/acp-state"
-import type { AccountSwitchWait } from "../../electron/contracts/live-conversations"
+import type { AccountSwitchWait } from "@mako/host/contracts/live-conversations"
 
 /** What a session says about its account when it isn't the one selected for its harness. */
 export type AccountReading =

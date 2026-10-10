@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
+import type { NativeQuestion, NativeQuestionAnswer } from "@mako/host/contracts/live-questions"
 
 export const CodexAsyncQuestionsSchema = z.array(z.object({
   title: z.string().min(1),

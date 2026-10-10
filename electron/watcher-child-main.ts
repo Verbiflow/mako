@@ -2,7 +2,7 @@ import parcel, { type AsyncSubscription } from "@parcel/watcher"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CanaryTestSchema, HistoryMarkSchema, WatcherRequestSchema, type CanaryTest, type HistoryMark, type WatcherReply } from "./contracts/watcher-child.js"
+import { CanaryTestSchema, HistoryMarkSchema, WatcherRequestSchema, type CanaryTest, type HistoryMark, type WatcherReply } from "@mako/host/contracts/watcher-child"
 
 /*
  * @parcel/watcher's FSEvents backend races its own callback thread on

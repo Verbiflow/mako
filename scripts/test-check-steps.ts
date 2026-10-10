@@ -5,13 +5,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parse as parseYaml } from "yaml"
 import { stepsCommand, stepsOf } from "../electron/check-steps.js"
-import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
-import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { readVersion, recipePath, RecipeSchema, recipeVersions, type Recipe } from "../electron/thread-recipe.js"
-import type { JsonValue } from "../electron/contracts/json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 
 /**
  * A check of named steps on real runs: each step timed and reported on its

@@ -14,10 +14,10 @@ import {
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
-import type { JsonObject } from "./contracts/json.js"
+import type { JsonObject } from "@mako/host/contracts/json"
 import type { McpJsonFormat } from "./providers/mcp-source.js"
 import { mcpDiscoveryRoute, type McpDiscoveryRoute } from "./mcp-registry.js"
-import type { McpRegistrySnapshot, McpServerDefinition, McpServerRecord, McpSyncPreview, McpSyncTarget } from "./contracts/mcp-skills-integrations.js"
+import type { McpRegistrySnapshot, McpServerDefinition, McpServerRecord, McpSyncPreview, McpSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
 
 interface CachedPreview {
   hash: string

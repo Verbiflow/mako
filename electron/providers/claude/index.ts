@@ -1,7 +1,7 @@
 import { emitClaudeSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import { byDefault, harnessLacks, implemented, makoLacks, noOp } from "../live-capabilities.js"
-import { shownBy } from "../../contracts/harness-unique.js"
+import { shownBy } from "@mako/host/contracts/harness-unique"
 import { claudeHooks, claudeCommands } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { claudeLiveDriver } from "./live-driver.js"

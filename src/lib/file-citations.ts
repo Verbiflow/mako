@@ -1,6 +1,6 @@
 import { markdownAnchorLine } from "./markdown-headings"
 import { z } from "zod"
-import { filePreviewFormat } from "../../electron/contracts/file-preview"
+import { filePreviewFormat } from "@mako/host/contracts/file-preview"
 
 export interface FileCitation {
   path: string

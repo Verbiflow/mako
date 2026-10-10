@@ -1,7 +1,7 @@
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { assertDraftsSaved } from "@/lib/draft-persistence"
-import type { LifecycleAction, LifecycleCommand, LifecycleState, UpdateInstallation } from "../../electron/contracts/app-lifecycle"
+import type { LifecycleAction, LifecycleCommand, LifecycleState, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
 
 export const applicationStore = createStore<{
   lifecycle: LifecycleState | null

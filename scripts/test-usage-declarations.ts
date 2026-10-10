@@ -10,7 +10,7 @@ import { existsSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { CONTEXT_COMPACTED } from "@mako/sessions/events"
-import { HARNESS_USAGE_LABELS, type HarnessUsageKey } from "../electron/contracts/harness-usage.ts"
+import { HARNESS_USAGE_LABELS, type HarnessUsageKey } from "@mako/host/contracts/harness-usage"
 import { providerHost } from "../electron/providers/index.ts"
 import { decoderFor, FIXTURE_ROOT, readRecording, replayed } from "./native-decoding.ts"
 

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { devHostBuild } from "../electron/dev-host-build.ts"
-import { RuntimeInfoSchema } from "../electron/contracts/runtime.ts"
+import { RuntimeInfoSchema } from "@mako/host/contracts/runtime"
 
 const root = mkdtempSync(join(tmpdir(), "mako-host-build-"))
 try {

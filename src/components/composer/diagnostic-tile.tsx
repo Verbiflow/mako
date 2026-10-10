@@ -1,7 +1,7 @@
 import { XIcon } from "lucide-react"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { useState } from "react"
-import { diagnosticFormat } from "../../../electron/contracts/file-preview"
+import { diagnosticFormat } from "@mako/host/contracts/file-preview"
 import type { Attachment } from "@/lib/attachments"
 import { formatBytes } from "@/lib/attachments"
 import { InlineFilePreview } from "@/components/transcript/file-preview"

@@ -16,8 +16,8 @@ import {
   type HarnessUpdateCommand,
   type HarnessUpdateInfo,
   type HarnessUpdates,
-} from "./contracts/harness-updates.js"
-import { compareVersions, parseVersion } from "./contracts/runtime-version.js"
+} from "@mako/host/contracts/harness-updates"
+import { compareVersions, parseVersion } from "@mako/host/contracts/runtime-version"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { withDiscoveryProcess } from "./providers/discovery-process.js"

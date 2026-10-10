@@ -10,9 +10,9 @@ import { selectAccount } from "../electron/accounts.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
-import { signInPause } from "../electron/contracts/sign-in-hold.ts"
-import type { LiveDriverEvent, LiveRequest } from "../electron/contracts/live-conversations.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import type { LiveDriverEvent, LiveRequest } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "../electron/execution-context.ts"
 
 /**

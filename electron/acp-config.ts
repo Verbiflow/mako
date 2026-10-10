@@ -3,7 +3,7 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { z } from "zod"
-import { accessTierOfModeId } from "./contracts/access.js"
+import { accessTierOfModeId } from "@mako/host/contracts/access"
 
 export function resolveAcpConfigValue(
   option: SessionConfigOption,

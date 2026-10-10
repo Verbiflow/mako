@@ -1,8 +1,8 @@
 import { z } from "zod"
 import type { MethodTable } from "../host-methods.js"
-import type { HostEvent } from "../contracts/host-events-boot.js"
-import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
-import { ThreadIdSchema } from "../contracts/thread-identity.js"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadStore } from "../thread-store.js"
 
 const TitleSchema = z.string().max(400)

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
-import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../electron/contracts/thread-list.ts"
+import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "@mako/host/contracts/thread-list"
 import { applyThreadRef, applyThreads, threadsStore } from "../src/state/threads.ts"
 
 // A catalog larger than the rail's cap (the user's has 1,500 sessions). The

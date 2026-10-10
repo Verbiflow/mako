@@ -1,5 +1,5 @@
 import type { SDKControlGetContextUsageResponse } from "@anthropic-ai/claude-agent-sdk"
-import type { ContextBreakdown } from "../../contracts/providers-acp.js"
+import type { ContextBreakdown } from "@mako/host/contracts/providers-acp"
 
 /** Items under this many tokens add rows without telling anyone where the context went. */
 const SMALL_ITEM = 200

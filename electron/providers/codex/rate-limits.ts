@@ -1,7 +1,7 @@
 import { z } from "zod"
-import type { AccountUsage, ResetCreditOutcome, UsageBalance, UsageResetCredits, UsageWindow } from "../../contracts/accounts.js"
-import type { JsonValue } from "../../contracts/json.js"
-import { orderWindows } from "../../contracts/account-usage.js"
+import type { AccountUsage, ResetCreditOutcome, UsageBalance, UsageResetCredits, UsageWindow } from "@mako/host/contracts/accounts"
+import type { JsonValue } from "@mako/host/contracts/json"
+import { orderWindows } from "@mako/host/contracts/account-usage"
 
 /**
  * Codex's own account limits, from its app-server: `account/rateLimits/read`

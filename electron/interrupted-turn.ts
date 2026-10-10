@@ -11,7 +11,7 @@ import {
   type Interruption,
   type InterruptedCall,
   type LiveRequest,
-} from "./contracts/live-conversations.js"
+} from "@mako/host/contracts/live-conversations"
 
 /**
  * A turn cut short by a crash or a dropped connection leaves the agent

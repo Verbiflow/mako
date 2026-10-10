@@ -1,4 +1,4 @@
-import type { GitRemoteInput, GitRemoteResult, FileContents, GitCommitEntry, GitDiff, GitFile, GitCommitFile, GitStatus, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./contracts/git-workspace-search.js"
+import type { GitRemoteInput, GitRemoteResult, FileContents, GitCommitEntry, GitDiff, GitFile, GitCommitFile, GitStatus, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "@mako/host/contracts/git-workspace-search"
 import { homedir } from "node:os"
 import { ensureChatsRoot } from "./chat-folders.js"
 import { WorkspaceGit } from "./host-git.js"
@@ -6,9 +6,9 @@ import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
 import { watchOutsideGitDir, type GitDirWatch } from "./git-dir-watch.js"
-import type { Capabilities } from "./contracts/mcp-skills-integrations.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
-import type { ModelInfo, SessionMeta, SessionState, SessionSummary, ThinkingLevel } from "./contracts/conversation-session.js"
+import type { Capabilities } from "@mako/host/contracts/mcp-skills-integrations"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { ModelInfo, SessionMeta, SessionState, SessionSummary, ThinkingLevel } from "@mako/host/contracts/conversation-session"
 import { onLinux } from "./platform.js"
 
 const EMPTY_CAPABILITIES: Capabilities = { tools: [], commands: [], skills: [] }

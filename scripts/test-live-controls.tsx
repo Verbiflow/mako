@@ -2,7 +2,7 @@ import { mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/event
 import { ProposedPlanCard } from "../src/components/transcript/proposed-plan"
 import { CompactionControl } from "../src/components/composer/compaction-control"
 import { fixtureCapabilities, fixtureDeclarations } from "../src/dev/harness-fixtures"
-import { harnessLacks } from "../electron/contracts/harness-capabilities"
+import { harnessLacks } from "@mako/host/contracts/harness-capabilities"
 import { Exchange } from "../src/components/transcript/exchange"
 import { Prose } from "../src/components/transcript/markdown"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"

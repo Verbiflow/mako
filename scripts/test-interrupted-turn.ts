@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "@mako/sessions/live-content"
-import type { LiveRequest } from "../electron/contracts/live-conversations.ts"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import {
   closeCutOffCalls,
   cutOffNote,

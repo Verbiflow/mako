@@ -8,13 +8,13 @@ import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
 import { removeAccount, selectAccount } from "../electron/accounts.ts"
 import { accountRemovalSessions } from "../electron/account-removal-sessions.ts"
-import type { AccountRemovalEvent } from "../electron/contracts/accounts.ts"
+import type { AccountRemovalEvent } from "@mako/host/contracts/accounts"
 import { launchContext } from "../electron/execution-context.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 /**
  * Removing an account sessions run on, through real admission, selection

@@ -1,7 +1,7 @@
 import { acpDefaultMode, acpSessionModes } from "../acp-access.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../contracts/execution-context.js"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 
 export const ACP_NATIVE_IDENTITY = {
   kind: "unavailable",

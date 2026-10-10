@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { resolveCommitModel } from "../src/state/commit-model.ts"
-import type { UtilityModelSettings } from "../electron/contracts/utility-models.ts"
-import type { UtilityModelOption, UtilityTaskState } from "../electron/contracts/utility-work.ts"
+import type { UtilityModelSettings } from "@mako/host/contracts/utility-models"
+import type { UtilityModelOption, UtilityTaskState } from "@mako/host/contracts/utility-work"
 
 // The host decides which API key drafts commits (`UtilityWork`); the commit
 // box reads that answer: a model it can run, a chosen key that went away (so

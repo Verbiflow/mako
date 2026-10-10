@@ -1,7 +1,7 @@
 import type { SessionModel as HarnessModel } from "@mako/sessions/settings"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
-import type { ExecutionCredential } from "../contracts/execution-context.js"
+import type { ExecutionCredential } from "@mako/host/contracts/execution-context"
 
 /** Private launch environment and public credential provenance from one resolution. */
 export interface NativeLaunch {

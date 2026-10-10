@@ -1,4 +1,4 @@
-import type { AccountConfirmation, ExecutionContext, NativeIdentityCapability } from "./contracts/execution-context.js"
+import type { AccountConfirmation, ExecutionContext, NativeIdentityCapability } from "@mako/host/contracts/execution-context"
 
 export function launchContext(
   transport: string,

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
-import type { HostEvent } from "../electron/contracts/host-events-boot.js"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { followOtherHosts } from "../electron/thread-groups-follow.js"
 import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA, type SourceRef } from "../electron/thread-store.js"
 

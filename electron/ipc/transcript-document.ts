@@ -1,5 +1,5 @@
 import type { MethodTable } from "../host-methods.js"
-import type { TranscriptDocument } from "../contracts/transcript-document.js"
+import type { TranscriptDocument } from "@mako/host/contracts/transcript-document"
 import { transcriptDocument, type TranscriptDocumentDeps } from "../transcript-document.js"
 
 /** A Session's transcript for the transcript tab, read again whenever the tab asks. */

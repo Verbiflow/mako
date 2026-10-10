@@ -24,7 +24,7 @@ import type { FileContents, LiveSnapshot } from "@/lib/types"
 import {
   filePreviewFormat,
   diagnosticFormat,
-} from "../../electron/contracts/file-preview"
+} from "@mako/host/contracts/file-preview"
 import "../index.css"
 
 bindTheme()

@@ -15,11 +15,11 @@ import {
 import {
   LifecycleStateSchema,
   type LifecycleAction,
-} from "../electron/contracts/app-lifecycle.js"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
+} from "@mako/host/contracts/app-lifecycle"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 async function checkRuntime() {

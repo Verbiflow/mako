@@ -6,9 +6,9 @@ import { CodexPermissionObserver, codexApprovalEnvironment } from "../electron/p
 import { readRetainedApprovalDecisions } from "../electron/providers/retained-approval-decisions.js"
 import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
 import { handleServerRequest, resolvePermission, resolveServerRequest, type PendingServerRequest, type PermissionCallbacks } from "../electron/codex-app-permissions.js"
-import type { NativeApprovalDecision, NativeApprovalIdentity } from "../electron/contracts/approval-response.js"
-import type { LiveDriverEvent } from "../electron/contracts/live-conversations.js"
-import type { LivePermissionRequest } from "../electron/contracts/providers-acp.js"
+import type { NativeApprovalDecision, NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LivePermissionRequest } from "@mako/host/contracts/providers-acp"
 
 const root = await mkdtemp(join(tmpdir(), "mako-codex-permission-observer-"))
 const outputs: NativeApprovalDecision[] = []

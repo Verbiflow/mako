@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react"
-import type { ThreadGroup } from "../../electron/contracts/thread-groups.ts"
+import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { PromptAttachment, ThreadRef } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { getMako } from "@/lib/bridge"

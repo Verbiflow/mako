@@ -1,6 +1,6 @@
-import type { ThreadAppView } from "../../electron/contracts/thread-app"
-import type { ProjectAppSetup } from "../../electron/contracts/project-app"
-import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
+import type { ThreadAppView } from "@mako/host/contracts/thread-app"
+import type { ProjectAppSetup } from "@mako/host/contracts/project-app"
+import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
 
 /** Menu action, replaced by an ordinary portable attachment when picked. */
 export const APP_SETUP_CONTEXT = "mako:app-setup"

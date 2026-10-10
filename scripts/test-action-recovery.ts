@@ -3,7 +3,7 @@ import { z } from "zod"
 import { toast } from "sonner"
 import { performLiveAction } from "../src/state/live-actions"
 import type { LiveSnapshot } from "../src/lib/types"
-import type { LiveAction } from "../electron/contracts/live-actions"
+import type { LiveAction } from "@mako/host/contracts/live-actions"
 
 const id = "11111111-1111-4111-8111-111111111111"
 const input = { kind: "compact", id } as const

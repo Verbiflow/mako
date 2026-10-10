@@ -3,7 +3,7 @@ import { ApplicationLifecycle } from "../electron/application-lifecycle.js"
 import type {
   LifecycleAction,
   LifecycleWork,
-} from "../electron/contracts/app-lifecycle.js"
+} from "@mako/host/contracts/app-lifecycle"
 
 const first: LifecycleWork = {
   id: "one",

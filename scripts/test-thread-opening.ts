@@ -1,7 +1,7 @@
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
-import { createMakoBridge } from "../electron/contracts/renderer-bridge.ts"
-import { type ThreadPage, type ThreadRef } from "../electron/contracts/conversation-session.ts"
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
+import { type ThreadPage, type ThreadRef } from "@mako/host/contracts/conversation-session"
 import {
   loadThreadBlock,
   recoverThreadReader,

@@ -1,5 +1,5 @@
 import type { AcpTurnResult } from "./acp-prompt-turn.js"
-import type { LiveSessionState } from "./contracts/providers-acp.js"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 /**
  * What a finished turn means for the session: a turn the agent completed is

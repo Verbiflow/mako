@@ -1,4 +1,4 @@
-import { diagnosticFormat, officeFormat } from "./contracts/file-preview.js"
+import { diagnosticFormat, officeFormat } from "@mako/host/contracts/file-preview"
 import { fileContentType, mediaForContentType } from "./file-media.js"
 import { providerHost } from "./providers/index.js"
 import { artifactDocument, previewsFile } from "./providers/artifact-preview.js"
@@ -23,7 +23,7 @@ import {
   resolve,
   sep,
 } from "node:path"
-import type { FileContents, StagedFile, WorkspaceFile } from "./contracts/git-workspace-search.js"
+import type { FileContents, StagedFile, WorkspaceFile } from "@mako/host/contracts/git-workspace-search"
 import { WorkspaceGit } from "./host-git.js"
 
 /**

@@ -1,11 +1,11 @@
-import { filePreviewFormat } from "../../electron/contracts/file-preview"
+import { filePreviewFormat } from "@mako/host/contracts/file-preview"
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { anchorLine } from "@/lib/file-citations"
 import { acpStore } from "@/state/acp-state"
 import type { ProposedPlan } from "@mako/sessions/content"
 import type { FileContents, GitDiff } from "@/lib/types"
-import type { TranscriptDepth, TranscriptSource } from "../../electron/contracts/transcript-document.ts"
+import type { TranscriptDepth, TranscriptSource } from "@mako/host/contracts/transcript-document"
 
 /**
  * Files open for reading in the renderer workbench.

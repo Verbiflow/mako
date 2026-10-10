@@ -1,5 +1,5 @@
 import { useAcp, activeLiveAcp } from "@/state/acp"
-import { describeActionRecovery } from "../../../electron/contracts/operation-recovery"
+import { describeActionRecovery } from "@mako/host/contracts/operation-recovery"
 import { acknowledgeLiveAction } from "@/state/live-actions"
 import { Notice, NoticeAction, type NoticeTone } from "@/components/ui/notice"
 

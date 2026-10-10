@@ -47,7 +47,7 @@ import {
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import type { NativeRunner } from "../electron/providers/native-runner.ts"
-import type { HarnessProfile } from "../electron/contracts/providers-acp.ts"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { ProviderRegistry } from "../electron/providers/registry.ts"
 
 async function waitFor(check: () => boolean): Promise<void> {

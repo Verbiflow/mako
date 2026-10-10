@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { grokPlanId, grokProposedPlan } from "@mako/sessions/harnesses"
 import { PLAN_APPROVAL_TITLE } from "../../acp-decoder.js"
-import type { JsonObject } from "../../contracts/json.js"
+import type { JsonObject } from "@mako/host/contracts/json"
 import type { AcpAsk, AcpVendorRequest, AcpVendorRequests } from "../acp-source.js"
 import { folderTrustRequest, GROK_FOLDER_TRUST_METHOD } from "./folder-trust.js"
 import { GROK_QUESTION_METHOD, questionRequest } from "./questions.js"

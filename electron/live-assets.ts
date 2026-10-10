@@ -12,7 +12,7 @@ import {
 } from "node:fs"
 import { join, relative, isAbsolute } from "node:path"
 import type { AttachmentContent } from "@mako/sessions"
-import type { PromptAttachment } from "./contracts/providers-acp.js"
+import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 
 export function promptFingerprint(

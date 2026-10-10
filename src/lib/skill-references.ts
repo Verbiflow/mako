@@ -1,7 +1,7 @@
 import {
   UNIVERSAL_SKILL_PROVIDER,
   skillDeliveryFor,
-} from "../../electron/contracts/skill-reach"
+} from "@mako/host/contracts/skill-reach"
 import { harnessTitle } from "./harness-title"
 import { tokenize } from "./mentions"
 import type {

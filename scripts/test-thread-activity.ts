@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
-import type { ExternalThreadActivity } from "../electron/contracts/host-events-boot.ts"
+import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import {
   WRITE_ACTIVE_MS,
   deriveActivity,

@@ -3,9 +3,9 @@ import { mock } from "node:test"
 import { TranscriptReaders, transcriptReaders, liveReadingSource, nativeReadingSource } from "../src/state/transcript-reading"
 import { LiveHistoryReader } from "../electron/live-history-reader"
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
-import { liveContentWeight } from "../electron/contracts/residency"
-import type { LiveSnapshot } from "../electron/contracts/live-conversations"
-import type { LiveHistoryRead } from "../electron/contracts/live-history"
+import { liveContentWeight } from "@mako/host/contracts/residency"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { LiveHistoryRead } from "@mako/host/contracts/live-history"
 import type { ThreadPage, ThreadEntry } from "../src/lib/types"
 
 let now = 100

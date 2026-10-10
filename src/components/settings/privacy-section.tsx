@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { ListCard, SettingRow, Toggle } from "@/components/ui/kit"
 import { telemetry } from "@/state/telemetry"
-import type { TelemetryChoice, TelemetryOff, TelemetryState } from "../../../electron/contracts/telemetry.ts"
+import type { TelemetryChoice, TelemetryOff, TelemetryState } from "@mako/host/contracts/telemetry"
 
 const OFF = {
   environment: "Off: DO_NOT_TRACK or MAKO_TELEMETRY is set where Mako runs.",

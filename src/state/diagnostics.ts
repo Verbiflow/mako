@@ -1,5 +1,5 @@
-import type { CrashReport } from "../../electron/contracts/crash-report.ts"
-import type { ProviderResidencySnapshot } from "../../electron/contracts/provider-residency.ts"
+import type { CrashReport } from "@mako/host/contracts/crash-report"
+import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
 import { getMako } from "@/lib/bridge"
 
 export const diagnostics = {

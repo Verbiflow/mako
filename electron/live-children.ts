@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import type { LiveSnapshot } from "./contracts/live-conversations.js"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { LiveRequestSchema } from "./live-journal.js"
 import { contextPrompt, prepareLiveContext } from "./live-context.js"
 import { errorMessage } from "./live-runtime.js"

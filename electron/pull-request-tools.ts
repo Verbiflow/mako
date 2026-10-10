@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
-import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "./contracts/git-actions.js"
+import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "@mako/host/contracts/git-actions"
 import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, type PullRequestDraft } from "./pull-requests.js"
 import { toolText } from "./tool-text.js"
 

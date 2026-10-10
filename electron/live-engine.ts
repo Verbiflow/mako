@@ -3,22 +3,22 @@ import { isDeepStrictEqual } from "node:util"
 import type {
   ApprovalSubmission,
   ApprovalEndSource,
-} from "./contracts/approval-response.js"
-import type { LiveDriverEvent } from "./contracts/live-conversations.js"
-import type { LivePermissionRequest, LivePermissionResponse, LiveSessionState } from "./contracts/providers-acp.js"
+} from "@mako/host/contracts/approval-response"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LivePermissionRequest, LivePermissionResponse, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"
-import type { NativeActivityObservation, NativeNotice } from "./contracts/native-activity.js"
-import type { NativeAgentObservation } from "./contracts/native-agents.js"
+import type { NativeActivityObservation, NativeNotice } from "@mako/host/contracts/native-activity"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import {
   compactionEvent,
   type Compaction,
   type TranscriptEvent,
 } from "@mako/sessions/events"
-import type { JsonValue } from "./contracts/json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 import {
   decodedNotices,
   type DecodedSink,
-} from "./contracts/native-decoding.js"
+} from "@mako/host/contracts/native-decoding"
 import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "./native-unknown.js"
 
 /** What a live engine's per-session record must carry to share the runtime. */
@@ -88,7 +88,7 @@ export interface LiveEngineApi<Live extends EngineLive> {
     live: Live,
     handlers: {
       effect(effect: Effect): void
-      usage?(windows: import("./contracts/accounts.js").UsageWindow[]): void
+      usage?(windows: import("@mako/host/contracts/accounts").UsageWindow[]): void
     }
   ): DecodedSink<Effect>
   /**

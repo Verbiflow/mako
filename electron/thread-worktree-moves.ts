@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { ForkInput } from "./contracts/conversation-control.js"
-import type { HostEvent } from "./contracts/host-events-boot.js"
-import type { LiveSnapshot } from "./contracts/live-conversations.js"
+import type { ForkInput } from "@mako/host/contracts/conversation-control"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { moveIntoWorktree, type ConversationMoveDeps, type MovedConversation } from "./conversation-move.js"
 import type { LiveConversations } from "./live-conversations.js"
-import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "./contracts/workspace-moves.js"
+import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "@mako/host/contracts/workspace-moves"
 import type { MoveSource, WorkspaceMoves } from "./workspace-moves.js"
 
 type WorkspaceMoved = Extract<HostEvent, { type: "workspace-moved" }>

@@ -4,7 +4,7 @@ import { mock } from "node:test"
 import { setImmediate as tick } from "node:timers/promises"
 import { toast } from "sonner"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
-import { RuntimeDisconnectedError } from "../electron/contracts/host-connection"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
 const { installMockBridge } = await import("../src/dev/mock-bridge")

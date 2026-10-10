@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { setTimeout as delay } from "node:timers/promises"
 import { GrokAgents } from "../electron/providers/grok/agents.ts"
-import type { NativeAgentObservation } from "../electron/contracts/native-agents.ts"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 const home = await mkdtemp(join(tmpdir(), "mako-grok-children-"))
 const parent = "01a0c67a-f346-7541-9a4e-644eb37a64f4"

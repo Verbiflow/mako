@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { RadioGroup } from "radix-ui"
 import { CheckIcon, ChevronRightIcon, FolderIcon, GitBranchIcon, GitPullRequestIcon, LoaderCircleIcon, XIcon } from "lucide-react"
-import { WORKTREE_BRANCH_PREFIX, worktreeSlug, type WorktreeStartPoint } from "../../../electron/contracts/thread-worktrees.ts"
+import { WORKTREE_BRANCH_PREFIX, worktreeSlug, type WorktreeStartPoint } from "@mako/host/contracts/thread-worktrees"
 import { Keys } from "@/components/ui/kit"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { formatChord } from "@/extend/commands"

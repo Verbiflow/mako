@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
 import { basename, dirname, join, resolve } from "node:path"
-import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "./contracts/checkout-heads.js"
+import type { CheckoutHead, CheckoutHeads, LinkedCheckout } from "@mako/host/contracts/checkout-heads"
 
 /** Checkouts followed at once; the one asked about longest ago is let go first. */
 const MAX_CHECKOUTS = 48

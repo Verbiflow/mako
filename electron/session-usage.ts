@@ -1,4 +1,4 @@
-import type { LiveSessionUsage, NativeTotals, TokenCounts } from "./contracts/providers-acp.js"
+import type { LiveSessionUsage, NativeTotals, TokenCounts } from "@mako/host/contracts/providers-acp"
 
 /**
  * What a harness can say about usage, in its own unit. Harnesses report
