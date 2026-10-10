@@ -59,7 +59,8 @@ export class PackagedApp {
       const id = ++this.counter
       const timer = setTimeout(() => {
         this.callbacks.delete(id)
-        reject(new Error(`Timed out: ${method}`))
+        const what = params.expression ?? params.text
+        reject(new Error(`Timed out: ${method}${what ? ` of ${what.replace(/\s+/g, " ").slice(0, 200)}` : ""}`))
       }, 120_000)
       this.callbacks.set(id, (message) => {
         clearTimeout(timer)
