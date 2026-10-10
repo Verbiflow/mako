@@ -130,11 +130,13 @@ export const grokAcpSource: ProviderAcpSource = {
   },
   questions: { kind: "request", via: "`_x.ai/ask_user_question` requests from the `ask_user_question` tool." },
   // grok 1.0.46 writes chat_history.jsonl from the first prompt and updates.jsonl
-  // when a turn ends, so a session saved mid-turn names the other file.
+  // when a turn ends, so a session saved mid-turn names the other file. The
+  // store is Grok's sessions folder: the launch directory's folder under it
+  // only files the session, and moving into another one (`elsewhere`) keeps it.
   nativeSource: (path, nativeId) => {
     const folder = dirname(path)
     return GROK_TRANSCRIPTS.includes(basename(path)) && basename(folder) === nativeId
-      ? { path: folder, record: `grok-session:${nativeId}` } : undefined
+      ? { path: dirname(dirname(folder)), record: `grok-session:${nativeId}` } : undefined
   },
   provider: "grok",
   approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
