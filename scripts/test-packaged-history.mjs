@@ -75,10 +75,16 @@ async function checkReadingAndDraft(item) {
   await command('Page.bringToFront')
   await until(() => evaluate('document.hasFocus()'), `${item.provider} focused verification window`)
   const first = await evaluate(`document.querySelector('[data-exchange]')?.textContent.slice(0,300)`)
-  const scroll = await evaluate(`(()=>{const s=[...document.querySelectorAll('.scroll-fade-scroller')].find(s=>s.querySelector('[data-exchange]'));s.scrollTop=1;const r=s.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+100}})()`)
-  await command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...scroll, deltaX: 0, deltaY: -650 })
+  const scroll = await evaluate(`(()=>{const s=[...document.querySelectorAll('.scroll-fade-scroller')].find(s=>s.querySelector('[data-exchange]'));const r=s.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+100}})()`)
+  const wheelUp = () => command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...scroll, deltaX: 0, deltaY: -650 })
+  // Climb with the wheel, as a reader does. Setting scrollTop isn't a reader's
+  // intent, so the transcript keeps following its end and never pages.
   if (item.expectedBlocks + item.expectedEntries > 80)
-    await until(() => evaluate(`document.querySelector('[data-exchange]')?.textContent.slice(0,300) !== ${JSON.stringify(first)}`), `${item.provider} earlier content after scrolling`)
+    await until(async () => {
+      await wheelUp()
+      return evaluate(`document.querySelector('[data-exchange]')?.textContent.slice(0,300) !== ${JSON.stringify(first)}`)
+    }, `${item.provider} earlier content after scrolling`)
+  else await wheelUp()
   await capture(`${proof}-${item.provider}-earlier.png`)
   await evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Jump to latest'));button?.click()})()`)
   await delay(350)
