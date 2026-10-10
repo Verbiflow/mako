@@ -97,6 +97,13 @@ import { liveContentWeight, residencyPlan, type ResidencyPlan } from "./contract
 import type { JournalFacts, SourceRef } from "./thread-store.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "./contracts/thread-identity.js"
 
+/**
+ * Whether a conversation can go on in another folder under its own native
+ * session: `now`; `wait`, for something in it that ends by itself or by the
+ * person; or `never`, so moving it means a fork. `reason` reads after its title.
+ */
+export type Relocation = { kind: "now" } | { kind: "wait" | "never"; reason: string }
+
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
 /**
@@ -138,6 +145,7 @@ export class LiveConversations {
   // it must not hold shutdown open while waiting on an external native store.
   private readonly refreshes = new Map<string, Promise<LiveSnapshot>>()
   private readonly starts = new Map<string, Promise<LiveSessionState>>()
+  private readonly relocationWaiters = new Set<() => void>()
   private readonly recovered = new Map<string, LiveSummary>()
   /** What each journal last told the Thread store, so a flush registers only news. */
   private readonly registeredThreads = new Map<string, string>()
@@ -171,7 +179,10 @@ export class LiveConversations {
       control: (resident) => this.control(resident),
       flush: (resident) => this.flush(resident),
       drain: (resident) => this.drain(resident),
-      residencyChanged: (resident) => this.scheduleHibernation(resident),
+      residencyChanged: (resident) => {
+        this.scheduleHibernation(resident)
+        this.relocationMayChange(resident)
+      },
       driverEvents: (resident, bindingId) =>
         this.driverEvents(resident, bindingId),
       nativeStart: (resident, driver, bindingId, start) =>
@@ -637,7 +648,7 @@ export class LiveConversations {
    */
   async relocate(id: string, cwd: string): Promise<string | undefined> {
     const resident = this.load(id)
-    if (!resident || !this.relocates(resident)) return undefined
+    if (!resident || this.relocates(resident).kind !== "now") return undefined
     const from = resident.snapshot.session.cwd
     if (from === cwd) return from
     if (resident.driver) await this.hibernate(resident, "workspace-move")
@@ -683,19 +694,53 @@ export class LiveConversations {
     hostLog("residency", "conversation returned from a removed worktree", { conversation: resident.snapshot.session.id, from, to })
   }
 
-  /** Whether `relocate` would move this conversation now. */
-  relocatable(id: string): boolean {
+  /** Whether `relocate` would move this conversation now, and if not, why. */
+  relocation(id: string): Relocation {
     const resident = this.load(id)
-    return Boolean(resident && this.relocates(resident))
+    return resident ? this.relocates(resident) : { kind: "never", reason: "isn't open" }
   }
 
-  private relocates(resident: Resident): boolean {
+  /**
+   * `relocation` once nothing in the conversation holds it any longer, or
+   * after `ms` as it is then.
+   */
+  async relocationWithin(id: string, ms: number): Promise<Relocation> {
+    const deadline = Date.now() + ms
+    let relocation = this.relocation(id)
+    while (relocation.kind === "wait" && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer)
+          this.relocationWaiters.delete(done)
+          resolve()
+        }
+        const timer = setTimeout(done, deadline - Date.now())
+        this.relocationWaiters.add(done)
+      })
+      relocation = this.relocation(id)
+    }
+    return relocation
+  }
+
+  private relocates(resident: Resident): Relocation {
+    const { session } = resident.snapshot
     const binding = this.activeBinding(resident)
     const driver = this.dependencies.driver(binding?.provider ?? "")
-    if (resident.snapshot.session.status === "closed" || !binding?.nativeId || !binding.path) return false
-    if (driver?.resume.kind !== "native" || !driver.resume.elsewhere) return false
-    return resident.driver ? this.canHibernate(resident)
-      : !resident.waking && !resident.opening && !resident.closing && ["hibernated", "disconnected"].includes(resident.snapshot.session.connection)
+    if (session.status === "closed") return { kind: "never", reason: "is closed" }
+    if (!binding?.nativeId || !binding.path) return { kind: "never", reason: "has no native session to resume yet" }
+    if (driver?.resume.kind !== "native" || !driver.resume.elsewhere)
+      return { kind: "never", reason: `runs on ${binding.provider}, which doesn't resume a session in another folder` }
+    const busy = this.moves.busy(resident)
+    if (busy) return { kind: "wait", reason: busy }
+    if (!resident.driver && !["hibernated", "disconnected"].includes(session.connection))
+      return { kind: "never", reason: `is ${session.connection}` }
+    return { kind: "now" }
+  }
+
+  /** Something that holds a move may have cleared: waiters look again, and so does the host. */
+  private relocationMayChange(resident: Resident): void {
+    for (const wake of this.relocationWaiters) wake()
+    this.dependencies.settled?.(resident.snapshot.session.id)
   }
 
   hibernateIfIdle(id: string, reason = "explicit"): boolean {
@@ -4031,6 +4076,7 @@ export class LiveConversations {
             : undefined,
       },
     })
+    this.relocationMayChange(resident)
     if (
       previous.session.status === "running" &&
       snapshot.session.status === "ready"

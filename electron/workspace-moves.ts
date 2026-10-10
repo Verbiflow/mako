@@ -10,6 +10,8 @@ export interface MoveSource {
   title?: string
   /** In the middle of a turn, or holding prompts that will start one. */
   busy: boolean
+  /** What else keeps it from moving as it is, read after its title; see `LiveConversations.relocation`. */
+  waiting?: string
 }
 
 export type MovePlace = { project: string; joins?: string; changed: number } | { refused: string }
@@ -147,6 +149,17 @@ export class WorkspaceMoves {
     const source = this.deps.source(conversationId)
     const companions = source ? this.deps.companions(conversationId).filter((id) => !this.moving.has(id)) : []
     if (source?.busy || companions.some((id) => this.deps.source(id)?.busy)) return
+    const request = this.requests.get(conversationId)
+    const waiting = source && [[conversationId, source] as const, ...companions.map((id) => [id, this.deps.source(id)] as const)]
+      .flatMap(([id, held]) => held?.waiting ? [`${id === conversationId ? "this session" : held.title ? `“${held.title}”` : "another session"} ${held.waiting}`] : [])
+      .join("; ")
+    if (waiting) {
+      if (request && request.waiting !== waiting) {
+        request.waiting = waiting
+        this.announce()
+      }
+      return
+    }
     this.requests.delete(conversationId)
     if (!source) {
       this.announce()

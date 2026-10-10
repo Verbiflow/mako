@@ -788,7 +788,6 @@ function emit(event: HostEvent, client?: string) {
   noteSpend(event)
   if (event.type === "threads" || event.type === "thread-ref")
     liveConversations?.discoverNativePaths()
-  if (event.type === "live-batch") workspaceMoves?.settled(event.batch.id)
   if (event.type === "thread-run" && event.run.status !== "running")
     nativeRequests?.ready(event.run.path)
   // Git status is recomputed after every turn and on focus, which is exactly
@@ -1912,6 +1911,7 @@ void (async () => {
     },
     resumeVerdict: assessResume,
     projectFolderOfRemoved,
+    settled: (id) => workspaceMoves?.settled(id),
     appPath: environment.appRoot,
     root: join(environment.dataRoot, "conversations"),
     tools: async (bindingId, conversationId) => {
@@ -2000,6 +2000,8 @@ void (async () => {
         busy: session.status === "starting" || session.status === "running" ||
           snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching"),
       }
+      const relocation = liveConversations.relocation(id)
+      if (relocation.kind === "wait") source.waiting = relocation.reason
       if (session.title) source.title = session.title
       return source
     },

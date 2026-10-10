@@ -139,6 +139,30 @@ try {
   await delay(0)
   assert.equal(moves.answerFor("c"), undefined)
 
+  // The turn ended but something else is still going on: the move waits, and the card says on what.
+  sources.set("w", { cwd: project, harness: "codex", title: "Wait", busy: false, waiting: "is saving or rewinding its workspace" })
+  sources.set("helper", { cwd: project, harness: "claude", title: "Helper", busy: false })
+  companions.set("w", ["helper"])
+  await moves.ask("w")
+  const waits = moves.state().requests.find((candidate) => candidate.conversationId === "w")!
+  const shown = announced.length
+  moves.answer(waits.id, "allow")
+  assert.deepEqual(moved, ["c"], "a checkpoint still being saved holds the move")
+  assert.equal(moves.state().requests.find((candidate) => candidate.id === waits.id)?.waiting, "this session is saving or rewinding its workspace")
+  assert.ok(announced.length > shown, "the card learns what it waits for")
+  sources.set("w", { ...sources.get("w")!, waiting: undefined })
+  sources.set("helper", { ...sources.get("helper")!, waiting: "has background tasks running" })
+  moves.settled("w")
+  assert.deepEqual(moved, ["c"], "so does a companion's background task")
+  assert.equal(moves.state().requests.find((candidate) => candidate.id === waits.id)?.waiting, "“Helper” has background tasks running")
+  sources.set("helper", { ...sources.get("helper")!, waiting: undefined })
+  moves.settled("helper")
+  await delay(0)
+  await delay(0)
+  assert.deepEqual(moved, ["c", "w", "helper follows"], "once nothing holds it, it moves")
+  companions.clear()
+  moved.length = 1
+
   // Don't allow: the card goes, and the agent's status says so.
   sources.set("d", { cwd: project, harness: "codex", busy: true })
   await moves.ask("d")

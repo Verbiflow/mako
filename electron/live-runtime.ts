@@ -115,6 +115,8 @@ export interface Dependencies {
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
   /** The same folder in the project a since-removed worktree holding `cwd` was made from; undefined while `cwd` is there. */
   projectFolderOfRemoved?(cwd: string): string | undefined
+  /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
+  settled?(conversationId: string): void
   driver(provider: string): ProviderLiveDriver | undefined
   /** Writes a conversation into the provider's own session store; null when it has no writer. */
   emitSession?(provider: string, thread: Thread): Promise<EmitResult | null>

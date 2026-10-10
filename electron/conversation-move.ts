@@ -5,8 +5,11 @@ import type { LiveSnapshot } from "./contracts/live-conversations.js"
 import type { LiveConversations } from "./live-conversations.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 
+/** How long a move waits for what Mako is finishing in the conversation, such as the checkpoint after a turn. */
+const SETTLE_MS = 15_000
+
 export interface ConversationMoveDeps {
-  conversations: Pick<LiveConversations, "snapshot" | "relocatable" | "relocate" | "resumeMoved" | "fork">
+  conversations: Pick<LiveConversations, "snapshot" | "relocationWithin" | "relocate" | "resumeMoved" | "fork">
   worktrees: Pick<ThreadWorktreeService, "joinFolder" | "prepareFork" | "moveChanges" | "attach" | "abandon">
   warn(message: string, facts: Record<string, string>): void
 }
@@ -64,8 +67,10 @@ async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: st
  * goes on in another folder (`resume.elsewhere`) and the move goes on from
  * its last answer: the session resumes there before this returns, once the
  * worktree is the Thread's, so it starts with the worktree's environment.
- * Otherwise, or when that resume fails, as a fork from `input`'s point with
- * its transcript, the conversation left as it was in its own folder.
+ * Something still going on in it, such as background tasks, refuses the move
+ * rather than splitting the conversation. Otherwise, or when that resume
+ * fails, as a fork from `input`'s point with its transcript, the conversation
+ * left as it was in its own folder.
  */
 export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput, project?: string): Promise<MovedConversation> {
   const fork = async (project?: string) => {
@@ -74,7 +79,12 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
     return forked
   }
   const last = deps.conversations.snapshot(id)?.requests.filter((request) => request.status === "completed").at(-1)
-  if (!input.move || input.point.kind !== "run" || input.point.requestId !== last?.id || !deps.conversations.relocatable(id)) {
+  const moves = input.move && input.point.kind === "run" && input.point.requestId === last?.id
+  const relocation = moves ? await deps.conversations.relocationWithin(id, SETTLE_MS) : undefined
+  if (relocation?.kind === "wait")
+    throw new Error(`This session ${relocation.reason}, so it can't move onto its own branch yet. Move it once that's done.`)
+  if (relocation?.kind !== "now") {
+    if (relocation) deps.warn("the conversation can't go on in another folder, so it was forked into the worktree", { conversation: id, reason: relocation.reason })
     const forked = await fork(project)
     return { conversation: forked.entered, moved: forked.moved, relocated: false }
   }
@@ -83,6 +93,7 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
     return from === undefined ? undefined : { from }
   })
   if (!placed) {
+    deps.warn("the conversation got busy while its worktree was made, so it was forked there", { conversation: id, reason: "busy before it moved" })
     const forked = await fork(project)
     return { conversation: forked.entered, moved: forked.moved, relocated: false }
   }

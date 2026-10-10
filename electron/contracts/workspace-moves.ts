@@ -19,6 +19,8 @@ export interface WorkspaceMoveRequest {
   /** The Thread's other Sessions in the same checkout, which move with it. */
   companions?: number
   state: "asking" | "allowed"
+  /** Once the turns ended, what an allowed move still waits for, such as background tasks. */
+  waiting?: string
 }
 
 export interface WorkspaceMoves {

@@ -210,7 +210,8 @@ export class LiveMoves {
     return residents
   }
 
-  private busy(resident: Resident): string | undefined {
+  /** What keeps this Session's provider from pausing now, as a predicate after its name; undefined when nothing does. */
+  busy(resident: Resident): string | undefined {
     const { snapshot } = resident
     const control = this.access.control(resident)
     if (resident.opening || resident.waking) return "is starting"
