@@ -185,7 +185,9 @@ export class SharedConversations {
     const value = await invokeRuntime(route.socket, this.client, channel, args, 1, { history: hostHistoryPaging() })
     if (channel === "mako:live-fork") {
       const fork = snapshotIdentity.parse(value)
-      const input = z.object({ id: z.string(), provider: z.string() }).parse(args[1])
+      const input = z.object({ id: z.string(), provider: z.string(), move: z.boolean().optional() }).parse(args[1])
+      // A move goes on as the same conversation when its harness resumes it in the worktree.
+      if (input.move && fork.session.id === id) return { handled: true, value }
       if (fork.session.id !== input.id || fork.session.harness !== input.provider)
         throw new Error("The conversation owner returned a different fork")
       // A fork has a journal before it has a native provider session. Record
