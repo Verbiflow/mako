@@ -82,7 +82,13 @@ export type HostEventBody =
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
   /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
-  | { type: "workspace-moved"; from: string; to: string; branch?: string; changed: number }
+  | {
+      type: "workspace-moved"; from: string; to: string; branch?: string; changed: number
+      /** Its agent was sent a message to carry on there; false for a Session that followed quietly. Older hosts leave it out, and told every one. */
+      told?: boolean
+      /** For a Session that followed another into the worktree: where that one goes on, and this one's title. */
+      lead?: string; title?: string
+    }
   | { type: "live-batch"; batch: LiveBatch }
   | { type: "live-owner-connection"; ids: string[]; connected: boolean }
   | { type: "session"; session: SessionState }

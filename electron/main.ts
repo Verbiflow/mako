@@ -80,11 +80,11 @@ import { installWorkspaceMovesIpc } from "./ipc/workspace-moves.js"
 import { installPlanBuildsIpc } from "./ipc/plan-builds.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { installTranscriptDocumentIpc } from "./ipc/transcript-document.js"
-import { WorkspaceMoves, type MoveSource } from "./workspace-moves.js"
+import { WorkspaceMoves } from "./workspace-moves.js"
 import { moveablePlace, within, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
-import { moveIntoWorktree as moveConversation, type MovedConversation } from "./conversation-move.js"
+import { moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
 import { projectRecipe } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { installThreadAppIpc } from "./ipc/thread-app.js"
@@ -670,80 +670,12 @@ function emitTerminalWake() {
   webHost?.terminal({ type: "wake" })
 }
 
-const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}/`)
+/** The Thread's Sessions moving into its worktree; made once the conversations and the Thread store are open. */
+let worktreeMoves: ThreadWorktreeMoves | undefined
 
-/**
- * The Thread's other open Sessions editing in the same checkout as this
- * one, in a folder around it or inside it. Archived ones, such as those a
- * move left behind, and those in the Thread's worktree already stay put.
- */
-function threadCompanions(id: string): string[] {
-  const placed = threadStore?.journalPlacement(id)
-  const cwd = liveConversations.session(id)?.cwd
-  if (!placed || !cwd) return []
-  const worktree = threadWorktrees?.threadCheckout(id)?.path
-  return liveConversations.summaries()
-    .filter(({ session, threadId }) => session.id !== id && threadId === placed.thread && session.status !== "closed" &&
-      (holds(cwd, session.cwd) || holds(session.cwd, cwd)) && !(worktree && holds(worktree, session.cwd)) &&
-      !threadLifecycle.controls({ kind: "live", id: session.id }).archived)
-    .map(({ session }) => session.id)
-}
-
-/** Where a Thread's move starts from: the outermost folder among this Session's and its companions', so the worktree is the whole project's. */
-function moveProject(id: string): string | undefined {
-  const cwd = liveConversations.session(id)?.cwd
-  if (!cwd) return undefined
-  return threadCompanions(id)
-    .map((other) => liveConversations.session(other)?.cwd ?? cwd)
-    .reduce((outer, folder) => holds(folder, outer) ? folder : outer, cwd)
-}
-
-/** Move a conversation into its Thread's worktree (`conversation-move.ts`). */
-function moveIntoWorktree(id: string, input: ForkInput, project?: string): Promise<MovedConversation> {
-  if (!threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
-  return moveConversation({ conversations: liveConversations, worktrees: threadWorktrees, warn: (message, facts) => hostWarn("workspace", message, facts) }, id, input, project)
-}
-
-/**
- * The move an agent asked for and the user allowed, once its turn and its
- * companions' ended: the Session goes on in the Thread's worktree, and the
- * agent is told where it is now. A fork leaves the Session it came from
- * archived. A companion (`asked` false) follows quietly, starting no turn.
- */
-async function moveOntoOwnBranch(id: string, asked = true): Promise<void> {
-  const source = liveConversations.snapshot(id)
-  if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
-  const last = source.requests.filter((request) => request.status === "completed").at(-1)
-  if (!last) throw new Error(asked
-    ? "The agent's turn didn't finish, so it didn't move onto its own branch. Move it from the composer once it has an answer."
-    : `“${source.session.title || "Untitled conversation"}” stayed in the main checkout: it has no answer yet to go on from in the worktree.`)
-  const { conversation, moved, relocated } = await moveIntoWorktree(id, {
-    id: crypto.randomUUID(),
-    provider: source.session.harness,
-    point: { kind: "run", requestId: last.id },
-    thread: "parent",
-    worktree: true,
-    move: true,
-  }, asked ? moveProject(id) : undefined)
-  if (!relocated)
-    emit({ type: "thread-archives", snapshot: threadLifecycle.archive({ id: crypto.randomUUID(), target: { kind: "live", id }, archived: true }) })
-  const branch = threadWorktrees?.ofConversation(conversation.session.id)?.branch
-  const event: Extract<HostEvent, { type: "workspace-moved" }> = { type: "workspace-moved", from: id, to: conversation.session.id, changed: moved }
-  if (branch) event.branch = branch
-  emit(event)
-  if (!asked) return
-  const came = moved ? ` The ${moved === 1 ? "uncommitted file" : `${moved} uncommitted files`} from the project folder came with you.` : ""
-  const tuning = await resolveHarnessLaunch(conversation.session.harness, conversation.session.cwd, last.tuning)
-  liveConversations.submit(
-    conversation.session.id,
-    crypto.randomUUID(),
-    `You're on this Thread's own branch now${branch ? `, ${branch}` : ""}, in ${conversation.session.cwd}.${came} Work there from now on, and carry on where you left off.`,
-    [],
-    tuning,
-    undefined,
-    undefined,
-    { kind: "service", name: "workspace" }
-  )
+function worktreeMove(): ThreadWorktreeMoves {
+  if (!worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
+  return worktreeMoves
 }
 
 /** Live sessions mid-turn, by id, with the harness that is spending. */
@@ -1577,7 +1509,9 @@ function bindIpc() {
       liveConversations.acknowledgeAction(id, actionId)
   )
   handle("mako:live-fork", async (_event, id: string, input: ForkInput) => {
-    const fork = input.worktree ? (await moveIntoWorktree(id, input)).conversation : await liveConversations.fork(id, input)
+    const fork = !input.worktree ? await liveConversations.fork(id, input)
+      : input.move && workspaceMoves ? (await workspaceMoves.moveNow(id, (told) => worktreeMove().carry(id, { lead: true, tell: told, input }))).moved
+        : (await worktreeMove().move(id, input)).conversation
     hostTelemetry?.feature("thread.forked", liveConversations.session(id)?.harness)
     return fork
   })
@@ -1988,27 +1922,23 @@ void (async () => {
     }
   )
   trace("journals ready")
+  if (threadWorktrees) worktreeMoves = new ThreadWorktreeMoves({
+    conversations: liveConversations,
+    worktrees: threadWorktrees,
+    threadOf: (id) => threadStore?.journalPlacement(id)?.thread,
+    archived: (id) => threadLifecycle.controls({ kind: "live", id }).archived,
+    archive: (id) => emit({ type: "thread-archives", snapshot: threadLifecycle.archive({ id: crypto.randomUUID(), target: { kind: "live", id }, archived: true }) }),
+    moved: (event) => emit(event),
+    launch: resolveHarnessLaunch,
+    warn: (message, facts) => hostWarn("workspace", message, facts),
+  })
   const moves = new WorkspaceMoves({
     file: join(environment.dataRoot, "workspace-moves.json"),
-    source: (id) => {
-      const snapshot = liveConversations.snapshot(id)
-      if (!snapshot || snapshot.session.status === "closed") return undefined
-      const { session } = snapshot
-      const source: MoveSource = {
-        cwd: session.cwd,
-        harness: session.harness,
-        busy: session.status === "starting" || session.status === "running" ||
-          snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching"),
-      }
-      const relocation = liveConversations.relocation(id)
-      if (relocation.kind === "wait") source.waiting = relocation.reason
-      if (session.title) source.title = session.title
-      return source
-    },
-    companions: threadCompanions,
-    place: (id, cwd) => moveablePlace(threadWorktrees, id, moveProject(id) ?? cwd),
-    move: (id) => moveOntoOwnBranch(id),
-    follow: (id) => moveOntoOwnBranch(id, false),
+    source: (id) => moveSource(liveConversations, id),
+    companions: (id) => worktreeMoves?.companions(id) ?? [],
+    place: (id, cwd) => moveablePlace(threadWorktrees, id, worktreeMoves?.project(id) ?? cwd),
+    move: async (id) => (await worktreeMove().carry(id, { lead: true, tell: true })).session.id,
+    follow: async (id, told, lead) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (_id, message) => emit({ type: "notice", level: "error", message }),
   })

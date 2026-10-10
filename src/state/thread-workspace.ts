@@ -80,8 +80,11 @@ async function forkIntoWorktree(source: Source): Promise<{ fork: LiveSnapshot; l
  * The Session on screen goes on there, in the same Thread: itself, when its
  * harness resumes the same session in another folder, or else a fork from
  * its last answer, and the one it leaves is archived, so the Thread moves
- * rather than splits. A new worktree takes the project folder's uncommitted changes
- * along; joining the Thread's worktree moves nothing.
+ * rather than splits. The host brings the Thread's other Sessions in the
+ * same checkout along after it (`WorkspaceMoves.moveNow`), and refuses,
+ * moving nothing, while one of them is still busy. A new worktree takes the
+ * project folder's uncommitted changes along; joining the Thread's worktree
+ * moves nothing.
  */
 export async function moveToWorktree(changed: number): Promise<boolean> {
   if (!hasBridge()) return false

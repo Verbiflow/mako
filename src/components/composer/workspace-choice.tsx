@@ -274,8 +274,8 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
             : threadBranch
               ? `Joins this thread's branch, ${threadBranch}. Nothing in the project folder moves`
               : changed
-                ? `Moves it to a worktree on a new branch. The conversation and the ${plural(changed, "changed file", "changed files")} come along`
-                : "Moves it to a worktree on a new branch. The conversation comes along"
+                ? `Moves the thread to a worktree on a new branch. Its sessions here and the ${plural(changed, "changed file", "changed files")} come along`
+                : "Moves the thread to a worktree on a new branch. Its sessions here come along"
   const branch = worktree?.branch ?? outsideBranch
   const choices: Record<Workspace, Choice> = worktree
     ? {

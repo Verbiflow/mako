@@ -1,4 +1,5 @@
 import { toast } from "sonner"
+import type { HostEvent } from "../../electron/contracts/host-events-boot.ts"
 import type { WorkspaceMoveAnswer, WorkspaceMoveRequest, WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
@@ -65,21 +66,38 @@ export const workspaceMoves = {
   },
 }
 
+/** The titles of the Sessions that followed each lead onto its branch, for the lead's window to name. */
+const followed = new Map<string, string[]>()
+
 /**
- * An agent's allowed move happened on the host. The Session it left is
- * archived there; a window showing it follows it onto the branch.
+ * One of a Thread's Sessions moved onto its branch on the host: an agent's
+ * allowed move, or a Session following another, the agent's or the
+ * person's. A Session it left is archived there; a window showing it
+ * follows it onto the branch, and the window showing the one it followed
+ * says it came along.
  */
-export async function workspaceMoved(event: { from: string; to: string; branch?: string; changed: number }): Promise<void> {
+export async function workspaceMoved(event: Extract<HostEvent, { type: "workspace-moved" }>): Promise<void> {
   acknowledgeThread({ kind: "live", id: event.from })
   await refreshWorktrees().catch(() => {})
-  if (acpStore.get().activeKey !== event.from) return
+  const active = acpStore.get().activeKey
+  if (event.lead && active === event.lead) {
+    const titles = [...followed.get(event.lead) ?? [], event.title ?? "Untitled conversation"]
+    followed.set(event.lead, titles)
+    toast(titles.length === 1 ? `“${titles[0]}” came along too` : `${titles.length} more Sessions came along`, {
+      id: `moved-with:${event.lead}`,
+      description: titles.length === 1 ? `This Thread's other Session here is on ${event.branch ?? "the same branch"} as well.` : titles.map((title) => `“${title}”`).join(", "),
+    })
+    return
+  }
+  if (active !== event.from) return
   const fork = await getMako().liveSnapshot(event.to).catch(() => null)
   if (!fork) return
   applyLiveSnapshot(fork)
   await show(event.to)
-  toast(event.branch ? `Now on its own branch, ${event.branch}` : "Now on its own branch", {
-    description: event.changed
-      ? `${event.changed} changed ${event.changed === 1 ? "file" : "files"} came along; the project folder is clean again. The agent carries on there.`
-      : "The agent carries on there.",
-  })
+  const description = [
+    event.lead ? "It moved with the rest of its Thread."
+      : event.changed ? `${event.changed} changed ${event.changed === 1 ? "file" : "files"} came along; the project folder is clean again.` : undefined,
+    event.told === false ? undefined : "The agent carries on there.",
+  ].filter(Boolean).join(" ")
+  toast(event.branch ? `Now on its own branch, ${event.branch}` : "Now on its own branch", description ? { description } : undefined)
 }
