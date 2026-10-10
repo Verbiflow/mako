@@ -6,7 +6,7 @@ import { promisify } from "node:util"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "../process-probe.js"
+} from "../../thread-harnesses.js"
 import { onWindows } from "@mako/host/base/platform"
 
 const run = promisify(execFile)

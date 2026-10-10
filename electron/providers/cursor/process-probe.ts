@@ -5,7 +5,7 @@ import { probeOpenFiles } from "../open-files-probe.js"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "../process-probe.js"
+} from "../../thread-harnesses.js"
 
 export function parseCursorOpenSessionPaths(
   output: string,

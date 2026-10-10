@@ -64,11 +64,6 @@
   "electron/host-workspace.ts": [
     "conversationFiles"
   ],
-  "electron/lineage.ts": [
-    "loaded",
-    "saveTimer",
-    "state"
-  ],
   "electron/provider-profile-cache.ts": [
     "providerProfileCache"
   ],

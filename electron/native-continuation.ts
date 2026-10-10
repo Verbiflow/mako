@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { open, stat } from "node:fs/promises"
 import { compareNativeCheckpoint, resumable, type ProviderBinding, type ResumeVerdict } from "@mako/host/contracts/conversation-control"
-import type { ProviderProcessProbe } from "./providers/process-probe.js"
+import type { ProviderProcessProbe } from "./thread-harnesses.js"
 
 const TAIL_BYTES = 64 * 1024
 const LEGACY_DIGEST = /^[0-9a-f]{64}$/

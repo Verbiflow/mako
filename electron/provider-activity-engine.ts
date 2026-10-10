@@ -1,7 +1,7 @@
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "./providers/process-probe.js"
+} from "./thread-harnesses.js"
 
 export interface ProviderActivitySnapshot {
   provider: string
@@ -64,7 +64,7 @@ export class ProviderActivityEngine {
   readonly #listeners = new Set<(snapshot: ProviderActivitySnapshot) => void>()
   #running = false
 
-  constructor(probes: ProviderProcessProbe[]) {
+  constructor(probes: readonly ProviderProcessProbe[]) {
     for (const probe of probes) {
       this.#slots.set(probe.provider, {
         probe,

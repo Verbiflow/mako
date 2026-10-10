@@ -85,7 +85,7 @@ async function main(app) {
   const { assessProviderResume } = await load("dist-electron/provider-recovery.js")
   const { bindCodexApp, stopCodexApps } = await load("dist-electron/codex-app.js")
   const { bindAcp } = await load("dist-electron/acp.js")
-  const { nativeSessionPath } = await load("dist-electron/native-source.js")
+  const { nativeSessionPath } = await load("dist-electron/thread-native-source.js")
   const { defaultCatalog, readableHarnesses, SAVED_HISTORY_READERS } = await load("packages/sessions/dist/index.js")
   const readers = [...SAVED_HISTORY_READERS]
   if (chosen.standIn) {

@@ -1,27 +1,21 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { HostConfig } from "../host-config.js"
-import { hostLabel } from "../host-config.js"
 import type { MethodTable } from "@mako/host/base/methods"
 import { hostWarn } from "@mako/host/base/host-log"
-import { SessionMemory, sessionMemoryPath } from "../session-memory.js"
+import { SessionMemory, sessionMemoryPath, type SessionMemoryHost } from "../session-memory.js"
 import { openThreadStore, threadStorePath, type ThreadStore } from "../thread-store.js"
 import { followOtherHosts } from "../thread-groups-follow.js"
-import { threadCatalog, type ThreadCatalog } from "../threads.js"
+import { threadCatalog, type ThreadCatalog, type ThreadCatalogDeps, type ThreadFileHomes } from "../threads.js"
 import { WorktreeOrigins } from "../worktree-origins.js"
 import { ThreadArchives } from "../thread-archives.js"
-import { ThreadLifecycle, followNativeArchives } from "../thread-lifecycle.js"
+import { ThreadLifecycle, followNativeArchives, type LiveThreads, type NativeQueue } from "../thread-lifecycle.js"
 import { installThreadLifecycleIpc } from "../ipc/thread-lifecycle.js"
 import { installThreadGroupsIpc } from "../ipc/thread-groups.js"
 import { installThreadTitlesIpc } from "../ipc/thread-titles.js"
 import { installChatFoldersIpc } from "../ipc/chat-folders.js"
-import { installTranscriptDocumentIpc } from "../ipc/transcript-document.js"
-import { bindLineageDirect, chainOf } from "../lineage.js"
+import { Lineage, chainOf } from "../lineage.js"
 import { daemonLoginEnabled, setDaemonLogin } from "../daemon-login.js"
-import { abortNative, nativeStopToken } from "../drivers.js"
-import type { LiveConversations } from "../live-conversations.js"
-import type { NativeRequests } from "../native-requests.js"
-import type { ThreadEnvironments } from "../thread-environment.js"
+import type { ThreadHarnesses } from "../thread-harnesses.js"
 import type { BlockAddress, ThreadContextOptions } from "@mako/host/contracts/conversation-session"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { MessageAnchor } from "@mako/host/contracts/message-anchor"
@@ -44,31 +38,49 @@ export interface Threads {
   /** Why the store didn't open, or opened degraded. */
   storeProblem: string | undefined
   origins: WorktreeOrigins
+  lineage: Lineage
   catalog: ThreadCatalog
   archives: ThreadArchives
   /** After every reader has stopped: the ledger, the store and the archives close. */
   close(): void
 }
 
-export function openThreads(config: HostConfig, emit: (event: HostEvent) => void): Threads {
-  const { environment, fixtureDesk } = config
-  const memory = openSessionMemory(config)
-  const { store, problem } = openThreadStore(threadStorePath({ dataRoot: environment.dataRoot, appData: environment.appData }), { readOnly: fixtureDesk })
+export interface ThreadsDeps {
+  dataRoot: string
+  /** Where the platform keeps app data; a profile's Thread store is shared from there. */
+  appData: string
+  /** A fixture desk's Threads read the user's stores and write none. */
+  readOnly: boolean
+  /** How this host is named in the session ledger every host on this Mac reads. */
+  ledger: SessionMemoryHost
+  harnesses: ThreadHarnesses
+  readFile: ThreadCatalogDeps["readFile"]
+  emit(event: HostEvent): void
+}
+
+export function openThreads({ dataRoot, appData, readOnly, ledger, harnesses, readFile, emit }: ThreadsDeps): Threads {
+  const memory = openSessionMemory(ledger, readOnly)
+  const { store, problem } = openThreadStore(threadStorePath({ dataRoot, appData }), { readOnly })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
   const stopFollowing = store ? followOtherHosts(store, emit) : () => {}
   const origins = new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json"))
-  const archives = new ThreadArchives(join(environment.dataRoot, "thread-archives.sqlite"))
+  const lineage = new Lineage(join(dataRoot, "lineage.json"))
+  const archives = new ThreadArchives(join(dataRoot, "thread-archives.sqlite"))
   return {
     memory,
     store,
     storeProblem: problem,
     origins,
+    lineage,
     catalog: threadCatalog({
-      dataRoot: environment.dataRoot,
+      dataRoot,
       sessionMemory: memory,
       threadStore: store,
       worktreeOrigins: origins,
-      readOnly: fixtureDesk,
+      lineage,
+      harnesses,
+      readFile,
+      readOnly,
       emit,
     }),
     archives,
@@ -82,19 +94,9 @@ export function openThreads(config: HostConfig, emit: (event: HostEvent) => void
   }
 }
 
-function openSessionMemory(config: HostConfig): SessionMemory | null {
-  const { environment } = config
+function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean): SessionMemory | null {
   try {
-    const memory = new SessionMemory(sessionMemoryPath(), {
-      pid: process.pid,
-      startedAt: Math.round(performance.timeOrigin),
-      label: hostLabel(config),
-      socket: config.socket,
-      launch: {
-        dataRoot: environment.dataRoot, executable: config.executable,
-        args: environment.packaged ? [] : [environment.appRoot], cwd: process.cwd(), profile: environment.profile,
-      },
-    }, { readOnly: config.fixtureDesk })
+    const memory = new SessionMemory(sessionMemoryPath(), ledger, { readOnly })
     memory.startHeartbeat()
     return memory
   } catch (error) {
@@ -105,14 +107,16 @@ function openSessionMemory(config: HostConfig): SessionMemory | null {
 
 export interface ThreadMethodsDeps {
   threads: Threads
-  live: LiveConversations
-  native: NativeRequests
-  environments: ThreadEnvironments | null
+  live: LiveThreads & { announceGroup(thread: string): void }
+  native: NativeQueue
+  /** Ends a headless run on a native session, given the token its stop control was shown. */
+  nativeStops: { token(path: string): string | null; abort(path: string, token: string): void }
+  homes: ThreadFileHomes | null
   emit(event: HostEvent): void
 }
 
 /** Cross-harness threads: every agent's sessions on this machine, and what becomes of them. */
-export function declareThreadMethods(methods: MethodTable, { threads, live, native, environments, emit }: ThreadMethodsDeps): ThreadLifecycle {
+export function declareThreadMethods(methods: MethodTable, { threads, live, native, nativeStops, homes, emit }: ThreadMethodsDeps): ThreadLifecycle {
   const { catalog, store, archives } = threads
   methods.handle("mako:threads", (filter?: { cwd?: string; harness?: string }) => ({
     ready: catalog.ready(),
@@ -121,7 +125,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   }))
   methods.handle("mako:thread-open", (path: string) => catalog.open(path))
   methods.handle("mako:thread-file", (threadPath: string, filePath: string) =>
-    catalog.readFile(threadPath, filePath, environments ?? undefined)
+    catalog.readFile(threadPath, filePath, homes ?? undefined)
   )
   methods.handle("mako:thread-page", (path: string, before?: number, limit?: number) => catalog.viewPage(path, before, limit))
   methods.handle("mako:thread-preview", (path: string) => catalog.viewPreview(path))
@@ -165,7 +169,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
       // actually says something.
       const materialized = await catalog.emitAs(path, harness)
       if (materialized) {
-        bindLineageDirect(materialized.sessionPath, chainOf(materialized.thread.ref))
+        threads.lineage.bind(materialized.sessionPath, chainOf(materialized.thread.ref))
         return { kind: "emitted" as const, path: materialized.sessionPath }
       }
       const [thread, artifact] = await Promise.all([
@@ -208,15 +212,14 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
     archives,
     native,
     threads: () => catalog.list(),
-    nativeToken: nativeStopToken,
-    abortNative,
+    nativeToken: nativeStops.token,
+    abortNative: nativeStops.abort,
     external: (path) => Boolean(catalog.activity()[path]),
   })
   installThreadLifecycleIpc(methods, lifecycle, archives, emit)
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)
-  installThreadGroupsIpc(methods, store, live, threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
+  installThreadGroupsIpc(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => emit({ type: "notice", level: "error", message }))
   installThreadTitlesIpc(methods, { store, emit })
   installChatFoldersIpc(methods)
-  installTranscriptDocumentIpc(methods, { snapshot: (id) => live.snapshot(id), openThread: (path) => catalog.open(path) })
   return lifecycle
 }

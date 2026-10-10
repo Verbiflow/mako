@@ -7,7 +7,7 @@ import { z } from "zod"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "../process-probe.js"
+} from "../../thread-harnesses.js"
 import type { OpenCodeServers } from "./servers.js"
 
 const registration = z.object({

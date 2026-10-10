@@ -72,7 +72,7 @@ async function main(app) {
   const { reduceLiveUpdates } = await import(join(repo, "packages/sessions/dist/live-content.js"))
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
   const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
-  const { nativeSessionPath } = await import(join(repo, "dist-electron/native-source.js"))
+  const { nativeSessionPath } = await import(join(repo, "dist-electron/thread-native-source.js"))
   const { SessionMemory } = await import(join(repo, "dist-electron/session-memory.js"))
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))

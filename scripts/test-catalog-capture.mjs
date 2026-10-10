@@ -31,6 +31,10 @@ async function run() {
   await app.whenReady()
   const { threadCatalog } = await import('../dist-electron/threads.js')
   const { WorktreeOrigins } = await import('../dist-electron/worktree-origins.js')
+  const { Lineage } = await import('../dist-electron/lineage.js')
+  const { threadHarnesses } = await import('../dist-electron/providers/thread-harnesses.js')
+  const { readConversationFile } = await import('../dist-electron/host-workspace.js')
+  const { providerHost } = await import('../dist-electron/providers/index.js')
   const { hostEnvironment } = await import('@mako/host/base/host-environment')
   const report = { root, outcome: 'running', events: [] }
   const threads = threadCatalog({
@@ -38,11 +42,13 @@ async function run() {
     sessionMemory: null,
     threadStore: null,
     worktreeOrigins: new WorktreeOrigins(join(root, 'worktree-origins.json')),
+    lineage: new Lineage(join(root, 'lineage.json')),
+    harnesses: threadHarnesses(providerHost),
+    readFile: readConversationFile,
     readOnly: false,
     emit: event => { if (event.type === 'notice') report.events.push(event) },
   })
   const { LiveConversations } = await import('../dist-electron/live-conversations.js')
-  const { providerHost } = await import('../dist-electron/providers/index.js')
   const owner = new LiveConversations({ root: join(root, 'conversations'), appPath: app.getAppPath(), driver: id => providerHost.liveDrivers.get(id), history: threads.page, emit: () => {} })
   try {
     const source = join(root, 'home/.codex/sessions/2026/09/24/rollout-fixture.jsonl')

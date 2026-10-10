@@ -44,7 +44,7 @@ import {
   processIdentityMatches,
   processStartMatches,
 } from "@mako/host/base/process-liveness"
-import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
+import type { ProviderProcessProbe } from "../electron/thread-harnesses.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import type { NativeRunner } from "../electron/providers/native-runner.ts"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"

@@ -40,6 +40,7 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LivePermissionResponse, PromptAttachment } from "@mako/host/contracts/providers-acp"
 import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import type { NativeRequestInput } from "@mako/host/contracts/native-requests"
+import { installTranscriptDocumentIpc } from "../ipc/transcript-document.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
@@ -231,6 +232,7 @@ export interface ConversationMethodsDeps {
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
   const { conversations, threads, workspaces, movers, lifecycle, telemetry, emit } = deps
   const { live, native, continuation, history } = conversations
+  installTranscriptDocumentIpc(methods, { snapshot: (id) => live.snapshot(id), openThread: (path) => threads.catalog.open(path) })
   const { worktrees, environments } = workspaces
   const worktreeMove = () => {
     if (!movers.worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")

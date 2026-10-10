@@ -1,7 +1,7 @@
 import type { ThreadRef } from "@mako/sessions"
 import { threadIdentity } from "@mako/sessions"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
-import type { ProviderActivitySession } from "./providers/process-probe.js"
+import type { ProviderActivitySession } from "./thread-harnesses.js"
 
 /**
  * A store written this recently, while a process holds it open or another

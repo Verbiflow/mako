@@ -12,10 +12,7 @@
  * it can inherit the conversation, and that is what this hands over.
  */
 import { threadIdentity, VIEWER_PAGE } from "@mako/sessions"
-import {
-  nativeSessionPath,
-  type NativeSourceIdentity,
-} from "./native-source.js"
+import { nativeSessionPath, type NativeSourceIdentity } from "./thread-native-source.js"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
@@ -51,23 +48,19 @@ import type {
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { retainUnread } from "@mako/host/base/native-unknown"
-import { readConversationFile } from "./host-workspace.js"
 import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
 import type { WorktreeOrigins } from "./worktree-origins.js"
-import { annotate as annotateLineage, loadLineage } from "./lineage.js"
+import type { Lineage } from "./lineage.js"
 import type { SessionMemory } from "./session-memory.js"
 import type { ThreadStore } from "./thread-store.js"
-import type { ThreadEnvironments } from "./thread-environment.js"
-import type { Actor } from "@mako/host/contracts/thread-identity"
+import type { Actor, ThreadId } from "@mako/host/contracts/thread-identity"
 import {
   resolveAnchor,
   type MessageAnchor,
 } from "@mako/host/contracts/message-anchor"
 import { tmpdir } from "node:os"
 import { ProviderActivityEngine } from "./provider-activity-engine.js"
-import { harnessLabel } from "./providers/harness-descriptors.js"
-import { providerHost } from "./providers/index.js"
-import type { ProviderActivitySession } from "./providers/process-probe.js"
+import type { ProviderActivitySession, ThreadHarnesses } from "./thread-harnesses.js"
 import {
   type ActivityIndex,
   WRITE_ACTIVE_MS,
@@ -141,12 +134,10 @@ function processIsAlive(pid: number): boolean {
 }
 
 function transcriptOptions(
-  harness: ThreadRef["harness"],
+  from: string,
   instruction: string | undefined
 ): TranscriptOptions {
-  const options: TranscriptOptions = {
-    from: harnessLabel(providerHost, harness),
-  }
+  const options: TranscriptOptions = { from }
   if (instruction) options.instruction = instruction
   return options
 }
@@ -289,6 +280,11 @@ function transcriptFence(content: string): string {
   return `${fence}text\n${content}${content.endsWith("\n") ? "" : "\n"}${fence}`
 }
 
+/** Where each Thread's environment keeps the files its conversations link to; Workspaces has them. */
+export interface ThreadFileHomes {
+  fileDataDir(owner: { cwd?: string; thread?: ThreadId }): Promise<string | undefined>
+}
+
 export interface ThreadCatalogDeps {
   /** Where this host keeps its catalog cache. */
   dataRoot: string
@@ -297,7 +293,12 @@ export interface ThreadCatalogDeps {
   /** The per-user Thread store every served ref is placed through. */
   threadStore: ThreadStore | null
   /** Where each worktree came from, so a ref names the worktrees it ran in. */
-  worktreeOrigins: WorktreeOrigins
+  worktreeOrigins: Pick<WorktreeOrigins, "of">
+  /** Where continuations Mako wrote came from, loaded before the first catalog. */
+  lineage: Pick<Lineage, "load" | "annotate">
+  harnesses: ThreadHarnesses
+  /** A file in a workspace, as the conversation that linked it sees it; Workspaces reads it. */
+  readFile(cwd: string, path: string, dataDir?: () => Promise<string | undefined>): Promise<FileContents>
   /** A fixture desk's catalog writes neither the archive nor any harness's store. */
   readOnly: boolean
   emit(event: HostEvent): void
@@ -338,7 +339,7 @@ export interface ThreadCatalog {
    * against the thread's workspace; absolute ones open as they are, so a file
    * the agent wrote outside the project and linked from its answer opens too.
    */
-  readFile(threadPath: string, filePath: string, environments?: ThreadEnvironments): Promise<FileContents>
+  readFile(threadPath: string, filePath: string, homes?: ThreadFileHomes): Promise<FileContents>
   page(path: string, before?: number, limit?: number, options?: ThreadPageOptions): Promise<ThreadPage | null>
   /** A page for the viewer; a tool row fetches its whole output (`block`) when it opens. */
   viewPage(path: string, before?: number, limit?: number): Promise<ThreadPage | null>
@@ -389,7 +390,7 @@ export interface ThreadCatalog {
 }
 
 export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
-  const { sessionMemory, threadStore, worktreeOrigins, readOnly: catalogReadOnly } = deps
+  const { sessionMemory, threadStore, worktreeOrigins, lineage, harnesses, readOnly: catalogReadOnly } = deps
   const workspacePresence = new Map<string, { at: number; missing: boolean }>()
 
   /**
@@ -457,7 +458,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
 
   function annotated(ref: ThreadRef): ThreadRef {
     const known = sessionMemory ? sessionMemory.annotate(ref) : ref
-    return withWorktrees(withWorkspacePresence(annotateLineage(known)))
+    return withWorktrees(withWorkspacePresence(lineage.annotate(known)))
   }
 
   function annotate(ref: ThreadRef): ThreadRef {
@@ -620,7 +621,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
 
   function monitorProviderProcesses(): void {
     if (activityEngine) return
-    activityEngine = new ProviderActivityEngine(providerHost.processProbes.list())
+    activityEngine = new ProviderActivityEngine(harnesses.processProbes())
     activityEngine.onChange((snapshot) => {
       providerActivity.set(snapshot.provider, snapshot.sessions)
       reconcileProviderActivity()
@@ -646,7 +647,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     stopping = false
     monitorProviderProcesses()
     catalogStartup = catalogTask(signal, async () => {
-      await loadLineage()
+      await lineage.load()
       signal.throwIfAborted()
       // The installed app enables login capture by default; explicit opt-outs use only an on-demand reader.
       await refreshDaemonLoginJob()
@@ -1214,7 +1215,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   async function readThreadFile(
     threadPath: string,
     filePath: string,
-    environments?: ThreadEnvironments
+    homes?: ThreadFileHomes
   ): Promise<FileContents> {
     const ref = daemon
       ? mirror.get(threadPath)
@@ -1222,11 +1223,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const cwd = ref ? threadFileWorkspace(ref) : undefined
     if (!cwd && !isAbsolute(filePath) && !filePath.startsWith("~/"))
       throw new Error("This conversation has no recorded working folder. Open the file by its full path.")
-    const dataDir = ref && environments ? () => environments.fileDataDir({
+    const dataDir = ref && homes ? () => homes.fileDataDir({
       cwd: ref.cwd ?? ref.workspace ?? cwd,
       thread: threadStore?.place(ref, CATALOG_ACTOR).thread,
     }) : undefined
-    return readConversationFile(cwd ?? "/", filePath, dataDir)
+    return deps.readFile(cwd ?? "/", filePath, dataDir)
   }
 
   async function pageThread(
@@ -1419,7 +1420,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         : opened
     const bundle = renderTranscriptBundle(
       thread,
-      transcriptOptions(thread.ref.harness, instruction)
+      transcriptOptions(harnesses.label(thread.ref.harness), instruction)
     )
     const digest = createHash("sha256").update(bundle.markdown).update("\0")
     for (const asset of bundle.assets)
@@ -1457,7 +1458,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const opened = await openThread(path)
     if (!opened) return null
     const bundle = renderTranscriptBundle(opened, {
-      ...transcriptOptions(opened.ref.harness, undefined),
+      ...transcriptOptions(harnesses.label(opened.ref.harness), undefined),
       mainBudget: INLINE_MAIN_BUDGET,
       totalBudget: INLINE_TOTAL_BUDGET,
     })
@@ -1483,7 +1484,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       upto !== undefined && upto < opened.entries.length
         ? { ref: opened.ref, entries: opened.entries.slice(0, upto + 1) }
         : opened
-    const emitter = providerHost.sessionEmitters.get(harness)
+    const emitter = harnesses.sessionEmitter(harness)
     if (!emitter) return null
     const emitted = await emitter.emit(thread)
     return { thread, sessionId: emitted.sessionId, sessionPath: emitted.path }

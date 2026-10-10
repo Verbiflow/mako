@@ -1,14 +1,30 @@
-import type { LiveConversations } from "./live-conversations.js"
-import type { NativeRequests } from "./native-requests.js"
 import type { ThreadArchives } from "./thread-archives.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { LiveSnapshot, LiveSummary } from "@mako/host/contracts/live-conversations"
+import type { NativeRequest } from "@mako/host/contracts/native-requests"
+import type { QueuedPromptEdit } from "@mako/host/contracts/live-queue"
 import type { ThreadRef } from "@mako/host/contracts/conversation-session"
 import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "@mako/host/contracts/thread-lifecycle"
 
+/** What archiving and stopping a Thread read and ask of the conversations live on this host. */
+export interface LiveThreads {
+  summaries(): LiveSummary[]
+  snapshot(id: string): Pick<LiveSnapshot, "control"> | null
+  activeRequest(id: string): string | null
+  setArchived(id: string, archived: boolean): void
+  stopRequest(id: string, requestId: string): Promise<boolean>
+}
+
+/** The headless runs waiting for a native session, which a stop pauses. */
+export interface NativeQueue {
+  list(): NativeRequest[]
+  editQueued(edit: QueuedPromptEdit): NativeRequest[]
+}
+
 interface ThreadLifecycleDependencies {
-  live: LiveConversations
+  live: LiveThreads
   archives: ThreadArchives
-  native: Pick<NativeRequests, "list" | "editQueued">
+  native: NativeQueue
   threads(): ThreadRef[]
   nativeToken(path: string): string | null
   abortNative(path: string, token: string): void

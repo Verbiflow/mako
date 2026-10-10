@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises"
 import { basename } from "node:path"
 import { z } from "zod"
-import type { ProviderActivitySession } from "../process-probe.js"
+import type { ProviderActivitySession } from "../../thread-harnesses.js"
 
 const CHUNK_BYTES = 64 * 1024
 const RECORD_BYTES = 1024 * 1024

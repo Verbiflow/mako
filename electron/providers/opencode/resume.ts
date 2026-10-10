@@ -3,7 +3,7 @@ import { z } from "zod"
 import { inspectNativeSession } from "../../native-continuation.js"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { NativeForkSource } from "../live-driver.js"
-import type { ProviderProcessProbe } from "../process-probe.js"
+import type { ProviderProcessProbe } from "../../thread-harnesses.js"
 import { openCodeRecordLocator, type OpenCodeResumeRecord } from "./resume-store.js"
 
 const recordSchema = z.discriminatedUnion("kind", [

@@ -4,32 +4,72 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { dirname } from "node:path"
 import type { ThreadOrigin, ThreadRef } from "@mako/sessions"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
-import { hostEnvironment } from "@mako/host/base/host-environment"
 
 interface LineageFile {
   version: 1
   byPath: Record<string, ThreadOrigin[]>
 }
 
-let state: LineageFile = { version: 1, byPath: {} }
-let loaded = false
-let saveTimer: NodeJS.Timeout | null = null
+export class Lineage {
+  private state: LineageFile = { version: 1, byPath: {} }
+  private loaded = false
+  private saveTimer: NodeJS.Timeout | null = null
+  private readonly file: string
 
-function filePath(): string {
-  return join(hostEnvironment().dataRoot, "lineage.json")
-}
+  constructor(file: string) { this.file = file }
 
-export async function loadLineage(): Promise<void> {
-  if (loaded) return
-  loaded = true
-  try {
-    const parsed = parseLineageFile(await readFile(filePath(), "utf8"))
-    if (parsed) state = parsed
-  } catch {
-    // First run, or an unreadable file: lineage starts empty.
+  async load(): Promise<void> {
+    if (this.loaded) return
+    this.loaded = true
+    try {
+      const parsed = parseLineageFile(await readFile(this.file, "utf8"))
+      if (parsed) this.state = parsed
+    } catch {
+      // First run, or an unreadable file: lineage starts empty.
+    }
+  }
+
+  /** A continuation whose file we created ourselves binds without guessing. */
+  bind(path: string, chain: ThreadOrigin[]): void {
+    this.state.byPath[path] = chain
+    this.scheduleSave()
+  }
+
+  /** Decorate a ref with its lineage, inheriting the title where it should. */
+  annotate(ref: ThreadRef): ThreadRef {
+    const chain = this.state.byPath[ref.path]
+    if (!chain || chain.length === 0) return ref
+    const inherited = [...chain].reverse().find((origin) => origin.title)?.title
+    // The conversation's name travels with it. The native store's own title is
+    // the handoff preamble ("You are continuing a conversation…"), which is
+    // provenance, not a name — the title it had before is the one that means
+    // anything to the person who started it.
+    const preamble =
+      ref.title?.startsWith("You are continuing a conversation") ||
+      ref.title?.startsWith("# Continuing a conversation") ||
+      ref.title?.startsWith("Continuing a conversation")
+    const title = inherited && (!ref.title || preamble) ? inherited : ref.title
+    return { ...ref, lineage: chain, title }
+  }
+
+  private scheduleSave(): void {
+    if (this.saveTimer) return
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      void this.save()
+    }, 1000)
+  }
+
+  private async save(): Promise<void> {
+    try {
+      await mkdir(dirname(this.file), { recursive: true })
+      await writeFile(this.file, JSON.stringify(this.state), "utf8")
+    } catch {
+      // Lost lineage is cosmetic; the sessions themselves are untouched.
+    }
   }
 }
 
@@ -92,44 +132,4 @@ function isString(value: JsonValue | undefined): value is string {
  */
 export function chainOf(ref: ThreadRef): ThreadOrigin[] {
   return [...(ref.lineage ?? []), { harness: ref.harness, title: ref.title }]
-}
-
-/** A continuation whose file we created ourselves binds without guessing. */
-export function bindLineageDirect(path: string, chain: ThreadOrigin[]): void {
-  state.byPath[path] = chain
-  scheduleSave()
-}
-
-/** Decorate a ref with its lineage, inheriting the title where it should. */
-export function annotate(ref: ThreadRef): ThreadRef {
-  const chain = state.byPath[ref.path]
-  if (!chain || chain.length === 0) return ref
-  const inherited = [...chain].reverse().find((origin) => origin.title)?.title
-  // The conversation's name travels with it. The native store's own title is
-  // the handoff preamble ("You are continuing a conversation…"), which is
-  // provenance, not a name — the title it had before is the one that means
-  // anything to the person who started it.
-  const preamble =
-    ref.title?.startsWith("You are continuing a conversation") ||
-    ref.title?.startsWith("# Continuing a conversation") ||
-    ref.title?.startsWith("Continuing a conversation")
-  const title = inherited && (!ref.title || preamble) ? inherited : ref.title
-  return { ...ref, lineage: chain, title }
-}
-
-function scheduleSave(): void {
-  if (saveTimer) return
-  saveTimer = setTimeout(() => {
-    saveTimer = null
-    void save()
-  }, 1000)
-}
-
-async function save(): Promise<void> {
-  try {
-    await mkdir(dirname(filePath()), { recursive: true })
-    await writeFile(filePath(), JSON.stringify(state), "utf8")
-  } catch {
-    // Lost lineage is cosmetic; the sessions themselves are untouched.
-  }
 }

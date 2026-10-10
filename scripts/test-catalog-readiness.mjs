@@ -128,11 +128,6 @@ const mocks = {
     export const daemonScript = () => ''; export const refreshDaemonLoginJob = async () => {};
     export const setDaemonLogin = async () => {};`,
   "./daemon-vintage.js": `export const daemonIsForeign = () => false;`,
-  "./lineage.js": `export const loadLineage = () => globalThis.__catalogReadinessTest.lineage.promise; export const annotate = ref => ref;`,
-  "./providers/index.js": `export const providerHost = { processProbes: { list: () => [] } };`,
-  "./provider-activity-engine.js": `export class ProviderActivityEngine { onChange() {} start() {} stop() {} }`,
-  "./host-git.js": `export class WorkspaceGit {}`,
-  "./host-workspace.js": `export class WorkspaceFiles {}; export function readConversationFile() { throw new Error("Catalog readiness must not read preview files") }`,
 }
 try {
   const outfile = join(root, "threads.mjs")
@@ -165,7 +160,10 @@ try {
     dataRoot: root,
     sessionMemory: null,
     threadStore: null,
-    worktreeOrigins: { of: () => undefined, projectFolderOfRemoved: () => undefined, flush: async () => {} },
+    worktreeOrigins: { of: () => undefined },
+    lineage: { load: () => state.lineage.promise, annotate: (ref) => ref },
+    harnesses: { label: (harness) => harness, processProbes: () => [], sessionEmitter: () => undefined },
+    readFile: () => { throw new Error("Catalog readiness must not read preview files") },
     readOnly: false,
     emit: (event) => state.events.push(event),
   })

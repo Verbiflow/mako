@@ -1,7 +1,7 @@
 import { watch, rmSync, type FSWatcher } from "node:fs"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { basename, dirname } from "node:path"
-import type { HostConfig } from "./host-config.js"
+import { hostLabel, type HostConfig } from "./host-config.js"
 import { HostMethods, runtimeInfo, startWebHost } from "@mako/host/transport"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { Admission } from "@mako/host/base/admission"
@@ -24,7 +24,10 @@ import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount,
 import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./automations.js"
 import { accountUsageSpent, completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
-import { abortNative, nativeLifecycleWork, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
+import { abortNative, nativeLifecycleWork, nativeStopToken, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
+import { providerHost } from "./providers/index.js"
+import { threadHarnesses } from "./providers/thread-harnesses.js"
+import { readConversationFile } from "./host-workspace.js"
 import { threadEnvironmentInstructions } from "./thread-environment.js"
 import { machineOffer, hostMachine } from "@mako/host/base/machine"
 import { nodePlatform } from "@mako/host/base/platform"
@@ -119,7 +122,24 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     await children.reap().catch((error) => {
       hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
     })
-    const threads = openThreads(config, emit)
+    const threads = openThreads({
+      dataRoot: environment.dataRoot,
+      appData: environment.appData,
+      readOnly: fixtureDesk,
+      ledger: {
+        pid: process.pid,
+        startedAt: Math.round(performance.timeOrigin),
+        label: hostLabel(config),
+        socket: config.socket,
+        launch: {
+          dataRoot: environment.dataRoot, executable: config.executable,
+          args: environment.packaged ? [] : [environment.appRoot], cwd: process.cwd(), profile: environment.profile,
+        },
+      },
+      harnesses: threadHarnesses(providerHost),
+      readFile: readConversationFile,
+      emit,
+    })
     const { catalog, store } = threads
     const control = openControl(config, emit, () => updates?.desktopChanged())
     updates = new Updates({
@@ -217,7 +237,14 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       hostWarn("accounts", "pending removals could not be read", { error: error instanceof Error ? error.message : String(error) })
     )
     trace("journals ready")
-    const lifecycle = declareThreadMethods(methods, { threads, live, native, environments: workspaces.environments, emit })
+    const lifecycle = declareThreadMethods(methods, {
+      threads,
+      live,
+      native,
+      nativeStops: { token: nativeStopToken, abort: abortNative },
+      homes: workspaces.environments,
+      emit,
+    })
     movers = openWorkspaceMovers({
       config,
       workspaces,

@@ -10,7 +10,7 @@ import { processIdentityMatches } from "@mako/host/base/process-liveness"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
-} from "../process-probe.js"
+} from "../../thread-harnesses.js"
 import { onWindows } from "@mako/host/base/platform"
 
 const run = promisify(execFile)

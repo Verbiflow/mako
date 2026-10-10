@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import type { ProviderActivityResult } from "./process-probe.js"
+import type { ProviderActivityResult } from "../thread-harnesses.js"
 import { onMac, onWindows } from "@mako/host/base/platform"
 
 export type OpenFilesResult =
