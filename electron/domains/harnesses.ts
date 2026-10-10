@@ -8,17 +8,16 @@ import { toolHarnesses } from "../providers/tool-harnesses.js"
 import type { ToolHarnesses } from "@mako/host/tools"
 import { assessProviderResume } from "../provider-recovery.js"
 import { RuntimeUpdates } from "../runtime-updates.js"
-import { nativeHarnesses } from "../native-runs.js"
+import { nativeHarnesses } from "../providers/native-runner.js"
 import { HarnessProfiles } from "../harness-profiles.js"
 import { ProviderProfileCache } from "../provider-profile-cache.js"
 import type { HarnessAccounts } from "../accounts.js"
 import { type AccountHarness, type AccountProvider } from "@mako/host/contracts/accounts"
-import { accountRemovalSessions } from "../account-removal-sessions.js"
+import { accountRemovalSessions, type AccountSessions } from "../account-removal-sessions.js"
 import { AccountLogins } from "../account-login.js"
 import type { ProviderConnectionAction } from "@mako/host/contracts/provider-connection"
 import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadCatalog } from "@mako/host/threads"
-import type { LiveConversations } from "../live-conversations.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 /** The six adapters as this host has them: their versions, accounts, and whether a session can resume. */
@@ -49,7 +48,7 @@ export interface HarnessesDeps {
   appRoot: string
   catalog: ThreadCatalog
   /** The live conversations, made after the harnesses; an account's removal asks them only once one runs. */
-  live(): LiveConversations | undefined
+  live(): AccountSessions | undefined
   emit(event: HostEvent): void
 }
 

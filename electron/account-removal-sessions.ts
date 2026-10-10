@@ -2,7 +2,8 @@ import type { AccountHolder } from "./account-holds.js"
 import type { AccountRemovalEvent, AccountRemovalPlan, AccountRemovalSession } from "@mako/host/contracts/accounts"
 import type { HarnessAccounts } from "./accounts.js"
 
-interface Sessions {
+/** The live sessions running on an account, which its removal names and retires. */
+export interface AccountSessions {
   accountSessions(bindingIds: readonly string[]): AccountRemovalSession[]
   retireAccountSessions(bindingIds: readonly string[]): void
 }
@@ -18,7 +19,7 @@ function sessionBindings(holders: readonly AccountHolder[]): string[] {
  * waiting on are kept in memory, so the idle check costs nothing when there
  * are none.
  */
-export function accountRemovalSessions(accounts: HarnessAccounts, sessions: () => Sessions | undefined, report: (harness: string, name: string, event: AccountRemovalEvent) => void) {
+export function accountRemovalSessions(accounts: HarnessAccounts, sessions: () => AccountSessions | undefined, report: (harness: string, name: string, event: AccountRemovalEvent) => void) {
   const waiting = new Set<string>()
   const dispose = accounts.onRemoval((harness, name, event) => {
     const key = `${harness}/${name}`

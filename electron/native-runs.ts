@@ -34,7 +34,6 @@ import type { AccountHold } from "./account-holds.js"
 import { resumable, type ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { reconnectRefusal } from "./live-transfers.js"
 import type { ProviderHost } from "./providers/host.js"
-import type { ProviderRegistry } from "./providers/registry.js"
 import {
   dropUncarried,
   type NativeCommand,
@@ -54,11 +53,6 @@ import {
 } from "@mako/host/base/executable"
 
 export type FreshOptions = NativeRunOptions
-
-/** The harnesses this machine can continue headlessly: those whose CLI is installed. */
-export function nativeHarnesses(runners: ProviderRegistry<NativeRunner>): string[] {
-  return runners.list().filter((runner) => runner.available()).map((runner) => runner.provider)
-}
 
 export interface NativeRunResult {
   state: ThreadRunState

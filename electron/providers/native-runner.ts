@@ -1,6 +1,6 @@
 import type { SessionModel as HarnessModel } from "@mako/sessions/settings"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { ProviderCapability } from "./registry.js"
+import type { ProviderCapability, ProviderRegistry } from "./registry.js"
 import type { ExecutionCredential } from "@mako/host/contracts/execution-context"
 
 /** Private launch environment and public credential provenance from one resolution. */
@@ -145,4 +145,9 @@ export function dropUncarried(
 export function argumentAfter(args: readonly string[], flag: string): string | undefined {
   const index = args.indexOf(flag)
   return index >= 0 ? args[index + 1] : undefined
+}
+
+/** The harnesses this machine can continue headlessly: those whose CLI is installed. */
+export function nativeHarnesses(runners: ProviderRegistry<NativeRunner>): string[] {
+  return runners.list().filter((runner) => runner.available()).map((runner) => runner.provider)
 }
