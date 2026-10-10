@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
+import { installSessionIpc, type SessionIpcContext } from "../ipc/session.js"
 import type { HostConfig } from "../host-config.js"
 import type { MethodTable } from "@mako/host/base/methods"
 import type { HostJobs } from "@mako/host/base/host-jobs"
@@ -239,11 +240,14 @@ export interface WorkspaceMethodsDeps {
   movers: WorkspaceMovers
   live: LiveConversations
   withHost<T>(run: (host: AgentHost) => T | Promise<T>): Promise<T>
+  /** What a window loads first, and its tabs. */
+  session: SessionIpcContext
   emit(event: HostEvent): void
 }
 
 /** The files people open, the editors and folders they reach for, worktrees, moves, apps and automations. */
-export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, withHost, emit }: WorkspaceMethodsDeps): WatchedFile {
+export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, withHost, session, emit }: WorkspaceMethodsDeps): WatchedFile {
+  installSessionIpc(methods, session)
   const files = installWorkspaceIpc(methods, { withHost, emit })
   methods.handle("mako:pick-folder", () => presentMachine().chooseFolder("Choose a folder"))
   methods.handle("mako:external-editors", () => listExternalEditors())

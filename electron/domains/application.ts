@@ -1,43 +1,18 @@
 import type { MethodTable } from "@mako/host/base/methods"
-import type { Updates } from "../updates.js"
 import { clearCrashes, crashesDir, listCrashes, record } from "@mako/host/base/crash"
 import { hostLogPath } from "@mako/host/base/host-log"
-import { installApplicationIpc } from "../ipc/application.js"
-import { installSessionIpc, type SessionIpcContext } from "../ipc/session.js"
-import type { LiveConversations } from "../live-conversations.js"
-import type { NativeRequests } from "../native-requests.js"
+import { installApplicationIpc, type ApplicationDependencies } from "../ipc/application.js"
 import type { WakeWatch } from "@mako/host/base/wake"
-import type { Admission } from "@mako/host/base/admission"
-import type { LifecycleAction } from "@mako/host/contracts/app-lifecycle"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 export type Application = ReturnType<typeof installApplicationIpc>
 
-export interface ApplicationMethodsDeps {
-  session: SessionIpcContext
-  live: LiveConversations
-  native: NativeRequests
-  admission: Admission
-  updates: Updates
+export interface ApplicationMethodsDeps extends ApplicationDependencies {
   wake: WakeWatch
-  clients(): string[]
-  /** Stops this host for a client's quit, restart or update, once its work allows. */
-  finish(action: LifecycleAction, install?: () => void): void
-  emit(event: HostEvent): void
 }
 
-/** What a client loads first, the host's own lifecycle, its updates and its crashes. */
+/** The host's own lifecycle, its updates and its crashes. */
 export function declareApplicationMethods(methods: MethodTable, deps: ApplicationMethodsDeps): Application {
-  installSessionIpc(methods, deps.session)
-  const application = installApplicationIpc(methods, {
-    live: deps.live,
-    native: deps.native,
-    admission: deps.admission,
-    updates: deps.updates,
-    emit: deps.emit,
-    clients: deps.clients,
-    finish: deps.finish,
-  })
+  const application = installApplicationIpc(methods, deps)
   methods.handle("mako:update-state", () => deps.updates.state())
   methods.handle("mako:check-updates", () => deps.updates.check())
   methods.handle("mako:install-update", () => application.lifecycle.command({ kind: "wait", action: "install" }))

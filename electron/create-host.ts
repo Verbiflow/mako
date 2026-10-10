@@ -26,7 +26,7 @@ import { Updates } from "./updates.js"
 import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./automations.js"
 import { completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
-import { resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
+import { abortNative, nativeLifecycleWork, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
 import { providerHost } from "./providers/index.js"
 import { launchLines } from "./control-launch.js"
 import { machineOffer, hostMachine } from "@mako/host/base/machine"
@@ -234,7 +234,23 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     trace("conversation tools ready")
     controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
 
-    const files = declareWorkspaceMethods(methods, { workspaces, movers, live, withHost, emit })
+    const files = declareWorkspaceMethods(methods, {
+      workspaces,
+      movers,
+      live,
+      withHost,
+      session: {
+        liveSummaries: () => live.summaries(),
+        archives: () => threads.archives.snapshot(),
+        ready,
+        withHost,
+        platform: nodePlatform(),
+        machine: () => machineOffer(hostMachine()),
+        sourceRoot: config.development ? environment.appRoot : undefined,
+        onWorkspaceChanged: watchWorkspace,
+      },
+      emit,
+    })
     declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost })
     declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
     declareControlMethods(methods, control, environment.appRoot, config.executable)
@@ -253,18 +269,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       emit,
     })
     application = declareApplicationMethods(methods, {
-      session: {
-        liveSummaries: () => live.summaries(),
-        archives: () => threads.archives.snapshot(),
-        ready,
-        withHost,
-        platform: nodePlatform(),
-        machine: () => machineOffer(hostMachine()),
-        sourceRoot: config.development ? environment.appRoot : undefined,
-        onWorkspaceChanged: watchWorkspace,
-      },
       live,
       native,
+      nativeRuns: { lifecycleWork: nativeLifecycleWork, abort: abortNative },
       admission,
       updates,
       wake,

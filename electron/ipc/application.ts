@@ -8,16 +8,33 @@ import {
   type LifecycleWork,
 } from "@mako/host/contracts/app-lifecycle"
 import type { Updates } from "../updates.js"
-import type { LiveConversations } from "../live-conversations.js"
-import type { NativeRequests } from "../native-requests.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { abortNative, nativeLifecycleWork } from "../drivers.js"
 import { hostClient } from "@mako/host/base/host-client"
 import type { MethodTable } from "@mako/host/base/methods"
 
-interface ApplicationDependencies {
-  live: LiveConversations
-  native: NativeRequests
+/** The live conversations, as a quit, restart or install waits for and stops them. */
+export interface LiveWork {
+  lifecycleWork(): LifecycleWork[]
+  /** Ends these conversations, or all of them, so the host can leave. */
+  closeForExit(ids?: string[]): Promise<void>
+}
+
+/** Queued replies to native sessions; none starts once the host is stopping. */
+export interface NativeQueue {
+  lifecycleWork(): LifecycleWork[]
+  pauseQueued(): void
+}
+
+/** Headless native runs, each stopped by its id and the token it was started with. */
+export interface NativeRuns {
+  lifecycleWork(): LifecycleWork[]
+  abort(path: string, token: string): void
+}
+
+export interface ApplicationDependencies {
+  live: LiveWork
+  native: NativeQueue
+  nativeRuns: NativeRuns
   /** Closed while the lifecycle stops the host's agents. */
   admission: Admission
   updates: Updates
@@ -31,7 +48,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
   const shutdown = new WindowShutdown()
   const work = (): LifecycleWork[] => [
     ...dependencies.live.lifecycleWork(),
-    ...nativeLifecycleWork(),
+    ...dependencies.nativeRuns.lifecycleWork(),
     ...dependencies.native.lifecycleWork(),
     ...(updates.building
       ? [
@@ -66,7 +83,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
       dependencies.native.pauseQueued()
       for (const item of reviewed)
         if (item.id.startsWith("native:"))
-          abortNative(item.id.slice(7), item.token)
+          dependencies.nativeRuns.abort(item.id.slice(7), item.token)
       await dependencies.live.closeForExit(
         reviewed.filter((item) => !item.id.includes(":")).map((item) => item.id)
       )

@@ -114,6 +114,7 @@ async function checkRuntime() {
   const application = installApplicationIpc(methods, {
     live,
     native,
+    nativeRuns: { lifecycleWork: () => [], abort: () => {} },
     admission,
     updates,
     clients: host.clients,
