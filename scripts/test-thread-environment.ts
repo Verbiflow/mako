@@ -12,8 +12,8 @@ import { mkdirSync, realpathSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
 import { AppKeySchema, THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "@mako/host/contracts/thread-environments"
-import { launchInstructions } from "../electron/control-launch.js"
-import { ThreadEnvironments, applyThreadEnvironment, folderApp } from "../electron/thread-environment.js"
+import { controlNote } from "../electron/control-launch.js"
+import { ThreadEnvironments, applyThreadEnvironment, folderApp, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadStore } from "../electron/thread-store.js"
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-environment-"))
@@ -151,12 +151,12 @@ function processEnvironment(): void {
   applyThreadEnvironment(bare)
   assert.deepEqual(bare, {}, "values inherited from a Mako started inside a Thread never reach another Thread's agents")
 
-  const note = launchInstructions(undefined, environment)
+  const note = controlNote([threadEnvironmentInstructions(environment)])
   assert.ok(note?.includes("ports 20010-20019"))
   const prompt = `${note}\n\nMake the login page remember me`
   assert.equal(withoutMakoFraming(prompt), "Make the login page remember me", "history readers strip the note like Local Control's")
   assert.equal(userTextFrom(prompt), "Make the login page remember me")
-  assert.equal(launchInstructions(undefined, undefined), undefined, "no note when there is nothing to say")
+  assert.equal(controlNote([]), undefined, "no note when there is nothing to say")
 }
 
 /** One app per folder: Threads sharing a folder share its values; a Worktree Thread's app is its own. */

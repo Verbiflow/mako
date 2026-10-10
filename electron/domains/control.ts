@@ -2,7 +2,6 @@ import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { BrowserService } from "@mako/control-runtime/browser"
 import { localBrowsers, publishDeskBrowserRegistration } from "@mako/control-runtime/desktop"
-import type { HostConfig } from "../host-config.js"
 import type { MethodTable } from "@mako/host/base/methods"
 import { hostWarn } from "@mako/host/base/host-log"
 import { hostClient } from "@mako/host/base/host-client"
@@ -28,6 +27,7 @@ import { nodePlatform } from "@mako/host/base/platform"
 import type { MakoComputerPermissions } from "@mako/host/contracts/mcp-skills-integrations"
 import type { AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { HostEnvironment } from "@mako/host/base/host-environment"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
 export interface Control {
@@ -55,8 +55,19 @@ export interface Control {
 
 export type ControlService = Awaited<ReturnType<typeof startControlService>>
 
+/** What Control reads of the host's configuration. */
+export interface ControlConfig {
+  environment: HostEnvironment
+  /** Where a development host's renderer registration is published, beside the socket. */
+  socket: string
+  /** Electron, to start the agent views app; a host without one makes no windows. */
+  desktopExecutable: string | undefined
+  fixtureDesk: boolean
+  development: { devServerUrl: string | null } | undefined
+}
+
 /** `updated`: the desktop's updater moved, or the desktop that had one left. */
-export function openControl(config: HostConfig, emit: (event: HostEvent) => void, updated: () => void): Control {
+export function openControl(config: ControlConfig, emit: (event: HostEvent) => void, updated: () => void): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
   let activeDevServerUrl = configuredDevServerUrl

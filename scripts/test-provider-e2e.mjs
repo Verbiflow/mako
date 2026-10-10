@@ -113,7 +113,7 @@ async function runElectron() {
     return value
   }
   const { ControlSessions } = await import("../dist-electron/control-sessions.js")
-  const { launchLines } = await import("../dist-electron/control-launch.js")
+  const { controlLine } = await import("../dist-electron/control-launch.js")
   const { resolveExecutable } = await import("@mako/host/base/executable")
   const runtimeSnapshot = await snapshotControlRuntime(root)
   const sessions = new ControlSessions(async () => {
@@ -140,7 +140,10 @@ async function runElectron() {
         ? { ...conversation, control: await sessions.start(binding, control?.mint(id, binding), async () => {await control?.revoke(id,binding)}) }
         : undefined
     },
-    controlInstructions: binding => launchLines(sessions.get(binding)),
+    controlInstructions: (binding) => {
+      const session = sessions.get(binding)
+      return session ? [controlLine(session)] : []
+    },
     revokeTools: async (binding, id) => {
       mcp?.revoke(binding, id)
       await control?.revoke(id, binding)

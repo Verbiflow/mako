@@ -27,7 +27,8 @@ import { completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
 import { abortNative, nativeLifecycleWork, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
 import { providerHost } from "./providers/index.js"
-import { launchLines } from "./control-launch.js"
+import { controlLine } from "./control-launch.js"
+import { threadEnvironmentInstructions } from "./thread-environment.js"
 import { machineOffer, hostMachine } from "@mako/host/base/machine"
 import { nodePlatform } from "@mako/host/base/platform"
 import type { HostPool } from "./pool.js"
@@ -202,7 +203,8 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       controlInstructions: (bindingId, conversationId) => {
         const launched = workspaces.environments?.launchedWith(conversationId)
         if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
-        return launchLines(control.sessions.get(bindingId), launched)
+        const session = control.sessions.get(bindingId)
+        return [session && controlLine(session), launched && threadEnvironmentInstructions(launched)].filter((line) => line !== undefined)
       },
       revokeTools: async (bindingId, conversationId) => {
         tools?.revoke(bindingId, conversationId)

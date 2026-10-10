@@ -12,7 +12,7 @@ import { BrowserService } from "@mako/control-runtime/browser"
 import { browserFixture } from "./browser-control-fixture.js"
 import {
   applyControlEnvironment,
-  launchInstructions,
+  controlLine,
 } from "../electron/control-launch.js"
 const run = promisify(execFile)
 const fixture = await browserFixture()
@@ -44,7 +44,7 @@ try {
   assert.equal(env.MAKO_CONTROL_URL, undefined)
   assert.equal(env.MAKO_CONTROL_SESSION_FILE, launch.sessionFile)
   assert.ok(env.PATH?.startsWith(launch.bin))
-  assert.ok(launchInstructions(launch)?.includes(launch.command))
+  assert.ok(controlLine(launch).includes(launch.command))
   assert.deepEqual(await sessions.processes(), { bindings: { binding: undefined }, spare: undefined }, "a launch starts no worker")
   assert.equal(JSON.parse(await readFile(launch.sessionFile, "utf8")).pid, process.pid, "the session file names its owner, which listens until a worker takes over")
   const grant = grants.mint("binding", "conversation")
