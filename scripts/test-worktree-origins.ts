@@ -80,6 +80,9 @@ try {
   rmSync(mirror, { recursive: true, force: true })
   git(repo, "worktree", "prune")
   assert.deepEqual(new WorktreeOrigins(memory).of(mirror), { path: mirror, repoRoot: suite, mirrors: true }, "and stays filed there once removed")
+  assert.equal(new WorktreeOrigins(memory).projectFolderOfRemoved(mirror), suite, "a new Session for its folder starts in the project")
+  assert.equal(new WorktreeOrigins(memory).projectFolderOfRemoved(join(mirror, "gone")), undefined, "unless that folder isn't in the project")
+  assert.equal(origins.projectFolderOfRemoved(suite), undefined, "a folder that's there stays as it is")
 
   // Every folder a catalog could hold, twice: the first pass reads the disk, the second only memory.
   const folders = Array.from({ length: 400 }, (_, index) => join([repo, claude, codex, plain][index % 4] ?? repo, `deep/${index}`))
@@ -100,6 +103,7 @@ try {
   const restarted = new WorktreeOrigins(memory)
   assert.deepEqual(restarted.of(codex), { path: codex, repoRoot: repo }, "and after a restart, from the remembered file")
   assert.deepEqual(restarted.of(join(codex, "web")), { path: codex, repoRoot: repo }, "so does a folder that was inside it")
+  assert.equal(restarted.projectFolderOfRemoved(codex), repo, "and a new Session for it starts in the repository")
   if (root.startsWith("/private/")) {
     // Hosts remember whichever spelling they saw; a recalled worktree is named the way it's asked about.
     const unprivate = (path: string) => path.slice("/private".length)

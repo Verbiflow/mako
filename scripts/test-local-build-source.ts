@@ -69,6 +69,12 @@ try {
   await symlink("../../packages/git", join(syncSource, "node_modules/@mako/git"))
   await writeFile(lockfile, JSON.stringify({ packages: {
     "node_modules/@mako/git": { resolved: "packages/git", link: true },
+    "node_modules/@esbuild/linux-x64": { version: "0.28.2", optional: true },
+  } }))
+  // Pulled, but npm install hasn't run since: the build would fail on the missing package.
+  await assert.rejects(syncBuildCheckout(syncSource, syncCheckout), /hasn't installed what its package-lock\.json lists \(@mako\/git\)\. Run npm install there/)
+  await writeFile(join(syncSource, "node_modules/.package-lock.json"), JSON.stringify({ packages: {
+    "node_modules/@mako/git": { resolved: "packages/git", link: true },
   } }))
   const afterWorkspace = await syncBuildCheckout(syncSource, syncCheckout)
   assert.notEqual(afterWorkspace, beforeWorkspace)

@@ -12,7 +12,7 @@ globalThis.__makoLoginTest = state
 try {
   const mocks = {
     './host-environment.js': `export const hostEnvironment = () => ({ get packaged() { return globalThis.__makoLoginTest.packaged }, appRoot: globalThis.__makoLoginTest.root });`,
-    'node:os': `export const homedir = () => globalThis.__makoLoginTest.root;`,
+    'node:os': `export const homedir = () => globalThis.__makoLoginTest.root; export const release = () => '25.0.0';`,
     'node:child_process': `export function execFile(command, args, cb) {
       const s = globalThis.__makoLoginTest; s.calls.push(args[0]);
       if (args[0] === 'bootstrap') s.loaded = true;

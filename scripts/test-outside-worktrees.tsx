@@ -140,5 +140,11 @@ const mirrored = { harness: "codex", nativeId: "x-9", path: "/p/x-9.jsonl", cwd:
 applyThreads([...listed, mirrored])
 assert.equal(worktreesStore.get().outside.some((entry) => entry.path === mirror), false, "the checkout is no worktree made outside Mako")
 assert.equal(threadFolderKey(mirrored), threadFolderKey({ cwd: suite }), "its sessions file under the project, the checkout removed or not")
+worktreesStore.set({ ...worktreesStore.get(), worktrees: [made] })
+chatFoldersStore.set({ ...chatFoldersStore.get(), projects: new Set(chatFoldersStore.get().projects) })
+const removed = worktreesStore.get()
+assert.equal(removed.folderMap(mirror), suite, "a live conversation left in the checkout after its removal files under the project")
+assert.equal(groupThreadFolders({ refs: [mirrored], live: [{ key: "k", harness: "cursor", cwd: mirror, createdAt: 0, status: "failed" }], pinnedThreads: [], pinnedFolders: [], sortBy: "recent", folderMap: removed.folderMap }).length, 1,
+  "and makes no project of its own")
 
-console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, moved by its harness vs a cd, detached, removed, Mako's own excluded; named by the host: one project before any head, project filter, live folder, harness move, branch from head, quiet relist; a project checkout of several repositories")
+console.log("outside worktrees: unknown until read, regroups, branch, one per worktree, composer on its branch, moved by its harness vs a cd, detached, removed, Mako's own excluded; named by the host: one project before any head, project filter, live folder, harness move, branch from head, quiet relist; a project checkout of several repositories, removed with a live conversation left in it")

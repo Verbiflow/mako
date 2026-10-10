@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -30,7 +30,7 @@ const worktree = join(root, "worktree")
 mkdirSync(main)
 mkdirSync(worktree)
 
-function fixture(provider: string, elsewhere: boolean, refuses?: string) {
+function fixture(provider: string, elsewhere: boolean, refuses?: string, projectFolderOfRemoved?: (cwd: string) => string | undefined) {
   const starts: { cwd: string; options: ProviderStartOptions }[] = []
   let closes = 0
   let owner: LiveConversations | undefined
@@ -66,6 +66,7 @@ function fixture(provider: string, elsewhere: boolean, refuses?: string) {
     history: async () => null, emit() {}, providerIdleMs: 60_000, providerWarmLimit: 10,
     checkpoint: async () => "checkpoint",
     resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+    projectFolderOfRemoved,
   })
   return { owner, starts, closes: () => closes, hold: (value: boolean) => { running = value } }
 }
@@ -133,7 +134,26 @@ try {
   assert.equal(staying.owner.session(other)?.cwd, main)
   assert.equal(staying.owner.session(other)?.connection, "connected")
   assert.equal(staying.closes(), 0)
-  console.log("Conversation relocate: an idle session sleeps, moves and is resumed in the new folder under its native ID before anyone writes; one that doesn't resume goes back to its folder, asleep and usable; mid-turn or undeclared, nothing changes")
+
+  // The Thread's worktree is merged and removed while its conversation sleeps there.
+  const removedTree = join(root, "removed-worktree")
+  mkdirSync(removedTree)
+  const returning = fixture("returns", true, undefined, (cwd) => cwd === removedTree && !existsSync(cwd) ? main : undefined)
+  owners.push(returning.owner)
+  const back = randomUUID()
+  await returning.owner.start("returns", removedTree, { conversationId: back })
+  returning.owner.submit(back, randomUUID(), "work in the worktree")
+  await until(() => returning.owner.snapshot(back)?.requests[0]?.status === "completed" && returning.owner.lifecycleWork().length === 0)
+  await delay(10)
+  assert.equal(returning.owner.hibernateIfIdle(back), true)
+  await until(() => returning.owner.session(back)?.connection === "hibernated")
+  rmSync(removedTree, { recursive: true })
+  returning.owner.submit(back, randomUUID(), "after the merge")
+  await until(() => returning.owner.snapshot(back)?.requests[1]?.status === "completed")
+  assert.equal(returning.starts.at(-1)!.cwd, main, "it goes on in the project folder the worktree was made from")
+  assert.equal(returning.starts.at(-1)!.options.resume, "native-returns", "under the same native session")
+  assert.equal(returning.owner.session(back)?.cwd, main)
+  console.log("Conversation relocate: an idle session sleeps, moves and is resumed in the new folder under its native ID before anyone writes; one that doesn't resume goes back to its folder, asleep and usable; mid-turn or undeclared, nothing changes; one whose worktree was removed goes on in the project folder")
 } finally {
   for (const owner of owners) await owner.stop()
   rmSync(root, { recursive: true, force: true })
