@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"

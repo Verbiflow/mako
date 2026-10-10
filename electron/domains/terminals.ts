@@ -1,8 +1,8 @@
 import { join } from "node:path"
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { TerminalClients } from "../terminal-clients.js"
 import { hostClient } from "@mako/host/base/host-client"
-import { buildTag } from "../build-identity.js"
+import { buildTag } from "@mako/host/base/build-identity"
 import type { TerminalCreateOptions } from "@mako/host/contracts/terminal"
 
 type TerminalEvent = Parameters<ConstructorParameters<typeof TerminalClients>[2]>[0]

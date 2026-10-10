@@ -12,7 +12,6 @@ import type {
 import {
   accountDir,
   accountsRoot,
-  childProcessEnv,
   cleanAccountName,
   credentialFileFingerprint,
   jsonFields,
@@ -23,6 +22,7 @@ import {
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 import type { JsonValue } from "@mako/host/contracts/json"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { devinExecutable } from "./executable.js"

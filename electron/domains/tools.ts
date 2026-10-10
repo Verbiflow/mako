@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { startConversationMcp } from "../conversation-mcp.js"
 import { deletePlugin, listPlugins, pluginsDir, watchPlugins, writePlugin } from "../plugins.js"
 import { discoverMcpRegistry } from "../mcp-registry.js"

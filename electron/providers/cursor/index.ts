@@ -1,6 +1,6 @@
 import { cursorCanvasPreview } from "./canvas-preview.js"
 import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from "@mako/sessions"
-import { childProcessEnv } from "../../accounts-common.js"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"

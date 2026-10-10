@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { ThreadArchives } from "../thread-archives.js"
 import type { ThreadLifecycle } from "../thread-lifecycle.js"
 import type { ArchiveCommand, StopTarget, ThreadTarget } from "@mako/host/contracts/thread-lifecycle"

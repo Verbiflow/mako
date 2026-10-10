@@ -1,6 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { UsageReader } from "../usage-reader.js"
 import { accountUsageSpent } from "../accounts.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"

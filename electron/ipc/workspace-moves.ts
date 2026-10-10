@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { WorkspaceMoves } from "../workspace-moves.js"
 import type { WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves as WorkspaceMovesState } from "@mako/host/contracts/workspace-moves"
 

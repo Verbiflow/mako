@@ -2,17 +2,13 @@ import type { ConversationRoutingResult } from "./shared-conversations.js"
 import { withHostClient, hostHistoryPaging } from "@mako/host/base/host-client"
 import { breadcrumb } from "@mako/host/base/crash"
 import { hostCallInput, hostChannels, isHostChannel, type HostArguments, type HostChannel } from "@mako/host/contracts/host-call-inputs"
+import type { MethodTable } from "@mako/host/base/methods"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
 import { CLIENT_CALL_ON_SOCKET, isClientCall } from "@mako/host/contracts/client-calls"
 import { HostCallLifetime } from "./host-call-lifetime.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 
 /** Where each domain declares the methods it answers. */
-export interface MethodTable {
-  /** Every call validates its arguments against the generated contract before `listener` sees them. */
-  handle<Channel extends HostChannel, Result>(channel: Channel, listener: (...args: HostArguments<Channel>) => Result): void
-}
-
 export interface HostMethodsOptions {
   /**
    * A fixture desk refuses every call outside the fixture allowlist, from

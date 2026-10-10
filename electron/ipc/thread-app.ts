@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { DeskApp } from "../environment-tools.js"
 import { AppOutputKeySchema, type AppActionOutcome, type AppMark, type AppOutputChunk, type AppOutputCursor, type AppProbeView, type RoomView, type ThreadAppView } from "@mako/host/contracts/thread-app"
 import type { ProjectAppSetup } from "@mako/host/contracts/project-app"

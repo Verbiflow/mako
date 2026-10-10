@@ -23,7 +23,7 @@ import { breadcrumb, clearCrashes, crashesDir, installCrashReporting, listCrashe
 import { electronNativeCrashes } from "./crash-electron.js"
 import { flushHostLog, hostLog, installHostLog } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "./renderer-health.js"
-import { buildIdentity } from "./build-identity.js"
+import { buildIdentity } from "@mako/host/base/build-identity"
 import { userRootFor } from "@mako/host/base/host-environment"
 import { dataKeyPath } from "@mako/host/base/host-secrets"
 import { SecretKeyLink } from "./secret-key-link.js"

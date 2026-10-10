@@ -6,7 +6,8 @@ import { homedir } from "node:os"
 import { z } from "zod"
 import { claudeAccountCapability } from "../electron/providers/claude/accounts.ts"
 import { claudeRuntime, terminalClaudeExecutable } from "../electron/providers/claude/runtime.ts"
-import { childProcessEnv, withAccountMutation, readSelection } from "../electron/accounts-common.ts"
+import { withAccountMutation, readSelection } from "../electron/accounts-common.ts"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 
 const directory = z.string().min(1).parse(process.env.MAKO_THREAD_DATA_DIR)
 const execute = promisify(execFile)

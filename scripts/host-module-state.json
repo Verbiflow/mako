@@ -40,9 +40,6 @@
   "electron/browser-icon.ts": [
     "icons"
   ],
-  "electron/build-identity.ts": [
-    "cached"
-  ],
   "electron/codex-app.ts": [
     "closingSessions",
     "sendEvent"
@@ -212,6 +209,9 @@
     "running",
     "runtime",
     "version"
+  ],
+  "packages/host/src/base/build-identity.ts": [
+    "cached"
   ],
   "packages/host/src/base/compile-cache.ts": [
     "status"

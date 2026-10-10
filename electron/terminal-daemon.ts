@@ -8,7 +8,7 @@ import {
   prepareMacosTerminalLogin,
   wrapMacosTerminalLogin,
 } from "./macos-terminal-login.js"
-import { childProcessEnv } from "./accounts-common.js"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 import { TerminalHistoryFilter } from "./terminal-history-filter.js"
 import { killTerminalProcessGroups } from "./terminal-process-groups.js"
 import type { TerminalSession } from "@mako/host/contracts/terminal"

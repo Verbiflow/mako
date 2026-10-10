@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { check, updateState } from "../updates.js"
 import { clearCrashes, crashesDir, listCrashes, record } from "@mako/host/base/crash"
 import { hostLogPath } from "@mako/host/base/host-log"

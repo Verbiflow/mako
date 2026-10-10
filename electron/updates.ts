@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import type { UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
-import { buildMetadata } from "./build-identity.js"
+import { buildMetadata } from "@mako/host/base/build-identity"
 import { LocalUpdates } from "./local-updates.js"
 import { prepareLocalInstall } from "./local-update-install.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"

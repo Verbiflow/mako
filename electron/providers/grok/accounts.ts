@@ -12,7 +12,6 @@ import {
   accountDir,
   accountsRoot,
   cleanAccountName,
-  childProcessEnv,
   principalFingerprint,
   readOptionalFile,
   jsonFields,
@@ -22,6 +21,7 @@ import {
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { resolveExecutable } from "@mako/host/base/executable"

@@ -4,7 +4,7 @@ import type { AgentHost } from "../host.js"
 import type { HostPool } from "../pool.js"
 import type { BootPayload, TabSnapshot } from "@mako/host/contracts/host-events-boot"
 import type { ThinkingLevel } from "@mako/host/contracts/conversation-session"
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { MachineOffer } from "@mako/host/contracts/machine-offer"
 
 export interface SessionIpcContext {

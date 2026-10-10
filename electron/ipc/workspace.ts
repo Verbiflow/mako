@@ -2,7 +2,7 @@ import { watch, type FSWatcher } from "node:fs"
 import type { AgentHost } from "../host.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { SearchOptions } from "@mako/host/contracts/git-workspace-search"
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { hostMachine } from "@mako/host/base/machine"
 
 export interface WorkspaceIpcContext {

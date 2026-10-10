@@ -16,7 +16,7 @@ import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { z } from "zod"
 import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "@mako/host/contracts/utility-models"
 import type { GitPushInput, GitRemoteInput } from "@mako/host/contracts/git-workspace-search"
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { hostEnvironment } from "@mako/host/base/host-environment"
 
 export interface GitIpcContext {

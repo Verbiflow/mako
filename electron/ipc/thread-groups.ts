@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { LiveConversations } from "../live-conversations.js"
 import type { ThreadStore } from "../thread-store.js"
 import type { ThreadGroup } from "@mako/host/contracts/thread-groups"

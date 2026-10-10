@@ -25,7 +25,6 @@ import {
   recordAccountHome,
   accountDir,
   accountsRoot,
-  childProcessEnv,
   cleanAccountName,
   ensureSharedLinks,
   jsonFields,
@@ -33,6 +32,7 @@ import {
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 import type { JsonValue } from "@mako/host/contracts/json"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"

@@ -22,7 +22,6 @@ import type {
   UsageWindow,
 } from "@mako/host/contracts/accounts"
 import {
-  childProcessEnv,
   loginPending,
   markLoginPending,
   managedAccountHome,
@@ -44,6 +43,7 @@ import {
   valueFields,
   writeKeychain,
 } from "../../accounts-common.js"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { orderWindows } from "@mako/host/contracts/account-usage"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"

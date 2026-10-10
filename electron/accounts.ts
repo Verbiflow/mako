@@ -48,13 +48,13 @@ import type {
 import {
   accountDir,
   accountsRoot,
-  childProcessEnv,
   clearLoginPending,
   loginPending,
   readSelection,
   withAccountMutation,
   writeSelection,
 } from "./accounts-common.js"
+import { childProcessEnv } from "@mako/host/base/child-environment"
 import type {
   AccountLoginLaunch,
   AccountLoginTarget,

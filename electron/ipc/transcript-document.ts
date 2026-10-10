@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { TranscriptDocument } from "@mako/host/contracts/transcript-document"
 import { transcriptDocument, type TranscriptDocumentDeps } from "../transcript-document.js"
 

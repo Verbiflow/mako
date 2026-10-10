@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { installGitIpc, openUtilityModels } from "../ipc/git.js"
 import { UtilityWork } from "../utility-work.js"
 import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "../github.js"

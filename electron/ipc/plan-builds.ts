@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { PlanBuilds } from "../plan-builds.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds as PlanBuildsState } from "@mako/host/contracts/plan-builds"
 

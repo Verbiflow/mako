@@ -19,7 +19,7 @@ try {
       if (args[0] === 'bootout') s.loaded = false;
       cb(args[0] === 'print' && !s.loaded ? new Error('not loaded') : null, 'pid = 123', '');
     }`,
-    './build-identity.js': `export const buildTag = () => 'test-build';`,
+    '@mako/host/base/build-identity': `export const buildTag = () => 'test-build';`,
     '@mako/host/base/headless-node': `export const headlessNodeExecutable = () => '/test/Mako Helper';`,
   }
   const outfile = join(root, 'login.mjs')

@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { chatFolders } from "../chat-folders.js"
 import type { ChatFolders } from "@mako/host/contracts/chat-folders"
 

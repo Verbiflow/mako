@@ -1,6 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import { providerHost } from "../providers/index.js"
 import { describeHarnesses } from "../providers/harness-descriptors.js"
 import { describeConnection } from "../providers/connection-capability.js"

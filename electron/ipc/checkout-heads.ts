@@ -1,4 +1,4 @@
-import type { MethodTable } from "../host-methods.js"
+import type { MethodTable } from "@mako/host/base/methods"
 import type { CheckoutHeadService } from "../checkout-heads.js"
 import type { CheckoutHeads } from "@mako/host/contracts/checkout-heads"
 
