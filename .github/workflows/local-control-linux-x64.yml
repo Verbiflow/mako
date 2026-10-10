@@ -8,6 +8,7 @@ on:
       - electron/**
       - packages/control/**
       - packages/control-runtime/**
+      - packages/lazy/**
       - runtime/control/**
       - scripts/**
       - vendor/cua-driver/**

@@ -9,8 +9,14 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "engines": {
+    "node": ">=24"
+  },
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsgo -b"
