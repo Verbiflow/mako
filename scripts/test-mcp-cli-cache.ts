@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { cliListingCache } from "@mako/host/tools/mcp-cli-cache"
 import { mcpRegistry } from "@mako/host/tools/mcp-registry"
-import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
-import { createHarnessHost } from "../electron/providers/index.js"
+import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
 
 const providerHost = createHarnessHost()

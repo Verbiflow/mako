@@ -4,9 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { createClaudeProfileLoader } from "../electron/providers/claude/profile.js"
-import { resolveHarnessTuning } from "../electron/harness-models.js"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+import { createClaudeProfileLoader } from "@mako/host/harnesses/claude/profile"
+import { resolveHarnessTuning } from "@mako/host/harnesses/harness-models"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const claudeProfileLoader = createClaudeProfileLoader(new DiscoveryProcesses())
 

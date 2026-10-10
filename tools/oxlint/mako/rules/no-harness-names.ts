@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { defineRule } from "@oxlint/plugins";
 
 /** Where code may name a harness: its own folder, and the dev mock that stands in for the host. */
-const OWNERS = [/\/electron\/providers\//, /\/src\/dev\//];
+const OWNERS = [/\/packages\/host\/src\/harnesses\/[^/]+\//, /\/src\/dev\//];
 const CHECKED = [/\/src\//, /\/electron\//];
 
 /**
@@ -36,7 +36,7 @@ export const noHarnessNamesRule = defineRule({
     },
     messages: {
       comparison:
-        "Don't branch on the harness `{{name}}`. Declare what differs on the harness definition (electron/providers/<harness>) and read it from the registry or the descriptor.",
+        "Don't branch on the harness `{{name}}`. Declare what differs on the harness definition (packages/host/src/harnesses/<harness>) and read it from the registry or the descriptor.",
       list:
         "Don't list harnesses by hand. Read them from the registry (`providerHost.harnesses`) or the descriptors, so the next harness appears here without an edit.",
     },

@@ -4,10 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
 import { compareVersions, parseVersion, versionBehind } from "@mako/host/contracts/runtime-version"
-import { scriptInstall, type ProviderUpdateSource } from "../electron/providers/update-source.ts"
-import { RuntimeUpdates, resolveRuntimeChannel } from "../electron/runtime-updates.ts"
+import { scriptInstall, type ProviderUpdateSource } from "@mako/host/harnesses/update-source"
+import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
 import { installCommandText, runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
 

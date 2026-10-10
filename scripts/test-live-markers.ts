@@ -11,13 +11,13 @@ import {
   reduceLiveUpdates,
   type LiveUpdate,
 } from "@mako/sessions/live-content"
-import { createLiveEngine, type EngineLive } from "../electron/live-engine.ts"
+import { createLiveEngine, type EngineLive } from "@mako/host/harnesses/live-engine"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
 import {
   ClaudeProjection,
   claudeRetracted,
 } from "@mako/sessions/claude-projection"
-import { ClaudeNotices } from "../electron/providers/claude/sdk-notices.ts"
+import { ClaudeNotices } from "@mako/host/harnesses/claude/sdk-notices"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { sessionDelta } from "@mako/host/contracts/live-conversations"

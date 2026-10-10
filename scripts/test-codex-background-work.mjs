@@ -36,7 +36,7 @@ async function check() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createCodexEngine } = await import(join(repo, "dist-electron/codex-app.js"))
+  const { createCodexEngine } = await import(join(repo, "packages/host/dist/harnesses/codex-app.js"))
   const codex = createCodexEngine()
   const events = []
   const running = (pid) => {

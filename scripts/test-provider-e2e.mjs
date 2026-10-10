@@ -69,10 +69,10 @@ async function runElectron() {
   const launchLog = installHostLog(join(root, "host.log"))
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
-  const { createHarnessHost } = await import("../dist-electron/providers/index.js")
+  const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
   const providerHost = createHarnessHost()
   const { mcpRegistry } = await import("@mako/host/tools/mcp-registry")
-  const { toolHarnesses } = await import("../dist-electron/providers/tool-harnesses.js")
+  const { toolHarnesses } = await import("@mako/host/harnesses/tool-harnesses")
   const registry = mcpRegistry(toolHarnesses(providerHost))
   const { ensureCuaEmbedded, stopCuaEmbedded } =
     await import("@mako/host/control/cua-embedded")
@@ -82,8 +82,8 @@ async function runElectron() {
   const { startConversationMcp } =
     await import("@mako/host/tools/conversation-mcp")
   const { defaultCatalog } = await import("@mako/sessions")
-  const { nativeCheckpoint } = await import("../dist-electron/native-continuation.js")
-  const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")
+  const { nativeCheckpoint } = await import("@mako/host/harnesses/native-continuation")
+  const { assessProviderResume } = await import("@mako/host/harnesses/provider-recovery")
   const { resumable } =
     await import("@mako/host/contracts/conversation-control")
   const cuaRoot = join("/tmp", `mako-provider-cua-${String(process.pid)}`)
@@ -164,8 +164,8 @@ async function runElectron() {
   control = await startControlService(browser, (id, binding) =>
     owner.authorizeAgent(id, binding)
   )
-  const { HarnessProfiles } = await import("../dist-electron/harness-profiles.js")
-  const { ProviderProfileCache } = await import("../dist-electron/provider-profile-cache.js")
+  const { HarnessProfiles } = await import("@mako/host/harnesses/harness-profiles")
+  const { ProviderProfileCache } = await import("@mako/host/harnesses/provider-profile-cache")
   const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const { resolveSessionSettings, modelByIdentity } =
     await import("@mako/sessions/settings")
@@ -271,7 +271,7 @@ async function runElectron() {
         if (source) {
           const via = "Probe: a second prompt sent while the turn runs"
           source.steering = { kind: "supported", via, wire: "concurrent-prompt" }
-          driver.steering = { kind: "supported", lands: "step", via, steer: (await import("../dist-electron/acp.js")).liveSteer }
+          driver.steering = { kind: "supported", lands: "step", via, steer: (await import("@mako/host/harnesses/acp")).liveSteer }
         }
       }
       const id = randomUUID()

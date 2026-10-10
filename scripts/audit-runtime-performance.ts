@@ -10,7 +10,7 @@ import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { projectLive } from "../src/state/live-projection"
 import { selectAcpPresence, sameAcpPresence } from "../src/state/acp-presence"
 import { acpForThread, type AcpState } from "../src/state/acp-state"
-import { createHarnessHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import {
   auditId,
   auditSnapshot,

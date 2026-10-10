@@ -6,7 +6,7 @@ import type { LiveAction, LiveActionInput } from "@mako/host/contracts/live-acti
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { NativeQuestionHistory } from "@mako/host/contracts/live-questions"
-import type { ProviderLiveDriver } from "./providers/live-driver.js"
+import type { ProviderLiveDriver } from "@mako/host/harnesses"
 
 interface QuestionDelivery {
   continue(id: string, bindingId: string, requestId: string, text: string, displayText: string): void

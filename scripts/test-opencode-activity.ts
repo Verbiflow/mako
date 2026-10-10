@@ -5,8 +5,8 @@ import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { openCodeProcessProbeFor } from "../electron/providers/opencode/process-probe.js"
-import { OpenCodeServers } from "../electron/providers/opencode/servers.js"
+import { openCodeProcessProbeFor } from "@mako/host/harnesses/opencode/process-probe"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-activity-"))
 let mode = "active"

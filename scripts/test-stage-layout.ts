@@ -1,4 +1,4 @@
-import { createHarnessHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import { syncThreadStatus } from "../src/state/acp-live.ts"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"

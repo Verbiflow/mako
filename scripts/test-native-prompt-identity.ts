@@ -5,9 +5,9 @@ import { projectLive } from "../src/state/live-projection.ts"
 import { reconcileMessages } from "../src/lib/reconcile.ts"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
-import { createAcpLiveDriver } from "../electron/providers/acp-live-driver.ts"
+import { createAcpLiveDriver } from "@mako/host/harnesses/acp-live-driver"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
-import { createProviderHost } from "../electron/providers/host.ts"
+import { createProviderHost } from "@mako/host/harnesses/host"
 
 const host = createProviderHost()
 

@@ -13,9 +13,9 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { devinDefaultModel } from "../electron/providers/devin/settings.ts"
-import { devinExecutable } from "../electron/providers/devin/executable.ts"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+import { devinDefaultModel } from "@mako/host/harnesses/devin/settings"
+import { devinExecutable } from "@mako/host/harnesses/devin/executable"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
 

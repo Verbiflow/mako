@@ -2,9 +2,9 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
-import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
-import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
-import { ProviderLaunchTrace } from "../electron/provider-launch.ts"
+import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
 
 // Native contract probe. All stores and sessions are disposable; no model call,
 // user configuration mutation, saved answer replay or patched runtime.

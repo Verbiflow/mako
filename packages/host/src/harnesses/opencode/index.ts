@@ -1,0 +1,74 @@
+import { join } from "node:path"
+import { installHarness, lacks, notBuilt } from "../harness-definition.js"
+import { createOpenCodeCommands } from "./authoring.js"
+import type { ProviderModule } from "../host.js"
+import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
+import { openCodeAccountCapability } from "./accounts.js"
+import { openCodeDecoderSource } from "./decoder-source.js"
+import { createOpenCodeDriver } from "./live-driver.js"
+import { openCodeMcpSource } from "./mcp.js"
+import { openCodeNativeRunner } from "./native-runner.js"
+import { openCodeProcessProbeFor } from "./process-probe.js"
+import { openCodeProfileLoader } from "./profile.js"
+import { OpenCodeServers } from "./servers.js"
+import { emitOpenCodeSession } from "./session-emitter.js"
+import { openCodeSkillSource } from "./skills.js"
+import { openCodeUpdateSource } from "./updates.js"
+import { openCodeUsageHistory } from "./usage-history.js"
+import { openCodePresentation } from "./presentation.js"
+import { hostEnvironment } from "../../base/host-environment.js"
+
+/**
+ * OpenCode v2 runs through its native API: one `opencode serve --stdio` per
+ * conversation, typed by `@opencode/client`. `opencode acp` was the transport
+ * before; its bridge dropped native questions, could not bind a turn to the
+ * message it sent, and needed a plugin to see permission decisions.
+ */
+export const installOpenCode: ProviderModule = (host) => {
+  const servers = new OpenCodeServers()
+  return installHarness(host, {
+    provider: "opencode",
+    presentation: openCodePresentation,
+    diagnostics: { sdk: "@opencode/client" },
+    usage: {
+      context: implemented("The main session's last step: what it read, cached or not, and wrote."),
+      window: implemented("The model's context limit in OpenCode's provider catalog."),
+      compaction: byDefault("OpenCode doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."),
+      tokens: implemented("Each step's tokens."),
+      cost: implemented("Each step's cost."),
+      missedCalls: harnessLacks("OpenCode's steps never say they left a call out."),
+      resetCredits: harnessLacks("OpenCode's providers report no reset credits to it."),
+    },
+    unique: [
+      { name: "Staged revert", native: "`revert/stage`, `commit`, `clear`", mako: makoLacks("Mako follows a revert another client commits; staging one isn't built.") },
+      { name: "Inbox", native: "a prompt sent while busy is steered or queued (`inbox/:id/steer|queue`)", mako: shownBy("capabilities.steering") },
+      { name: "Code Mode MCP", native: "MCP tools called from a script through the `execute` tool, on by default", mako: shownInTools(["execute"]) },
+    ],
+    hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+    commands: createOpenCodeCommands(),
+    toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
+    skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
+    mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
+    live: createOpenCodeDriver({
+      approvalRoot: () => Promise.resolve(join(hostEnvironment().dataRoot, "approval-evidence")),
+      servers,
+    }),
+    decoder: openCodeDecoderSource,
+    profile: openCodeProfileLoader(servers),
+    accounts: openCodeAccountCapability,
+    acp: lacks("Runs on OpenCode’s native API"),
+    nativeRunner: openCodeNativeRunner,
+    processProbe: openCodeProcessProbeFor(servers),
+    mcp: openCodeMcpSource,
+    skills: openCodeSkillSource,
+    sessionEmitter: {
+      provider: "opencode",
+      emit: async (thread) => emitOpenCodeSession(thread, await host.accounts.env("opencode", process.env)),
+    },
+    connection: lacks("Signs in through OpenCode’s own providers"),
+    updates: openCodeUpdateSource,
+    usageHistory: openCodeUsageHistory,
+    artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
+  })
+}

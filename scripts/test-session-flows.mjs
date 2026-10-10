@@ -80,10 +80,10 @@ async function main(app) {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const load = (path) => import(join(repo, path))
-  const { createHarnessHost } = await load("dist-electron/providers/index.js")
+  const { createHarnessHost } = await load("packages/host/dist/harnesses/harness-host.js")
   const providerHost = createHarnessHost()
   const { LiveConversations } = await load("dist-electron/live-conversations.js")
-  const { assessProviderResume } = await load("dist-electron/provider-recovery.js")
+  const { assessProviderResume } = await load("packages/host/dist/harnesses/provider-recovery.js")
   const stopDrivers = () => {
     for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
   }
@@ -764,7 +764,7 @@ const RECORDED = [
 
 /** The next build, picking up every recorded conversation where the person left it. */
 async function continueRecorded(root, host, tools, results, report) {
-  const { createHarnessHost } = await import(join(process.env.MAKO_FLOWS_REPO, "dist-electron/providers/index.js"))
+  const { createHarnessHost } = await import(join(process.env.MAKO_FLOWS_REPO, "packages/host/dist/harnesses/harness-host.js"))
   const providerHost = createHarnessHost()
   const { conversations } = JSON.parse(await readFile(join(root, "recorded.json"), "utf8"))
   for (const entry of conversations) {

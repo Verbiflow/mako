@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const NAMES = ["claude", "codex", "grok", "devin", "opencode"]
@@ -46,7 +46,6 @@ setTimeout(() => process.exit(1), 500)
       STALE_NAME: "from-the-parent",
       PORT: "3000",
       MAKO_LAUNCH_ROOT: root,
-      MAKO_LAUNCH_DIST: resolve(process.env.MAKO_LAUNCH_DIST ?? "dist-electron"),
     }
     delete env.ELECTRON_RUN_AS_NODE
     const { default: electron } = await import("electron")
@@ -71,9 +70,10 @@ async function check() {
   const root = process.env.MAKO_LAUNCH_ROOT
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createHarnessHost } = await import(join(process.env.MAKO_LAUNCH_DIST, "providers/index.js"))
+  const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
   const providerHost = createHarnessHost()
-  const { createCursorSdkDriver } = await import(join(process.env.MAKO_LAUNCH_DIST, "providers/cursor/sdk/driver.js"))
+  const { createCursorSdkDriver } = await import("@mako/host/harnesses/cursor/sdk/driver")
+  const { ProviderLaunchTrace } = await import("@mako/host/harnesses/provider-launch")
   assert.deepEqual(
     providerHost.harnesses.list().filter((harness) => !harness.diagnostics.runsInSdk).map((harness) => harness.provider).sort(),
     [...NAMES].sort(),
@@ -93,17 +93,23 @@ async function check() {
     PORT: "20110",
     API_URL: "http://fix-login.thread.localhost:20111",
   }
-  const options = () => ({
-    conversationId: randomUUID(),
-    emit: () => {},
-    mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
-    threadEnvironment: environment,
-  })
+  const options = (provider) => {
+    const conversationId = randomUUID()
+    return {
+      conversationId,
+      emit: () => {},
+      mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
+      threadEnvironment: environment,
+      accountLaunch: { env: { ...process.env }, account: { name: "default" }, selection: { kind: "unavailable" } },
+      observeUsage: () => undefined,
+      trace: new ProviderLaunchTrace({ provider, conversation: conversationId }),
+    }
+  }
   const outcomes = {}
   for (const name of NAMES) {
     const driver = providerHost.liveDrivers.get(name)
     assert.ok(driver, `${name} has a live driver`)
-    const id = options()
+    const id = options(name)
     const started = await Promise.race([
       driver.start(cwd, id).then(() => "started", (error) => `failed: ${error instanceof Error ? error.message : String(error)}`),
       new Promise((done) => setTimeout(() => done("still starting"), 15_000)),
@@ -112,7 +118,7 @@ async function check() {
     await Promise.resolve(driver.close(id.conversationId)).catch(() => undefined)
   }
 
-  const bare = { ...options(), threadEnvironment: undefined }
+  const bare = { ...options("codex"), threadEnvironment: undefined }
   const codex = providerHost.liveDrivers.get("codex")
   await codex.start(cwd, bare).catch(() => undefined)
   await Promise.resolve(codex.close(bare.conversationId)).catch(() => undefined)
@@ -127,7 +133,7 @@ async function check() {
       throw new Error("recorded")
     },
   })
-  await cursor.start(cwd, options()).catch(() => undefined)
+  await cursor.start(cwd, options("cursor")).catch(() => undefined)
 
   const launches = (await readFile(join(root, "launches.jsonl"), "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
   const report = {}

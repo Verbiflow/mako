@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { OpenCode } from "@opencode/client"
 import { setTimeout as pause } from "node:timers/promises"
-import { createOpenCodeCommands } from "../electron/providers/opencode/authoring.ts"
+import { createOpenCodeCommands } from "@mako/host/harnesses/opencode/authoring"
 
 const openCodeCommands = createOpenCodeCommands()
 

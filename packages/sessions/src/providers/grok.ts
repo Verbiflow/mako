@@ -119,7 +119,7 @@ type SavedLine =
 
 /**
  * Grok's own updates that are transcript facts. Saved history and the live
- * connection (electron/providers/grok/notifications.ts) both read them here,
+ * connection (packages/host/src/harnesses/grok/notifications.ts) both read them here,
  * so a marker says the same thing in both.
  */
 /** What a Grok error kind (`SamplingErrorKind`, xai-grok-sampler, or a shell error type) says to the person. */

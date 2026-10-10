@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { performance } from "node:perf_hooks"
 import { cpus } from "node:os"
-import { DevinAgents } from "../electron/providers/devin/agents.ts"
+import { DevinAgents } from "@mako/host/harnesses/devin/agents"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 
 // Measures only the provider observer's incremental event path. No RPC,

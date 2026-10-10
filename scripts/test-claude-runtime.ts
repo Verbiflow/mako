@@ -6,16 +6,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import type { ProviderHost } from "../electron/providers/host.ts"
-import type { ProviderUpdateSource } from "../electron/providers/update-source.ts"
-import { installClaude } from "../electron/providers/claude/index.ts"
+import type { ProviderHost } from "@mako/host/harnesses/host"
+import type { ProviderUpdateSource } from "@mako/host/harnesses/update-source"
+import { installClaude } from "@mako/host/harnesses/claude/index"
 import {
   bundledClaudeExecutable,
   claudeRuntime,
   terminalClaudeExecutable,
-} from "../electron/providers/claude/runtime.ts"
-import { RuntimeUpdates, resolveRuntimeChannel } from "../electron/runtime-updates.ts"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+} from "@mako/host/harnesses/claude/runtime"
+import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
 

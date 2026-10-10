@@ -1,4 +1,4 @@
-import { createHarnessHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 
 const providerHost = createHarnessHost()
 

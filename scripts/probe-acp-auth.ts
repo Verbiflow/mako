@@ -9,8 +9,8 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
 } from "@agentclientprotocol/sdk"
-import { createHarnessHost } from "../electron/providers/index"
-import { acpReadable, acpWritable } from "../electron/acp-stream"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
 
 const providerHost = createHarnessHost()
 

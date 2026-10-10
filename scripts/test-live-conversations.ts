@@ -16,7 +16,7 @@ import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "@mako/host/contrac
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { projectLive } from "../src/state/live-projection.js"

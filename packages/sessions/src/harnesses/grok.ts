@@ -118,7 +118,7 @@ const Stamped = z.object({ eventId: z.string() }).loose()
  * `planContent`. An approved call completes with the plan file's text as
  * `rawOutput.PlanReady.plan_content`, which replaces it and which a
  * reloaded session replays. The request that asks to build it is the live
- * client's (`electron/providers/grok/plans.ts`).
+ * client's (`packages/host/src/harnesses/grok/plans.ts`).
  */
 const ExitPlanCallSchema = z.object({
   toolCallId: z.string(),

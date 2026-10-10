@@ -2,7 +2,7 @@ import { defineVocabulary } from "./vocabulary.js"
 
 /**
  * Names are the SDK's live ones (`ToolType` in `@cursor/sdk`, which
- * `electron/providers/cursor/sdk/vocabulary-check.ts` holds this list to);
+ * `packages/host/src/harnesses/cursor/sdk/vocabulary-check.ts` holds this list to);
  * aliases are what Cursor's CLI, ACP and Desktop stores record.
  */
 const STORES_ONLY = "Cursor's CLI, ACP and Desktop stores record it; the SDK reports no such tool-call type."

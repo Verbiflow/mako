@@ -32,10 +32,10 @@ async function run() {
   const { threadCatalog } = await import('@mako/host/threads/catalog')
   const { WorktreeOrigins } = await import('@mako/host/threads/worktree-origins')
   const { Lineage } = await import('@mako/host/threads/lineage')
-  const { threadHarnesses } = await import('../dist-electron/providers/thread-harnesses.js')
+  const { threadHarnesses } = await import('@mako/host/harnesses/thread-harnesses')
   const { ConversationFiles } = await import('@mako/host/workspaces/files')
   const { ArtifactPreviews } = await import('@mako/host/workspaces/artifact-previews')
-  const { createHarnessHost } = await import('../dist-electron/providers/index.js')
+  const { createHarnessHost } = await import('@mako/host/harnesses/harness-host')
   const providerHost = createHarnessHost()
   const { hostEnvironment } = await import('@mako/host/base/host-environment')
   const report = { root, outcome: 'running', events: [] }

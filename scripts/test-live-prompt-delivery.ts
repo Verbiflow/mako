@@ -10,13 +10,13 @@ import {
   advancePromptDelivery,
   type PromptDeliveryEvidence,
 } from "@mako/host/contracts/prompt-delivery"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import {
   preparePrompt,
   type PromptDispatch,
-} from "../electron/providers/prompt-dispatch.ts"
+} from "@mako/host/harnesses/prompt-dispatch"
 import type { LiveDriverEvent, LiveBatch } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"

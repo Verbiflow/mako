@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { RequestError, type AuthMethod } from "@agentclientprotocol/sdk"
-import { openAuthenticatedSession } from "../electron/acp-authentication"
+import { openAuthenticatedSession } from "@mako/host/harnesses/acp-authentication"
 
 const methods: AuthMethod[] = [
   { id: "provider-browser", name: "Log in with browser" },

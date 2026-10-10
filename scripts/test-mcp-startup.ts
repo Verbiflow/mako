@@ -2,9 +2,9 @@ import assert from "node:assert/strict"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, delimiter } from "node:path"
-import { createHarnessHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import { mcpRegistry } from "@mako/host/tools/mcp-registry"
-import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
+import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
 
 const providerHost = createHarnessHost()

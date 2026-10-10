@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { harnessLabel } from "../electron/providers/harness-descriptors.js"
-import type { ProviderHost } from "../electron/providers/host.js"
-import { createHarnessHost } from "../electron/providers/index.js"
+import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
+import type { ProviderHost } from "@mako/host/harnesses/host"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 
 /**
  * Writes `src/dev/harness-descriptors.ts`: what the host tells the renderer

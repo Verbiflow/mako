@@ -132,14 +132,14 @@ conversations?.live`) rather than a domain importing another's files.
 
 ## Provider composition
 
-A provider is installed once from `electron/providers/<id>/index.ts`. That
+A provider is installed once from `packages/host/src/harnesses/<id>/index.ts`. That
 module contributes independent capabilities to `providerHost`: metadata and
 model discovery, native and ACP execution, native session emission, accounts,
 MCP discovery/writes, and skill roots.
 Consumers query those registries; they never maintain another list of provider
 ids or branch on all known providers. Provider-specific wire syntax and paths
 belong under that provider's directory. A new provider adds one module to
-`electron/providers/index.ts`; it does not add switches to shared consumers.
+`packages/host/src/harnesses/harness-host.ts`; it does not add switches to shared consumers.
 
 Whether a harness is installed is what its driver's `available` says:
 `npx tsx scripts/harnesses-installed.ts`. Never `which`: Devin's CLI ships
@@ -160,7 +160,7 @@ what is not the message's own meaning: binding turns, answering requests,
 reading native state back, ordering content behind an async lookup. What it
 must act on comes out of the decoder as an `effect` (OpenCode's `turn`,
 `request`, `catalog`, `mcp`, `model` and `agent-call`; Cursor's `agent`).
-ACP harnesses share `AcpDecoder` (`electron/acp-decoder.ts`), which the live
+ACP harnesses share `AcpDecoder` (`packages/host/src/harnesses/acp-decoder.ts`), which the live
 client and the fixtures both run. What differs per harness is declared on
 `ProviderAcpSource`: `plans()` (plan cards and which permission approves
 them), `requests` (extension requests the agent sends the client; any other
@@ -1133,7 +1133,7 @@ line; `console.warn`/`console.error` are mirrored; crash reports add a summary
 line; Settings > Diagnostics reveals the file. Fields are explicit and stderr
 tails are scrubbed of bearer tokens: never log an environment, a header list or
 a request body. ACP startup is bounded by silence, not a fixed budget
-(`electron/provider-startup.ts`): a step fails after 20 s without any stdout or
+(`packages/host/src/harnesses/provider-startup.ts`): a step fails after 20 s without any stdout or
 stderr from the process, after 120 s regardless, or at once when the process
 exits, and the error names the step, what had already finished and whether the
 process is alive. Grok once answered `initialize` in 150 ms and then sat silent
@@ -1309,7 +1309,7 @@ Legacy journal modes are filtered on read without deleting saved history. A mode
 `access:<tier>` is Mako's normalized selection id; anything else is the provider's own.
 
 Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
-(`native`, `launch`, `base`); `electron/acp-access.ts` builds the mode
+(`native`, `launch`, `base`); `packages/host/src/harnesses/acp-access.ts` builds the mode
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11
 against the installed CLIs: Devin advertises all five tiers
 natively. Grok reads `--permission-mode` at launch, so its tiers are
@@ -1576,7 +1576,7 @@ option value of each provider's catalog through the runner and compares the
 read-back with the settings the ACP transport applies; a mangled flag or a
 composed id that the CLI would reject fails there.
 
-Cursor runs through `@cursor/sdk` (`electron/providers/cursor/sdk/`) and
+Cursor runs through `@cursor/sdk` (`packages/host/src/harnesses/cursor/sdk/`) and
 nothing else. `cursor-agent acp` was the transport before: it ended a turn
 on the first reset frame of its backend stream (`RetriableError: http/2
 stream closed … CANCEL`), asked before every command, and answered "Session
@@ -1703,7 +1703,7 @@ step completed after 1.7 s when the steer landed) and the model continues
 with the message, so the driver advertises `interrupt`. `@cursor/sdk-*` is
 `asarUnpack`ed for its `cursorsandbox`, `rg` and tree-sitter binaries.
 `scripts/test-cursor-sdk.ts` covers the projection, modes and wire; a live
-check is `node` against `dist-electron/providers/cursor/sdk/client.js` in a
+check is `node` against `packages/host/dist/harnesses/cursor/sdk/client.js` in a
 fixture-prefixed directory.
 
 Steering is a capability with a kind, not a command. `step` folds the message
@@ -2055,7 +2055,7 @@ The runtime behind a provider is one declaration on its module
 (`host.updateSources.register`, `ProviderUpdateSource`): how to resolve the
 binary, the npm package that publishes it, its Homebrew formula or cask, its
 own updater with the install root that updater owns, and the path fragments
-that mean another app owns the copy. `electron/runtime-updates.ts` does the
+that mean another app owns the copy. `packages/host/src/harnesses/runtime-updates.ts` does the
 rest for every provider alike and no provider spawns `npm` or reads a
 version itself. The host reads every runtime five seconds after it starts,
 when a window asks and the reading is over ten minutes old, hourly for the

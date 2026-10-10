@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
-import { createHarnessHost } from "../dist-electron/providers/index.js"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 
 const providerHost = createHarnessHost()
 

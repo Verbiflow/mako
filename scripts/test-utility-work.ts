@@ -7,7 +7,7 @@ import { agentOrder, harnessesByRecency } from "@mako/host/contracts/agent-order
 import { harnessOrder, isDefaultOrder, workDefault } from "@mako/host/contracts/harness-defaults"
 import type { UtilityConnection, UtilityModelSettings } from "@mako/host/contracts/utility-models"
 import type { UtilityWorkChoices } from "@mako/host/contracts/utility-work"
-import { createHarnessHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import { UtilityModelStore } from "@mako/host/git/utility-model-store"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { parseConnection, utilityProviders } from "@mako/host/git/utility-models"

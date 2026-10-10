@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, open, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { nativeCheckpoint } from "../electron/native-continuation.ts"
+import { nativeCheckpoint } from "@mako/host/harnesses/native-continuation"
 
 const root = await mkdtemp(join(tmpdir(), "mako-recovery-benchmark-"))
 const source = join(root, "64-mib-native-record.jsonl")

@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import WebSocket from 'ws'
 import { extractFile } from '@electron/asar'
 import { LiveJournal } from '../dist-electron/live-journal.js'
-import { createHarnessHost } from '../dist-electron/providers/index.js'
+import { createHarnessHost } from '@mako/host/harnesses/harness-host'
 import { auditId, auditSnapshot } from './performance-audit-fixtures.ts'
 import { PackagedApp } from './lib/packaged-app.mjs'
 

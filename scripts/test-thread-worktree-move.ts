@@ -9,7 +9,7 @@ import { moveHold, moveSource, ThreadWorktreeMoves, type ThreadWorktreeMoveDeps 
 import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { ProviderLiveDriver, ProviderStartOptions } from "../electron/providers/live-driver.ts"
+import type { ProviderLiveDriver, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"

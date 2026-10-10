@@ -2,9 +2,9 @@ import assert from "node:assert/strict"
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { startOpenCodeApi } from "../electron/providers/opencode/native-api.js"
-import { OpenCodeServers } from "../electron/providers/opencode/servers.js"
-import { ProviderLaunchTrace } from "../electron/provider-launch.js"
+import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
 
 const servers = new OpenCodeServers()
 

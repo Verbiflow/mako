@@ -3,8 +3,8 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { Decoded } from "@mako/host/contracts/native-decoding"
-import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "../electron/providers/decoder-source.ts"
-import { createHarnessHost } from "../electron/providers/index.ts"
+import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "@mako/host/harnesses/decoder-source"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 
 const providerHost = createHarnessHost()
 
@@ -59,7 +59,7 @@ export const FixtureSchema = z.object({
 })
 export type Fixture = z.infer<typeof FixtureSchema>
 
-/** A capture's first line, written by `electron/native-capture.ts`. */
+/** A capture's first line, written by `packages/host/src/harnesses/native-capture.ts`. */
 const CaptureHeaderSchema = z.object({
   capture: z.number(),
   harness: z.string(),

@@ -1,6 +1,6 @@
-import type { AccountLaunch } from "../../electron/accounts.ts"
-import type { AdmittedStartOptions, ProviderStartOptions } from "../../electron/providers/live-driver.ts"
-import { ProviderLaunchTrace } from "../../electron/provider-launch.ts"
+import type { AccountLaunch } from "@mako/host/harnesses/accounts"
+import type { AdmittedStartOptions, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
+import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
 
 /** A driver's start options as admission hands them over, launched on `env` with no account selected. */
 export function admitted(

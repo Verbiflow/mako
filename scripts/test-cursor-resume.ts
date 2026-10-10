@@ -1,4 +1,4 @@
-import { assessProviderResume } from "../electron/provider-recovery.ts"
+import { assessProviderResume } from "@mako/host/harnesses/provider-recovery"
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -15,19 +15,19 @@ import {
   cursorStoreOrigin,
 } from "@mako/sessions"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
-import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
-import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
+import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
 import { memorySecrets } from "@mako/host/base/secrets"
-import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
+import { createCursorSdkDriver } from "@mako/host/harnesses/cursor/sdk/driver"
 import {
   CursorImportError,
   copyLegacyStore,
   importedAgentDocument,
   verifyImportRevision,
   resolveImportAgentId,
-} from "../electron/providers/cursor/sdk/import.ts"
-import { readLegacyStoreSnapshot } from "../electron/providers/cursor/legacy-store.ts"
-import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../electron/providers/cursor/resume.ts"
+} from "@mako/host/harnesses/cursor/sdk/import"
+import { readLegacyStoreSnapshot } from "@mako/host/harnesses/cursor/legacy-store"
+import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "@mako/host/harnesses/cursor/resume"
 
 /**
  * Cursor resumes through the SDK, whichever process wrote the store. An SDK

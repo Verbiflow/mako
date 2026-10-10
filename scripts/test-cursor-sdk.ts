@@ -6,7 +6,7 @@ import {
   type CursorSdkDelta,
   type CursorSdkMessage,
 } from "@mako/sessions/cursor-sdk-content"
-import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "../electron/providers/cursor/sdk/modes.ts"
+import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "@mako/host/harnesses/cursor/sdk/modes"
 import {
   SdkChildLineSchema,
   SdkRequestSchema,
@@ -15,7 +15,7 @@ import {
   type SdkMethod,
   type SdkResult,
   type SdkRunResult,
-} from "../electron/providers/cursor/sdk/wire.ts"
+} from "@mako/host/harnesses/cursor/sdk/wire"
 import { MAX_STREAMED_TOOL_OUTPUT, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { admitted } from "./fixtures/admitted-start.ts"
@@ -578,7 +578,7 @@ console.log("cursor sdk projection, modes and wire ok")
 // A steer's ack is turn-paced: held past the request deadline it stays
 // pending, while an ordinary request still fails at that deadline.
 {
-  const { CursorSdkClient } = await import("../electron/providers/cursor/sdk/client.ts")
+  const { CursorSdkClient } = await import("@mako/host/harnesses/cursor/sdk/client")
   const { writeFileSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
   const { join } = await import("node:path")
@@ -645,11 +645,11 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const { mkdtempSync, rmSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
   const { join } = await import("node:path")
-  const { CursorSdkAuth } = await import("../electron/providers/cursor/sdk/auth.ts")
-  const { CursorCredentialStore } = await import("../electron/providers/cursor/sdk/credentials.ts")
+  const { CursorSdkAuth } = await import("@mako/host/harnesses/cursor/sdk/auth")
+  const { CursorCredentialStore } = await import("@mako/host/harnesses/cursor/sdk/credentials")
   const { memorySecrets } = await import("@mako/host/base/secrets")
-  const { createCursorSdkDriver } = await import("../electron/providers/cursor/sdk/driver.ts")
-  type Client = import("../electron/providers/cursor/sdk/driver.ts").CursorSdkLiveClient
+  const { createCursorSdkDriver } = await import("@mako/host/harnesses/cursor/sdk/driver")
+  type Client = import("@mako/host/harnesses/cursor/sdk/driver").CursorSdkLiveClient
   type Answers = { [M in SdkMethod]?: () => SdkResult<M> }
 
   const root = mkdtempSync(join(tmpdir(), "mako-cursor-events-"))

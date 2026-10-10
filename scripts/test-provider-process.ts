@@ -6,9 +6,9 @@ import { join } from "node:path"
 import {
   MissingWorkingDirectoryError,
   spawnProviderProcess,
-} from "../electron/providers/provider-process.ts"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
-import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
+} from "@mako/host/harnesses/provider-process"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
 
 // A provider started in a folder that is gone names the folder, for every
 // harness, instead of Node's ENOENT against an executable that exists.

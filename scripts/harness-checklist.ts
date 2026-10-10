@@ -5,10 +5,10 @@ import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability, type LiveCapabilityKey } from "@mako/host/contracts/harness-capabilities"
 import { HARNESS_USAGE_ASKS, HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@mako/host/contracts/harness-usage"
 import { DECLARATION_SHOWS, type UniqueCapability } from "@mako/host/contracts/harness-unique"
-import { HARNESS_FAMILIES, type HarnessFamily } from "../electron/providers/harness-definition.js"
-import { harnessLabel } from "../electron/providers/harness-descriptors.js"
-import { createHarnessHost } from "../electron/providers/index.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import { HARNESS_FAMILIES, type HarnessFamily } from "@mako/host/harnesses/harness-definition"
+import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { PAIRS_FOLDER } from "./decode-compare.ts"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
@@ -197,7 +197,7 @@ export function renderHarnessChecklist(): string {
     "",
     "## 1. The definition",
     "",
-    "Create `electron/providers/<harness>/index.ts` calling `installHarness(host, definition)` and add it to `electron/providers/index.ts`; its place there is Mako's order. Give `presentation.mark` (viewBox, paths, tint), `diagnostics` (the SDK Mako drives it through, whether sessions run inside it, its sign-in's log scope), and each family below: the capability, `lacks(reason)` when the harness has no such thing, or `notBuilt(reason)` when Mako hasn't built it (a gap). Then run `npm run harness:descriptors`. Enforced by the types, `installHarness`, `test-harness-definitions.ts`, and `test:seventh-harness`, which installs a seventh harness and runs the session flows against it.",
+    "Create `packages/host/src/harnesses/<harness>/index.ts` calling `installHarness(host, definition)` and add it to `packages/host/src/harnesses/harness-host.ts`; its place there is Mako's order. Give `presentation.mark` (viewBox, paths, tint), `diagnostics` (the SDK Mako drives it through, whether sessions run inside it, its sign-in's log scope), and each family below: the capability, `lacks(reason)` when the harness has no such thing, or `notBuilt(reason)` when Mako hasn't built it (a gap). Then run `npm run harness:descriptors`. Enforced by the types, `installHarness`, `test-harness-definitions.ts`, and `test:seventh-harness`, which installs a seventh harness and runs the session flows against it.",
     "",
     ...header(["Family", "What it is"]),
     ...families.map((family) => `| \`${family}\` | ${cell(HARNESS_FAMILIES[family])} | ${harnesses.map((harness) => familyCell(harness, family)).join(" | ")} |`),

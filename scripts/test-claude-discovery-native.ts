@@ -13,14 +13,14 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
 import { z } from "zod"
-import { createClaudeProfileLoader } from "../electron/providers/claude/profile.js"
+import { createClaudeProfileLoader } from "@mako/host/harnesses/claude/profile"
 import {
   claudeDiscoveryArgs,
   claudeDiscoveryControl,
   ClaudeEffectiveSettingsSchema,
-} from "../electron/providers/claude/settings.js"
-import { withDiscoveryStream } from "../electron/providers/profile-transport.js"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+} from "@mako/host/harnesses/claude/settings"
+import { withDiscoveryStream } from "@mako/host/harnesses/profile-transport"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
 const claudeProfileLoader = createClaudeProfileLoader(processes)

@@ -5,8 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { Worker } from "node:worker_threads"
-import { readLegacyStoreSnapshot } from "../electron/providers/cursor/legacy-store.ts"
-import { copyLegacyStore, importedAgentDocument } from "../electron/providers/cursor/sdk/import.ts"
+import { readLegacyStoreSnapshot } from "@mako/host/harnesses/cursor/legacy-store"
+import { copyLegacyStore, importedAgentDocument } from "@mako/host/harnesses/cursor/sdk/import"
 import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions"
 
 const root = mkdtempSync(join(tmpdir(), "mako-cursor-revision-"))

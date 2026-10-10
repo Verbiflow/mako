@@ -66,8 +66,8 @@ async function main() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const load = (path) => import(join(repo, "dist-electron", path))
-  const { createHarnessHost } = await load("providers/index.js")
+  const load = (path) => import(join(repo, "packages/host/dist/harnesses", path))
+  const { createHarnessHost } = await load("harness-host.js")
   const providerHost = createHarnessHost()
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(process.env.MAKO_FAILURES_HOST_LOG ?? join(root, "host.log"))
@@ -106,8 +106,8 @@ async function main() {
       close: acp.close,
     }
   }
-  const { createGrokAcpSource } = await load("providers/grok/acp.js")
-  const { devinAcpSource } = await load("providers/devin/acp.js")
+  const { createGrokAcpSource } = await load("grok/acp.js")
+  const { devinAcpSource } = await load("devin/acp.js")
 
   const standIns = {
     codex: (() => {
@@ -128,7 +128,7 @@ async function main() {
     grok: acpStandIn("grok", createGrokAcpSource()),
     devin: acpStandIn("devin", devinAcpSource),
     claude: await (async () => {
-      const { createClaudeSdkDriver } = await load("providers/claude/sdk-driver.js")
+      const { createClaudeSdkDriver } = await load("claude/sdk-driver.js")
       const { query } = await import(join(repo, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"))
       let executable
       let env = {}
@@ -151,8 +151,8 @@ async function main() {
       }
     })(),
     opencode: await (async () => {
-      const { createOpenCodeDriver } = await load("providers/opencode/live-driver.js")
-      const { OpenCodeServers } = await load("providers/opencode/servers.js")
+      const { createOpenCodeDriver } = await load("opencode/live-driver.js")
+      const { OpenCodeServers } = await load("opencode/servers.js")
       const driver = createOpenCodeDriver({ servers: new OpenCodeServers(), approvalRoot: async () => join(root, "opencode-approvals") })
       return {
         unproven: {
@@ -171,8 +171,8 @@ async function main() {
       }
     })(),
     cursor: await (async () => {
-      const { createCursorSdkDriver } = await load("providers/cursor/sdk/driver.js")
-      const { CursorSdkClient } = await load("providers/cursor/sdk/client.js")
+      const { createCursorSdkDriver } = await load("cursor/sdk/driver.js")
+      const { CursorSdkClient } = await load("cursor/sdk/client.js")
       let env = {}
       const signedIn = { state: { status: "signed-in" }, checkedAt: Date.now() }
       const driver = createCursorSdkDriver({

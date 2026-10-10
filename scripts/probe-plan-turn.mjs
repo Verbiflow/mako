@@ -54,7 +54,7 @@ async function probe() {
   mkdirSync(out, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createHarnessHost } = await import(join(repo, "dist-electron/providers/index.js"))
+  const { createHarnessHost } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
   const providerHost = createHarnessHost()
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))

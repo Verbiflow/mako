@@ -13,10 +13,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type Client, type SessionNotification } from "@agentclientprotocol/sdk"
 import { z } from "zod"
-import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
-import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
-import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
-import { GrokTurnCounts, grokFork } from "../electron/providers/grok/fork.ts"
+import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
+import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { GrokTurnCounts, grokFork } from "@mako/host/harnesses/grok/fork"
 
 const turnCounts = new GrokTurnCounts()
 const grokAcpSource = createGrokAcpSource()

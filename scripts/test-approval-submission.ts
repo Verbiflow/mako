@@ -1,6 +1,6 @@
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import assert from "node:assert/strict"
-import { createLiveEngine, type PermittingLive } from "../electron/live-engine.js"
+import { createLiveEngine, type PermittingLive } from "@mako/host/harnesses/live-engine"
 import { ApprovalSubmissionSchema, describeApprovalResponse, type ApprovalResponse } from "@mako/host/contracts/approval-response"
 
 const events: LiveDriverEvent[] = []

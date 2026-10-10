@@ -24,7 +24,7 @@ import type { ConversationControl } from "@mako/host/contracts/conversation-cont
 import type { ThreadPlacement } from "@mako/host/contracts/thread-identity"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"

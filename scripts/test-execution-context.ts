@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
 import { assessExecutionContext, disconnectedContext, launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "@mako/host/base/execution-context"
-import { CodexIdentityResponseSchema, codexRuntimeVersion } from "../electron/providers/codex/native-context.ts"
+import { CodexIdentityResponseSchema, codexRuntimeVersion } from "@mako/host/harnesses/codex/native-context"
 import { LiveJournal } from "../electron/live-journal.ts"
 import { auditSnapshot } from "./performance-audit-fixtures.ts"
 

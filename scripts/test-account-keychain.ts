@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises"
 import { tmpdir, userInfo } from "node:os"
 import { join } from "node:path"
-import { deleteKeychain, readKeychain, writeKeychain } from "../electron/accounts-common.js"
+import { deleteKeychain, readKeychain, writeKeychain } from "@mako/host/harnesses/accounts-common"
 
 if (process.platform === "darwin") {
   const root = await mkdtemp(join(tmpdir(), "mako-keychain-test-"))

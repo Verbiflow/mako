@@ -10,11 +10,11 @@ import {
   accountsRoot,
   readSelection,
   writeSelection,
-} from "../electron/accounts-common.js"
-import { codexAccountCapability } from "../electron/providers/codex/accounts.js"
-import { openCodeAccountCapability } from "../electron/providers/opencode/accounts.js"
-import { claudeAccountCapability } from "../electron/providers/claude/accounts.js"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.js"
+} from "@mako/host/harnesses/accounts-common"
+import { codexAccountCapability } from "@mako/host/harnesses/codex/accounts"
+import { openCodeAccountCapability } from "@mako/host/harnesses/opencode/accounts"
+import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const codexAccounts = codexAccountCapability(new DiscoveryProcesses())
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { ProviderLaunchTrace, type ProviderLaunchRecord } from "../electron/provider-launch.js"
+import { ProviderLaunchTrace, type ProviderLaunchRecord } from "@mako/host/harnesses/provider-launch"
 
 const records: ProviderLaunchRecord[] = []
 let now = 0

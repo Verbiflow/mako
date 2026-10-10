@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { approvalAnswerDigest } from "./providers/approval-evidence.js"
+import { approvalAnswerDigest } from "@mako/host/harnesses"
 import { isDeepStrictEqual } from "node:util"
 import { ANSWERED_DIFFERENTLY, ApprovalSubmissionSchema, NativeApprovalDecisionSchema, sameNativeApproval, type NativeApprovalDecision, type NativeApprovalIdentity, type ApprovalEndSource, type ApprovalOrigin, type ApprovalResponse, type ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import type { LivePermissionRequest, LivePermissionResponse } from "@mako/host/contracts/providers-acp"

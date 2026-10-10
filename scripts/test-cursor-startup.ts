@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CursorSdkClient, CursorSdkError } from "../electron/providers/cursor/sdk/client.ts"
-import { CURSOR_SDK_WIRE_VERSION } from "../electron/providers/cursor/sdk/wire.ts"
+import { CursorSdkClient, CursorSdkError } from "@mako/host/harnesses/cursor/sdk/client"
+import { CURSOR_SDK_WIRE_VERSION } from "@mako/host/harnesses/cursor/sdk/wire"
 
 const root = await mkdtemp(join(tmpdir(), "cursor-startup-"))
 try {

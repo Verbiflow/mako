@@ -3,8 +3,8 @@ import {
   rpcRequest,
   streamRequest,
   runDiscovery,
-} from "../electron/providers/profile-transport.ts"
-import { DiscoveryProcesses, type DiscoveryOptions } from "../electron/providers/discovery-process.ts"
+} from "@mako/host/harnesses/profile-transport"
+import { DiscoveryProcesses, type DiscoveryOptions } from "@mako/host/harnesses/discovery-process"
 import { z } from "zod"
 
 const processes = new DiscoveryProcesses()

@@ -42,7 +42,7 @@ async function check() {
   const root = process.env.MAKO_CODEX_ARCHIVED_ROOT
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createCodexEngine } = await import(join(process.env.MAKO_REPO, "dist-electron/codex-app.js"))
+  const { createCodexEngine } = await import(join(process.env.MAKO_REPO, "packages/host/dist/harnesses/codex-app.js"))
   const codex = createCodexEngine()
   const thread = "01a0e752-670b-7900-8d93-804fefadacbd"
   const start = async (name, missing) => {

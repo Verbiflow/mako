@@ -1,11 +1,8 @@
 import { LiveQuestions } from "./live-questions.js"
 import { disconnectedContext } from "@mako/host/base/execution-context"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch, type AdmittedLiveDriver, resumes, verifyRecoveredSession, nativeRecord, carriedUsage, restorableTotals, spendBetween } from "@mako/host/harnesses"
 import type { AccountRemovalSession, AccountRemovalWait } from "@mako/host/contracts/accounts"
 import { holdForSignIn, releaseSignIn, signInPause } from "@mako/host/contracts/sign-in-hold"
-import type { AdmittedLiveDriver } from "./providers/live-driver.js"
-import { resumes } from "./providers/live-capabilities.js"
-import { verifyRecoveredSession } from "./provider-recovery.js"
 import { retireQuestionsForInput } from "@mako/host/contracts/live-questions"
 import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
@@ -29,7 +26,6 @@ import {
 } from "@mako/host/contracts/native-agents"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { captureNativeHistory, withSeed } from "./native-history.js"
-import { nativeRecord } from "./native-source.js"
 import { capturedThread, prepareLiveContext, contextPrompt } from "./live-context.js"
 import { LiveTransfers, reconnectRefusal } from "./live-transfers.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
@@ -70,7 +66,6 @@ import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, typ
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, STOPPED_CALL_NOTE, TurnSteps } from "./interrupted-turn.js"
 import { controlNote } from "@mako/host/control"
 import { classifyProviderFailure, classifyStartFailure } from "@mako/host/contracts/provider-failure"
-import { carriedUsage, restorableTotals, spendBetween } from "./session-usage.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type ContextBreakdown } from "@mako/host/contracts/providers-acp"
 import {
   AUTO_CONTINUE_DELAY_MS,

@@ -3,9 +3,9 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { codexProfileLoader } from "../electron/providers/codex/profile.js"
+import { codexProfileLoader } from "@mako/host/harnesses/codex/profile"
 import { setTimeout as delay } from "node:timers/promises"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.js"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const loader = codexProfileLoader(new DiscoveryProcesses())
 

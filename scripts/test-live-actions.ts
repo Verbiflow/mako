@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { nativeCheckpoint } from "../electron/native-continuation.ts"
+import { nativeCheckpoint } from "@mako/host/harnesses/native-continuation"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
@@ -14,7 +14,7 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type {
   ProviderLiveDriver,
   ProviderSteerResult,
-} from "../electron/providers/live-driver.js"
+} from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"

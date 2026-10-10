@@ -7,7 +7,7 @@ import {
   guardShellFolder,
   movedShellCommand,
   shellCommandIndex,
-} from "../electron/providers/cursor/sdk/shell-folder.ts"
+} from "@mako/host/harnesses/cursor/sdk/shell-folder"
 
 // The shapes SDK 1.0.31 starts its shell tool with; anything else is not one.
 assert.equal(shellCommandIndex("/bin/zsh", ["-c", "wrapper", "--", "ls"]), 3)

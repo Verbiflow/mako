@@ -4,12 +4,12 @@ import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import { createHarnessHost } from "../electron/providers/index.ts"
-import { claudeAccountCapability } from "../electron/providers/claude/accounts.ts"
-import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
-import { spawnClaudeProcess } from "../electron/providers/claude/sdk-process.ts"
-import { ClaudeInput } from "../electron/providers/claude/input.ts"
-import { traceProviderLaunch } from "../electron/provider-launch.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
+import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
+import { spawnClaudeProcess } from "@mako/host/harnesses/claude/sdk-process"
+import { ClaudeInput } from "@mako/host/harnesses/claude/input"
+import { traceProviderLaunch } from "@mako/host/harnesses/provider-launch"
 
 const providerHost = createHarnessHost()
 

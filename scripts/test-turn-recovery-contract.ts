@@ -4,14 +4,14 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFi
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { devinResumePolicy } from "../electron/providers/devin/resume.ts"
-import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
-import { GrokTurnCounts } from "../electron/providers/grok/fork.ts"
-import { grokSessionSource } from "../electron/providers/grok/session-source.ts"
-import { createHarnessHost } from "../electron/providers/index.ts"
-import { createCodexLiveDriver } from "../electron/providers/codex/live-driver.ts"
-import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import { createCodexProcessProbe } from "../electron/providers/codex/process-probe.ts"
+import { devinResumePolicy } from "@mako/host/harnesses/devin/resume"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { GrokTurnCounts } from "@mako/host/harnesses/grok/fork"
+import { grokSessionSource } from "@mako/host/harnesses/grok/session-source"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createCodexLiveDriver } from "@mako/host/harnesses/codex/live-driver"
+import { validateLiveDriver, type ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
 
 const providerHost = createHarnessHost()
 

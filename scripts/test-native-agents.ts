@@ -4,14 +4,14 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import { ClaudeAgents } from "../electron/providers/claude/sdk-agents.ts"
-import { CursorAgents } from "../electron/providers/cursor/sdk/agents.ts"
+import { ClaudeAgents } from "@mako/host/harnesses/claude/sdk-agents"
+import { CursorAgents } from "@mako/host/harnesses/cursor/sdk/agents"
 import type { CursorSdkMessage } from "@mako/sessions/cursor-sdk-content"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import {
   CodexAgents,
   CodexAgentItemSchema,
-} from "../electron/providers/codex/agents.ts"
+} from "@mako/host/harnesses/codex/agents"
 import {
   disconnectNativeAgents,
   observeNativeAgent,
@@ -22,7 +22,7 @@ import {
 import { ApplicationLifecycle } from "@mako/host/application/lifecycle"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { LiveJournal } from "../electron/live-journal.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"

@@ -4,10 +4,10 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolveHarnessTuning } from "../../../../electron/harness-models.ts"
+import { resolveHarnessTuning } from "@mako/host/harnesses/harness-models"
 import { normalizeCodexModels, normalizeDevinModels } from "@mako/sessions/model-catalog"
-import { codexNativeRunner } from '../../../../electron/providers/codex/native-runner.ts'
-import { ProviderProfileCache } from '../../../../electron/provider-profile-cache.ts'
+import { codexNativeRunner } from '@mako/host/harnesses/codex/native-runner'
+import { ProviderProfileCache } from '@mako/host/harnesses/provider-profile-cache'
 
 const catalog = normalizeCodexModels({ data: [{
   model: 'sample-model', isDefault: true, defaultReasoningEffort: 'medium',

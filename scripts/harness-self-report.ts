@@ -14,8 +14,8 @@ import { VOCABULARIES, type HarnessConcepts } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { resolveExecutable } from "@mako/host/base/executable"
-import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
-import { devinExecutable } from "../electron/providers/devin/executable.ts"
+import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
+import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { codexBinary } from "./harness-binaries.ts"
 
 /**

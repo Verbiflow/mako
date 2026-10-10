@@ -2,25 +2,25 @@ import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { type UsageWindow } from "@mako/host/contracts/accounts"
 import { bindingWindow, hasReset, mergeWindows, nextReset } from "@mako/host/contracts/account-usage"
-import { codexUpdatedWindows, parseCodexRateLimits, parseResetOutcome } from "../electron/providers/codex/rate-limits"
-import { createHarnessHost } from "../electron/providers/index"
+import { codexUpdatedWindows, parseCodexRateLimits, parseResetOutcome } from "@mako/host/harnesses/codex/rate-limits"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import type { AccountUsage } from "@mako/host/contracts/accounts"
-import { parseChatGptUsage } from "../electron/providers/chatgpt-usage"
-import { claudeRateLimitWindow, parseClaudeUsage } from "../electron/providers/claude/accounts"
+import { parseChatGptUsage } from "@mako/host/harnesses/chatgpt-usage"
+import { claudeRateLimitWindow, parseClaudeUsage } from "@mako/host/harnesses/claude/accounts"
 import {
   parseCursorGrants,
   parseCursorPeriodUsage,
   parseCursorPlan,
-} from "../electron/providers/cursor/accounts"
+} from "@mako/host/harnesses/cursor/accounts"
 import {
   devinCredential,
   parseDevinStatus,
-} from "../electron/providers/devin/accounts"
+} from "@mako/host/harnesses/devin/accounts"
 import {
   parseGrokAccounts,
   parseGrokBilling,
-} from "../electron/providers/grok/accounts"
-import { parseOpenCodeAccounts } from "../electron/providers/opencode/accounts"
+} from "@mako/host/harnesses/grok/accounts"
+import { parseOpenCodeAccounts } from "@mako/host/harnesses/opencode/accounts"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 
 const providerHost = createHarnessHost()

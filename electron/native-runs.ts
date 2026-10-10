@@ -29,17 +29,9 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import type { ThreadRef } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { AccountLaunch } from "./accounts.js"
-import type { AccountHold } from "./account-holds.js"
+import { type AccountLaunch, type AccountHold, type ProviderHost, dropUncarried, type NativeCommand, type NativeRunOptions, type NativeRunner } from "@mako/host/harnesses"
 import { resumable, type ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { reconnectRefusal } from "./live-transfers.js"
-import type { ProviderHost } from "./providers/host.js"
-import {
-  dropUncarried,
-  type NativeCommand,
-  type NativeRunOptions,
-  type NativeRunner,
-} from "./providers/native-runner.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { launchContext } from "@mako/host/base/execution-context"
 import type { ExecutionContext } from "@mako/host/contracts/execution-context"

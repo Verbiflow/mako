@@ -143,7 +143,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 
 ## Capabilities
 
-Projected from each live driver (`electron/providers/live-capabilities.ts`); `npm run harness:doctor -- <harness>` prints the reasons.
+Projected from each live driver (`packages/host/src/harnesses/live-capabilities.ts`); `npm run harness:doctor -- <harness>` prints the reasons.
 
 | Capability | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
 | --- | --- | --- | --- | --- | --- | --- |

@@ -12,7 +12,7 @@ const root = await mkdtemp(join(tmpdir(), "mako-startup-gate-"))
 process.env.MAKO_LIFECYCLE_ROOT = root
 try {
   await checkMcpStartup()
-  const { stderrDetail } = await import("../dist-electron/provider-startup.js")
+  const { stderrDetail } = await import("@mako/host/harnesses/provider-startup")
   assert.equal(
     stderrDetail(
       "Model unavailable\n\u001b[2m2026-09-09T00:00:00Z\u001b[0m  INFO SessionEnd dispatched"
@@ -38,9 +38,9 @@ async function checkMcpStartup() {
     throw new Error("Unexpected discovery process before MCP readiness")
   }
   syncBuiltinESMExports()
-  const { DiscoveryProcesses } = await import("../dist-electron/providers/discovery-process.js")
-  const { createAcpEngine } = await import("../dist-electron/acp.js")
-  const { createCodexEngine } = await import("../dist-electron/codex-app.js")
+  const { DiscoveryProcesses } = await import("@mako/host/harnesses/discovery-process")
+  const { createAcpEngine } = await import("@mako/host/harnesses/acp")
+  const { createCodexEngine } = await import("@mako/host/harnesses/codex-app")
   try {
     const acp = createAcpEngine({
       ...noAcpCapabilities,

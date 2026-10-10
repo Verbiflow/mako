@@ -18,17 +18,17 @@ import type {
 import {
   createClaudeSdkDriver,
   type ClaudeSdkDependencies,
-} from "../electron/providers/claude/sdk-driver.ts"
-import { claudeExecutablePath } from "../electron/providers/claude/sdk-process.ts"
+} from "@mako/host/harnesses/claude/sdk-driver"
+import { claudeExecutablePath } from "@mako/host/harnesses/claude/sdk-process"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
-import { claudeInputContent, ClaudeInput } from "../electron/providers/claude/input.ts"
-import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
-import { ClaudeTranscript } from "../electron/providers/claude/sdk-transcript.ts"
+import { claudeInputContent, ClaudeInput } from "@mako/host/harnesses/claude/input"
+import { ClaudePermissions } from "@mako/host/harnesses/claude/sdk-permissions"
+import { ClaudeTranscript } from "@mako/host/harnesses/claude/sdk-transcript"
 import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
-import { claudeAuthCause, claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
-import type { ClaudeCredentialState } from "../electron/providers/claude/accounts.ts"
+import { claudeAuthCause, claudeAuthDiagnostics } from "@mako/host/harnesses/claude/auth-diagnostics"
+import type { ClaudeCredentialState } from "@mako/host/harnesses/claude/accounts"
 import { installHostLog, flushHostLog, type HostLogFields } from "@mako/host/base/host-log"
 import { admitted } from "./fixtures/admitted-start.ts"
 

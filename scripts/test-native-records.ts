@@ -5,9 +5,9 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { installHostLog } from "@mako/host/base/host-log"
-import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "../electron/native-capture.ts"
+import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "@mako/host/harnesses/native-capture"
 import { flushUnknown, nativeUnknownPath, retainUnknown, retainUnread, unknownKinds } from "@mako/host/base/native-unknown"
-import { createHarnessHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import { decoderFor, decodeSession, readRecording } from "./native-decoding.ts"
 
 const providerHost = createHarnessHost()

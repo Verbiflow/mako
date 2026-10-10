@@ -9,16 +9,16 @@ import {
   rejectionText,
   type CursorSdkProbeClient,
   type CursorSdkSpawnOptions,
-} from "../electron/providers/cursor/sdk/auth.ts"
-import { CursorSdkError } from "../electron/providers/cursor/sdk/client.ts"
+} from "@mako/host/harnesses/cursor/sdk/auth"
+import { CursorSdkError } from "@mako/host/harnesses/cursor/sdk/client"
 import {
   CursorCredentialStore,
   CursorCredentialStoreError,
   parseCursorApiKey,
-} from "../electron/providers/cursor/sdk/credentials.ts"
-import { authenticationFailure } from "../electron/providers/cursor/sdk/driver.ts"
-import { cursorConnection, cursorConnectionState } from "../electron/providers/cursor/connection.ts"
-import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
+} from "@mako/host/harnesses/cursor/sdk/credentials"
+import { authenticationFailure } from "@mako/host/harnesses/cursor/sdk/driver"
+import { cursorConnection, cursorConnectionState } from "@mako/host/harnesses/cursor/connection"
+import type { SdkMethod, SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
 import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
 import { keychainReachable, type SecretEncryption } from "@mako/host/base/secure-storage"
 import { electronSecretEncryption } from "../electron/secure-storage-electron.ts"

@@ -3,7 +3,7 @@ import { settingValueLabel } from "../src/components/composer/settings-source.ts
 import {
   canonicalHarnessModelId,
   resolveHarnessTuning,
-} from "../electron/harness-models.ts"
+} from "@mako/host/harnesses/harness-models"
 import {
   normalizeClaudeModels,
   normalizeCodexModels,
@@ -16,14 +16,14 @@ import {
   optionAccepts,
   resolveSessionSettings,
 } from "@mako/sessions/settings"
-import { createClaudeProfileLoader } from "../electron/providers/claude/profile.ts"
-import { devinProfileLoader } from "../electron/providers/devin/profile.ts"
-import { availableProviderProfile } from "../electron/providers/profile-loader.ts"
+import { createClaudeProfileLoader } from "@mako/host/harnesses/claude/profile"
+import { devinProfileLoader } from "@mako/host/harnesses/devin/profile"
+import { availableProviderProfile } from "@mako/host/harnesses/profile-loader"
 import type { HarnessModel, HarnessProfile } from "@mako/host/contracts/providers-acp"
-import type * as Profiles from "../electron/harness-profiles.ts"
-import type * as ProfileCache from "../electron/provider-profile-cache.ts"
-import type * as Providers from "../electron/providers/index.ts"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+import type * as Profiles from "@mako/host/harnesses/harness-profiles"
+import type * as ProfileCache from "@mako/host/harnesses/provider-profile-cache"
+import type * as Providers from "@mako/host/harnesses/harness-host"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
 const claudeProfileLoader = createClaudeProfileLoader(processes)
@@ -437,10 +437,10 @@ assertFixtureProfiles()
 if (process.argv.includes("--live")) {
   // Native SDK children execute JavaScript directly; tsx's import remapping
   // does not apply to their separate processes. Use the built host for live checks.
-  const built = (path: string) => new URL(`../dist-electron/${path}`, import.meta.url).href
+  const built = (path: string) => new URL(`../packages/host/dist/harnesses/${path}`, import.meta.url).href
   const { HarnessProfiles }: typeof Profiles = await import(built("harness-profiles.js"))
   const { ProviderProfileCache }: typeof ProfileCache = await import(built("provider-profile-cache.js"))
-  const { createHarnessHost }: typeof Providers = await import(built("providers/index.js"))
+  const { createHarnessHost }: typeof Providers = await import(built("harness-host.js"))
   const providerHost = createHarnessHost()
   const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const loaders = providerHost.profiles.list()

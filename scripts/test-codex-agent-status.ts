@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
-import { CodexAgents } from "../electron/providers/codex/agents.ts"
-import { CodexAgentStatus, CodexAgentRunsSchema, type CodexAgentRun } from "../electron/providers/codex/agent-status.ts"
-import { parseNotification } from "../electron/codex-app-parse.ts"
+import { CodexAgents } from "@mako/host/harnesses/codex/agents"
+import { CodexAgentStatus, CodexAgentRunsSchema, type CodexAgentRun } from "@mako/host/harnesses/codex/agent-status"
+import { parseNotification } from "@mako/host/harnesses/codex-app-parse"
 import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 async function until(check: () => boolean) {

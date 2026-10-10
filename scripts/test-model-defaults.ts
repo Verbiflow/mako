@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readdirSync } from "node:fs"
 import { resolveSessionSettings, type SessionModel } from "@mako/sessions/settings"
 import { workDefault, workDefaultProblems, type HarnessDefaults } from "@mako/host/contracts/harness-defaults"
-import { createHarnessHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import { MODEL_CATALOG_ROOT, recordedCatalog } from "./model-catalogs.ts"
 
 const providerHost = createHarnessHost()

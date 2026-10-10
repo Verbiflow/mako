@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { createAcpLiveDriver } from "../electron/providers/acp-live-driver.js"
+import { createAcpLiveDriver } from "@mako/host/harnesses/acp-live-driver"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,12 +10,12 @@ import type {
   PromptAttachment,
 } from "../src/lib/types.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
-import type { PlanningCapability, ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import { elicitationQuestion, elicitationContent } from "../electron/acp-elicitation.ts"
+import type { PlanningCapability, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { elicitationQuestion, elicitationContent } from "@mako/host/harnesses/acp-elicitation"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noAcpCapabilities, noCapabilities } from "./fixtures/driver-capabilities.ts"
-import { createProviderHost } from "../electron/providers/host.ts"
+import { createProviderHost } from "@mako/host/harnesses/host"
 
 const host = createProviderHost()
 

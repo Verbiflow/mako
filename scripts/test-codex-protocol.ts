@@ -11,7 +11,7 @@ import {
   resolveServerRequest,
   type PermissionCallbacks,
   type PermissionContext,
-} from "../electron/codex-app-permissions.ts"
+} from "@mako/host/harnesses/codex-app-permissions"
 import { boundedText, numberValue } from "@mako/host/base/json-values"
 import { type JsonObject } from "@mako/host/contracts/json"
 import {
@@ -19,7 +19,7 @@ import {
   parseNotification,
   parseThreadResponse,
   parseSteerResponse,
-} from "../electron/codex-app-parse.ts"
+} from "@mako/host/harnesses/codex-app-parse"
 import {
   consumeStdout,
   retainStoppedTurn,
@@ -27,8 +27,8 @@ import {
   MAX_STDOUT_BUFFER,
   CodexDecoder,
   type ProtocolContext,
-} from "../electron/codex-app-protocol.ts"
-import { CodexRolloutCalls } from "../electron/providers/codex/rollout-calls.ts"
+} from "@mako/host/harnesses/codex-app-protocol"
+import { CodexRolloutCalls } from "@mako/host/harnesses/codex/rollout-calls"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"

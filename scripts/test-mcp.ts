@@ -1,4 +1,4 @@
-import { createHarnessHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import type { McpJsonFormat } from "@mako/host/tools/mcp-source"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -18,11 +18,11 @@ import {
 } from "@mako/host/control/cua-embedded"
 import { jsonMcpMerge, mcpSync, mergeJsonMcpConfig } from "@mako/host/tools/mcp-sync"
 import { mcpRegistry, mergeMcpDefinitions, parseProviderJson, type McpDiscoveredDefinition } from "@mako/host/tools/mcp-registry"
-import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
+import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 import type { JsonValue } from "@mako/host/contracts/json"
 import type { McpProvider, McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import { migrateRetiredMakoMcpFile } from "@mako/host/tools/retired-mcp"
-import { conversationServers } from "../electron/providers/live-driver.js"
+import { conversationServers } from "@mako/host/harnesses/live-driver"
 import { projectedMcpServers, reachableMcpServers } from "@mako/host/contracts/mcp-reach"
 
 const providerHost = createHarnessHost()

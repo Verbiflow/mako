@@ -19,7 +19,7 @@ import {
   type LifecycleAction,
 } from "@mako/host/contracts/app-lifecycle"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"

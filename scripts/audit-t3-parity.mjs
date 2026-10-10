@@ -75,7 +75,7 @@ const registry = JSON.parse(
       "tsx",
       "--input-type=module",
       "-e",
-      'import { createHarnessHost } from "./electron/providers/index.ts"; console.log(JSON.stringify(createHarnessHost().liveDrivers.list().map(d => ({ provider: d.provider, nativeResume: d.resume.kind === "native", nativeForkAtRun: d.fork.kind === "native" && d.fork.point === "run", steer: d.steering.kind === "supported", compact: d.compaction.kind === "supported" }))))',
+      'import { createHarnessHost } from "./packages/host/src/harnesses/harness-host.ts"; console.log(JSON.stringify(createHarnessHost().liveDrivers.list().map(d => ({ provider: d.provider, nativeResume: d.resume.kind === "native", nativeForkAtRun: d.fork.kind === "native" && d.fork.point === "run", steer: d.steering.kind === "supported", compact: d.compaction.kind === "supported" }))))',
     ],
     { cwd: workspace, encoding: "utf8", timeout: 20_000, maxBuffer: 64 * 1024 }
   )

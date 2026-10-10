@@ -14,7 +14,7 @@ const root = await mkdtemp(join(tmpdir(), "mako-cursor-key-env-"))
 const entry = join(process.cwd(), "node_modules/.tmp/cursor-key-env-child.mjs")
 const children = []
 try {
-  await build({ entryPoints: ["electron/providers/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", logLevel: "silent", plugins: [{ name: "env-sdk", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-env-sdk.mjs") })) } }] })
+  await build({ entryPoints: ["packages/host/src/harnesses/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", logLevel: "silent", plugins: [{ name: "env-sdk", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-env-sdk.mjs") })) } }] })
   const env = { PATH: process.env.PATH, HOME: root, NODE_OPTIONS: "", CURSOR_API_KEY: KEY }
   const traced = async cwd => (await readFile(join(cwd, "trace"), "utf8")).trim().split("\n").map(line => JSON.parse(line))
   const assertClean = (events, mode) => {

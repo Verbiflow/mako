@@ -2,7 +2,7 @@ import { z } from "zod"
 import { exclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
-/** Claude Code's hook events, held to the SDK's `HOOK_EVENTS` by `electron/providers/claude/vocabulary-check.ts`. */
+/** Claude Code's hook events, held to the SDK's `HOOK_EVENTS` by `packages/host/src/harnesses/claude/vocabulary-check.ts`. */
 export const CLAUDE_HOOK_EVENTS = [
   "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch", "Notification", "UserPromptSubmit", "UserPromptExpansion",
   "SessionStart", "SessionEnd", "Stop", "StopFailure", "SubagentStart", "SubagentStop", "PreCompact", "PostCompact",

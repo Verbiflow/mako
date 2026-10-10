@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import type { PromptResponse } from "@agentclientprotocol/sdk"
-import { AcpPromptTurn, type AcpTurnResult } from "../electron/acp-prompt-turn.ts"
+import { AcpPromptTurn, type AcpTurnResult } from "@mako/host/harnesses/acp-prompt-turn"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 for (const order of ["original-first", "steer-first"]) {

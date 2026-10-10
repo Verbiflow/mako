@@ -3,24 +3,24 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
-import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
+import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
 import { memorySecrets } from "@mako/host/base/secrets"
-import { CursorSdkDisconnectedError, type CursorSdkExit } from "../electron/providers/cursor/sdk/client.ts"
-import { cursorProfileLoaderWith } from "../electron/providers/cursor/profile.ts"
-import { resolveHarnessTuning } from "../electron/harness-models.ts"
+import { CursorSdkDisconnectedError, type CursorSdkExit } from "@mako/host/harnesses/cursor/sdk/client"
+import { cursorProfileLoaderWith } from "@mako/host/harnesses/cursor/profile"
+import { resolveHarnessTuning } from "@mako/host/harnesses/harness-models"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import {
   createCursorSdkDriver,
   type CursorSdkLiveClient,
-} from "../electron/providers/cursor/sdk/driver.ts"
+} from "@mako/host/harnesses/cursor/sdk/driver"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import type {
   SdkEvent,
   SdkMethod,
   SdkResult,
   SdkModelListItem,
-} from "../electron/providers/cursor/sdk/wire.ts"
+} from "@mako/host/harnesses/cursor/sdk/wire"
 import { admitted } from "./fixtures/admitted-start.ts"
 
 type FixtureAnswers = {

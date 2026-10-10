@@ -25,7 +25,7 @@ import {
   type LivePending,
   type LiveUpdate,
 } from "@mako/sessions/live-content"
-import { SessionUsage, type UsageObservation } from "../electron/session-usage"
+import { SessionUsage, type UsageObservation } from "@mako/host/harnesses/session-usage"
 import { PAIRS_FOLDER, PairSchema, storeReader } from "./decode-compare"
 import { decodeSession, decoders, FIXTURE_ROOT, loadFixtures } from "./native-decoding"
 

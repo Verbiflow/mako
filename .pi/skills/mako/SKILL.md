@@ -19,7 +19,7 @@ Write one `.tsx` file into the extensions directory. Mako compiles it in the
 renderer, runs it with full renderer-state access, and repaints its contributions
 immediately. Use this only for trusted local presentation, commands, and transcript
 renderers. Provider transports, accounts, MCP/skills, persistence, and host tools
-belong in source under `electron/providers/`; UI extensions cannot add them.
+belong in source under `packages/host/src/harnesses/`; UI extensions cannot add them.
 
 The directory is `<userData>/plugins/` — on macOS,
 `~/Library/Application Support/mako/plugins/`. Write there with your ordinary

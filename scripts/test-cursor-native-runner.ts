@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { join } from "node:path"
 import { normalizeCursorSdkModels } from "@mako/sessions"
-import { cursorSdkNativeRunner } from "../electron/providers/cursor/sdk/native-runner.ts"
-import { CURSOR_SDK_HEADLESS, SdkHeadlessSpecSchema } from "../electron/providers/cursor/sdk/wire.ts"
-import type { NativeCommand, NativeRunOptions } from "../electron/providers/native-runner.ts"
+import { cursorSdkNativeRunner } from "@mako/host/harnesses/cursor/sdk/native-runner"
+import { CURSOR_SDK_HEADLESS, SdkHeadlessSpecSchema } from "@mako/host/harnesses/cursor/sdk/wire"
+import type { NativeCommand, NativeRunOptions } from "@mako/host/harnesses/native-runner"
 
 /**
  * Cursor's headless runs start Mako's SDK child in its one-shot mode with the

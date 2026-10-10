@@ -15,7 +15,7 @@
   ],
   "declarations": [
     "packages/host/src/base/heavy-packages.ts",
-    "electron/heavy-adapters.ts",
+    "packages/host/src/harnesses/heavy.ts",
     "packages/host/src/git/heavy.ts",
     "packages/control-runtime/src/heavy-packages.ts"
   ],
@@ -26,17 +26,17 @@
         "packages/host/src/git/heavy.ts"
       ]
     },
-    "electron/acp-elicitation.ts": {
+    "packages/host/src/harnesses/acp-elicitation.ts": {
       "uses": "ACP's form schemas",
       "loadedBy": [
-        "electron/heavy-adapters.ts",
-        "electron/providers/devin/approval-observer.ts"
+        "packages/host/src/harnesses/heavy.ts",
+        "packages/host/src/harnesses/devin/approval-observer.ts"
       ]
     },
-    "electron/providers/devin/approval-observer.ts": {
+    "packages/host/src/harnesses/devin/approval-observer.ts": {
       "uses": "ACP's elicitation requests, reading Devin's approvals",
       "loadedBy": [
-        "electron/heavy-adapters.ts"
+        "packages/host/src/harnesses/heavy.ts"
       ]
     },
     "packages/control-runtime/src/driver-schema.ts": {
@@ -59,7 +59,7 @@
         "electron/browser-native-host-entry.ts"
       ]
     },
-    "electron/providers/claude/approval-settings-worker.ts": {
+    "packages/host/src/harnesses/claude/approval-settings-worker.ts": {
       "uses": "Claude's settings resolver, in its own worker thread",
       "loadedBy": []
     }

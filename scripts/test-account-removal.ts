@@ -8,9 +8,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { join } from "node:path"
-import { readSelection, writeSelection } from "../electron/accounts-common.ts"
-import { createHarnessHost } from "../electron/providers/index.ts"
-import type { SelectableAccountCapability } from "../electron/providers/account-capability.ts"
+import { readSelection, writeSelection } from "@mako/host/harnesses/accounts-common"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import type { SelectableAccountCapability } from "@mako/host/harnesses/account-capability"
 
 const providerHost = createHarnessHost()
 

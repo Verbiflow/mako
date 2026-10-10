@@ -5,13 +5,13 @@ import { appendFile, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { NativeQuestionHistory } from "@mako/host/contracts/live-questions"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
-import { codexAsyncQuestion, codexQuestionAnswer } from "../electron/providers/codex/questions.js"
-import { createCodexQuestionHistory } from "../electron/providers/codex/question-history.js"
+import { codexAsyncQuestion, codexQuestionAnswer } from "@mako/host/harnesses/codex/questions"
+import { createCodexQuestionHistory } from "@mako/host/harnesses/codex/question-history"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-question-history-"))

@@ -1,7 +1,7 @@
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { ProviderStartupWatch, exitDescription, stderrDetail } from "../electron/provider-startup.ts"
+import { ProviderStartupWatch, exitDescription, stderrDetail } from "@mako/host/harnesses/provider-startup"
 import { errorMessage } from "@mako/host/base/error-message"
 import { configuredListenPort } from "@mako/host/base/listen-port"
 

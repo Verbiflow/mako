@@ -4,9 +4,9 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { createHarnessHost } from "../electron/providers/index.ts"
-import { ProviderProfileCache } from "../electron/provider-profile-cache.ts"
-import { HarnessProfiles } from "../electron/harness-profiles.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
+import { HarnessProfiles } from "@mako/host/harnesses/harness-profiles"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 
 const providerHost = createHarnessHost()

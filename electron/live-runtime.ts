@@ -13,7 +13,7 @@ import type {
 import type {
   AdmittedLiveDriver,
   ConversationTools,
-} from "./providers/live-driver.js"
+} from "@mako/host/harnesses"
 import type { LiveJournal } from "./live-journal.js"
 import type { SessionMemory, ThreadStore } from "@mako/host/threads"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"

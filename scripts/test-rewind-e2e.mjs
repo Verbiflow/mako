@@ -317,9 +317,9 @@ try {
       (binding) => binding.nativeId === original.session.nativeId
     )
     const { assessProviderResume } =
-      await import("../dist-electron/provider-recovery.js")
+      await import("@mako/host/harnesses/provider-recovery")
     const { resumable } = await import("@mako/host/contracts/conversation-control")
-    const { createHarnessHost } = await import("../dist-electron/providers/index.js")
+    const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
     const providerHost = createHarnessHost()
     await until(
       async () => resumable(await assessProviderResume(binding, providerHost.liveDrivers.get(provider)), "same"),

@@ -7,8 +7,8 @@ import { setTimeout as pause } from "node:timers/promises"
 import { UsageReader } from "@mako/host/usage/reader"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { usageSummary } from "@mako/host/usage/summary"
-import { createHarnessHost } from "../dist-electron/providers/index.js"
-import { usageHarnesses } from "../dist-electron/providers/usage-harnesses.js"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { closeRepositories, openRepository, text } from "@mako/git"
 
 const providerHost = createHarnessHost()

@@ -2,15 +2,15 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { RuntimeUpdates } from "../electron/runtime-updates.ts"
+import { RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
 import {
   openCodeRelease,
   openCodeUpdateSource,
-} from "../electron/providers/opencode/updates.ts"
-import { isOpenCodeV2 } from "../electron/providers/opencode/version.ts"
+} from "@mako/host/harnesses/opencode/updates"
+import { isOpenCodeV2 } from "@mako/host/harnesses/opencode/version"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { runtimeRowView } from "../src/lib/runtime-updates.ts"
-import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
 

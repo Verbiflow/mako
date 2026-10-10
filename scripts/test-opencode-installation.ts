@@ -1,11 +1,11 @@
-import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
-import { openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
+import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
+import { openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
 import { accessModeId } from "@mako/host/contracts/access"
 import assert from "node:assert/strict"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { openCodeDatabasePaths, resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
+import { openCodeDatabasePaths, resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-runtime-"))
 try {

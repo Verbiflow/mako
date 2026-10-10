@@ -9,16 +9,16 @@ import {
   nativeCheckpoint,
   canResumeBinding,
   resumeVerdict,
-} from "../electron/native-continuation.ts"
+} from "@mako/host/harnesses/native-continuation"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
-import { assessProviderResume, verifyRecoveredSession } from "../electron/provider-recovery.ts"
+import { assessProviderResume, verifyRecoveredSession } from "@mako/host/harnesses/provider-recovery"
 import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import { createHarnessHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import { resumable } from "@mako/host/contracts/conversation-control"
-import type { NativeResumeEvidence } from "../electron/native-continuation.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import type { NativeResumeEvidence } from "@mako/host/harnesses/native-continuation"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 
 const providerHost = createHarnessHost()
 

@@ -27,12 +27,12 @@ const UserChunk = z.object({ sessionUpdate: z.literal("user_message_chunk"), con
  */
 export async function installStandIn({ load, providerHost, store }) {
   const { AcpSavedTurns } = await load("packages/sessions/dist/acp-saved-turns.js")
-  const { installHarness, lacks } = await load("dist-electron/providers/harness-definition.js")
-  const { harnessLacks } = await load("dist-electron/providers/live-capabilities.js")
-  const { createAcpLiveDriver } = await load("dist-electron/providers/acp-live-driver.js")
-  const { acpDecoderSource } = await load("dist-electron/providers/acp-decoder-source.js")
-  const { fileResumeEvidence } = await load("dist-electron/native-continuation.js")
-  const { availableProviderProfile } = await load("dist-electron/providers/profile-loader.js")
+  const { installHarness, lacks } = await load("packages/host/dist/harnesses/harness-definition.js")
+  const { harnessLacks } = await load("packages/host/dist/harnesses/live-capabilities.js")
+  const { createAcpLiveDriver } = await load("packages/host/dist/harnesses/acp-live-driver.js")
+  const { acpDecoderSource } = await load("packages/host/dist/harnesses/acp-decoder-source.js")
+  const { fileResumeEvidence } = await load("packages/host/dist/harnesses/native-continuation.js")
+  const { availableProviderProfile } = await load("packages/host/dist/harnesses/profile-loader.js")
   const { NO_NATIVE_PROMPT_IDENTITY } = await load("packages/host/dist/contracts/native-prompt-identity.js")
   mkdirSync(store, { recursive: true })
   const source = (nativeId) => join(store, `${nativeId}.jsonl`)

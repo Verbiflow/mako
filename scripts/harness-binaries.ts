@@ -1,6 +1,6 @@
 import { readdir, realpath } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
+import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 
 /** The native Codex binary Mako runs; the npm launcher runs one from its platform package. */
 export async function codexBinary(): Promise<string | null> {

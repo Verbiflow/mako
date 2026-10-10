@@ -79,7 +79,7 @@ export default defineConfig([
     },
   },
   {
-    files: ["electron/providers/**/*.ts"],
+    files: ["packages/host/src/harnesses/*/**/*.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -89,11 +89,11 @@ export default defineConfig([
               group: [
                 "../harness-profiles.js",
                 "../../harness-profiles.js",
-                "../native-runs.js",
-                "../../native-runs.js",
+                "../index.js",
+                "../../index.js",
               ],
               message:
-                "Provider capabilities cannot import their consumers; move shared mechanics under electron/providers/.",
+                "A harness's own modules cannot import the domain that consumes them; move shared mechanics beside them in packages/host/src/harnesses/.",
             },
           ],
         },

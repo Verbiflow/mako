@@ -1,10 +1,10 @@
 import { parseArgs } from "node:util"
 import { accessTierOfModeId, ACCESS_TIER_NAMES } from "@mako/host/contracts/access"
-import { createHarnessHost } from "../electron/providers/index.ts"
-import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../electron/providers/live-capabilities.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "@mako/host/harnesses/live-capabilities"
 import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@mako/host/contracts/harness-usage"
 import { workDefaultProblems } from "@mako/host/contracts/harness-defaults"
-import { unlistedOwnDeclarations } from "../electron/providers/harness-definition.ts"
+import { unlistedOwnDeclarations } from "@mako/host/harnesses/harness-definition"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { uniqueCell } from "./harness-checklist.ts"
 

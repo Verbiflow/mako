@@ -8,7 +8,7 @@ import { ANSWERED_DIFFERENTLY, type ApprovalSubmission } from "@mako/host/contra
 import type { PlanBuild } from "@mako/host/contracts/plan-builds"
 import { LiveConversations } from "../electron/live-conversations.js"
 import type { LivePermissionResponse, LiveSessionState } from "@mako/host/contracts/providers-acp"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"

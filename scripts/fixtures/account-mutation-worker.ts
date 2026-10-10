@@ -3,7 +3,7 @@ import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { access, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { createHarnessHost } from "../../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 
 const providerHost = createHarnessHost()
 

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { NativeRuns } from "../electron/native-runs.ts"
-import { createHarnessHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ThreadRef } from "@mako/sessions"
 

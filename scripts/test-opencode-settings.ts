@@ -5,9 +5,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { resolveSessionSettings } from "@mako/sessions/settings"
-import { openCodeProfileLoader } from "../electron/providers/opencode/profile.ts"
-import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
-import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
+import { openCodeProfileLoader } from "@mako/host/harnesses/opencode/profile"
+import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { admitted } from "./fixtures/admitted-start.ts"
 
 const servers = new OpenCodeServers()

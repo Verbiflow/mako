@@ -3,9 +3,9 @@ import { mock } from "node:test"
 import { mkdtemp, mkdir, symlink, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createHarnessHost } from "../electron/providers/index.js"
-import { ProviderProfileCache } from "../electron/provider-profile-cache.js"
-import { FAILED_DISCOVERY_TTL_MS, HarnessProfiles } from "../electron/harness-profiles.js"
+import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
+import { FAILED_DISCOVERY_TTL_MS, HarnessProfiles } from "@mako/host/harnesses/harness-profiles"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 
 const providerHost = createHarnessHost()

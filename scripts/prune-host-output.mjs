@@ -24,6 +24,8 @@ async function prune(sourceRoot, outputRoot, relative = "") {
       }
     }
   }
+  // A folder whose sources all moved away is left empty; it goes with them.
+  if (relative && !(await readdir(output).catch(() => [""])).length) await rm(output, { recursive: true })
 }
 await prune("electron", "dist-electron")
 for (const name of ["lazy", "control", "control-runtime", "host"])
