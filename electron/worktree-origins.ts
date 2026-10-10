@@ -121,6 +121,15 @@ export class WorktreeOrigins {
     return this.located(folder) ?? undefined
   }
 
+  /** The same folder in the project a since-removed worktree was made from, when `folder` was in one and that folder is there. */
+  projectFolderOfRemoved(folder: string): string | undefined {
+    if (isDirectory(folder)) return undefined
+    const linked = this.of(folder)
+    if (!linked) return undefined
+    const there = `${linked.repoRoot}${folder.slice(linked.path.length)}`
+    return isDirectory(there) ? there : undefined
+  }
+
   /** Writes what's pending now; for a host that is quitting. */
   async flush(): Promise<void> {
     if (!this.saving) return

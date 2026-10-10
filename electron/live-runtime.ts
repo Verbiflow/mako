@@ -113,6 +113,8 @@ export interface Dependencies {
   accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
   /** Who has a saved binding's native session and whether its record moved; see `ResumeVerdict`. */
   resumeVerdict?(binding: ProviderBinding): Promise<ResumeVerdict>
+  /** The same folder in the project a since-removed worktree holding `cwd` was made from; undefined while `cwd` is there. */
+  projectFolderOfRemoved?(cwd: string): string | undefined
   driver(provider: string): ProviderLiveDriver | undefined
   /** Writes a conversation into the provider's own session store; null when it has no writer. */
   emitSession?(provider: string, thread: Thread): Promise<EmitResult | null>
@@ -179,6 +181,8 @@ export interface LiveAccess {
   close(id: string): Promise<void>
   /** Reconnect an idle conversation whose native session can resume, as a follow-up would. */
   reopen(resident: Resident): Promise<void>
+  /** Before a native start: a conversation whose worktree was removed goes on in the project folder it was made from. */
+  returnFromRemovedWorktree(resident: Resident): void
   pending(resident: Resident): ContextTransfer | undefined
   storageFailed(resident: Resident, boundary: FailureBoundary): void
   /** A conversation acting through Mako's tools, named by its Session. */

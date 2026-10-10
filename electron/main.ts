@@ -159,6 +159,7 @@ import {
   rememberThreadMode,
   openThread,
   pageThread,
+  projectFolderOfRemoved,
   threadBlock,
   viewThreadPage,
   viewThreadPreview,
@@ -1467,8 +1468,10 @@ function bindIpc() {
         : undefined
       // A new Thread in a worktree starts there, and a new Thread outside any
       // project in a chat folder of its own; a resume or a new tab of an
-      // existing Thread runs where that Thread already does.
+      // existing Thread runs where that Thread already does. Once its
+      // worktree is removed, that's the project it was made from.
       const fresh = !options.resume && !options.session
+      const landed = !options.resume && options.session ? projectFolderOfRemoved(cwd) : undefined
       const chat = fresh && standsForNoProject(cwd) ? newChatFolder() : undefined
       if (options.worktree && !chat && !threadWorktrees) throw new Error("Worktrees need the Thread store, which didn't open. Choose Project folder to work in the folder itself.")
       const making = options.worktree && fresh && !chat && threadWorktrees
@@ -1485,7 +1488,7 @@ function bindIpc() {
         trace("worktree")
         emit({ type: "worktree-ready", conversationId: options.conversationId })
       }
-      const startCwd = worktree?.cwd ?? chat ?? cwd
+      const startCwd = worktree?.cwd ?? chat ?? landed ?? cwd
       const tuning = await resolveHarnessLaunch(
         harness,
         startCwd,
@@ -1908,6 +1911,7 @@ void (async () => {
       return emitter ? emitter.emit(thread) : null
     },
     resumeVerdict: assessResume,
+    projectFolderOfRemoved,
     appPath: environment.appRoot,
     root: join(environment.dataRoot, "conversations"),
     tools: async (bindingId, conversationId) => {

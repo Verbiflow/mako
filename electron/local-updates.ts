@@ -357,6 +357,32 @@ const syncManifestSchema = z.object({
   entries: z.record(z.string(), z.string()),
 })
 
+const lockPackagesSchema = z.object({
+  packages: z.record(z.string(), z.object({
+    optional: z.boolean().optional(),
+    devOptional: z.boolean().optional(),
+    peer: z.boolean().optional(),
+  })).optional(),
+})
+
+/**
+ * Packages the source's lockfile requires that its last npm install never
+ * put in node_modules: a pull or merge changed package-lock.json without an
+ * install after it. Optional and peer entries are left out, since npm skips
+ * the ones for other platforms.
+ */
+async function uninstalledPackages(source: string): Promise<string[]> {
+  const read = (path: string) => readFile(join(source, path), "utf8")
+    .then((text) => lockPackagesSchema.parse(JSON.parse(text)).packages ?? {})
+    .catch(() => null)
+  const [wanted, installed] = await Promise.all([read("package-lock.json"), read(DEPENDENCIES_SENTINEL)])
+  if (!wanted || !installed) return []
+  return Object.entries(wanted).flatMap(([path, entry]) =>
+    path.startsWith("node_modules/") && !entry.optional && !entry.devOptional && !entry.peer && !(path in installed)
+      ? [path.slice("node_modules/".length)]
+      : [])
+}
+
 const buildSourceFilter = (path: string) => {
   const name = basename(path)
   return (
@@ -457,6 +483,11 @@ export async function syncBuildCheckout(
     .lstat(join(checkout, "node_modules"))
     .then((info) => info.isDirectory())
     .catch(() => false)
+  const uninstalled = sourceModules ? await uninstalledPackages(source) : []
+  if (uninstalled.length) {
+    const named = uninstalled.slice(0, 3).join(", ") + (uninstalled.length > 3 ? ` and ${uninstalled.length - 3} more` : "")
+    throw new Error(`${source} hasn't installed what its package-lock.json lists (${named}). Run npm install there, then build the update again.`)
+  }
   let resyncedDependencies = false
   if (!sourceModules) {
     await files.rm(join(checkout, "node_modules"), {

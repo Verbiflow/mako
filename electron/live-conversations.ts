@@ -160,6 +160,7 @@ export class LiveConversations {
       retainAttachments: (attachments) => this.assets.retainPrompt(attachments),
       close: (id) => this.close(id),
       reopen: (resident) => this.reopen(resident),
+      returnFromRemovedWorktree: (resident) => this.returnFromRemovedWorktree(resident),
       pending: (resident) => this.transfers.pending(resident),
       storageFailed: (resident, boundary) =>
         this.storageFailed(resident, boundary),
@@ -667,6 +668,19 @@ export class LiveConversations {
     }
     hostWarn("residency", "a relocated conversation didn't resume", { conversation: id, harness: resident.snapshot.session.harness, error: reason })
     return reason
+  }
+
+  returnFromRemovedWorktree(resident: Resident): void {
+    if (resident.driver) return
+    const from = resident.snapshot.session.cwd
+    const to = this.dependencies.projectFolderOfRemoved?.(from)
+    if (!to) return
+    const binding = this.activeBinding(resident)
+    const driver = this.dependencies.driver(binding?.provider ?? "")
+    if (binding?.nativeId && (driver?.resume.kind !== "native" || !driver.resume.elsewhere)) return
+    resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, cwd: to } }
+    this.flush(resident)
+    hostLog("residency", "conversation returned from a removed worktree", { conversation: resident.snapshot.session.id, from, to })
   }
 
   /** Whether `relocate` would move this conversation now. */
@@ -1266,6 +1280,7 @@ export class LiveConversations {
     if (!resident.driver && !resident.opening && binding && !binding.nativeId && binding.id === resident.snapshot.session.id &&
       driver?.available(this.dependencies.appPath)) {
       // The launch was refused before any native session existed: start it as the first launch would.
+      this.returnFromRemovedWorktree(resident)
       const session = resident.snapshot.session
       resident.opening = true
       resident.driver = driver
@@ -1734,6 +1749,7 @@ export class LiveConversations {
       this.flush(resident)
       return
     }
+    this.returnFromRemovedWorktree(resident)
     const generation = ++resident.generation
     resident.opening = true
     resident.driver = driver

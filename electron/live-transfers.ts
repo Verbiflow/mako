@@ -224,6 +224,7 @@ export class LiveTransfers {
     try {
       this.save(resident, { ...transfer, state: { kind: "preparing" } })
       await this.host.locateNativePath(resident)
+      this.host.returnFromRemovedWorktree(resident)
       const source = resident.snapshot
       const control = this.host.control(resident)
       const target = transfer.input.bindingId

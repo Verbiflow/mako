@@ -96,13 +96,20 @@ function withWorkspacePresence(ref: ThreadRef): ThreadRef {
 
 let worktreeOrigins: WorktreeOrigins | null = null
 
+function origins(): WorktreeOrigins {
+  return (worktreeOrigins ??= new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json")))
+}
+
+export function projectFolderOfRemoved(folder: string): string | undefined {
+  return origins().projectFolderOfRemoved(folder)
+}
+
 function withWorktrees(ref: ThreadRef): ThreadRef {
   const folders = new Set([ref.cwd, ref.workspace, ref.currentCwd].filter((folder): folder is string => Boolean(folder)))
   if (!folders.size) return ref
-  worktreeOrigins ??= new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json"))
   const found = new Map<string, { path: string; repoRoot: string }>()
   for (const folder of folders) {
-    const linked = worktreeOrigins.of(folder)
+    const linked = origins().of(folder)
     if (linked) found.set(linked.path, linked)
   }
   return found.size ? { ...ref, worktrees: [...found.values()] } : ref
